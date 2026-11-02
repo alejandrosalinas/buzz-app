@@ -632,6 +632,69 @@ it.each([
   },
 );
 
+it("returns the list to its last offset in the same session", async () => {
+  const h = fixture();
+  const scroller = () =>
+    screen.getByRole("list", { name: "Inbox conversations" }).parentElement;
+  const scrollTo = (top: number) => {
+    const list = scroller();
+    if (!list) throw new Error("Missing Inbox scroller");
+    list.scrollTop = top;
+    fireEvent.scroll(list);
+  };
+  const view = render(h.view);
+  await waitFor(() => expect(rows()).toHaveLength(2));
+  expect(scroller()?.scrollTop).toBe(0);
+  scrollTo(120);
+  view.unmount();
+  render(h.view);
+  await waitFor(() => expect(rows()).toHaveLength(2));
+  expect(scroller()?.scrollTop).toBe(120);
+  // Drafts replaces the list; returning keeps the offset scrolled last.
+  scrollTo(40);
+  await chooseFilter("Drafts");
+  await chooseFilter("All activity");
+  await waitFor(() => expect(rows()).toHaveLength(2));
+  expect(scroller()?.scrollTop).toBe(40);
+});
+
+it("does not override a scroll made before the list's rows arrive", async () => {
+  const h = fixture();
+  const scroller = () =>
+    screen.getByRole("list", { name: "Inbox conversations" }).parentElement;
+  const scrollTo = (top: number) => {
+    const list = scroller();
+    if (!list) throw new Error("Missing Inbox scroller");
+    list.scrollTop = top;
+    fireEvent.scroll(list);
+  };
+  const view = render(h.view);
+  await waitFor(() => expect(rows()).toHaveLength(2));
+  scrollTo(120);
+  await chooseFilter("Unread only", "Attention");
+  view.unmount();
+  await act(async () => {
+    await h.owner.session.unread.markChannelRead("room");
+  });
+  render(h.view);
+  await screen.findByText("No unread activity in this view");
+  // Compositor scrolling can move the list before its scroll event arrives.
+  const list = scroller();
+  if (!list) throw new Error("Missing Inbox scroller");
+  list.scrollTop = 40;
+  const mention = message(
+    h.alice,
+    "room",
+    "Fresh mention",
+    Math.floor(Date.now() / 1000) + 5,
+    [["p", h.viewer.pubkey]],
+  );
+  h.addEvent(mention);
+  act(() => h.emit([mention]));
+  await waitFor(() => expect(rows()).toHaveLength(1));
+  expect(scroller()?.scrollTop).toBe(40);
+});
+
 it("offers no Archive shortcut while Drafts is shown", async () => {
   const h = fixture();
   render(h.view);
