@@ -662,7 +662,10 @@ function InboxList({
     }
     if (visible.length) placed.current = list;
     // Selecting a row, or rows arriving above it, moves nothing the scroll
-    // handler sees, so record whether it shows after each commit too.
+    // handler sees, so record whether it shows after each commit too. A
+    // covered list skips layout, which reading it would force; what showed
+    // before it was covered still holds.
+    if (list.closest("[hidden], [inert]")) return;
     const shown = selectedInView(list);
     if (typeof shown === "boolean")
       selections.set(session, {
