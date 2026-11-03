@@ -17,17 +17,8 @@ pub(crate) struct Saved {
     pubkey: Option<String>,
 }
 
-#[cfg(target_os = "macos")]
-fn root() -> Option<PathBuf> {
-    let identifier = buzz_agent_controller::LegacySource::Installed.app_directory();
-    Some(
-        dirs::home_dir()?
-            .join("Library/WebKit")
-            .join(identifier)
-            .join("WebsiteData"),
-    )
-}
-#[cfg(not(target_os = "macos"))]
+/// The onboarding-test branch never reads old Buzz, so testers get the
+/// new-user path whatever else is installed.
 fn root() -> Option<PathBuf> {
     None
 }

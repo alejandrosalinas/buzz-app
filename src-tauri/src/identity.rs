@@ -1254,14 +1254,11 @@ pub async fn identity_import(
     tauri::async_runtime::spawn_blocking(move || backup.local_key_installed(identity));
     Ok(public)
 }
-/// Whether installed old Buzz left data here; never reads secure storage.
+/// Whether installed old Buzz left data here. Never on the onboarding-test
+/// branch, so first run offers no import of the tester's real old key.
 #[tauri::command]
-pub fn identity_legacy_available<R: tauri::Runtime>(app: tauri::AppHandle<R>) -> bool {
-    use tauri::Manager;
-    app.path().data_dir().is_ok_and(|dir| {
-        dir.join(buzz_agent_controller::LegacySource::Installed.app_directory())
-            .is_dir()
-    })
+pub fn identity_legacy_available<R: tauri::Runtime>(_app: tauri::AppHandle<R>) -> bool {
+    false
 }
 #[tauri::command]
 pub async fn identity_import_legacy(

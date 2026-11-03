@@ -21,6 +21,8 @@ they use every day. It is not meant to merge.
   (`dev.local.buzz.foundation.onboarding-test.*`), so it can never pick up your
   real key. The same rename gives it its own nsec backups folder and sign-out
   records.
+- **No old-Buzz import:** first run doesn't offer the pre-1.0 Buzz key or
+  communities (see below).
 - **Production only:** `just desktop` refuses to start if `.env.local`, a Vite
   mode file or the shell sets anything that would point it elsewhere, fake first
   run, or supply an existing identity. Examples are a `BUZZ_BUILDERLAB_URL`
@@ -61,6 +63,7 @@ items, and nothing that belongs to another Buzz.
 Your Builderlab account still remembers what you linked and saved during the
 test, so a later run with the same account follows the returning-user path.
 
-If you ever had the pre-1.0 Buzz (`~/Library/Application Support/xyz.block.buzz.app`),
-first run offers to import its key, as it would for any upgrading user. Choose
-a new identity instead if you want the new-user path.
+This build never looks for the pre-1.0 Buzz
+(`~/Library/Application Support/xyz.block.buzz.app`). It doesn't offer to
+import that key or its communities, so everyone gets the new-user path. Revert
+the "Skip old-Buzz detection" commit to test the upgrade path instead.
