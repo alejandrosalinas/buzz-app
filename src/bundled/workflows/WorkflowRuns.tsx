@@ -10,16 +10,41 @@ import {
   formatItemTimestamp,
 } from "../../shared/datetime";
 import { Button } from "../../shared/design-system/ui/Button";
+import { HEX, record } from "../../features/workflows/protocol";
 import { useWorkflowView } from "./useWorkflowView";
+
+/** Messages a run's completed `send_message` steps posted, as the relay traces
+ * them: `{ step_id, status, output: { sent: true, event_id } }`. Only that step
+ * reports `sent`, and the relay posts it to the workflow's own channel. */
+function postedMessages(trace: readonly unknown[]) {
+  // A retried step can trace the same message twice.
+  const posted = new Map<string, { step: string | undefined; id: string }>();
+  for (const entry of trace)
+    if (
+      record(entry) &&
+      entry.status === "completed" &&
+      record(entry.output) &&
+      entry.output.sent === true &&
+      typeof entry.output.event_id === "string" &&
+      HEX.test(entry.output.event_id)
+    )
+      posted.set(entry.output.event_id, {
+        step: typeof entry.step_id === "string" ? entry.step_id : undefined,
+        id: entry.output.event_id,
+      });
+  return [...posted.values()];
+}
 
 export function WorkflowRuns({
   capability,
   workflow,
   heading = true,
+  onOpenMessage,
 }: {
   capability: WorkflowCapability;
   workflow: WorkflowDefinition;
   heading?: boolean;
+  onOpenMessage?: ((messageId: string) => void) | undefined;
 }) {
   const [cursor, setCursor] = useState<WorkflowRunCursor | undefined>();
   if (!capability.availability.history)
@@ -36,6 +61,7 @@ export function WorkflowRuns({
       cursor={cursor}
       onPage={setCursor}
       heading={heading}
+      onOpenMessage={onOpenMessage}
     />
   );
 }
@@ -45,12 +71,14 @@ function RunPage({
   cursor,
   onPage,
   heading,
+  onOpenMessage,
 }: {
   capability: WorkflowCapability;
   workflow: WorkflowReference;
   cursor: WorkflowRunCursor | undefined;
   onPage: (cursor: WorkflowRunCursor | undefined) => void;
   heading: boolean;
+  onOpenMessage: ((messageId: string) => void) | undefined;
 }) {
   const { snapshot, refresh } = useWorkflowView(
     useCallback(
@@ -110,6 +138,19 @@ function RunPage({
               {run.errorCode}: {run.errorMessage}
             </p>
           )}
+          {onOpenMessage &&
+            postedMessages(run.trace).map((message, _, posted) => (
+              <Button
+                key={message.id}
+                variant="link"
+                size="inline"
+                onClick={() => onOpenMessage(message.id)}
+              >
+                {posted.length > 1 && message.step
+                  ? `Open posted message (${message.step})`
+                  : "Open posted message"}
+              </Button>
+            ))}
           <details>
             <summary>Run details and trace</summary>
             <p className="text-mono-sm workflow-key">Run ID: {run.id}</p>

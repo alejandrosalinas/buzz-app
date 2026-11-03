@@ -25,7 +25,13 @@ export const fixtureRun: WorkflowRun = {
   workflowId: "55555555-5555-4555-8555-555555555555",
   status: "completed",
   currentStep: 1,
-  trace: [{ step: "notify", status: "completed" }],
+  trace: [
+    {
+      step_id: "notify",
+      status: "completed",
+      output: { sent: true, event_id: "ee".repeat(32) },
+    },
+  ],
   createdAt: 1_789_224_000,
   startedAt: 1_789_224_000,
   completedAt: 1_789_224_001,

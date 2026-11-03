@@ -11,6 +11,14 @@ import {
 } from "@testing-library/react";
 import { afterEach, expect, it, vi } from "vitest";
 import userEvent from "@testing-library/user-event";
+import { useEffect, useMemo, useSyncExternalStore } from "react";
+import {
+  createNavigationController,
+  type Navigation,
+} from "../../features/navigation/controller";
+import { createMemoryHistory } from "../../features/navigation/history";
+import type { PageNavigation } from "../../features/navigation/service";
+import type { OpenTarget } from "../../features/navigation/targets";
 import { formStateToYaml, yamlToFormState } from "./workflowFormTypes";
 import type { ChannelList } from "../../features/relay/contracts";
 import type { RelaySession } from "../../features/relay/session";
@@ -23,6 +31,7 @@ import { bindNames } from "../../features/identity-names/service";
 import { agentDirectory } from "../../features/identity-names/testing";
 import { ToastProvider } from "../../shared/design-system/ui/Toast";
 import { WorkflowCommunity } from "./WorkflowsPage";
+import { workflowsRoute, type WorkflowsRoute } from "./routes";
 import {
   createWorkflowFixture,
   fixtureChannel,
@@ -34,6 +43,7 @@ vi.stubGlobal(
   "ResizeObserver",
   class {
     observe() {}
+    unobserve() {}
     disconnect() {}
   },
 );
@@ -44,6 +54,13 @@ function mount(
   owner = fixtureViewer,
   save = true,
   identity: Partial<Pick<RelaySession, "profiles" | "names">> = {},
+  community = (session: RelaySession) => (
+    <WorkflowCommunity session={session} viewer={fixtureViewer} />
+  ),
+  initialChannels: ChannelList = {
+    status: "ready",
+    channels: [{ id: fixtureChannel, name: "Fixture channel" }],
+  },
 ) {
   const fixture = createWorkflowFixture();
   fixture.definitions.update({
@@ -53,10 +70,7 @@ function mount(
       items: [{ ...fixtureDefinition, owner, yaml: initialYaml }],
     },
   });
-  let list: ChannelList = {
-    status: "ready",
-    channels: [{ id: fixtureChannel, name: "Fixture channel" }],
-  };
+  let list = initialChannels;
   const listeners = new Set<() => void>();
   const session = {
     profiles: createProfileDirectory({ read: async () => [] }).queries,
@@ -76,11 +90,7 @@ function mount(
       },
     },
   } as unknown as RelaySession;
-  render(
-    <ToastProvider>
-      <WorkflowCommunity session={session} viewer={fixtureViewer} />
-    </ToastProvider>,
-  );
+  render(<ToastProvider>{community(session)}</ToastProvider>);
   return {
     ...fixture,
     setChannels(next: ChannelList) {
@@ -1473,4 +1483,503 @@ it("describes an unreadable workflow outside its row button", async () => {
   expect(
     screen.getByText("Unreadable configuration").closest("button"),
   ).toBeNull();
+});
+
+const pageScope = { viewer: fixtureViewer, communityOrigin: "https://a.test" };
+const pageTarget = {
+  version: 1,
+  kind: "page",
+  pluginId: "buzz.workflows",
+  pageId: "workflows",
+  scope: pageScope,
+} as const satisfies OpenTarget;
+
+/** The page under a host that records its visits in a memory history. */
+function navigatedPage(
+  route?: WorkflowsRoute,
+  owner = fixtureViewer,
+  initialChannels?: ChannelList,
+) {
+  const controller = createNavigationController(
+    createMemoryHistory(
+      route
+        ? { ...pageTarget, route: { version: 1, params: { ...route } } }
+        : pageTarget,
+    ),
+  );
+  const navigator = controller.navigation;
+  function Host({ session }: { session: RelaySession }) {
+    const snapshot = useSyncExternalStore(
+      navigator.subscribe,
+      navigator.snapshot,
+    );
+    const navigation = useMemo(() => {
+      const request: PageNavigation = {
+        entryId: snapshot.entry.id,
+        target: snapshot.entry.target,
+        signal: snapshot.attempt.signal,
+        position: () => undefined,
+        savePosition() {},
+        forSession: () => request,
+        resolve: () => false,
+        complete: (result) => controller.complete(snapshot.attempt, result),
+      };
+      return request;
+    }, [snapshot.attempt, snapshot.entry]);
+    useEffect(() => {
+      navigation.complete({ status: "opened" });
+    }, [navigation]);
+    return (
+      <WorkflowCommunity
+        session={session}
+        viewer={fixtureViewer}
+        scope={pageScope}
+        navigation={navigation}
+        navigator={navigator}
+      />
+    );
+  }
+  const fixture = mount(
+    fixtureYaml,
+    owner,
+    true,
+    {},
+    (session) => <Host session={session} />,
+    initialChannels,
+  );
+  return {
+    ...fixture,
+    navigator,
+    routed() {
+      const target = navigator.snapshot().entry.target;
+      return target.kind === "page"
+        ? workflowsRoute(target.route?.params)
+        : undefined;
+    },
+    dispose: () => controller.dispose(),
+  };
+}
+
+it("records a selected workflow as a visit that Back and Forward restore and Close retires", async () => {
+  const page = navigatedPage();
+  try {
+    const open = await screen.findByRole("button", {
+      name: /^Open Message helper:/,
+    });
+    expect(page.routed()).toBeUndefined();
+    fireEvent.click(open);
+    expect(
+      detailPane().getByRole("tab", { name: "Message helper" }),
+    ).toBeVisible();
+    await waitFor(() =>
+      expect(page.routed()).toEqual({
+        channel: fixtureChannel,
+        owner: fixtureViewer,
+        workflow: fixtureDefinition.id,
+      }),
+    );
+    expect(page.navigator.snapshot().canGoBack).toBe(true);
+    act(() => page.navigator.back());
+    await waitFor(() =>
+      expect(
+        screen.queryByRole("region", { name: "Workflow details" }),
+      ).toBeNull(),
+    );
+    expect(
+      screen.getByRole("button", { name: /^Open Message helper:/ }),
+    ).toHaveAttribute("aria-pressed", "false");
+    act(() => page.navigator.forward());
+    expect(
+      await screen.findByRole("tab", { name: "Message helper" }),
+    ).toBeVisible();
+    expect(
+      screen.getByRole("button", { name: /^Open Message helper:/ }),
+    ).toHaveAttribute("aria-pressed", "true");
+    fireEvent.click(
+      detailPane().getByRole("button", { name: "Close Message helper tab" }),
+    );
+    expect(
+      screen.queryByRole("region", { name: "Workflow details" }),
+    ).toBeNull();
+    await waitFor(() => expect(page.routed()).toBeUndefined());
+    expect(page.navigator.snapshot().canGoBack).toBe(false);
+    expect(page.navigator.snapshot().canGoForward).toBe(false);
+  } finally {
+    page.dispose();
+  }
+});
+
+it("replaces the selected workflow's visit when another is selected", async () => {
+  const page = navigatedPage();
+  try {
+    act(() =>
+      page.definitions.update({
+        status: "ready",
+        data: {
+          partial: false,
+          items: [
+            fixtureDefinition,
+            {
+              ...fixtureDefinition,
+              id: "22222222-2222-4222-8222-222222222222",
+              yaml: fixtureYaml.replace("Message helper", "Second helper"),
+            },
+          ],
+        },
+      }),
+    );
+    fireEvent.click(
+      await screen.findByRole("button", { name: /^Open Message helper:/ }),
+    );
+    await waitFor(() =>
+      expect(page.routed()?.workflow).toBe(fixtureDefinition.id),
+    );
+    fireEvent.click(
+      screen.getByRole("button", { name: /^Open Second helper:/ }),
+    );
+    await waitFor(() =>
+      expect(page.routed()?.workflow).toBe(
+        "22222222-2222-4222-8222-222222222222",
+      ),
+    );
+    // Back skips the first selection: the landing is the previous entry.
+    act(() => page.navigator.back());
+    await waitFor(() => expect(page.routed()).toBeUndefined());
+    expect(page.navigator.snapshot().canGoBack).toBe(false);
+    act(() => page.navigator.forward());
+    expect(
+      await screen.findByRole("tab", { name: "Second helper" }),
+    ).toBeVisible();
+    fireEvent.click(
+      detailPane().getByRole("button", { name: "Close Second helper tab" }),
+    );
+    await waitFor(() => expect(page.routed()).toBeUndefined());
+    expect(page.navigator.snapshot().canGoBack).toBe(false);
+    expect(page.navigator.snapshot().canGoForward).toBe(false);
+  } finally {
+    page.dispose();
+  }
+});
+
+it("retires a selected workflow's visit when a filter hides it", async () => {
+  const page = navigatedPage();
+  try {
+    fireEvent.click(
+      await screen.findByRole("button", { name: /^Open Message helper:/ }),
+    );
+    await waitFor(() => expect(page.routed()?.workflow).toBeDefined());
+    // The fixture workflow is disabled.
+    fireEvent.click(screen.getByRole("button", { name: /^Status(?::|$)/ }));
+    fireEvent.click(await screen.findByRole("radio", { name: "Enabled" }));
+    await waitFor(() =>
+      expect(
+        screen.queryByRole("region", { name: "Workflow details" }),
+      ).toBeNull(),
+    );
+    await waitFor(() => expect(page.routed()).toBeUndefined());
+    expect(page.navigator.snapshot().canGoBack).toBe(false);
+    expect(page.navigator.snapshot().canGoForward).toBe(false);
+  } finally {
+    page.dispose();
+  }
+});
+
+it("returns to the link visit when a workflow selected from it closes", async () => {
+  const page = navigatedPage({ channel: fixtureChannel, owner: fixtureViewer });
+  try {
+    expect(
+      await screen.findByRole("button", { name: /^Channels(?::|$)/ }),
+    ).toHaveAccessibleName("Channels: Fixture channel");
+    // The reader's filter changes outlive the link's.
+    fireEvent.click(
+      screen.getByRole("button", { name: "Owner: My workflows" }),
+    );
+    fireEvent.click(
+      await screen.findByRole("radio", { name: "All channel workflows" }),
+    );
+    fireEvent.click(
+      screen.getByRole("button", { name: /^Open Message helper:/ }),
+    );
+    await waitFor(() => expect(page.routed()?.workflow).toBeDefined());
+    // Back to the landing and Forward again still closes to that landing.
+    act(() => page.navigator.back());
+    await waitFor(() => expect(page.routed()?.workflow).toBeUndefined());
+    await waitFor(() =>
+      expect(
+        screen.queryByRole("region", { name: "Workflow details" }),
+      ).toBeNull(),
+    );
+    act(() => page.navigator.forward());
+    await waitFor(() => expect(page.routed()?.workflow).toBeDefined());
+    fireEvent.click(
+      await detailPane().findByRole("button", {
+        name: "Close Message helper tab",
+      }),
+    );
+    await waitFor(() =>
+      expect(page.routed()).toEqual({
+        channel: fixtureChannel,
+        owner: fixtureViewer,
+      }),
+    );
+    expect(page.navigator.snapshot().canGoBack).toBe(false);
+    expect(page.navigator.snapshot().canGoForward).toBe(false);
+    expect(
+      screen.getByRole("button", { name: /^Channels(?::|$)/ }),
+    ).toHaveAccessibleName("Channels: Fixture channel");
+    expect(
+      screen.queryByRole("button", { name: "Owner: My workflows" }),
+    ).toBeNull();
+  } finally {
+    page.dispose();
+  }
+});
+
+it("reports a routed channel that has no workflows instead of filtering by it", async () => {
+  const page = navigatedPage(
+    { channel: "other-channel", owner: fixtureViewer },
+    fixtureViewer,
+    {
+      status: "ready",
+      channels: [
+        { id: fixtureChannel, name: "Fixture channel" },
+        { id: "other-channel", name: "Other channel" },
+      ],
+    },
+  );
+  try {
+    expect(
+      await screen.findByText("#Other channel has no workflows."),
+    ).toBeVisible();
+    expect(
+      screen.getByRole("button", { name: /^Channels(?::|$)/ }),
+    ).toHaveAccessibleName("Channels");
+  } finally {
+    page.dispose();
+  }
+});
+
+it("selects a routed workflow, clearing the filters that would hide it", async () => {
+  const owner = "22".repeat(32);
+  const page = navigatedPage(
+    { channel: fixtureChannel, owner, workflow: fixtureDefinition.id },
+    owner,
+  );
+  try {
+    expect(
+      await screen.findByRole("tab", { name: "Message helper" }),
+    ).toBeVisible();
+    expect(
+      screen.getByRole("button", { name: /^Open Message helper:/ }),
+    ).toHaveAttribute("aria-pressed", "true");
+    expect(
+      screen.queryByRole("button", { name: "Owner: My workflows" }),
+    ).toBeNull();
+  } finally {
+    page.dispose();
+  }
+});
+
+it("filters by a routed channel and owner, and reports a routed workflow that is missing or unread", async () => {
+  const page = navigatedPage({
+    channel: fixtureChannel,
+    owner: "22".repeat(32),
+  });
+  try {
+    act(() =>
+      page.setChannels({
+        status: "ready",
+        channels: [
+          { id: fixtureChannel, name: "Fixture channel" },
+          { id: "other-channel", name: "Other channel" },
+        ],
+      }),
+    );
+    expect(
+      await screen.findByRole("button", { name: /^Channels(?::|$)/ }),
+    ).toHaveAccessibleName("Channels: Fixture channel");
+    expect(
+      screen.queryByRole("button", { name: "Owner: My workflows" }),
+    ).toBeNull();
+    expect(
+      screen.queryByRole("region", { name: "Workflow details" }),
+    ).toBeNull();
+  } finally {
+    page.dispose();
+  }
+  cleanup();
+  const missing = navigatedPage({
+    channel: fixtureChannel,
+    owner: fixtureViewer,
+    workflow: "66666666-6666-4666-8666-666666666666",
+  });
+  try {
+    expect(
+      await screen.findByRole("button", { name: /^Open Message helper:/ }),
+    ).toHaveAttribute("aria-pressed", "false");
+    expect(
+      screen.queryByRole("region", { name: "Workflow details" }),
+    ).toBeNull();
+    expect(
+      await screen.findByText("The linked workflow was not found."),
+    ).toBeVisible();
+  } finally {
+    missing.dispose();
+  }
+  cleanup();
+  // An unlisted channel's workflows are never read.
+  const unread = navigatedPage({
+    channel: "other-channel",
+    owner: fixtureViewer,
+    workflow: fixtureDefinition.id,
+  });
+  try {
+    expect(
+      await screen.findByText("The linked workflow could not be read."),
+    ).toBeVisible();
+    expect(
+      screen.queryByRole("region", { name: "Workflow details" }),
+    ).toBeNull();
+  } finally {
+    unread.dispose();
+  }
+});
+
+it("applies a routed workflow once its channel is listed", async () => {
+  const page = navigatedPage(
+    {
+      channel: fixtureChannel,
+      owner: fixtureViewer,
+      workflow: fixtureDefinition.id,
+    },
+    fixtureViewer,
+    { status: "loading", channels: [] },
+  );
+  try {
+    expect(await screen.findByText("Reading channels…")).toBeVisible();
+    expect(
+      screen.queryByRole("region", { name: "Workflow details" }),
+    ).toBeNull();
+    act(() =>
+      page.setChannels({
+        status: "ready",
+        channels: [{ id: fixtureChannel, name: "Fixture channel" }],
+      }),
+    );
+    expect(
+      await screen.findByRole("tab", { name: "Message helper" }),
+    ).toBeVisible();
+    expect(screen.queryByText("The linked workflow was not found.")).toBeNull();
+  } finally {
+    page.dispose();
+  }
+});
+
+it("opens the channel and a posted message from the detail pane and reports refusals", async () => {
+  const open = vi.fn<Navigation["open"]>(async () => ({ status: "opened" }));
+  mount(fixtureYaml, fixtureViewer, true, {}, (session) => (
+    <WorkflowCommunity
+      session={session}
+      viewer={fixtureViewer}
+      scope={pageScope}
+      navigator={{ open } as unknown as Navigation}
+    />
+  ));
+  fireEvent.click(
+    await screen.findByRole("button", { name: /^Open Message helper:/ }),
+  );
+  fireEvent.click(
+    detailPane().getByRole("button", { name: "#Fixture channel" }),
+  );
+  expect(open).toHaveBeenCalledWith({
+    version: 1,
+    kind: "conversation",
+    scope: pageScope,
+    channelId: fixtureChannel,
+  });
+  fireEvent.click(
+    await detailPane().findByRole("button", { name: "Open posted message" }),
+  );
+  expect(open).toHaveBeenLastCalledWith({
+    version: 1,
+    kind: "conversation",
+    scope: pageScope,
+    channelId: fixtureChannel,
+    messageId: "ee".repeat(32),
+  });
+  await waitFor(() => expect(open).toHaveReturnedTimes(2));
+  expect(screen.queryByText(/could not be opened/)).toBeNull();
+  open.mockResolvedValueOnce({ status: "failed", reason: "not-found" });
+  fireEvent.click(
+    detailPane().getByRole("button", { name: "Open posted message" }),
+  );
+  expect(
+    await screen.findByText("This message could not be opened."),
+  ).toBeVisible();
+  open.mockResolvedValueOnce({ status: "failed", reason: "denied" });
+  fireEvent.click(
+    detailPane().getByRole("button", { name: "#Fixture channel" }),
+  );
+  expect(
+    await screen.findByText("This channel could not be opened."),
+  ).toBeVisible();
+});
+
+it("names the channel without links when the host offers no navigation", async () => {
+  mount();
+  fireEvent.click(
+    await screen.findByRole("button", { name: /^Open Message helper:/ }),
+  );
+  expect(await detailPane().findByText("completed")).toBeVisible();
+  expect(detailPane().getByText(/#Fixture channel/)).toBeVisible();
+  expect(
+    detailPane().queryByRole("button", { name: "#Fixture channel" }),
+  ).toBeNull();
+  expect(
+    detailPane().queryByRole("button", { name: /^Open posted message/ }),
+  ).toBeNull();
+});
+
+it("shows a created run from its notice, clearing filters that hide the workflow", async () => {
+  const fixture = mount();
+  fireEvent.click(
+    await screen.findByRole("button", { name: "Run now: Message helper" }),
+  );
+  act(() => fixture.finish("succeeded"));
+  expect(screen.queryByRole("region", { name: "Workflow details" })).toBeNull();
+  const reads = fixture.calls.runs;
+  fireEvent.click(await screen.findByRole("button", { name: "View run" }));
+  expect(
+    detailPane().getByRole("tab", { name: "Message helper" }),
+  ).toBeVisible();
+  expect(await detailPane().findByText("completed")).toBeVisible();
+  expect(fixture.calls.runs).toBeGreaterThan(reads);
+  expect(screen.queryByRole("button", { name: "View run" })).toBeNull();
+  fireEvent.click(
+    detailPane().getByRole("button", { name: "Close Message helper tab" }),
+  );
+  fireEvent.click(
+    screen.getByRole("button", { name: "Run now: Message helper" }),
+  );
+  fireEvent.click(screen.getByRole("button", { name: /^Status(?::|$)/ }));
+  fireEvent.click(await screen.findByRole("radio", { name: "Enabled" }));
+  await waitFor(() =>
+    expect(
+      screen.queryByRole("button", { name: /^Open Message helper:/ }),
+    ).toBeNull(),
+  );
+  act(() => fixture.finish("succeeded"));
+  fireEvent.click(await screen.findByRole("button", { name: "View run" }));
+  expect(
+    await screen.findByRole("button", { name: /^Open Message helper:/ }),
+  ).toHaveAttribute("aria-pressed", "true");
+  expect(
+    detailPane().getByRole("tab", { name: "Message helper" }),
+  ).toBeVisible();
+  expect(
+    screen.getByRole("button", { name: /^Status(?::|$)/ }),
+  ).toHaveAccessibleName("Status");
+  expect(
+    screen.getByRole("button", { name: "Owner: My workflows" }),
+  ).toBeVisible();
 });

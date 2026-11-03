@@ -68,6 +68,8 @@ const token = /^[a-z0-9][a-z0-9._-]{0,127}$/;
 const section = /^[a-z0-9][a-z0-9._-]{0,127}(?:\/[a-z0-9][a-z0-9._-]{0,127})?$/;
 const provider = /^[a-z0-9][a-z0-9._-]{0,127}\/[a-z0-9][a-z0-9._-]{0,127}$/;
 const hex = /^[a-f0-9]{64}$/i;
+/** The channel ID grammar of conversation targets and links. */
+export const CHANNEL_ID = /^[a-zA-Z0-9][a-zA-Z0-9._-]{0,255}$/;
 const paramKey = /^[a-zA-Z0-9][a-zA-Z0-9_-]{0,63}$/;
 const gitCommit = /^(?:[a-f0-9]{40}|[a-f0-9]{64})$/i;
 const MAX_PARAMS = 16;
@@ -351,10 +353,7 @@ export function parseOpenTarget(input: unknown): OpenTarget {
           version: 1,
           kind: "conversation",
           scope: boundScope(value.scope),
-          channelId: text(
-            value.channelId,
-            /^[a-zA-Z0-9][a-zA-Z0-9._-]{0,255}$/,
-          ),
+          channelId: text(value.channelId, CHANNEL_ID),
           ...(value.messageId !== undefined
             ? { messageId: text(value.messageId, hex).toLowerCase() }
             : {}),

@@ -11,7 +11,9 @@ import {
   type ReactNode,
   type Ref,
   type RefObject,
+  useCallback,
   useEffect,
+  useEffectEvent,
   useId,
   useMemo,
   useRef,
@@ -29,6 +31,7 @@ import type {
   WorkflowDefinition,
   WorkflowDefinitions,
   WorkflowOperation,
+  WorkflowReference,
   WorkflowView,
 } from "../../features/workflows/types";
 import {
@@ -95,6 +98,13 @@ import {
   readWorkflowDocumentFields,
   yamlWithWorkflowEnabled,
 } from "./workflowYamlDocument";
+import { routedWorkflow, type WorkflowsRoute } from "./routes";
+
+/** Opens a channel, or a message in it; resolves false when that failed. */
+type OpenConversation = (
+  channelId: string,
+  messageId?: string,
+) => Promise<boolean>;
 
 const ICONS: Record<WorkflowCardIcon, typeof LightningIcon> = {
   delay: TimerIcon,
@@ -478,6 +488,7 @@ function WorkflowCard({
   showChannel = false,
   onError,
   onOpen,
+  onOpenConversation,
   onDelete,
   onSelect,
   onRun,
@@ -498,6 +509,7 @@ function WorkflowCard({
   onError: (message: string | null) => void;
   onDelete: (definition: WorkflowDefinition) => void;
   onOpen: (definition: WorkflowDefinition, channel: ChannelSummary) => void;
+  onOpenConversation?: OpenConversation | undefined;
 }) {
   const present = useIsPresent();
   const [confirmDelete, setConfirmDelete] = useState(false);
@@ -595,6 +607,17 @@ function WorkflowCard({
       );
     }
   };
+  const openConversation =
+    onOpenConversation &&
+    ((messageId?: string) =>
+      void onOpenConversation(channel.id, messageId).then((opened) => {
+        if (!opened)
+          onError(
+            messageId
+              ? "This message could not be opened."
+              : "This channel could not be opened.",
+          );
+      }));
   const toggle = (next: boolean) => {
     const yaml = yamlWithWorkflowEnabled(definition.yaml, next);
     if (yaml === null) {
@@ -734,7 +757,18 @@ function WorkflowCard({
           {presentation.description}
         </p>
         <p className="text-caption text-subtle">
-          #{channel.name} · {updated}
+          {openConversation ? (
+            <Button
+              variant="link"
+              size="inline"
+              onClick={() => openConversation()}
+            >
+              #{channel.name}
+            </Button>
+          ) : (
+            <>#{channel.name}</>
+          )}{" "}
+          · {updated}
         </p>
         <p className="text-caption text-subtle">{owner}</p>
         <div className="workflow-detail-actions">
@@ -807,6 +841,7 @@ function WorkflowCard({
         key={createdRun ?? ""}
         capability={capability}
         workflow={history}
+        onOpenMessage={openConversation}
       />
     </section>
   );
@@ -961,8 +996,9 @@ function WorkflowCards({
   partialChannels,
   viewer,
   onOpen,
+  onOpenConversation,
   onDelete,
-  onSelect,
+  onChoose,
   onRun,
   onError,
 }: {
@@ -979,11 +1015,12 @@ function WorkflowCards({
   }[];
   partialChannels: readonly ChannelSummary[];
   viewer: string;
-  onSelect: (key: string | undefined) => void;
+  onChoose: (workflow: WorkflowReference | undefined) => void;
   onRun: (eventId: string) => void;
   onError: (message: string | null) => void;
   onDelete: (definition: WorkflowDefinition) => void;
   onOpen: (definition: WorkflowDefinition, channel: ChannelSummary) => void;
+  onOpenConversation: OpenConversation | undefined;
 }) {
   // Present groups receive current props; presence data updates retained exits.
   const present = useIsPresent();
@@ -1028,8 +1065,11 @@ function WorkflowCards({
               onError={onError}
               onRun={onRun}
               onOpen={onOpen}
+              onOpenConversation={onOpenConversation}
               onDelete={onDelete}
-              onSelect={() => onSelect(selected === key ? undefined : key)}
+              onSelect={() =>
+                onChoose(selected === key ? undefined : definition)
+              }
               operations={operations}
               selected={selected === key}
               viewer={viewer}
@@ -1049,8 +1089,8 @@ function WorkflowCards({
   );
 }
 
-const workflowKey = (definition: WorkflowDefinition) =>
-  `${definition.channelId}:${definition.owner}:${definition.id}`;
+export const workflowKey = (workflow: WorkflowReference) =>
+  `${workflow.channelId}:${workflow.owner}:${workflow.id}`;
 
 const OWNER_OPTIONS = [
   { value: "all", label: "All channel workflows" },
@@ -1269,6 +1309,9 @@ export function WorkflowLanding({
   detailTarget,
   selected,
   onSelect,
+  onChoose,
+  route,
+  onOpenConversation,
 }: {
   /** Live identity names; offline diagnostic fixtures use public-key labels. */
   session?: RelaySession | undefined;
@@ -1279,6 +1322,11 @@ export function WorkflowLanding({
   selected: string | undefined;
   /** Reports the selected workflow and its name, or clears the selection. */
   onSelect: (key: string | undefined, name?: string) => void;
+  /** The reader selects a workflow, or closes the selected one. */
+  onChoose?: (workflow: WorkflowReference | undefined) => void;
+  /** The visit's route, applied once its channel's workflows are read. */
+  route?: (WorkflowsRoute & { visit: string }) | undefined;
+  onOpenConversation?: OpenConversation | undefined;
   /** Channel IDs to show; every channel is still read. Empty shows all. */
   filter: readonly string[];
   onFilterChange: (channelIds: readonly string[]) => void;
@@ -1348,6 +1396,28 @@ export function WorkflowLanding({
     operationRefreshKey,
     saveReadback,
   );
+  /** The owner, status and trigger filters that hide `definition`. */
+  const hiddenBy = useCallback(
+    (definition: WorkflowDefinition) => {
+      const reasons: ("owner" | "status" | "trigger")[] = [];
+      if (mineOnly && definition.owner !== viewer) reasons.push("owner");
+      if (status !== "all") {
+        const fields = readWorkflowDocumentFields(definition.yaml);
+        if (
+          !fields.editable ||
+          (fields.enabled !== false) !== (status === "enabled")
+        )
+          reasons.push("status");
+      }
+      if (triggers.length) {
+        const type = workflowCardPresentation(definition.yaml).triggerIcon;
+        if (!triggers.some((trigger) => trigger === type))
+          reasons.push("trigger");
+      }
+      return reasons;
+    },
+    [mineOnly, status, triggers, viewer],
+  );
   const filteredSnapshots = useMemo(() => {
     if (!mineOnly && status === "all" && triggers.length === 0)
       return snapshots;
@@ -1358,35 +1428,40 @@ export function WorkflowLanding({
           ...snapshot,
           data: {
             ...snapshot.data,
-            items: snapshot.data.items.filter((definition) => {
-              if (mineOnly && definition.owner !== viewer) return false;
-              if (status !== "all") {
-                const fields = readWorkflowDocumentFields(definition.yaml);
-                if (
-                  !fields.editable ||
-                  (fields.enabled !== false) !== (status === "enabled")
-                )
-                  return false;
-              }
-              if (triggers.length === 0) return true;
-              const type = workflowCardPresentation(
-                definition.yaml,
-              ).triggerIcon;
-              return triggers.some((trigger) => trigger === type);
-            }),
+            items: snapshot.data.items.filter(
+              (definition) => !hiddenBy(definition).length,
+            ),
           },
         },
       ]),
     );
-  }, [snapshots, mineOnly, status, triggers, viewer]);
+  }, [snapshots, mineOnly, status, triggers, hiddenBy]);
   const filtered =
     mineOnly || status !== "all" || triggers.length > 0 || filter.length > 0;
-  const resetFilters = () => {
+  const clearFilters = () => {
     onFilterChange([]);
     setMineOnly(false);
     setStatus("all");
     setTriggers([]);
+  };
+  const resetFilters = () => {
+    clearFilters();
     ownerTriggerRef.current?.focus();
+  };
+  /** Clears only the filters hiding `workflow`, so its card is listed. */
+  const reveal = (workflow: WorkflowReference) => {
+    if (filter.length && !filter.includes(workflow.channelId))
+      onFilterChange([]);
+    const definition = snapshots[workflow.channelId]?.data.items.find(
+      (item) => item.id === workflow.id && item.owner === workflow.owner,
+    );
+    // An unread definition could be hidden by any of them.
+    for (const reason of definition
+      ? hiddenBy(definition)
+      : (["owner", "status", "trigger"] as const))
+      if (reason === "owner") setMineOnly(false);
+      else if (reason === "status") setStatus("all");
+      else setTriggers([]);
   };
   const ordered = [...channels].sort(
     (a, b) => a.name.localeCompare(b.name) || a.id.localeCompare(b.id),
@@ -1429,12 +1504,77 @@ export function WorkflowLanding({
     ? readWorkflowDocumentFields(selectedItem.yaml).name ||
       "Unnamed or malformed workflow"
     : undefined;
+  // Hosts without navigation select directly; a stable callback keeps the
+  // effects below from re-running every render.
+  const choose = useMemo(
+    () =>
+      onChoose ??
+      ((workflow: WorkflowReference | undefined) =>
+        onSelect(workflow && workflowKey(workflow))),
+    [onChoose, onSelect],
+  );
   useEffect(() => {
     // Filtering is definitive; disappearance waits for pending reads to settle.
+    // Either closes the selection, retiring its visit like Close does.
     if (selected && !selectedName && (selectionFilteredOut || !reading))
-      onSelect(undefined);
+      choose(undefined);
     else if (selected && selectedName) onSelect(selected, selectedName);
-  }, [onSelect, reading, selected, selectedName, selectionFilteredOut]);
+  }, [choose, onSelect, reading, selected, selectedName, selectionFilteredOut]);
+  const routeChannel = route?.channel ? snapshots[route.channel] : undefined;
+  // A route waits for its channel's read: an unread channel is not yet a filter
+  // choice, and its workflows are unknown. A failed read is retried from the
+  // page, which then applies the route. An unlisted channel is never read.
+  const routeReady =
+    !route?.channel ||
+    (routeChannel
+      ? routeChannel.status !== "loading" && routeChannel.status !== "error"
+      : !channels.some((channel) => channel.id === route.channel));
+  const applyRoute = useEffectEvent((route: WorkflowsRoute, first: boolean) => {
+    const workflow = routedWorkflow(route);
+    if (workflow) {
+      const read = routeChannel?.status === "ready";
+      const definition = read
+        ? routeChannel.data.items.find(
+            (item) => workflowKey(item) === workflowKey(workflow),
+          )
+        : undefined;
+      // A visit shows its workflow even when filters changed since.
+      if (definition) reveal(definition);
+      else
+        setError(
+          read
+            ? "The linked workflow was not found."
+            : "The linked workflow could not be read.",
+        );
+      onSelect(definition && workflowKey(definition));
+      return;
+    }
+    onSelect(undefined);
+    // A link's filters apply as it arrives; the reader's later changes stand.
+    if (!first) return;
+    if (route.owner) setMineOnly(route.owner === viewer);
+    if (!route.channel) return;
+    // Only a channel with workflows is a filter choice.
+    if (routeChannel?.status !== "ready")
+      setError("The linked channel's workflows could not be read.");
+    else if (routeChannel.data.items.length) onFilterChange([route.channel]);
+    else
+      setError(
+        `#${channels.find((channel) => channel.id === route.channel)?.name ?? route.channel} has no workflows.`,
+      );
+  });
+  const seenVisit = useRef<string>(undefined);
+  const appliedVisits = useRef(new Set<string>());
+  useEffect(() => {
+    if (!route || seenVisit.current === route.visit || !routeReady) return;
+    seenVisit.current = route.visit;
+    // A visit this page pushed already shows its workflow.
+    const routed = routedWorkflow(route);
+    if (routed && workflowKey(routed) === selected) return;
+    const first = !appliedVisits.current.has(route.visit);
+    appliedVisits.current.add(route.visit);
+    applyRoute(route, first);
+  }, [route, routeReady, selected]);
   const cleared = visible.some(
     (channel) =>
       snapshots[channel.id]?.status === "idle" ||
@@ -1704,7 +1844,7 @@ export function WorkflowLanding({
                 target.closest(".workflow-detail"))
             ) {
               event.preventDefault();
-              onSelect(undefined);
+              choose(undefined);
             }
           }}
         >
@@ -1725,8 +1865,9 @@ export function WorkflowLanding({
                   partialChannels={group.partialChannels}
                   detailTarget={detailTarget}
                   onOpen={onOpen}
+                  onOpenConversation={onOpenConversation}
                   onDelete={onDelete}
-                  onSelect={onSelect}
+                  onChoose={choose}
                   onRun={runRequest}
                   onError={setError}
                   operations={operations}
@@ -1780,7 +1921,7 @@ export function WorkflowLanding({
                   ? "warning"
                   : "error"
             }
-            timeout={run.outcome === "succeeded" ? 4000 : 0}
+            timeout={run.outcome !== "succeeded" ? 0 : run.runId ? 8000 : 4000}
             {...(run.outcome === "succeeded"
               ? {
                   onDismiss: () =>
@@ -1790,6 +1931,21 @@ export function WorkflowLanding({
                 }
               : {})}
           >
+            {run.outcome === "succeeded" && run.runId && (
+              <Button
+                size="compact"
+                onClick={() => {
+                  setRunRequests((current) =>
+                    current.filter((eventId) => eventId !== run.eventId),
+                  );
+                  // Its card rereads history for the created run.
+                  reveal(run.workflow);
+                  choose(run.workflow);
+                }}
+              >
+                View run
+              </Button>
+            )}
             {run.outcome !== "succeeded" && (
               <Button
                 size="compact"

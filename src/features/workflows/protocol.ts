@@ -24,7 +24,7 @@ export function isWorkflowOperation(
 }
 export const UUID =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
-const HEX = /^[0-9a-f]{64}$/;
+export const HEX = /^[0-9a-f]{64}$/;
 export function record(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }

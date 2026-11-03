@@ -2548,6 +2548,114 @@ it("opens workflow message details once the pointer rests, without a competing h
   }
 });
 
+it("opens an agent owner's profile when only its directory profile marks it as an agent", () => {
+  const ownerId = "ab".repeat(32);
+  const open = vi.fn(() => true);
+  try {
+    renderMessage({
+      row: {
+        ...row,
+        authorId: ownerId,
+        signerId: "cd".repeat(32),
+        workflowOwnerId: ownerId,
+      },
+      agentPubkeys: new Set(),
+      participantProfiles: new Map([[ownerId, { name: "Wes", isAgent: true }]]),
+      onOpenLink: open,
+      canOpenLink: () => true,
+    });
+    fireEvent.click(
+      screen.getByRole("button", { name: "View workflow owner Wes profile" }),
+    );
+    expect(open).toHaveBeenCalledWith(`buzz:agent-profile:${ownerId}`, {
+      rootId: "root",
+    });
+  } finally {
+    cleanup();
+  }
+});
+
+it("links an agent owner's profile and the channel's workflows from the byline", async () => {
+  const ownerId = "ab".repeat(32);
+  const open = vi.fn(() => true);
+  const channels = {
+    status: "ready",
+    channels: [{ id: row.channelId, name: "general" }],
+  };
+  const session = {
+    channels: { list: () => channels, subscribeList: () => () => {} },
+    messages: {},
+  } as unknown as RelaySession;
+  try {
+    renderMessage({
+      row: {
+        ...row,
+        authorId: ownerId,
+        signerId: "cd".repeat(32),
+        workflowOwnerId: ownerId,
+      },
+      session,
+      agentPubkeys: new Set([ownerId]),
+      profile: { name: "Wes" },
+      participantProfiles: new Map([[ownerId, { name: "Wes" }]]),
+      onOpenLink: open,
+      canOpenLink: () => true,
+    });
+    fireEvent.click(
+      screen.getByRole("button", { name: "View workflow owner Wes profile" }),
+    );
+    expect(open).toHaveBeenCalledWith(`buzz:agent-profile:${ownerId}`, {
+      rootId: "root",
+    });
+    fireEvent.click(
+      screen.getByRole("button", { name: "Workflow message details" }),
+    );
+    fireEvent.click(
+      await screen.findByRole("button", { name: "View workflows in #general" }),
+    );
+    expect(open).toHaveBeenLastCalledWith(
+      `buzz://plugin?id=buzz.workflows&page=workflows&route.channel=channel&route.owner=${ownerId}`,
+      { rootId: "root" },
+    );
+    expect(
+      screen.queryByText(/Workflow and run details are not included/),
+    ).toBeNull();
+  } finally {
+    cleanup();
+  }
+});
+
+it("keeps the byline's workflows link when no panel opens the owner", async () => {
+  const ownerId = "ab".repeat(32);
+  const open = vi.fn(() => true);
+  try {
+    renderMessage({
+      row: { ...row, signerId: "cd".repeat(32), workflowOwnerId: ownerId },
+      profile: { name: "Wes" },
+      participantProfiles: new Map([[ownerId, { name: "Wes" }]]),
+      canOpenLink: () => false,
+      onOpenLink: open,
+    });
+    expect(
+      screen.queryByRole("button", { name: /^View workflow owner/ }),
+    ).toBeNull();
+    fireEvent.click(
+      screen.getByRole("button", { name: "Workflow message details" }),
+    );
+    fireEvent.click(
+      await screen.findByRole("button", {
+        name: "View workflows in this channel",
+      }),
+    );
+    expect(open).toHaveBeenCalledWith(
+      `buzz://plugin?id=buzz.workflows&page=workflows&route.channel=channel&route.owner=${ownerId}`,
+      { rootId: "root" },
+    );
+  } finally {
+    cleanup();
+  }
+});
+
 it("contains a broken plugin message action to its own contribution", () => {
   const listeners = new Set<() => void>();
   const entry = (
