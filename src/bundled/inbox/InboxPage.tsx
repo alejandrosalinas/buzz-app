@@ -364,11 +364,18 @@ function InboxList({
   const [filters, setFilters] = useState(() => readFilters(archiveScope));
   const { show, activity, sender: senderFilter } = filters;
   const unreadOnly = filters.attention === "unread";
+  // Each list returns to the session's last offset once its rows show,
+  // unless the user has already scrolled it. The offset they chose wins,
+  // unless the selected row they could see has since left the view.
+  const scroller = useRef<HTMLDivElement | null>(null);
+  const placed = useRef<HTMLDivElement | null>(null);
   function setFilter(patch: Partial<Filters>) {
     const next = { ...filters, ...patch };
     setFilters(next);
     writeView(archiveScope, filtersKey, next);
-    // The saved offset belonged to the list as it was filtered.
+    // A filter change keeps the list's current offset. A mounted list stays
+    // where it is, even empty at 0, rather than taking the saved offset when
+    // rows show. Drafts unmounts the list, so its offset is the saved one.
     placed.current = scroller.current;
   }
   const [drafts, setDrafts] = useState(false);
@@ -647,11 +654,6 @@ function InboxList({
   useLayoutEffect(() => {
     archiveView.current = { show, visible, selected, opened };
   });
-  // Each list returns to the session's last offset once its rows show,
-  // unless the user has already scrolled it. The offset they chose wins,
-  // unless the selected row they could see has since left the view.
-  const scroller = useRef<HTMLDivElement | null>(null);
-  const placed = useRef<HTMLDivElement | null>(null);
   useLayoutEffect(() => {
     const list = scroller.current;
     // A covered list skips layout: measuring it forces that layout, and
