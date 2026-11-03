@@ -14,7 +14,11 @@ import {
 import { tmpdir } from "node:os";
 import path from "node:path";
 import test from "node:test";
-import { portForPath } from "../../scripts/worktree-port.mjs";
+import { NON_PRODUCTION } from "../../scripts/desktop-config.mjs";
+import {
+  ONBOARDING_TEST_SALT,
+  portForPath,
+} from "../../scripts/worktree-port.mjs";
 
 function recipe(name, ...args) {
   const settings = typeof args[0] === "object" ? args.shift() : {};
@@ -76,7 +80,7 @@ function recipe(name, ...args) {
       path.join(directory, "pnpm"),
       `#!${process.execPath}\nrequire("node:fs").appendFileSync(process.env.BUZZ_TEST_CALLS, JSON.stringify(process.argv.slice(2)) + "\\n");
 if (process.argv[2] === "tauri" && process.argv[3] === "dev") console.log("VIEWER:" + JSON.stringify(process.env.BUZZ_DEV_VIEWER));
-if (process.argv[2] === "tauri") console.log("ENV:" + JSON.stringify({ fi: process.env.BUZZ_BUILD_FEDERATED_IDENTITY_CONFIG, other: process.env.LOCAL_ONLY_SECRET, updater: process.env.BUZZ_UPDATER_ENDPOINT }));
+if (process.argv[2] === "tauri") console.log("ENV:" + JSON.stringify({ value: process.env.BUZZ_DEV_NOTIFICATIONS, other: process.env.LOCAL_ONLY_SECRET, updater: process.env.BUZZ_UPDATER_ENDPOINT }));
 \n`,
       { mode: 0o755 },
     );
@@ -111,10 +115,14 @@ if (process.argv[2] === "tauri") console.log("ENV:" + JSON.stringify({ fi: proce
           BUZZ_TEST_AGENT_COMMAND: commandFile,
           BUZZ_TEST_BUZZ_CLI: cliFile,
           BUZZ_TEST_OPEN: openFile,
+          // The onboarding-test launchers refuse these; keep the operator's out.
+          ...Object.fromEntries(NON_PRODUCTION.map((key) => [key, undefined])),
           // Do not inherit the operator's public pin in isolated launcher tests.
           BUZZ_DEV_VIEWER: undefined,
           BUZZ_DEV_SIGNING_IDENTITY: undefined,
           BUZZ_BUILD_FEDERATED_IDENTITY_CONFIG: undefined,
+          BUZZ_BUILDERLAB_URL: undefined,
+          BUZZ_DEV_NOTIFICATIONS: undefined,
           LOCAL_ONLY_SECRET: undefined,
           BUZZ_UPDATER_ENDPOINT: undefined,
           ...settings.env,
@@ -150,7 +158,7 @@ if (process.argv[2] === "tauri") console.log("ENV:" + JSON.stringify({ fi: proce
       cli,
       opened,
       root,
-      port: portForPath(root),
+      port: portForPath(ONBOARDING_TEST_SALT + root),
     };
   } finally {
     rmSync(directory, { recursive: true, force: true });
@@ -170,7 +178,7 @@ const build = (port) => ({
   beforeDevCommand: `pnpm dev:desktop --port ${port}`,
 });
 
-const identifier = "xyz.block.buzz.desktop.dev";
+const identifier = "xyz.block.buzz.desktop.onboarding-test";
 
 const overlay = (port) => ({
   identifier,
@@ -535,77 +543,141 @@ test("desktop-bundle preserves no-bundle and ignores bundle flags after --", () 
   ]);
 });
 
-for (const [name, settings, expected] of [
-  [
-    "local pin",
-    { local: "BUZZ_DEV_VIEWER=local-public-pin\n" },
-    "local-public-pin",
-  ],
+// The onboarding-test branch runs as a fresh production user, so a viewer pin
+// from any source Vite reads is refused; an explicit empty one still reaches
+// native startup.
+for (const [name, settings] of [
+  ["local pin", { local: "BUZZ_DEV_VIEWER=local-public-pin\n" }],
   [
     "mode precedence",
-    { local: "BUZZ_DEV_VIEWER=local\n", mode: "BUZZ_DEV_VIEWER=mode\n" },
-    "mode",
+    { local: "BUZZ_DEV_VIEWER=\n", mode: "BUZZ_DEV_VIEWER=mode\n" },
   ],
   [
     "process override",
-    { local: "BUZZ_DEV_VIEWER=local\n", env: { BUZZ_DEV_VIEWER: "process" } },
-    "process",
+    { local: "BUZZ_DEV_VIEWER=\n", env: { BUZZ_DEV_VIEWER: "process" } },
   ],
+]) {
+  test(`desktop refuses a development viewer: ${name}`, () => {
+    const result = recipe("desktop", settings);
+    assert.equal(result.status, 1, result.stdout);
+    assert.match(result.stderr, /production only\. Remove BUZZ_DEV_VIEWER /);
+    assert.deepEqual(result.calls, [["install", "--frozen-lockfile"]]);
+  });
+}
+for (const [name, settings] of [
   [
     "explicit native override",
     { local: "BUZZ_DEV_VIEWER=local\n", env: { BUZZ_DEV_VIEWER: "" } },
-    "",
   ],
-  ["no broker", {}, ""],
+  ["no broker", {}],
 ]) {
   test(`desktop passes Vite's effective viewer to native startup: ${name}`, () => {
     const result = recipe("desktop", settings);
     assert.equal(result.status, 0, result.stderr);
-    assert.ok(
-      result.stdout.includes(`VIEWER:${JSON.stringify(expected)}`),
-      result.stdout,
-    );
+    assert.ok(result.stdout.includes('VIEWER:""'), result.stdout);
   });
 }
 
-// `.env.local` is a launch environment source for `BUZZ_` names, so native
-// build inputs such as the FI descriptor can live there.
+// Both launchers refuse anything that leaves production or fakes first run,
+// before Tauri starts, and allow production Builderlab named explicitly.
+for (const target of ["desktop", "desktop-bundle"]) {
+  for (const [name, settings, names] of [
+    [
+      "staging Builderlab",
+      { local: "BUZZ_BUILDERLAB_URL=https://app.builderlabstaging.xyz\n" },
+      "BUZZ_BUILDERLAB_URL",
+    ],
+    [
+      "disabled Builderlab",
+      { env: { BUZZ_BUILDERLAB_URL: "" } },
+      "BUZZ_BUILDERLAB_URL",
+    ],
+    [
+      "faked first run and FI descriptor",
+      {
+        local:
+          "BUZZ_DEV_FIRST_RUN_ACCOUNT=unlinked\nBUZZ_BUILD_FEDERATED_IDENTITY_CONFIG='{}'\n",
+      },
+      "BUZZ_DEV_FIRST_RUN_ACCOUNT, BUZZ_BUILD_FEDERATED_IDENTITY_CONFIG",
+    ],
+    [
+      "real identity, staging backup and another plugin home",
+      {
+        env: {
+          BUZZ_DEV_CREDENTIAL_HELPER: "/opt/helper",
+          BUZZ_NSEC_BACKUP_SERVICE_URL: "https://backup.example",
+          BUZZODZ_HOME: "/tmp/plugins",
+        },
+      },
+      "BUZZ_DEV_CREDENTIAL_HELPER, BUZZ_NSEC_BACKUP_SERVICE_URL, BUZZODZ_HOME",
+    ],
+  ])
+    test(`${target} refuses a non-production launch: ${name}`, () => {
+      const result = recipe(target, settings);
+      assert.equal(result.status, 1, result.stdout);
+      assert.ok(
+        result.stderr.includes(`production only. Remove ${names} from`),
+        result.stderr,
+      );
+      assert.ok(!result.calls.some((call) => call[0] === "tauri"));
+    });
+  test(`${target} refuses what its Vite mode file sets`, () => {
+    const result = recipe(
+      target,
+      target === "desktop"
+        ? { mode: "BUZZ_DEV_FIRST_RUN_ACCOUNT=unlinked\n" }
+        : { local: "BUZZ_DEV_FIRST_RUN_ACCOUNT=unlinked\n" },
+    );
+    assert.equal(result.status, 1, result.stdout);
+    assert.match(result.stderr, /Remove BUZZ_DEV_FIRST_RUN_ACCOUNT from/);
+  });
+  test(`${target} allows production Builderlab`, () => {
+    const result = recipe(target, {
+      local:
+        "BUZZ_BUILDERLAB_URL=https://app.builderlab.xyz\nBUZZ_RELAY_URL=\n",
+    });
+    assert.equal(result.status, 0, result.stderr);
+  });
+}
+
+// `.env.local` is a launch environment source for `BUZZ_` names. The
+// onboarding-test guard refuses the FI descriptor, so a value it allows stands in.
 const descriptor = '{"version":1,"id":"example"}';
 for (const target of ["desktop", "desktop-bundle"])
   for (const [name, settings, expected] of [
     [
       "local value",
       {
-        local: `BUZZ_BUILD_FEDERATED_IDENTITY_CONFIG='${descriptor}'\nLOCAL_ONLY_SECRET=local\nBUZZ_UPDATER_ENDPOINT=https://updates.example\n`,
+        local: `BUZZ_DEV_NOTIFICATIONS='${descriptor}'\nLOCAL_ONLY_SECRET=local\nBUZZ_UPDATER_ENDPOINT=https://updates.example\n`,
       },
-      { fi: descriptor },
+      { value: descriptor },
     ],
     [
       "process override",
       {
-        local: `BUZZ_BUILD_FEDERATED_IDENTITY_CONFIG='${descriptor}'\n`,
-        env: { BUZZ_BUILD_FEDERATED_IDENTITY_CONFIG: "process" },
+        local: `BUZZ_DEV_NOTIFICATIONS='${descriptor}'\n`,
+        env: { BUZZ_DEV_NOTIFICATIONS: "process" },
       },
-      { fi: "process" },
+      { value: "process" },
     ],
     [
       "explicit empty override",
       {
-        local: `BUZZ_BUILD_FEDERATED_IDENTITY_CONFIG='${descriptor}'\n`,
-        env: { BUZZ_BUILD_FEDERATED_IDENTITY_CONFIG: "" },
+        local: `BUZZ_DEV_NOTIFICATIONS='${descriptor}'\n`,
+        env: { BUZZ_DEV_NOTIFICATIONS: "" },
       },
-      { fi: "" },
+      { value: "" },
     ],
     [
       "literal dollar",
       {
-        local: `BUZZ_BUILD_FEDERATED_IDENTITY_CONFIG='{"organization":"$LOCAL_ONLY_SECRET"}'\nLOCAL_ONLY_SECRET=local\n`,
+        local: `BUZZ_DEV_NOTIFICATIONS='{"organization":"$LOCAL_ONLY_SECRET"}'\nLOCAL_ONLY_SECRET=local\n`,
       },
-      { fi: '{"organization":"$LOCAL_ONLY_SECRET"}' },
+      { value: '{"organization":"$LOCAL_ONLY_SECRET"}' },
     ],
     [
       "mode file ignored",
-      { mode: `BUZZ_BUILD_FEDERATED_IDENTITY_CONFIG='${descriptor}'\n` },
+      { mode: `BUZZ_DEV_NOTIFICATIONS='${descriptor}'\n` },
       {},
     ],
     ["unset", {}, {}],

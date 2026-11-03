@@ -21,7 +21,7 @@ fn debug_agents_use_the_helper_for_create_restore_and_delete() {
     write_helper(
         r#"
 [ "$1" = --agent-store ] || exit 11
-[ "$3" = xyz.block.buzz.desktop.agents ] || exit 10
+[ "$3" = xyz.block.buzz.desktop.onboarding-test.agents ] || exit 10
 [ "$4" = agent-bundle-v1 ] || exit 10
 case "$2" in
   read) [ -f "$0.bundle" ] || exit 10; /bin/cat "$0.bundle" ;;

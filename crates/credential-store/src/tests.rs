@@ -289,14 +289,23 @@ fn home_child() {
 #[test]
 fn human_identity_slots_stay_separate() {
     assert_eq!(HUMAN_ACCOUNT, "human");
-    assert_eq!(human_service(true), "xyz.block.buzz.desktop.identity.debug");
-    assert_eq!(human_service(false), "xyz.block.buzz.desktop.identity");
+    assert_eq!(
+        human_service(true),
+        "xyz.block.buzz.desktop.onboarding-test.identity.debug"
+    );
+    assert_eq!(
+        human_service(false),
+        "xyz.block.buzz.desktop.onboarding-test.identity"
+    );
     assert_eq!(HUMAN_SERVICE, human_service(cfg!(debug_assertions)));
     assert_eq!(
         human_store(true),
-        "dev.local.buzz.foundation.identity.debug"
+        "dev.local.buzz.foundation.onboarding-test.identity.debug"
     );
-    assert_eq!(human_store(false), "dev.local.buzz.foundation.identity");
+    assert_eq!(
+        human_store(false),
+        "dev.local.buzz.foundation.onboarding-test.identity"
+    );
     assert_eq!(HUMAN_STORE, human_store(cfg!(debug_assertions)));
     assert_eq!(PREVIOUS_HUMAN_SERVICE, HUMAN_STORE);
 }

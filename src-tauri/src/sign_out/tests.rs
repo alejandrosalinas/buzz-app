@@ -1645,7 +1645,9 @@ fn only_the_current_identifier_takes_every_folder_the_legacy_one_used() {
     use legacy_identifier::{moves, CURRENT, LEGACY};
     let config: serde_json::Value =
         serde_json::from_str(include_str!("../../tauri.conf.json")).unwrap();
-    assert_eq!(config["identifier"], CURRENT);
+    // The onboarding-test branch builds as its own identifier, which moves nothing.
+    assert_eq!(config["identifier"], "xyz.block.buzz.desktop.onboarding-test");
+    assert_eq!(moves("xyz.block.buzz.desktop.onboarding-test"), Some(Vec::new()));
     assert_eq!(
         moves("dev.local.buzz.foundation.nexus-test-012345abcdef"),
         Some(Vec::new())
@@ -1743,7 +1745,13 @@ fn an_interrupted_development_seed_finishes_at_the_next_launch() {
 #[test]
 fn development_launches_copy_the_installed_storage_and_take_only_their_sign_out() {
     use legacy_identifier::{moves, seeds, CURRENT, DEV, LEGACY};
-    assert!(include_str!("../../../scripts/desktop-config.mjs").contains(&format!("\"{DEV}\"")));
+    // The onboarding-test branch launches as its own identifier, which neither
+    // copies nor moves anything.
+    let onboarding_test = "xyz.block.buzz.desktop.onboarding-test";
+    assert!(include_str!("../../../scripts/desktop-config.mjs")
+        .contains(&format!("\"{onboarding_test}\"")));
+    assert_eq!(moves(onboarding_test), Some(Vec::new()));
+    assert_eq!(seeds(onboarding_test), Some(Vec::new()));
     let (legacy, dev) = (
         Paths::resolve(LEGACY).unwrap(),
         Paths::resolve(DEV).unwrap(),

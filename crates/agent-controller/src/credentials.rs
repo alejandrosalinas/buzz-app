@@ -13,9 +13,9 @@ mod platform;
 #[cfg(test)]
 mod tests;
 
-const SERVICE: &str = "xyz.block.buzz.desktop.agents";
+const SERVICE: &str = "xyz.block.buzz.desktop.onboarding-test.agents";
 /// The service before 1.0. Reads copy a key found only there; deletes remove it too.
-const PREVIOUS_SERVICE: &str = "dev.local.buzz.foundation.agents";
+const PREVIOUS_SERVICE: &str = "dev.local.buzz.foundation.onboarding-test.agents";
 const MAX_BLOB: usize = 2 * 1024 * 1024;
 /// Another operation, in this app or another, holds the store; it may be retried.
 pub const BUSY: &str = "Credentials are busy; retry after the current operation finishes";

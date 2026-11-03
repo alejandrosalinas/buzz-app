@@ -49,13 +49,51 @@ export function options(args, names) {
   return { values, forwarded, rest: args.slice(index) };
 }
 
-// Development launches keep their own app storage, copied once from the
-// installed app's, so they never take or block it, but share its Agents folder
-// (see `src-tauri/src/sign_out/legacy_identifier.rs`).
-const DEV_IDENTIFIER = "xyz.block.buzz.desktop.dev";
+// The onboarding-test branch runs as its own app: no storage is copied from the
+// installed or development Buzz, its Agents folder is its own (see
+// `src-tauri/src/sign_out/legacy_identifier.rs`), and its Keychain items are
+// under `xyz.block.buzz.desktop.onboarding-test.*`. See ONBOARDING_TEST.md.
+const ONBOARDING_TEST_IDENTIFIER = "xyz.block.buzz.desktop.onboarding-test";
+
+// Production Builderlab, as release builds and `vite.config.ts` default to.
+const PRODUCTION_BUILDERLAB_URL = "https://app.builderlab.xyz";
+// Inputs that would point the build away from production or fake first run.
+// Empty counts as unset, except BUZZ_BUILDERLAB_URL, where empty disables it.
+export const NON_PRODUCTION = [
+  "BUZZ_DEV_VIEWER",
+  "BUZZ_DEV_CREDENTIAL_HELPER",
+  "BUZZ_DEV_CREDENTIAL_HELPER_AUTHORIZE",
+  "BUZZ_DEV_FIRST_RUN_ACCOUNT",
+  "BUZZ_DEV_OPEN_RELAY",
+  "BUZZ_RELAY_URL",
+  "BUZZ_COMMUNITY_ALIASES",
+  "BUZZ_BUILDERLAB_APPS_DOMAIN",
+  "BUZZ_BUILD_FEDERATED_IDENTITY_CONFIG",
+  "BUZZ_BUILD_ENTERPRISE_AUTH_RELAYS",
+  "BUZZ_BUILD_ENTERPRISE_AUTH_ADAPTER_BASE_URL",
+  "BUZZ_NSEC_BACKUP_SERVICE_URL",
+  "BUZZ_NSEC_BACKUP_NAMESPACE",
+  "BUZZ_DEFAULT_COMMUNITY_URL",
+  "BUZZODZ_HOME",
+];
+
+/** Refuse a launch environment that isn't production's first run. `env` is
+ * the launch environment over Vite's for the mode it builds, so a value in any
+ * file Vite reads counts unless the launch overrides it. */
+export function requireProduction(env) {
+  const set = NON_PRODUCTION.filter((name) => env[name]);
+  const builderlab = env.BUZZ_BUILDERLAB_URL;
+  if (builderlab !== undefined && builderlab !== PRODUCTION_BUILDERLAB_URL)
+    set.unshift("BUZZ_BUILDERLAB_URL");
+  if (set.length === 0) return;
+  console.error(
+    `The onboarding-test build runs against production only. Remove ${set.join(", ")} from .env.local and the shell environment, then retry.`,
+  );
+  process.exit(1);
+}
 
 export function desktopOverlay(root) {
-  const config = { identifier: DEV_IDENTIFIER };
+  const config = { identifier: ONBOARDING_TEST_IDENTIFIER };
   const icon = worktreeIcon(root);
   if (icon) config.bundle = { icon: [icon] };
   return config;

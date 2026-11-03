@@ -10,16 +10,16 @@ use zeroize::Zeroizing;
 
 #[cfg_attr(test, allow(dead_code))]
 pub(crate) const KEY_SERVICE: &str = if cfg!(debug_assertions) {
-    "xyz.block.buzz.desktop.jev-key.debug"
+    "xyz.block.buzz.desktop.onboarding-test.jev-key.debug"
 } else {
-    "xyz.block.buzz.desktop.jev-key"
+    "xyz.block.buzz.desktop.onboarding-test.jev-key"
 };
 /// The service before 1.0. Reads copy a key found only there; clearing removes it too.
 #[cfg_attr(test, allow(dead_code))]
 const PREVIOUS_KEY_SERVICE: &str = if cfg!(debug_assertions) {
-    "dev.local.buzz.foundation.jev-key.debug"
+    "dev.local.buzz.foundation.onboarding-test.jev-key.debug"
 } else {
-    "dev.local.buzz.foundation.jev-key"
+    "dev.local.buzz.foundation.onboarding-test.jev-key"
 };
 #[cfg_attr(test, allow(dead_code))]
 pub(crate) const KEY_ACCOUNT: &str = "typesafe";

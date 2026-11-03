@@ -19,6 +19,11 @@ export function portForPath(path) {
   return port === 10080 ? 10081 : port;
 }
 
+// The onboarding-test branch salts the hashed root. An unbundled run keeps its
+// WebView storage per origin in one folder every `just desktop` shares, so a
+// checkout switched to this branch must not reuse its usual origin's storage.
+export const ONBOARDING_TEST_SALT = "onboarding-test:";
+
 // The worktree root reported by Git; outside a checkout, the directory itself.
 // A missing git or a plain directory is an ordinary outcome, not an exception,
 // so this reads spawnSync's exit status rather than catching a throw.
@@ -28,5 +33,8 @@ export function worktreePort(dir) {
     encoding: "utf8",
     stdio: ["ignore", "pipe", "pipe"],
   });
-  return portForPath(git.status === 0 ? git.stdout.trim() : resolve(dir));
+  return portForPath(
+    ONBOARDING_TEST_SALT +
+      (git.status === 0 ? git.stdout.trim() : resolve(dir)),
+  );
 }

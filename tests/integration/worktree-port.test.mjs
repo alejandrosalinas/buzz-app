@@ -5,7 +5,11 @@ import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import test from "node:test";
-import { portForPath, worktreePort } from "../../scripts/worktree-port.mjs";
+import {
+  ONBOARDING_TEST_SALT,
+  portForPath,
+  worktreePort,
+} from "../../scripts/worktree-port.mjs";
 
 // Expected values were cross-checked independently of portForPath with
 // Python 3.14.5 and a separate Node one-liner, which agree on both:
@@ -73,16 +77,25 @@ test("worktreePort hashes the Git toplevel, or the directory outside Git", (t) =
   mkdirSync(nested, { recursive: true });
   // Git reports the resolved root (on macOS, /private/var rather than /var).
   const toplevel = git("-C", nested, "rev-parse", "--show-toplevel");
-  assert.equal(worktreePort(nested), portForPath(toplevel));
-  assert.equal(worktreePort(repo), portForPath(toplevel));
-  assert.equal(worktreePort(`${repo}${path.sep}`), portForPath(toplevel));
+  assert.equal(
+    worktreePort(nested),
+    portForPath(ONBOARDING_TEST_SALT + toplevel),
+  );
+  assert.equal(
+    worktreePort(repo),
+    portForPath(ONBOARDING_TEST_SALT + toplevel),
+  );
+  assert.equal(
+    worktreePort(`${repo}${path.sep}`),
+    portForPath(ONBOARDING_TEST_SALT + toplevel),
+  );
 
   const plain = path.join(directory, "plain");
   mkdirSync(plain);
-  assert.equal(worktreePort(plain), portForPath(plain));
+  assert.equal(worktreePort(plain), portForPath(ONBOARDING_TEST_SALT + plain));
   assert.equal(
     worktreePort(`${plain}${path.sep}`),
-    portForPath(plain),
+    portForPath(ONBOARDING_TEST_SALT + plain),
     "trailing separators do not change the fallback",
   );
 });

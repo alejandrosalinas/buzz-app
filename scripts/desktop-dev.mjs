@@ -5,6 +5,7 @@ import {
   desktopOverlay,
   launchEnvironment,
   options,
+  requireProduction,
 } from "./desktop-config.mjs";
 import { worktreePort } from "./worktree-port.mjs";
 
@@ -29,6 +30,7 @@ const env = launchEnvironment(root);
 // frontend actually uses.
 env.BUZZ_DEV_VIEWER =
   loadEnv("development", root, "BUZZ_DEV_VIEWER").BUZZ_DEV_VIEWER ?? "";
+requireProduction({ ...loadEnv("development", root, "BUZZ_"), ...env });
 // Stage the bundled helpers before Tauri compiles, outside its dev-server timeout.
 if (!help) {
   // Stage for the target Tauri is given, as Tauri tells beforeBuildCommand.

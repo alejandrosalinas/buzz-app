@@ -12,7 +12,8 @@ use std::path::{Path, PathBuf};
 
 pub(crate) const LEGACY: &str = "dev.local.buzz.foundation";
 pub(crate) const CURRENT: &str = "xyz.block.buzz.desktop";
-/// What `just desktop` and debug bundles run as (`scripts/desktop-config.mjs`).
+/// What `just desktop` and debug bundles run as on main. The onboarding-test
+/// branch runs as its own identifier instead (`scripts/desktop-config.mjs`).
 pub(crate) const DEV: &str = "xyz.block.buzz.desktop.dev";
 const BUSY: &str = "Quit every other Buzz window, then open Buzz again to finish moving its storage. Nothing was moved.";
 const AGENT_STOPPING: &str =

@@ -36,17 +36,17 @@ pub const HUMAN_STORE: &str = human_store(cfg!(debug_assertions));
 
 pub const fn human_service(debug: bool) -> &'static str {
     if debug {
-        "xyz.block.buzz.desktop.identity.debug"
+        "xyz.block.buzz.desktop.onboarding-test.identity.debug"
     } else {
-        "xyz.block.buzz.desktop.identity"
+        "xyz.block.buzz.desktop.onboarding-test.identity"
     }
 }
 
 pub const fn human_store(debug: bool) -> &'static str {
     if debug {
-        "dev.local.buzz.foundation.identity.debug"
+        "dev.local.buzz.foundation.onboarding-test.identity.debug"
     } else {
-        "dev.local.buzz.foundation.identity"
+        "dev.local.buzz.foundation.onboarding-test.identity"
     }
 }
 
@@ -403,7 +403,7 @@ mod tests;
 /// Erase an indexed session without reading its contents or knowing its schema.
 #[cfg(not(test))]
 pub fn delete_session(service: &str, account: &str) -> Result<()> {
-    if !service.starts_with("xyz.block.buzz.desktop.federated-session") {
+    if !service.starts_with("xyz.block.buzz.desktop.onboarding-test.federated-session") {
         return Err(Error::Denied);
     }
     let _lock = acquire(&lock_root()?, service, account)?;
@@ -425,7 +425,7 @@ pub fn compare_session(
     expected: Option<&[u8]>,
     replacement: Option<&[u8]>,
 ) -> Result<()> {
-    if !service.starts_with("xyz.block.buzz.desktop.federated-session") {
+    if !service.starts_with("xyz.block.buzz.desktop.onboarding-test.federated-session") {
         return Err(Error::Denied);
     }
     let _lock = acquire(&lock_root()?, service, account)?;

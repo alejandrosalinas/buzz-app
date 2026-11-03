@@ -13,7 +13,11 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
-import { portForPath } from "../../scripts/worktree-port.mjs";
+import { NON_PRODUCTION } from "../../scripts/desktop-config.mjs";
+import {
+  ONBOARDING_TEST_SALT,
+  portForPath,
+} from "../../scripts/worktree-port.mjs";
 
 // Real Git worktrees and subprocesses; only Swift rendering and pnpm are stubs.
 // The macOS-only launcher wiring also runs on a Mac, without opening an app.
@@ -22,6 +26,8 @@ function fixture(t) {
   t.after(() => rmSync(directory, { recursive: true, force: true }));
   const env = { ...process.env };
   delete env.BUZZ_DEV_SIGNING_IDENTITY;
+  // The onboarding-test launchers refuse these; keep the operator's out.
+  for (const key of [...NON_PRODUCTION, "BUZZ_BUILDERLAB_URL"]) delete env[key];
   // Git hooks export repository selectors; never let fixtures touch the real repo.
   for (const key of [
     "GIT_DIR",
@@ -202,14 +208,14 @@ test("macOS launchers preserve icon, port, explicit config and runner arguments"
   });
   // The worktree's root selects its port.
   const root = git("-C", linked, "rev-parse", "--show-toplevel");
-  const port = portForPath(root);
+  const port = portForPath(ONBOARDING_TEST_SALT + root);
   // An explicit --port wins over the worktree-derived default.
   const explicit = launch("--port=1431");
   assert.deepEqual(explicit.call.slice(0, 3), ["tauri", "dev", "--config"]);
   const config = JSON.parse(explicit.call[3]);
   assert.equal(readFileSync(config.bundle.icon[0], "utf8"), "first-label");
   assert.deepEqual(config, {
-    identifier: "xyz.block.buzz.desktop.dev",
+    identifier: "xyz.block.buzz.desktop.onboarding-test",
     bundle: config.bundle,
     build: build(1431),
   });

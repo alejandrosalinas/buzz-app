@@ -2,7 +2,7 @@
   "$schema": "https://schema.tauri.app/config/2",
   "productName": "Buzz",
   "version": "0.7.0",
-  "identifier": "xyz.block.buzz.desktop",
+  "identifier": "xyz.block.buzz.desktop.onboarding-test",
   "build": {
     "beforeDevCommand": "pnpm dev:desktop --port 1430",
     "devUrl": "http://localhost:1430",

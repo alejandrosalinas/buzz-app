@@ -5,6 +5,7 @@ import {
   desktopOverlay,
   launchEnvironment,
   options,
+  requireProduction,
 } from "./desktop-config.mjs";
 
 // A debug bundle for the one thing `just desktop` cannot do: macOS routes a URL
@@ -83,12 +84,14 @@ if (process.platform === "darwin") {
 }
 forwarded.unshift("--config", JSON.stringify(config));
 forwarded.push(...rest);
+const env = launchEnvironment(root);
+requireProduction({ ...loadEnv("production", root, "BUZZ_"), ...env });
 const result = spawnSync(
   "pnpm",
   ["tauri", "build", ...defaults, ...forwarded],
   {
     stdio: "inherit",
-    env: launchEnvironment(root),
+    env,
   },
 );
 if (result.error) console.error(result.error.message);

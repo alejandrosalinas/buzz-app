@@ -86,7 +86,7 @@ fn human_restore_uses_the_selected_helper_and_fails_closed() {
     let agent = |operation, value: &[u8]| {
         dev_agent_store(
             operation,
-            "xyz.block.buzz.desktop.agents",
+            "xyz.block.buzz.desktop.onboarding-test.agents",
             "agent-bundle-v1",
             value,
         )
