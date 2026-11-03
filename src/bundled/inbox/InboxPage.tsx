@@ -368,6 +368,8 @@ function InboxList({
     const next = { ...filters, ...patch };
     setFilters(next);
     writeView(archiveScope, filtersKey, next);
+    // The saved offset belonged to the list as it was filtered.
+    placed.current = scroller.current;
   }
   const [drafts, setDrafts] = useState(false);
   // A shortcut's open carries filters; a plain open carries none and changes nothing.

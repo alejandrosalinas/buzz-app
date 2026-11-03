@@ -679,6 +679,30 @@ it("does not override a scroll made before the list's rows arrive", async () => 
   expect(scroller()?.scrollTop).toBe(40);
 });
 
+it("keeps a saved offset off a list the user refilters", async () => {
+  const h = fixture();
+  const view = render(h.view);
+  await waitFor(() => expect(rows()).toHaveLength(2));
+  scrollTo(120);
+  await chooseFilter("Unread only", "Attention");
+  view.unmount();
+  await act(async () => {
+    await h.owner.session.unread.markChannelRead("room");
+  });
+  const returned = render(h.view);
+  await screen.findByText("No unread activity in this view");
+  // Rows the user's filter change shows are not the list the offset was for.
+  await chooseFilter("All", "Attention");
+  await waitFor(() => expect(rows()).toHaveLength(2));
+  expect(scroller()?.scrollTop).toBe(0);
+  // The next return still restores the offset scrolled last.
+  scrollTo(40);
+  returned.unmount();
+  render(h.view);
+  await waitFor(() => expect(rows()).toHaveLength(2));
+  expect(scroller()?.scrollTop).toBe(40);
+});
+
 it("neither measures nor places the list until a tab moved to the main pane uncovers it", async () => {
   const h = fixture();
   const view = render(h.view);
