@@ -679,12 +679,13 @@ it("does not override a scroll made before the list's rows arrive", async () => 
   expect(scroller()?.scrollTop).toBe(40);
 });
 
-it("does not measure the list while a tab moved to the main pane covers it", async () => {
+it("neither measures nor places the list until a tab moved to the main pane uncovers it", async () => {
   const h = fixture();
-  render(h.view);
+  const view = render(h.view);
   await waitFor(() => expect(rows()).toHaveLength(2));
   const list = scroller();
   if (!list) throw new Error("Missing Inbox scroller");
+  scrollTo(120);
   const [first] = rows();
   if (!first) throw new Error("Missing fixture row");
   fireEvent.click(within(first).getByRole("button", { name: /^Open / }));
@@ -714,6 +715,9 @@ it("does not measure the list while a tab moved to the main pane covers it", asy
     h.addEvent(mention);
     act(() => h.emit([mention]));
     await waitFor(() => expect(list).toHaveTextContent("Fresh mention"));
+    // Rows arriving above a scrolled, covered list can anchor it.
+    list.scrollTop = 160;
+    fireEvent.scroll(list);
     expect(
       measure.mock.contexts.filter(
         (element) => element instanceof Node && list.contains(element),
@@ -722,6 +726,22 @@ it("does not measure the list while a tab moved to the main pane covers it", asy
   } finally {
     measure.mockRestore();
   }
+  // Returning to Inbox under the moved tab leaves the list where it is
+  // until that tab is no longer selected.
+  view.unmount();
+  render(h.view);
+  const returned = await screen.findByRole("list", {
+    name: "Inbox conversations",
+    hidden: true,
+  });
+  await waitFor(() => expect(returned).toHaveTextContent("Fresh mention"));
+  const covered = returned.parentElement;
+  if (!covered) throw new Error("Missing Inbox scroller");
+  expect(covered.closest("[inert]")).not.toBeNull();
+  expect(covered.scrollTop).toBe(0);
+  fireEvent.click(screen.getByRole("tab", { name: "Inbox" }));
+  expect(covered.closest("[inert]")).toBeNull();
+  expect(covered.scrollTop).toBe(160);
 });
 
 it("offers no Archive shortcut while Drafts is shown", async () => {

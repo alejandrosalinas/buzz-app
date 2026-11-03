@@ -167,9 +167,11 @@ test("an Inbox tab's menu opens its thread in its channel", async ({
 // thread tab's channel name unmounts the page; Back returns to the offset the
 // user chose, even away from the selected row and after rows shifted, unless
 // a fresh reply moved a selected row they could see out of view while away.
+// A tab moved to the main pane covers the list, which is placed once it shows.
 const titles = {
   kept: "",
   moved: " around a row that moved",
+  covered: " around a row that moved under a main-pane tab",
   away: " away from the selected row",
   shifted: " away from the selected row as rows shift",
   drifted: " after rows pushed the selected row out of view",
@@ -215,6 +217,7 @@ for (const variant of Object.keys(titles))
     // of view while the list shows, leaves it off-screen on return.
     const away = variant === "away" || variant === "shifted";
     const offscreen = away || variant === "drifted";
+    const moved = variant === "moved" || variant === "covered";
     // A row near the top is in view at once; a low one needs scrolling.
     const row = rows.filter({
       hasText: offscreen ? "Beta mention 24" : "Beta mention 3",
@@ -244,9 +247,28 @@ for (const variant of Object.keys(titles))
     if (variant === "drifted") expect(offset).toBe(0);
     else expect(offset).toBeGreaterThan(0);
 
+    const main = inbox.getByRole("tablist", { name: "Inbox tabs" });
+    const listTab = main.getByRole("tab", { name: "Inbox", exact: true });
+    if (variant === "covered") {
+      await inbox
+        .getByRole("tablist", { name: "Panel tabs" })
+        .getByRole("tab")
+        .focus();
+      await page.keyboard.press("Alt+Shift+ArrowLeft");
+      await expect(main.getByRole("tab")).toHaveText([
+        "Inbox",
+        "Thread · Beta",
+      ]);
+      await expect(
+        main.getByRole("tab", { name: "Thread · Beta", exact: true }),
+      ).toBeFocused();
+      await expect(listTab).toHaveAttribute("aria-selected", "false");
+      await expect(channel).toBeVisible();
+    }
+
     await channel.click();
     await expect(inbox).toHaveCount(0);
-    if (variant === "moved") {
+    if (moved) {
       app.append(
         "primary",
         "beta",
@@ -281,8 +303,22 @@ for (const variant of Object.keys(titles))
       ).toBeVisible();
     }
     await page.getByRole("button", { name: "Go back", exact: true }).click();
+    if (variant === "covered") {
+      // Inbox returns under the moved tab, which renders the moved row unseen.
+      await expect(listTab).toHaveAttribute("aria-selected", "false");
+      await expect(
+        inbox
+          .getByRole("list", {
+            name: "Inbox conversations",
+            includeHidden: true,
+          })
+          .getByRole("listitem", { includeHidden: true })
+          .nth(1),
+      ).toContainText("Fresh Beta mention 3");
+      await listTab.click();
+    }
     await expect(row).toHaveAttribute("data-selected", "true");
-    if (variant === "moved") {
+    if (moved) {
       // The newer DM fixture row stays first; the thread moved above its page.
       await expect(rows.nth(1)).toContainText("Fresh Beta mention 3");
       await expect(row).toBeInViewport();

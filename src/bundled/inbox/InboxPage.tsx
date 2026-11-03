@@ -200,6 +200,8 @@ function selectedInView(list: HTMLElement) {
   const rect = row.getBoundingClientRect();
   return rect.bottom > bounds.top && rect.top < bounds.bottom;
 }
+/** Whether another tab covers the list, or it is hidden; neither is measured. */
+const covered = (list: HTMLElement) => !!list.closest("[hidden], [inert]");
 
 type InboxPageTabs = (props: PageTabsProps) => ReactNode;
 
@@ -643,14 +645,17 @@ function InboxList({
   useLayoutEffect(() => {
     archiveView.current = { show, visible, selected, opened };
   });
-  // Each list returns to the session's last offset once its rows render,
+  // Each list returns to the session's last offset once its rows show,
   // unless the user has already scrolled it. The offset they chose wins,
   // unless the selected row they could see has since left the view.
   const scroller = useRef<HTMLDivElement | null>(null);
   const placed = useRef<HTMLDivElement | null>(null);
   useLayoutEffect(() => {
     const list = scroller.current;
-    if (!list) return;
+    // A covered list skips layout: measuring it forces that layout, and
+    // revealing a row in it scrolls nothing. It is placed on the commit that
+    // uncovers it; what showed before it was covered still holds.
+    if (!list || covered(list)) return;
     // Compositor scrolling may update the position before its scroll event.
     if (placed.current !== list && visible.length && list.scrollTop === 0) {
       const saved = selections.get(session);
@@ -662,10 +667,7 @@ function InboxList({
     }
     if (visible.length) placed.current = list;
     // Selecting a row, or rows arriving above it, moves nothing the scroll
-    // handler sees, so record whether it shows after each commit too. A
-    // covered list skips layout, which reading it would force; what showed
-    // before it was covered still holds.
-    if (list.closest("[hidden], [inert]")) return;
+    // handler sees, so record whether it shows after each commit too.
     const shown = selectedInView(list);
     if (typeof shown === "boolean")
       selections.set(session, {
@@ -1041,11 +1043,15 @@ function InboxList({
               className={styles.scroll}
               onScroll={(event) => {
                 // Saved as it moves, so any teardown keeps the last offset.
+                // Rows arriving above a covered list can still anchor it,
+                // which saves only the offset.
                 const list = event.currentTarget;
                 selections.set(session, {
                   ...selections.get(session),
                   scrollTop: list.scrollTop,
-                  selectedShown: selectedInView(list),
+                  ...(!covered(list) && {
+                    selectedShown: selectedInView(list),
+                  }),
                 });
               }}
             >
