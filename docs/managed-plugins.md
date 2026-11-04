@@ -131,6 +131,10 @@ other.
   update keeps the plugin's enabled state.
 - **Pending recommendations** show as a small count beside **Plugins** in the profile
   menu and beside **Manage plugins** in Settings. There is no startup prompt or modal.
+- **Shell update notices** also check installed Git plugins. For a managed plugin,
+  the check and update use the recommended reference, path, and commit pin. A
+  reference at another commit cannot install. Missing recommendations keep their
+  existing review flow. The Plugins menu keeps updates available after **Later**.
 - **Details of a managed plugin** do not offer the generic update check, which would
   install the reference's tip instead of the pinned commit. They show the same
   **Review update** as the group above when the plugin is Outdated.

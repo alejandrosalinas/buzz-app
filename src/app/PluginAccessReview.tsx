@@ -188,6 +188,18 @@ function hostDeclarations(
   ];
 }
 
+export function pluginAccessIncreases(
+  manifest: PluginManifest,
+  previous: PluginManifest,
+) {
+  const granted = new Set(
+    hostDeclarations(previous, []).map((item) => item.signature),
+  );
+  return hostDeclarations(manifest, []).some(
+    (item) => !granted.has(item.signature),
+  );
+}
+
 export function PluginAccessReview({
   manifest,
   previousManifest,

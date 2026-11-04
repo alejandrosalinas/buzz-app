@@ -21,6 +21,7 @@ import { ModalWindowDragProvider } from "../shared/design-system/ui/ModalWindowD
 import { modalWindowDragHandlers } from "./shell/title-bar";
 import { isTauri } from "@tauri-apps/api/core";
 import { Dialog } from "../shared/design-system/ui/Dialog";
+import { PluginUpdates } from "./PluginUpdates";
 import { UpdateNotice } from "../features/updates/UpdateNotice";
 import { RejectedLinkNotice } from "../features/navigation/RejectedLinkNotice";
 import { ExternalAuthorizationDialog } from "../features/agents/ExternalAuthorizationDialog";
@@ -562,137 +563,143 @@ function ConnectedAppContent({ services }: { services: AppServices }) {
       <SignInEnding identity={services.federatedIdentity} />
       <ChannelNavigationProvider relay={services.relay}>
         <AgentsContext.Provider value={services.agents}>
-          <AppShell
-            creationInSidebar={!workspace.page?.sidebar}
-            creationAction={(open, onOpenChange, triggerContainer) => (
-              <NewMenu
-                triggerContainer={triggerContainer}
-                open={open}
-                onOpenChange={onOpenChange}
-                relay={services.relay}
-                navigator={services.navigation}
-                agents={services.agents}
-              />
-            )}
-            workspaceRef={setWorkspaceElement}
-            sidebar={(pageNavigation, creationAction) =>
-              workspace.page?.sidebar && pageSidebarReady ? (
-                <OwnedContribution
-                  entry={workspace.page}
-                  registry={services.pages}
-                  resetIdentity={workspace.request}
-                  fallback={
-                    <div className="shell-sidebar-default">
-                      <SidebarFrame label={`${workspace.page.title} sidebar`}>
-                        <SidebarList>
-                          <p role="alert">
-                            This page’s sidebar is unavailable.
-                          </p>
-                          {pageNavigation}
-                        </SidebarList>
-                      </SidebarFrame>
-                    </div>
-                  }
-                >
-                  {(entry) => {
-                    const Sidebar = entry.sidebar;
-                    return Sidebar ? (
-                      <Sidebar target={workspace.target}>
-                        {pageNavigation}
-                      </Sidebar>
-                    ) : null;
-                  }}
-                </OwnedContribution>
-              ) : workspace.page?.sidebar ? (
-                <div className="shell-sidebar-default">
-                  <SidebarFrame label="Page navigation">
-                    <SidebarList>{pageNavigation}</SidebarList>
-                  </SidebarFrame>
-                </div>
-              ) : (
-                <PrimarySidebar
-                  creationAction={creationAction}
-                  federatedIdentity={services.federatedIdentity}
+          <PluginUpdates
+            plugins={plugins}
+            relay={services.relay}
+            installRequests={services.pluginInstallRequests}
+          >
+            <AppShell
+              creationInSidebar={!workspace.page?.sidebar}
+              creationAction={(open, onOpenChange, triggerContainer) => (
+                <NewMenu
+                  triggerContainer={triggerContainer}
+                  open={open}
+                  onOpenChange={onOpenChange}
                   relay={services.relay}
                   navigator={services.navigation}
                   agents={services.agents}
-                  chatIcons={services.conversation.chatIcons}
-                  chatMenus={services.conversation.chatMenus}
-                  sidebarSections={services.sidebarSections}
-                  sidebarScope={services.sidebarScope}
-                  sidebarRows={services.sidebarRows}
-                  target={workspace.target}
-                >
-                  {pageNavigation}
-                </PrimarySidebar>
-              )
-            }
-            navigationControls={
-              <NavigationControls navigation={services.navigation} />
-            }
-            onCommunitySelect={selectCommunity}
-            // A scoped Settings target selects its community on the way.
-            onOpenTarget={(target) => void services.navigation.open(target)}
-            communities={services.communities}
-            federatedIdentity={services.federatedIdentity}
-            invite={invite?.viewer === client.viewer ? invite : undefined}
-            onInviteClose={services.invites.clear}
-            settingsCards={services.settingsCards}
-            accountActions={services.accountActions}
-            appearance={services.appearance}
-            pluginRecommendations={pluginRecommendations}
-            searchServices={services}
-            launchers={
-              <PanelLaunchers
-                panels={launcher.available}
-                selected={selectedPanel}
-                launch={launcher.launch}
-              />
-            }
-            companion={pageOwnsCompanion ? undefined : companion}
-            pages={startup === "ready" ? route.pages : []}
-            selected={workspace.selected}
-            navigationAttempt={workspace.attempt}
-            onSelect={select}
-            tone={presentation.tone}
-            workspace={
-              startup === "ready" && workspace.page?.layout === "workspace"
-            }
-          >
-            <UpdateNotice updates={services.updates} />
-            <RejectedLinkNotice links={services.rejectedLinks} />
-            <ExternalAuthorizationDialog
-              connection={services.externalApps}
-              agents={services.agents}
+                />
+              )}
+              workspaceRef={setWorkspaceElement}
+              sidebar={(pageNavigation, creationAction) =>
+                workspace.page?.sidebar && pageSidebarReady ? (
+                  <OwnedContribution
+                    entry={workspace.page}
+                    registry={services.pages}
+                    resetIdentity={workspace.request}
+                    fallback={
+                      <div className="shell-sidebar-default">
+                        <SidebarFrame label={`${workspace.page.title} sidebar`}>
+                          <SidebarList>
+                            <p role="alert">
+                              This page’s sidebar is unavailable.
+                            </p>
+                            {pageNavigation}
+                          </SidebarList>
+                        </SidebarFrame>
+                      </div>
+                    }
+                  >
+                    {(entry) => {
+                      const Sidebar = entry.sidebar;
+                      return Sidebar ? (
+                        <Sidebar target={workspace.target}>
+                          {pageNavigation}
+                        </Sidebar>
+                      ) : null;
+                    }}
+                  </OwnedContribution>
+                ) : workspace.page?.sidebar ? (
+                  <div className="shell-sidebar-default">
+                    <SidebarFrame label="Page navigation">
+                      <SidebarList>{pageNavigation}</SidebarList>
+                    </SidebarFrame>
+                  </div>
+                ) : (
+                  <PrimarySidebar
+                    creationAction={creationAction}
+                    federatedIdentity={services.federatedIdentity}
+                    relay={services.relay}
+                    navigator={services.navigation}
+                    agents={services.agents}
+                    chatIcons={services.conversation.chatIcons}
+                    chatMenus={services.conversation.chatMenus}
+                    sidebarSections={services.sidebarSections}
+                    sidebarScope={services.sidebarScope}
+                    sidebarRows={services.sidebarRows}
+                    target={workspace.target}
+                  >
+                    {pageNavigation}
+                  </PrimarySidebar>
+                )
+              }
+              navigationControls={
+                <NavigationControls navigation={services.navigation} />
+              }
+              onCommunitySelect={selectCommunity}
+              // A scoped Settings target selects its community on the way.
+              onOpenTarget={(target) => void services.navigation.open(target)}
               communities={services.communities}
-              relay={services.relay}
-            />
-            <InterruptedNotice agents={services.agents} />
-            <MediaMenuDownloadNotice />
-            <CreationReview agents={services.agents} />
-            <UpdateReview agents={services.agents} />
-            {!settings && startup === "recovery" ? (
-              <RecoveryScreen plugins={plugins} />
-            ) : !settings &&
-              ((!route.state.ingress && route.failure) || failedPage) ? (
-              destinationFailure
-            ) : !settings && route.waiting ? (
-              opening
-            ) : startup === "loading" || restoring ? (
-              settings ? null : (
-                opening
-              )
-            ) : workspace.page ? (
-              <PageView
-                page={workspace.page}
-                navigation={workspace.request}
-                companion={pageOwnsCompanion ? companion : undefined}
-                companionOpening={
-                  pageOwnsCompanion ? launcher.opening : undefined
-                }
+              federatedIdentity={services.federatedIdentity}
+              invite={invite?.viewer === client.viewer ? invite : undefined}
+              onInviteClose={services.invites.clear}
+              settingsCards={services.settingsCards}
+              accountActions={services.accountActions}
+              appearance={services.appearance}
+              pluginRecommendations={pluginRecommendations}
+              searchServices={services}
+              launchers={
+                <PanelLaunchers
+                  panels={launcher.available}
+                  selected={selectedPanel}
+                  launch={launcher.launch}
+                />
+              }
+              companion={pageOwnsCompanion ? undefined : companion}
+              pages={startup === "ready" ? route.pages : []}
+              selected={workspace.selected}
+              navigationAttempt={workspace.attempt}
+              onSelect={select}
+              tone={presentation.tone}
+              workspace={
+                startup === "ready" && workspace.page?.layout === "workspace"
+              }
+            >
+              <UpdateNotice updates={services.updates} />
+              <RejectedLinkNotice links={services.rejectedLinks} />
+              <ExternalAuthorizationDialog
+                connection={services.externalApps}
+                agents={services.agents}
+                communities={services.communities}
+                relay={services.relay}
               />
-            ) : null}
-          </AppShell>
+              <InterruptedNotice agents={services.agents} />
+              <MediaMenuDownloadNotice />
+              <CreationReview agents={services.agents} />
+              <UpdateReview agents={services.agents} />
+              {!settings && startup === "recovery" ? (
+                <RecoveryScreen plugins={plugins} />
+              ) : !settings &&
+                ((!route.state.ingress && route.failure) || failedPage) ? (
+                destinationFailure
+              ) : !settings && route.waiting ? (
+                opening
+              ) : startup === "loading" || restoring ? (
+                settings ? null : (
+                  opening
+                )
+              ) : workspace.page ? (
+                <PageView
+                  page={workspace.page}
+                  navigation={workspace.request}
+                  companion={pageOwnsCompanion ? companion : undefined}
+                  companionOpening={
+                    pageOwnsCompanion ? launcher.opening : undefined
+                  }
+                />
+              ) : null}
+            </AppShell>
+          </PluginUpdates>
           <Dialog
             // The inert launch surface would swallow the modal's initial focus.
             open={settings && !launching}

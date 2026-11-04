@@ -192,6 +192,32 @@ Browser installation is not supported; the browser shows a desktop-only explanat
 An organization can recommend plugin sources through a policy file next to the profile
 folders; see [managed plugin sources](managed-plugins.md).
 
+## Git plugin updates
+
+The desktop shell checks saved Git sources at startup and once per hour while
+Buzz is visible. `imports.checkGit` reads metadata without taking the import
+preview slot. Checks do not install, reload, or stop a plugin. Folder sources
+keep their existing update flow.
+
+A shell notice offers **Update and reload** when access does not increase.
+An increase in declared host access requires **Review permissions** and explicit
+confirmation in the existing access review. A publisher change also requires
+review and remains subject to native signing rules. **Later** hides the notice
+for the current app run and candidate. The update stays in the profile menu's
+**Plugins** submenu. A newer candidate can show a notice again.
+
+An update action fetches a fresh immutable preview. The importer checks access
+and publisher data from that preview before it applies the update. It checks
+the live source again before installation. A managed source retains its commit
+pin. A changed source or recommendation retires the pending action.
+
+Save unfinished forms and stop active plugin workers before confirmation.
+Installation preserves the enabled state. An enabled plugin reloads immediately
+through the existing manager. Checks, review, Later, and cancellation leave
+plugin work running. Failed checks and imports offer retry. An activation
+failure offers **Retry activation** and the existing plugin menu for rollback.
+The rollback confirmation and signing limits still apply.
+
 ## Emoji and reusable conversation UI
 
 Emoji and Mentions are built-in conversation features, always loaded by the app
