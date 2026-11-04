@@ -1,4 +1,5 @@
 import { useSoloRowActivation } from "./useSoloRowActivation";
+import { DraftIndicator } from "../messages/DraftIndicator";
 import { useSoloNavigation } from "./solo-navigation-react";
 import {
   useRef,
@@ -437,16 +438,19 @@ function SoloConversationRow({
             </span>
           }
           trailing={
-            <span
-              className={channelStyles.indicatorStack}
-              data-solo-working-indicator=""
-            >
-              <WorkingAgentsBadge
-                agents={agents}
-                profiles={agentProfiles}
-                channelName={title}
-                waiting={waiting}
-              />
+            <span className="inline-flex items-center gap-1">
+              <span
+                className={channelStyles.indicatorStack}
+                data-solo-working-indicator=""
+              >
+                <WorkingAgentsBadge
+                  agents={agents}
+                  profiles={agentProfiles}
+                  channelName={title}
+                  waiting={waiting}
+                />
+              </span>
+              <DraftIndicator session={session} channelId={id} />
             </span>
           }
         />

@@ -282,6 +282,24 @@
 .organizedRow [data-solo-working-indicator]:empty {
   display: none;
 }
+/* Keep the pencil at the same painted edge as Team, including on hover.
+   Existing status and overflow slots move inward instead of displacing it. */
+.organizedRow:has([data-draft-indicator]) {
+  --session-trailing-end: calc(
+    var(--session-trailing-offset) +
+    var(--channel-row-fill-end, 0%) +
+    var(--space-6)
+  );
+}
+.organizedRow [class~="navigation-item-trailing"]:has([data-draft-indicator]) {
+  padding-inline-end: var(--space-6);
+}
+.organizedRow [data-draft-indicator] {
+  position: absolute;
+  inset-inline-end: calc(var(--channel-row-fill-end, 0%) + var(--space-half));
+  top: 50%;
+  transform: translateY(-50%);
+}
 .organizedRow [data-solo-shared] {
   display: inline-flex;
   align-items: center;

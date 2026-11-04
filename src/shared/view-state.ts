@@ -1,5 +1,5 @@
 // View intent is durable and explicitly partitioned; connection generations are not storage keys.
-const viewListeners = new Map<string, Set<() => void>>();
+const viewListeners = new Map<string, Set<(key?: string) => void>>();
 const composerDraftKey =
   /^draft:([a-zA-Z0-9][a-zA-Z0-9._-]{0,255})(?::thread:([0-9a-f]{64}))?$/;
 export function draftCoordinates(key: string) {
@@ -8,11 +8,11 @@ export function draftCoordinates(key: string) {
     ? { channelId: match[1], ...(match[2] ? { threadRootId: match[2] } : {}) }
     : undefined;
 }
-const changed = (scope: string) => {
-  for (const listener of viewListeners.get(scope) ?? []) listener();
+const changed = (scope: string, key?: string) => {
+  for (const listener of viewListeners.get(scope) ?? []) listener(key);
 };
 /** Same durable view keys as the composer; no parallel draft store or index. */
-export function subscribeView(scope: string, listener: () => void) {
+export function subscribeView(scope: string, listener: (key?: string) => void) {
   let listeners = viewListeners.get(scope);
   if (!listeners) {
     listeners = new Set();
@@ -28,7 +28,8 @@ export function subscribeView(scope: string, listener: () => void) {
       }
       if (!event.key.startsWith("buzz-view.v1:")) return;
       const pair: unknown = JSON.parse(event.key.slice("buzz-view.v1:".length));
-      if (Array.isArray(pair) && pair[0] === scope) listener();
+      if (Array.isArray(pair) && pair[0] === scope)
+        listener(typeof pair[1] === "string" ? pair[1] : undefined);
     } catch {
       /* Storage may be unavailable while a window is closing. */
     }
@@ -64,7 +65,7 @@ export function writeView(scope: string, key: string, value: unknown) {
       revision,
     );
     if (viewRevision(scope, key) !== revision) return false;
-    changed(scope);
+    changed(scope, key);
     return true;
   } catch {
     // Ordinary view callers remain usable in memory; recovery callers check this.
@@ -89,6 +90,7 @@ export function listDraftViews(
   scope: string,
   meaningful: (value: unknown, key: string) => boolean,
   selected?: string,
+  limit = 500,
 ): Readonly<{
   entries: readonly Readonly<{ key: string; value: unknown }>[];
   limited: boolean;
@@ -127,7 +129,7 @@ export function listDraftViews(
       try {
         const value: unknown = JSON.parse(raw);
         if (!meaningful(value, pair[1])) continue;
-        if (drafts.length === 500) {
+        if (drafts.length === limit) {
           limited = true;
           break;
         }

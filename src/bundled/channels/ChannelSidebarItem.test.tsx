@@ -44,7 +44,12 @@ function owner(profiles = new Map<string, Profile>()) {
     freshness: "observed",
   };
   const session = {
-    channels: { prepare: vi.fn() },
+    scope: "https://sidebar.test:viewer",
+    channels: {
+      prepare: vi.fn(),
+      list: () => ({ channels: [] }),
+      subscribeList: () => () => {},
+    },
     sidebarPreferences: {
       snapshot: () => ({ data: { muted } }),
       subscribe: (listener: () => void) => {

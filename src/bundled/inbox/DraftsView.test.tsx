@@ -1227,9 +1227,11 @@ it("Delete draft clears exact ready attachments but preserves sibling channel an
   render(h.view);
   await screen.findByText("Please review this");
   await chooseFilter("Drafts");
-  fireEvent.click(
-    screen.getByRole("button", { name: "Open draft for #Design" }),
-  );
+  // The sibling thread now appears too, even though it has files only.
+  expect(screen.getByText("Attachment")).toBeVisible();
+  const target = screen.getByText("Discard this text").closest("button");
+  if (!target) throw new Error("Missing draft control");
+  fireEvent.click(target);
   fireEvent.click(screen.getByRole("button", { name: "Delete draft…" }));
   fireEvent.click(screen.getByRole("button", { name: "Delete draft" }));
   expect(readView(h.owner.session.scope, key, "")).toBe("");

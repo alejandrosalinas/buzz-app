@@ -90,6 +90,13 @@
 .badges[data-working] {
   padding-inline-end: 0;
 }
+/* Drafts end on the painted row edge, independently of unread/working slots. */
+.row .select [data-variant="row"]:has([data-draft-indicator]) {
+  padding-inline-end: calc(var(--channel-row-fill-end, 0%) + var(--space-half));
+}
+.badges:has([data-draft-indicator]) {
+  padding-inline-end: 0;
+}
 .nameContent {
   --user-status-emoji-size: var(--sidenav-emoji-size);
   display: flex;

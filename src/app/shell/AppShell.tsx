@@ -192,6 +192,12 @@ function AppShellContent({
           selected={selected}
           onSelect={onSelect}
           previews
+          inbox={
+            searchServices && {
+              relay: communities.relay,
+              navigation: searchServices.navigation,
+            }
+          }
         />
       </nav>
     ) : null;
@@ -227,6 +233,8 @@ function AppShellContent({
     sidebarScope,
     creationAction,
     creationInSidebar,
+    searchServices,
+    communities.relay,
   ]);
   const headerPages = useMemo(
     () =>

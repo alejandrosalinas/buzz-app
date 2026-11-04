@@ -22,19 +22,15 @@ import type { Navigation } from "../../features/navigation/controller";
 import type { NavigationScope } from "../../features/navigation/targets";
 import { selectProfiles } from "../../features/relay/profile-selection";
 import { useIdentityNames } from "../../features/identity-names/react";
+import { mentionDraft } from "../../features/messages/mention-draft";
+import { listComposerDrafts } from "../../features/messages/draft-presence";
 import {
-  hasDraftContent,
-  mentionDraft,
-} from "../../features/messages/mention-draft";
-import {
-  attachmentDraftCount,
   clearAttachmentDraft,
   subscribeAttachmentDraftCounts,
 } from "../../features/messages/attachment-draft";
 import {
   clearView,
   draftCoordinates,
-  listDraftViews,
   subscribeView,
 } from "../../shared/view-state";
 import { Avatar } from "../../shared/design-system/ui/Avatar";
@@ -119,15 +115,7 @@ export function DraftsView({
   }, [selected, onEmptyRetire]);
   // Keep an emptied selected draft mounted while its composer is being edited.
   // The composer owns draft contents and storage; Inbox only enumerates its scope.
-  const saved = listDraftViews(
-    session.scope,
-    (value, key) =>
-      hasDraftContent(
-        mentionDraft(value),
-        attachmentDraftCount(session, `${session.scope}:${key}`),
-      ),
-    selected,
-  );
+  const saved = listComposerDrafts(session, selected);
   void revision;
   const list = useSyncExternalStore(
     session.channels.subscribeList,
@@ -380,7 +368,9 @@ export function DraftsView({
                           : entry.draft.gifs?.length &&
                               !entry.draft.chatCards?.length
                             ? "GIF"
-                            : "Chat attachment"}
+                            : entry.draft.chatCards?.length
+                              ? "Chat attachment"
+                              : "Attachment"}
                       </span>
                     </span>
                   }

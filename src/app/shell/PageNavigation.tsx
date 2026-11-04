@@ -3,6 +3,7 @@ import {
   useId,
   useRef,
   useState,
+  Fragment,
   type ComponentProps,
   type ComponentType,
   type ReactElement,
@@ -32,6 +33,9 @@ import {
   usePagePresentation,
 } from "./BestieNavigation";
 import { BESTIE_PAGE } from "./bestie-context";
+import { DraftsNavigation } from "../../bundled/inbox/DraftsNavigation";
+import type { RelayData } from "../../features/relay/service";
+import type { Navigation } from "../../features/navigation/controller";
 
 export function PageNavigation({
   pages,
@@ -40,6 +44,7 @@ export function PageNavigation({
   onSelect,
   placement = "sidebar",
   previews = false,
+  inbox,
 }: {
   pages: readonly RegisteredPage[];
   selected: string;
@@ -48,6 +53,7 @@ export function PageNavigation({
   placement?: "sidebar" | "topbar" | "toolbar";
   /** Show page hover previews; only the sidebar's own navigation opts in. */
   previews?: boolean;
+  inbox?: { relay: RelayData; navigation: Navigation } | undefined;
 }) {
   const presentation = usePagePresentation();
   const hover = useHoverPointer();
@@ -167,17 +173,26 @@ export function PageNavigation({
         }
       />
     );
-    return page.preview && previewed(page) ? (
-      <PagePreview
-        key={page.key}
-        page={page}
-        preview={page.preview}
-        label={label}
-      >
-        {item}
-      </PagePreview>
+    const row =
+      page.preview && previewed(page) ? (
+        <PagePreview
+          key={page.key}
+          page={page}
+          preview={page.preview}
+          label={label}
+        >
+          {item}
+        </PagePreview>
+      ) : (
+        item
+      );
+    return page.key === "buzz.inbox/inbox" && inbox ? (
+      <Fragment key={page.key}>
+        {row}
+        <DraftsNavigation {...inbox} />
+      </Fragment>
     ) : (
-      item
+      row
     );
   });
 }

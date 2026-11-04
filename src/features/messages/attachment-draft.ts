@@ -75,6 +75,12 @@ const drafts = new WeakMap<ComposerSession, Map<string, AttachmentDraft>>();
 export function attachmentDraftCount(session: ComposerSession, key: string) {
   return drafts.get(session)?.get(key)?.snapshot().length ?? 0;
 }
+/** Enumerate retained file-only composers without allocating an attachment owner. */
+export function attachmentDraftKeys(session: ComposerSession) {
+  return [...(drafts.get(session)?.entries() ?? [])]
+    .filter(([, draft]) => draft.snapshot().length)
+    .map(([key]) => key);
+}
 const countListeners = new WeakMap<ComposerSession, Set<() => void>>();
 /** Hear when any of the session's drafts gains or loses files, including
  * drafts whose composer is no longer mounted. */

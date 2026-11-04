@@ -51,6 +51,16 @@ The shell hides the card while Inbox is selected and on devices without hover.
 
 ## Drafts (PR5)
 
+The sidebar includes Drafts directly below Inbox while the plugin is enabled.
+It opens the existing Inbox page with its Drafts route and shows the current
+viewer/community's number of meaningful message and reply drafts. Solo chat and
+Team channel rows show a pencil when their main composer or any thread has a
+draft. The shared presence projection reuses composer view keys and retained
+attachment counts; it stores no second draft copy and keeps row counts beyond
+the list's 500-preview limit. File-only composers appear in the list even before
+they have a saved text key. Counts update through view/storage and attachment
+notifications, with no relay reads or polling.
+
 Drafts is a quiet Inbox header action. It lists only meaningful saved composer
 text in this viewer/community scope, up to 500 with explicit truncation; an
 emptied selected editor stays open until send, close or confirmed delete. The
