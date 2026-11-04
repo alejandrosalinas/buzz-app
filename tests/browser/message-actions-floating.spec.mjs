@@ -192,6 +192,7 @@ for (const own of [true, false]) {
     await row.getByText("Hi", { exact: true }).hover();
     await above(actions);
     await expect(actions).not.toHaveCSS("box-shadow", "none");
+    await expect(actions).not.toHaveCSS("backdrop-filter", "none");
     // Park the pointer first: after the resize, its narrow-pane position can
     // land on a sidebar activity badge whose hover popover covers the row.
     await page.mouse.move(0, 0);
@@ -586,6 +587,8 @@ test("thread actions and growing reactions paint beyond the scroller without mov
     .toBeLessThan(beforeWheel);
   await page.mouse.move(0, 0);
   await expect(actions).toHaveCSS("opacity", "0");
+  // Closed bars stay laid out in every row; only open ones carry the glass.
+  await expect(actions).toHaveCSS("backdrop-filter", "none");
 });
 
 test("compact timeline actions slide under the top edge, track scrolling and preserve keyboard order", async ({

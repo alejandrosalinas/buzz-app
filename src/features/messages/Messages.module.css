@@ -2046,6 +2046,13 @@ html[data-keyboard-navigation] .membership .membershipName:focus-visible {
     pointer-events: none;
     translate: 0 -100%;
   }
+  /* Every row keeps its closed bar laid out (including the placeholder before
+     first hover), and WebKit composites each backdrop blur, even at opacity 0.
+     Closed bars are invisible, so they skip the glass; an open bar is
+     :popover-open and keeps it. */
+  .messageActions:not(:popover-open) {
+    backdrop-filter: none;
+  }
   /* Closed controls remain focusable at the slot, not at viewport offsets. */
   .messageActions[popover] {
     position: absolute;
