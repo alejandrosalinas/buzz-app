@@ -1407,6 +1407,54 @@ not visible rows or complete history.
 The relay can filter rows after its limit, and summaries/EOSE are not proof of
 exhaustion. See [the thread owner and bounds](relay-queries.md#thread-views).
 
+### Scrolling long threads
+
+These are the requirements for scrolling a long thread; the targets below measure
+how close the panel is, and [performance runs](performance.md)
+report where it stands. A thread with hundreds of replies must scroll as smoothly
+as a short one, for every reply the panel has loaded, up to the bounded history
+above, whatever the mix of Markdown, mentions, links and authors. Reaching replies
+beyond those bounds belongs to the relay's thread retention, not to scrolling.
+
+- **Smooth and responsive:** wheel, trackpad and keyboard input move the pane from
+  the first event, at the display's frame rate, and a reversal follows at once.
+  The panel's own position corrections never stall input or cut a trackpad coast
+  short.
+- **Always available:** loaded replies are painted as they come into view, at any
+  scroll speed and through direction changes. The pane never blinks or shows empty
+  space where loaded replies belong, and replies already shown stay readable while
+  an older page loads.
+- **Final on arrival:** a reply appears at its final size and position. It does not
+  rewrap, resize or move after it is on screen; media occupy their reserved frame.
+- **Reading position holds:** older pages, resolved media and profiles, live
+  replies and panel resizes keep the message being read at the same offset. New
+  replies are followed only while the reader is at or near the bottom.
+- **Bounded work:** the cost of a scroll gesture depends on the replies near the
+  viewport, not on how many are loaded. If replies far from the viewport are not
+  rendered, scrolling, exact links, keyboard selection and Back/Forward still reach
+  every loaded reply, and focus, selection, editing, drafts and expanded branches
+  keep working for them.
+
+#### Targets
+
+These targets are measured on a fixed mock thread of 460 replies (the strict
+window's full history) in the macOS app, with every reply loaded and a 60 Hz
+display. A measured run is two upward trackpad flings with a reversal, then Jump to
+latest.
+They are advisory: the [performance suite](performance.md) reports them and does
+not fail CI on them.
+
+| While scrolling the loaded thread | Target | Ceiling |
+| --- | --- | --- |
+| 95th-percentile frame interval | 16.7 ms (60 fps) | 33 ms |
+| Frames longer than two 60 Hz frames, per run | 0 | 5 |
+| Captured frames with a blank band (35% of the pane or more), per run | 0 | 5 |
+
+The target is the goal; the ceiling is the line regressions must not cross while
+the target is out of reach. Browser engines show a different subset: Chromium's
+frame rate cannot see compositing stalls, so its runs report main-thread cost, and
+macOS WebKit reproduces the frame intervals but not momentum or painted pixels.
+
 ## Validation and limits
 
 `just scan` runs frontend checks/build, runtime/CLI tests, relay behavior tests,
