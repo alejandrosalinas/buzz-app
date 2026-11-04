@@ -161,7 +161,9 @@ describe("GooseProcess", () => {
           protected: true,
           env: { BUZZ_SECURITY_URL: url },
         }),
-      ).rejects.toThrow("Protected Goose did not turn on its security gate");
+      ).rejects.toThrow(
+        "Protected Goose's security gate is in the wrong state",
+      );
       expect(fake.geese[0]?.killed).toBe(true);
     },
   );

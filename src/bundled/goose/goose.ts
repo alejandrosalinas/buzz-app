@@ -205,7 +205,9 @@ export const GooseProcess = {
           capability.enabled !== undefined &&
           capability.enabled !== (launch.env?.BUZZ_SECURITY_URL != null)
         )
-          throw new Error("Protected Goose did not turn on its security gate");
+          throw new Error(
+            "Protected Goose's security gate is in the wrong state",
+          );
       }
       launch.signal?.throwIfAborted();
       return goose;
