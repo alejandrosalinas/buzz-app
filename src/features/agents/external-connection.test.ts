@@ -39,6 +39,16 @@ afterEach(() => vi.useRealTimers());
 it("parses the generic authorization request without a bearer", () => {
   expect(parseExternalAuthorization(uri())).toEqual(request);
 });
+it.each(["read", "post", "create", "read create", "read post create"])(
+  "parses explicitly requested access without adding scopes (%s)",
+  (scope) => {
+    const url = new URL(uri());
+    url.searchParams.set("scope", scope);
+    expect(parseExternalAuthorization(url.href)?.scope).toEqual(
+      scope.split(" "),
+    );
+  },
+);
 it.each([
   ["callback", "http://localhost:1234/buzz/authorize"],
   ["callback", "https://127.0.0.1:1234/buzz/authorize"],
@@ -48,6 +58,8 @@ it.each([
   ["code_challenge_method", "plain"],
   ["scope", "read files"],
   ["scope", "read read"],
+  ["scope", "create create"],
+  ["scope", "create manage"],
   ["state", "short"],
   ["client", ""],
   ["version", "2"],
@@ -65,38 +77,45 @@ it("rejects ambiguous and extra link fields", () => {
     ),
   ).toBeNull();
 });
-it("requires owner approval and keeps transport credentials out of observable state", async () => {
-  const server = transport(),
-    connect = vi.fn(async () => server),
-    deny = vi.fn(async () => {});
-  const connection = createExternalApps();
-  connection.bind({ connect, deny });
-  connection.open(request, "viewer");
-  expect(connect).not.toHaveBeenCalled();
-  await connection.approve("test-agent");
-  expect(connect).toHaveBeenCalledWith(
-    "test-agent",
-    expect.any(AbortSignal),
-    expect.any(Function),
-    ["read", "post"],
-  );
-  expect(server.authorize).toHaveBeenCalledWith({
-    callback: request.callback,
-    state: request.state,
-    code_challenge: request.code_challenge,
-  });
-  expect(JSON.stringify(connection.snapshot())).not.toContain(
-    "test-only-token",
-  );
-  connection.open({ ...request, state: "B".repeat(43) }, "viewer");
-  expect(server.close).not.toHaveBeenCalled();
-  await connection.deny();
-  expect(deny).toHaveBeenCalledOnce();
-  expect(server.close).not.toHaveBeenCalled();
-  expect(connection.snapshot().grant?.phase).toBe("waiting");
-  await connection.revoke();
-  expect(server.close).toHaveBeenCalled();
-});
+it.each([
+  { scope: ["read", "post"] },
+  { scope: ["create"] },
+  { scope: ["read", "post", "create"] },
+] as const)(
+  "requires approval for exactly $scope and hides transport credentials",
+  async ({ scope }) => {
+    const server = transport(),
+      connect = vi.fn(async () => server),
+      deny = vi.fn(async () => {});
+    const connection = createExternalApps();
+    connection.bind({ connect, deny });
+    connection.open({ ...request, scope }, "viewer");
+    expect(connect).not.toHaveBeenCalled();
+    await connection.approve("test-agent");
+    expect(connect).toHaveBeenCalledWith(
+      "test-agent",
+      expect.any(AbortSignal),
+      expect.any(Function),
+      scope,
+    );
+    expect(server.authorize).toHaveBeenCalledWith({
+      callback: request.callback,
+      state: request.state,
+      code_challenge: request.code_challenge,
+    });
+    expect(JSON.stringify(connection.snapshot())).not.toContain(
+      "test-only-token",
+    );
+    connection.open({ ...request, state: "B".repeat(43) }, "viewer");
+    expect(server.close).not.toHaveBeenCalled();
+    await connection.deny();
+    expect(deny).toHaveBeenCalledOnce();
+    expect(server.close).not.toHaveBeenCalled();
+    expect(connection.snapshot().grant?.phase).toBe("waiting");
+    await connection.revoke();
+    expect(server.close).toHaveBeenCalled();
+  },
+);
 it("closes a server that starts after revocation", async () => {
   const pending = deferred<HostMcpServer>(),
     started = deferred<void>();

@@ -71,7 +71,8 @@ permission. **Settings > External apps** shows the connection and **Revoke acces
 Keys stay in Buzz. Closing Settings keeps access active.
 
 Version 1 links contain `version=1`, the requesting `client` display name,
-`callback`, random `state`, `scope` (`read`, `post`, or both), `code_challenge`,
+`callback`, random `state`, `scope` (a space-separated selection of `read`, `post`,
+and `create`), `code_challenge`,
 and `code_challenge_method=S256`. The callback must be exactly
 `http://127.0.0.1:<port>/buzz/authorize`, with a port from 1024 through 65535.
 State and challenge each encode 32 bytes as unpadded base64url. The client name
@@ -97,14 +98,27 @@ identity change, or the end of the owning agent runtime, plugin, or app also
 stops it. Start setup again in the external app after a connection ends.
 
 The read scope allows `channel_list`, `channel_get`, and `read`. The post scope
-allows `send` and `reply_in_subthread`. Buzz classifies each built-in tool through
+allows `send` and `reply_in_subthread`. The create scope allows only
+`channel_create({name})`: a private Solo with the authenticated owner, connected
+agent and the owner's account-saved Bestie. Buzz derives these identities and
+deduplicates them; the creating agent is an implicit member. A missing, invalid,
+unreadable or unavailable saved Bestie fails before creation with a corrective
+message. It never substitutes an automatic device fallback. The exact saved key
+must be selectable through the session's shared agent choices in this community;
+it need not run on this device. Caller-supplied members, identities, visibility,
+templates and lifecycle operations are not allowed. Publication and confirmation
+use the existing native Solo-create handler and its unconfirmed-result messages.
+Buzz classifies each built-in tool through
 its trusted external-access policy. Unclassified tools cannot run. Runtime plugin
 tools cannot enroll in this policy.
 
 `tools/list` returns all classified tools in one page. It rejects a supplied
 `cursor`. Each tool has `_meta["buzz/requiredScopes"]`. The list result has
 `_meta["buzz/grantedScopes"]` and `_meta["buzz/supportedScopes"]`; the supported
-set is `read` and `post`. Tool discovery does not grant access. Each call checks
+set is `read`, `post`, and `create`. One authorization can request all three.
+Buzz never widens an existing grant: a read/post grant permits creation only after
+the owner approves a request that includes `create`. Tool discovery does not grant
+access. Each call checks
 the grant against the trusted policy. A missing scope returns `isError: true`
 and `_meta["buzz/error"]: {code: "authorization_required", required_scopes: [...]}`.
 `required_scopes` lists the missing scopes. Each approval replaces the previous
@@ -114,11 +128,17 @@ it already has. For example, an app with `read` that needs `post` requests
 The app must not retry the call automatically after approval. New classified tools
 use this same contract.
 
+External clients must accept `create` in `buzz/grantedScopes`,
+`buzz/supportedScopes` and per-tool `buzz/requiredScopes` before this catalog is
+advertised. Older Nexus clients that accept only read/post reject an unknown
+supported scope even when their grant still contains only read/post.
+
 The shared schemas apply with explicit
 targets: `read` needs `channel`, `thread`, or `message_url`. A `message_url` uses
 the linked message's channel and thread; it cannot combine with `channel` or
 `thread`. Searches with `q` need `channel` or `message_url`;
-`channel_get` needs `channel`; `send` needs `channel`, `text`, and `audience`;
+`channel_get` needs `channel`; `channel_create` accepts only `name`;
+`send` needs `channel`, `text`, and `audience`;
 `reply_in_subthread` needs `parent`, `text`, and `audience`. Posts accept
 `mentions`, and `send` accepts `reply`. Posts reject `path`, `files`, and `final`.
 Unknown fields are rejected. File access, commands, Git credentials, and plugin

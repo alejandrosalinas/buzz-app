@@ -1,21 +1,31 @@
 import { expect, it, vi } from "vitest";
-import type { BuzzClient, BuzzEvent } from "./client";
+import type { BuzzClient, BuzzEvent, Filter, Template } from "./client";
+import type { ExternalScope } from "../features/agents/external-connection";
 import { respondExternal } from "./external";
 
 function fixture(events: BuzzEvent[] = []) {
-  const query = vi.fn(async () => events);
-  const publish = vi.fn(async (event) => ({ ...event, id: "d".repeat(64) }));
+  const query = vi.fn(async (_filters: readonly Filter[]) => events);
+  const publish = vi.fn(async (event: Template) => ({
+    ...event,
+    id: "d".repeat(64),
+  }));
+  const defaultWorker = vi.fn(async () => "c".repeat(64));
   const read = vi.fn(async () => {
     throw new Error("file access");
   });
   const client = {
     pubkey: "a".repeat(64),
     key: "a".repeat(64),
+    owner: "b".repeat(64),
     query,
     publish,
     read,
   } as unknown as BuzzClient;
-  const call = (name: string, args: unknown) =>
+  const call = (
+    name: string,
+    args: unknown,
+    scopes: readonly ExternalScope[] = ["read", "post"],
+  ) =>
     respondExternal(
       client,
       {
@@ -25,8 +35,10 @@ function fixture(events: BuzzEvent[] = []) {
         params: { name, arguments: args },
       },
       () => {},
+      scopes,
+      defaultWorker,
     );
-  return { client, query, publish, read, call };
+  return { client, query, publish, read, call, defaultWorker };
 }
 
 it("lists the restricted schemas and negotiates only the external protocol", async () => {
@@ -65,6 +77,7 @@ it("lists the restricted schemas and negotiates only the external protocol", asy
     }
   ).result.tools;
   expect(tools.map((tool) => tool.name).sort()).toEqual([
+    "channel_create",
     "channel_get",
     "channel_list",
     "read",
@@ -75,6 +88,11 @@ it("lists the restricted schemas and negotiates only the external protocol", asy
   expect(send?.inputSchema.properties).not.toHaveProperty("files");
   expect(send?.inputSchema.properties).not.toHaveProperty("path");
   expect(send?.inputSchema.required).toEqual(["channel", "text", "audience"]);
+  const create = tools.find((tool) => tool.name === "channel_create");
+  expect(create?.inputSchema.properties).toEqual({ name: { type: "string" } });
+  expect(create?.inputSchema.required).toEqual(["name"]);
+  expect(create).toHaveProperty("annotations.readOnlyHint", false);
+  expect(create).toHaveProperty("_meta.buzz/requiredScopes", ["create"]);
   expect(
     await respondExternal(
       client,
@@ -232,7 +250,7 @@ it("enforces read-only scope even when a caller asks for a post tool", async () 
   );
   expect(list).toHaveProperty("result._meta", {
     "buzz/grantedScopes": ["read"],
-    "buzz/supportedScopes": ["read", "post"],
+    "buzz/supportedScopes": ["read", "post", "create"],
   });
   expect(list).toHaveProperty(
     "result.tools",
@@ -271,4 +289,215 @@ it("enforces read-only scope even when a caller asks for a post tool", async () 
     `sent ${"d".repeat(64)}`,
   );
   expect(publish).toHaveBeenCalledOnce();
+});
+
+it("does not expand existing read/post grants to create", async () => {
+  const { call, defaultWorker, query, publish } = fixture();
+  const reply = await call("channel_create", { name: "Triage" });
+  expect(reply).toHaveProperty("result.isError", true);
+  expect(reply).toHaveProperty("result._meta.buzz/error", {
+    code: "authorization_required",
+    required_scopes: ["create"],
+  });
+  expect(defaultWorker).not.toHaveBeenCalled();
+  expect(query).not.toHaveBeenCalled();
+  expect(publish).not.toHaveBeenCalled();
+});
+
+it.each([
+  ["channel_list", {}, "read"],
+  ["channel_get", { channel: "chan" }, "read"],
+  ["read", { channel: "chan" }, "read"],
+  ["send", { channel: "chan", text: "blocked", audience: "everyone" }, "post"],
+  [
+    "reply_in_subthread",
+    { parent: "a".repeat(64), text: "blocked", audience: "everyone" },
+    "post",
+  ],
+])(
+  "does not grant %s through create-only consent",
+  async (name, args, scope) => {
+    const { call, defaultWorker, query, publish, read } = fixture();
+    const reply = await call(name as string, args, ["create"]);
+    expect(reply).toHaveProperty("result.isError", true);
+    expect(reply).toHaveProperty("result._meta.buzz/error", {
+      code: "authorization_required",
+      required_scopes: [scope],
+    });
+    expect(defaultWorker).not.toHaveBeenCalled();
+    expect(query).not.toHaveBeenCalled();
+    expect(publish).not.toHaveBeenCalled();
+    expect(read).not.toHaveBeenCalled();
+  },
+);
+
+it.each([
+  {},
+  { name: " " },
+  { name: 123 },
+  ...[
+    "owner",
+    "agent",
+    "worker",
+    "members",
+    "visibility",
+    "solo",
+    "template",
+    "type",
+    "about",
+    "ttl",
+    "join_role",
+  ].map((field) => ({ name: "Triage", [field]: "override" })),
+])("rejects external Solo overrides or invalid names (%j)", async (args) => {
+  const { call, defaultWorker, query, publish } = fixture();
+  expect(await call("channel_create", args, ["create"])).toHaveProperty(
+    "result.isError",
+    true,
+  );
+  expect(defaultWorker).not.toHaveBeenCalled();
+  expect(query).not.toHaveBeenCalled();
+  expect(publish).not.toHaveBeenCalled();
+});
+
+it.each([{ owner: undefined }, { owner: "invalid" }, { pubkey: "invalid" }])(
+  "rejects invalid authenticated Solo identities (%j)",
+  async (identity) => {
+    const { client, call, defaultWorker, publish } = fixture();
+    Object.assign(client, identity);
+    expect(
+      await call("channel_create", { name: "Triage" }, ["create"]),
+    ).toHaveProperty(
+      "result.content.0.text",
+      expect.stringContaining("Authorize the app again"),
+    );
+    expect(defaultWorker).not.toHaveBeenCalled();
+    expect(publish).not.toHaveBeenCalled();
+  },
+);
+
+it("rejects invalid or unreadable default-worker configuration before publication", async () => {
+  const { call, defaultWorker, publish } = fixture();
+  defaultWorker.mockResolvedValueOnce("invalid");
+  expect(
+    await call("channel_create", { name: "Triage" }, ["create"]),
+  ).toHaveProperty(
+    "result.content.0.text",
+    "Choose and save a Bestie in Buzz, then try again.",
+  );
+  defaultWorker.mockRejectedValueOnce(
+    new Error("Your saved Bestie could not be read."),
+  );
+  expect(
+    await call("channel_create", { name: "Triage" }, ["create"]),
+  ).toHaveProperty("result.isError", true);
+  expect(publish).not.toHaveBeenCalled();
+});
+
+function soloFixture() {
+  const f = fixture();
+  f.query.mockImplementation(async (filters) => {
+    const created = f.publish.mock.lastCall?.[0];
+    if (!created) return [];
+    const id = created.tags.find(([key]) => key === "h")?.[1] as string;
+    const kind = (filters[0]?.kinds as number[] | undefined)?.[0] ?? 0;
+    const tags =
+      kind === 39000
+        ? [
+            ["d", id],
+            ["name", "Triage"],
+            ["private"],
+            ["t", "stream"],
+            ["t", "buzz.solo"],
+            ["t", "buzz.session.named"],
+          ]
+        : kind === 39002
+          ? [
+              ["d", id],
+              ["p", f.client.pubkey, "", "owner"],
+              ...created.tags.filter(([key]) => key === "p"),
+            ]
+          : undefined;
+    return tags
+      ? [
+          {
+            id: "e".repeat(64),
+            pubkey: f.client.pubkey,
+            created_at: 1,
+            kind,
+            content: "",
+            tags,
+            sig: "",
+          },
+        ]
+      : [];
+  });
+  return f;
+}
+
+it.each(["a".repeat(64), "b".repeat(64), "c".repeat(64)])(
+  "creates only a private Solo and deduplicates the worker %s",
+  async (worker) => {
+    const { call, client, defaultWorker, publish } = soloFixture();
+    defaultWorker.mockResolvedValue(worker);
+    const reply = await call("channel_create", { name: "Triage" }, ["create"]);
+    expect(reply).not.toHaveProperty("result.isError", true);
+    expect(reply).toHaveProperty(
+      "result.content.0.text",
+      expect.not.stringContaining("did not keep the Solo label"),
+    );
+    expect(reply).toHaveProperty(
+      "result.content.0.text",
+      expect.stringMatching(/^created /),
+    );
+    expect(publish).toHaveBeenCalledOnce();
+    const created = publish.mock.calls[0]?.[0];
+    const members = [...new Set([client.owner, worker])].filter(
+      (key) => key !== client.pubkey,
+    );
+    expect(created).toEqual({
+      kind: 9007,
+      content: "",
+      tags: [
+        ["h", expect.any(String)],
+        ["name", "Triage"],
+        ["visibility", "private"],
+        ["channel_type", "stream"],
+        ["t", "buzz.solo"],
+        ["t", "buzz.session.named"],
+        ...members.map((key) => ["p", key]),
+      ],
+    });
+    for (const member of members)
+      expect(reply).toHaveProperty(
+        "result.content.0.text",
+        expect.stringContaining(`added ${member}`),
+      );
+  },
+);
+
+it("preserves relay refusal and unconfirmed creation results", async () => {
+  const { call, publish } = soloFixture();
+  publish.mockRejectedValueOnce(new Error("Relay refused a required member."));
+  const refused = await call("channel_create", { name: "Triage" }, ["create"]);
+  expect(refused).toHaveProperty("result.isError", true);
+  expect(refused).toHaveProperty(
+    "result.content.0.text",
+    "Relay refused a required member.",
+  );
+  const pending = fixture();
+  vi.useFakeTimers();
+  try {
+    const reply = pending.call("channel_create", { name: "Triage" }, [
+      "create",
+    ]);
+    await vi.runAllTimersAsync();
+    expect(await reply).toHaveProperty(
+      "result.content.0.text",
+      expect.stringMatching(
+        /^The community accepted channel .+; its members are not confirmed\.$/,
+      ),
+    );
+  } finally {
+    vi.useRealTimers();
+  }
 });

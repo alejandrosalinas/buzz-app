@@ -12664,6 +12664,333 @@ it.each(["community selection", "reconnect", "identity", "runtime", "revoke"])(
   },
 );
 
+describe("external private Solo creation", () => {
+  async function fixture(
+    scopes: readonly import("./external-connection").ExternalScope[] = [
+      "create",
+    ],
+  ) {
+    vi.stubEnv(
+      "VITE_BUZZ_EXTERNAL_MCP_COMMUNITIES",
+      "https://relay.example.test",
+    );
+    const f = await setup();
+    const saved = vi.fn<NonNullable<RelaySession["mainAgent"]>["read"]>(
+      async () => sibling,
+    );
+    const libraryRead = vi.fn(async () => ({
+      definitions: [],
+      identities: [{ pubkey: sibling, name: "Saved remote Bestie" }],
+    }));
+    const lifetime = new AbortController();
+    const choices = createAgentChoices({
+      scope: `https://relay.example.test:${viewer}`,
+      library: createAgentLibrary(libraryRead).queries,
+      native: {
+        snapshot: f.service.local,
+        subscribe: f.service.subscribe,
+        refresh: () => f.service.refresh(),
+      },
+      archives: {
+        snapshot: () => ({
+          status: "ready",
+          archived: [...f.archives.archived],
+        }),
+        subscribe: () => () => {},
+        state: (key) => f.archives.state(key),
+        ensure: f.archives.ensure,
+        refresh: f.archives.refresh,
+      },
+      signal: lifetime.signal,
+    });
+    Object.assign(f.session, {
+      mainAgent: { read: saved, write: vi.fn(async () => {}) },
+      agentChoices: choices,
+    });
+    let handler: import("../host/service").McpHandler | undefined;
+    const closed = runnerGate();
+    const close = vi.fn(async () => closed.resolve());
+    f.ctx.provide("host", {
+      serveMcp: async (receive: import("../host/service").McpHandler) => {
+        handler = receive;
+        return {
+          url: "http://127.0.0.1:1234/mcp",
+          headers: [],
+          closed: closed.promise,
+          close,
+        };
+      },
+    } as unknown as import("../host/service").Host);
+    await f.service.create({ type: "example/echo", name: "Echo" });
+    await vi.waitFor(() => expect(f.plugin.agents.handle(bot)).toBeDefined());
+    const owner = f.ctx.extend({
+      pluginOwner: { id: "buzz.agents", revision: "one" },
+    });
+    const controller = new AbortController();
+    const server = await owner.agents.connectExternal(
+      bot,
+      controller.signal,
+      () => {},
+      scopes,
+    );
+    const call = handler;
+    if (!call) throw new Error("Missing external server handler");
+    f.native.publish.mockClear();
+    f.native.query.mockImplementation(async (_member, filters) => {
+      const created = f.native.publish.mock.calls.find(
+        ([, value]) => value.kind === 9007,
+      )?.[1];
+      if (!created) return [];
+      const id = created.tags?.find(([key]) => key === "h")?.[1] as string;
+      const kind = (filters[0] as { kinds?: number[] } | undefined)?.kinds?.[0];
+      if (kind === 39000)
+        return [
+          event("metadata", {
+            kind,
+            tags: [
+              ["d", id],
+              ["name", "Triage"],
+              ["private"],
+              ["t", "stream"],
+              ["t", "buzz.solo"],
+              ["t", "buzz.session.named"],
+            ],
+          }),
+        ];
+      if (kind === 39002)
+        return [
+          event("roster", {
+            kind,
+            tags: [
+              ["d", id],
+              ["p", bot, "", "owner"],
+              ...(created.tags ?? [])
+                .filter(([key]) => key === "p")
+                .map((tag) => [...tag]),
+            ],
+          }),
+        ];
+      return [];
+    });
+    return {
+      ...f,
+      saved,
+      libraryRead,
+      controller,
+      close,
+      create: (args: Record<string, unknown> = { name: "Triage" }) =>
+        call({
+          id: 1,
+          method: "tools/call",
+          params: { name: "channel_create", arguments: args },
+        }),
+      cleanup: async () => {
+        await server.close();
+        lifetime.abort();
+        await f.ctx.fiber.dispose();
+      },
+    };
+  }
+
+  it.each([sibling, bot])(
+    "uses native owner/caller and the account-saved worker %s",
+    async (worker) => {
+      const f = await fixture();
+      try {
+        f.saved.mockResolvedValueOnce(worker);
+        const reply = await f.create();
+        expect(reply).toHaveProperty(
+          "result.content.0.text",
+          expect.stringMatching(/^created /),
+        );
+        expect(reply).toHaveProperty(
+          "result.content.0.text",
+          expect.not.stringContaining("did not keep the Solo label"),
+        );
+        expect(f.saved).toHaveBeenCalledOnce();
+        expect(f.libraryRead).toHaveBeenCalledOnce();
+        expect(f.native.publish).toHaveBeenCalledOnce();
+        expect(f.native.publish).toHaveBeenCalledWith(
+          { pubkey: bot, relay: "wss://relay.example.test" },
+          {
+            kind: 9007,
+            content: "",
+            tags: [
+              ["h", expect.any(String)],
+              ["name", "Triage"],
+              ["visibility", "private"],
+              ["channel_type", "stream"],
+              ["t", "buzz.solo"],
+              ["t", "buzz.session.named"],
+              ["p", viewer],
+              ...(worker === bot ? [] : [["p", worker]]),
+            ],
+          },
+        );
+        expect(reply).toHaveProperty(
+          "result.content.0.text",
+          expect.stringContaining(`added ${viewer}`),
+        );
+        if (worker !== bot)
+          expect(reply).toHaveProperty(
+            "result.content.0.text",
+            expect.stringContaining(`added ${worker}`),
+          );
+      } finally {
+        await f.cleanup();
+      }
+    },
+  );
+
+  it.each([
+    "unset",
+    "missing",
+    "invalid",
+    "unavailable",
+    "archived",
+    "unreadable",
+    "unsupported",
+  ])(
+    "fails before publication when the configured worker is %s",
+    async (reason) => {
+      const f = await fixture();
+      try {
+        if (reason === "unset") f.saved.mockResolvedValueOnce(undefined);
+        else if (reason === "missing") f.saved.mockResolvedValueOnce(null);
+        else if (reason === "invalid")
+          f.saved.mockResolvedValueOnce("not-a-key");
+        else if (reason === "unavailable")
+          f.saved.mockResolvedValueOnce("e".repeat(64));
+        else if (reason === "archived") f.archives.archived.add(sibling);
+        else if (reason === "unreadable")
+          f.saved.mockRejectedValueOnce(new Error("offline"));
+        else Object.assign(f.session, { mainAgent: undefined });
+        const reply = await f.create();
+        expect(reply).toHaveProperty("result.isError", true);
+        expect(reply).toHaveProperty(
+          "result.content.0.text",
+          expect.stringMatching(
+            /Bestie.*Buzz|Bestie could not be read|Bestie is not available/,
+          ),
+        );
+        expect(f.native.publish).not.toHaveBeenCalled();
+      } finally {
+        await f.cleanup();
+      }
+    },
+  );
+
+  it("requires new consent without even looking up the configured worker", async () => {
+    const f = await fixture(["read", "post"]);
+    try {
+      expect(await f.create()).toHaveProperty("result._meta.buzz/error", {
+        code: "authorization_required",
+        required_scopes: ["create"],
+      });
+      expect(f.saved).not.toHaveBeenCalled();
+      expect(f.libraryRead).not.toHaveBeenCalled();
+      expect(f.native.publish).not.toHaveBeenCalled();
+    } finally {
+      await f.cleanup();
+    }
+  });
+
+  it.each(["library", "refresh"])(
+    "offers retry guidance when the worker's %s lookup fails",
+    async (source) => {
+      const f = await fixture();
+      try {
+        if (source === "library")
+          f.libraryRead.mockRejectedValueOnce(new Error("inventory offline"));
+        else
+          vi.spyOn(f.service, "refresh").mockRejectedValueOnce(
+            new Error("inventory offline"),
+          );
+        const reply = await f.create();
+        expect(reply).toHaveProperty("result.isError", true);
+        expect(reply).toHaveProperty(
+          "result.content.0.text",
+          "Your saved Bestie could not be checked. Check the community connection and try again.",
+        );
+        expect(f.native.publish).not.toHaveBeenCalled();
+      } finally {
+        await f.cleanup();
+      }
+    },
+  );
+
+  it("uses a verified local Bestie despite a partial library failure", async () => {
+    const f = await fixture();
+    try {
+      f.saved.mockResolvedValueOnce(bot);
+      f.libraryRead.mockRejectedValueOnce(new Error("inventory offline"));
+      expect(await f.create()).toHaveProperty(
+        "result.content.0.text",
+        expect.stringMatching(/^created /),
+      );
+      expect(f.native.publish).toHaveBeenCalledOnce();
+    } finally {
+      await f.cleanup();
+    }
+  });
+
+  it("reports native publication refusal without claiming that a Solo exists", async () => {
+    const f = await fixture();
+    try {
+      f.native.publish.mockRejectedValueOnce(
+        new Error("This member cannot join the Solo."),
+      );
+      const reply = await f.create();
+      expect(reply).toHaveProperty("result.isError", true);
+      expect(reply).toHaveProperty(
+        "result.content.0.text",
+        "This member cannot join the Solo.",
+      );
+      expect(f.native.publish).toHaveBeenCalledOnce();
+    } finally {
+      await f.cleanup();
+    }
+  });
+
+  it.each(["account", "inventory"])(
+    "revokes creation during the pending %s lookup",
+    async (stage) => {
+      const f = await fixture();
+      const started = runnerGate(),
+        release = runnerGate();
+      if (stage === "account")
+        f.saved.mockImplementationOnce(async () => {
+          started.resolve();
+          await release.promise;
+          return sibling;
+        });
+      else
+        f.libraryRead.mockImplementationOnce(async () => {
+          started.resolve();
+          await release.promise;
+          return {
+            definitions: [],
+            identities: [{ pubkey: sibling, name: "Bestie" }],
+          };
+        });
+      const outcome = f.create().catch((error) => error);
+      try {
+        await started.promise;
+        f.controller.abort();
+      } finally {
+        release.resolve();
+      }
+      try {
+        expect(await outcome).toBeInstanceOf(Error);
+        await vi.waitFor(() => expect(f.close).toHaveBeenCalled());
+        expect(f.native.publish).not.toHaveBeenCalled();
+      } finally {
+        await f.cleanup();
+      }
+    },
+  );
+});
+
 it.each(["return", "throw"])(
   "revokes source commands on %s without losing queued output",
   async (ending) => {

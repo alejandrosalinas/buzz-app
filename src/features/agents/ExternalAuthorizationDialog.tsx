@@ -136,7 +136,9 @@ function ConsentDialog({
               .map((scope) =>
                 scope === "read"
                   ? "read channels, messages and threads"
-                  : "post text as the selected agent",
+                  : scope === "post"
+                    ? "post text as the selected agent"
+                    : "create private Solo chats with you, the selected agent and your saved Bestie",
               )
               .join("; ")}
             . Keys stay in Buzz.
