@@ -20,9 +20,18 @@ const cases = [
   "thread-open-rich",
   "thread-close-rich",
   "thread-reopen-rich",
+  "thread-scroll-open",
+  "thread-scroll-fling",
+  "thread-scroll-reverse",
 ];
 // A case name selects only that case; a group selects every case it prefixes.
-const groups = ["all", "channel-open", "scroll-paging", "thread"];
+const groups = [
+  "all",
+  "channel-open",
+  "scroll-paging",
+  "thread",
+  "thread-scroll",
+];
 const scenarios = [...groups, ...cases];
 try {
   const { values } = parseArgs({
@@ -31,14 +40,16 @@ try {
       scenario: { type: "string", default: "all" },
       repeat: { type: "string", default: "5" },
       cpu: { type: "string", default: "4" },
+      browser: { type: "string", default: "chromium" },
       out: { type: "string" },
       help: { type: "boolean" },
     },
   });
   if (values.help) {
-    console.log(`Usage: bin/pnpm perf [--scenario ${scenarios.join("|")}] [--repeat 5] [--cpu 4] [--out results.json]
-Runs a production Chromium build serially, with fresh state per sample.
+    console.log(`Usage: bin/pnpm perf [--scenario ${scenarios.join("|")}] [--repeat 5] [--cpu 4] [--browser chromium|webkit] [--out results.json]
+Runs a production build serially, with fresh state per sample.
 CPU is Chromium's slowdown factor (>=1); repeat is a positive integer.
+WebKit samples record frames only; only thread-scroll cases support it.
 Results and evidence default to a unique test-results/perf/ directory.
 See docs/performance.md for measurement definitions and limitations.`);
   } else {
@@ -55,6 +66,15 @@ See docs/performance.md for measurement definitions and limitations.`);
     );
     if (!Number.isSafeInteger(repeat) || repeat < 1)
       throw new Error("--repeat must be a positive integer");
+    if (!["chromium", "webkit"].includes(values.browser))
+      throw new Error("--browser must be chromium or webkit");
+    if (
+      values.browser === "webkit" &&
+      selected.some((name) => !name.startsWith("thread-scroll-"))
+    )
+      throw new Error("WebKit runs only the thread-scroll cases");
+    if (values.browser === "webkit" && cpu !== 4 && cpu !== 1)
+      throw new Error("--cpu applies to Chromium only");
     if (!Number.isFinite(cpu) || cpu < 1)
       throw new Error("--cpu must be a finite number >= 1");
     if (values.out !== undefined && !values.out.trim())
@@ -87,7 +107,9 @@ See docs/performance.md for measurement definitions and limitations.`);
           PERF_SCENARIO: values.scenario,
           PERF_CASES: selected.join(","),
           PERF_REPEAT: String(repeat),
-          PERF_CPU: String(cpu),
+          // WebKit has no CPU throttling; record what actually ran.
+          PERF_CPU: String(values.browser === "webkit" ? 1 : cpu),
+          PERF_BROWSER: values.browser,
           PERF_RUN_DIR: runDir,
           PERF_OUT: out,
         },

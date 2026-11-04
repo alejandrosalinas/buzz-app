@@ -1,4 +1,4 @@
-import { writeFileSync } from "node:fs";
+import { appendFileSync, writeFileSync } from "node:fs";
 import { cpus, loadavg, platform, arch } from "node:os";
 
 export default class Reporter {
@@ -74,6 +74,7 @@ export default class Reporter {
             scenario: process.env.PERF_SCENARIO,
             repeat: Number(process.env.PERF_REPEAT),
             cpu: Number(process.env.PERF_CPU),
+            browser: process.env.PERF_BROWSER ?? "chromium",
             viewport: { width: 1440, height: 950 },
           },
           host: {
@@ -92,6 +93,24 @@ export default class Reporter {
         2,
       )}\n`,
     );
+    // CI shows medians on the run page; the JSON artifact keeps every sample.
+    if (process.env.GITHUB_STEP_SUMMARY && Object.keys(summary).length)
+      appendFileSync(
+        process.env.GITHUB_STEP_SUMMARY,
+        [
+          `### Browser measurements (${process.env.PERF_BROWSER === "webkit" ? "WebKit" : `Chromium, CPU ×${process.env.PERF_CPU}`})`,
+          "",
+          "| Case | Median metrics |",
+          "| --- | --- |",
+          ...Object.entries(summary).map(
+            ([scenario, metrics]) =>
+              `| ${scenario} | ${Object.entries(metrics)
+                .map(([key, { median }]) => `${key} ${Math.round(median)}`)
+                .join(", ")} |`,
+          ),
+          "",
+        ].join("\n"),
+      );
     console.log(`Results written to ${process.env.PERF_OUT}`);
     return { status };
   }

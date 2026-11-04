@@ -18,5 +18,10 @@ export default defineConfig({
   timeout: 120_000,
   expect: { timeout: 15_000 },
   reporter: [["list"], ["./perf/reporter.mjs"]],
-  use: { ...gate.use, browserName: "chromium", trace: "off", video: "off" },
+  use: {
+    ...gate.use,
+    browserName: process.env.PERF_BROWSER ?? "chromium",
+    trace: "off",
+    video: "off",
+  },
 });
