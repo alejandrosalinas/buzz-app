@@ -252,7 +252,10 @@ export function fakeSpawn(
       const sessionId = String(params.sessionId ?? "");
       switch (method) {
         case "_buzz/security/capabilities":
-          return reply(id, { version: 2 });
+          return reply(id, {
+            version: 2,
+            enabled: fake.env.BUZZ_SECURITY_URL != null,
+          });
         case "initialize":
           return reply(id, {
             protocolVersion: 1,

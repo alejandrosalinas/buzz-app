@@ -128,6 +128,54 @@ describe("GooseProcess", () => {
     expect(fake.geese[0]?.killed).toBe(true);
   });
 
+  /** A fake goose that reports `capability` for its security hooks. */
+  const reporting = (capability: object) => {
+    const fake = fakeSpawn();
+    const spawn: typeof fake.spawn = async (id, options = {}) => {
+      const process = await fake.spawn(id, options);
+      return {
+        ...process,
+        write: async (data) => {
+          if (!data.includes('"method":"_buzz/security/capabilities"'))
+            return process.write(data);
+          const { id: request } = JSON.parse(data);
+          options.onStdout?.(
+            `${JSON.stringify({ jsonrpc: "2.0", id: request, result: capability })}\n`,
+          );
+        },
+      };
+    };
+    return { fake, spawn };
+  };
+
+  it.each([
+    ["off with the security bridge", "http://127.0.0.1:1/", false],
+    ["on without it", null, true],
+  ])(
+    "refuses a protected goose whose security gate is %s",
+    async (_, url, enabled) => {
+      const { fake, spawn } = reporting({ version: 2, enabled });
+      await expect(
+        GooseProcess.start(spawn, {
+          cwd: "/work",
+          protected: true,
+          env: { BUZZ_SECURITY_URL: url },
+        }),
+      ).rejects.toThrow("Protected Goose did not turn on its security gate");
+      expect(fake.geese[0]?.killed).toBe(true);
+    },
+  );
+
+  it("starts a protected goose released before it reported its security gate", async () => {
+    const { fake, spawn } = reporting({ version: 2 });
+    await GooseProcess.start(spawn, {
+      cwd: "/work",
+      protected: true,
+      env: { BUZZ_SECURITY_URL: "http://127.0.0.1:1/" },
+    });
+    expect(fake.geese[0]?.killed).toBe(false);
+  });
+
   it("still fails a protected start at its time limit when a goose without the security hooks never exits", async () => {
     vi.useFakeTimers();
     const fake = fakeSpawn();

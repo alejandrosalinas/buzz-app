@@ -196,9 +196,16 @@ export const GooseProcess = {
           "_buzz/security/capabilities",
           {},
           REQUEST_TIMEOUT_MS,
-        )) as { version?: number };
+        )) as { version?: number; enabled?: boolean };
         if (capability.version !== 2)
           throw new Error("This Goose build lacks mandatory security hooks");
+        // The engine gates exactly when Buzz gives it the security bridge.
+        // Engines released before it reported this omit `enabled`.
+        if (
+          capability.enabled !== undefined &&
+          capability.enabled !== (launch.env?.BUZZ_SECURITY_URL != null)
+        )
+          throw new Error("Protected Goose did not turn on its security gate");
       }
       launch.signal?.throwIfAborted();
       return goose;
