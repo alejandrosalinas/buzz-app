@@ -141,14 +141,12 @@ describe("AgentSessions", () => {
       expect(normal?.sessionId).toBeDefined();
       expect(standalone?.sessionId).toBeDefined();
       const running = await process.get();
-      expect(sessions.serving("thread")).toEqual({
-        sessionId: normal?.sessionId,
-        process: running,
-      });
-      expect(sessions.serving("watch #1")).toEqual({
-        sessionId: standalone?.sessionId,
-        process: running,
-      });
+      expect(sessions.serving("thread")?.sessionId).toBe(normal?.sessionId);
+      expect(sessions.serving("thread")?.process).toBe(running);
+      expect(sessions.serving("watch #1")?.sessionId).toBe(
+        standalone?.sessionId,
+      );
+      expect(sessions.serving("watch #1")?.process).toBe(running);
       expect(sessions.serving("missing")).toBeUndefined();
       for (const turn of turns) turn.finish();
       await Promise.all([delivery, once]);

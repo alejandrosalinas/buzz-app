@@ -423,6 +423,8 @@ it("retires an agent once every replaced worker has exited, leaving none running
       retired = true;
     });
     await flush(100);
+    // Its turns waiting on the first worker hold it too; the check below is
+    // what tells the replaced workers apart.
     expect(retired).toBe(false);
     f.fake.geese[0]?.exit(null);
     await retiring;
@@ -456,6 +458,13 @@ it("reads a protected tool's native conversation from the worker in its kill gra
       arguments: { audience: "everyone", path: "notes.md" },
     });
     expect(reply.result).not.toMatchObject({ isError: true });
+    expect(
+      old.received.filter(
+        (request) => request.method === "_goose/unstable/session/export",
+      ),
+    ).toEqual([
+      expect.objectContaining({ params: { sessionId, format: "json" } }),
+    ]);
     expect(check).toHaveBeenCalledWith(
       expect.objectContaining({
         kind: "tool",
