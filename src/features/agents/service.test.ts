@@ -56,6 +56,7 @@ import {
   type Delivery,
   type Trigger,
   fromOwner,
+  HOSTED_INSTRUCTIONS_CHANGED,
   teamPrompt,
 } from "./service";
 import {
@@ -9453,7 +9454,7 @@ it("reads and replaces a hosted agent's instructions through its provider", asyn
   await service.create({ type: "example/cloud", name: "Sky" });
   const hosted = service.hostedInstructions(hostedKey);
   await expect(hosted?.get()).resolves.toBe("Be brief.");
-  await hosted?.set("Be kind.");
+  await hosted?.set("Be kind.", "Be brief.");
   expect(instructions.get).toHaveBeenCalledWith({
     pubkey: hostedKey,
     community: "wss://relay.example.test",
@@ -9465,10 +9466,16 @@ it("reads and replaces a hosted agent's instructions through its provider", asyn
     instructions: "Be kind.",
     signal: expect.any(AbortSignal),
   });
+  // An edit saved elsewhere since the caller read is never replaced.
+  instructions.set.mockClear();
+  await expect(hosted?.set("Be kind.", "Be terse.")).rejects.toThrow(
+    HOSTED_INSTRUCTIONS_CHANGED,
+  );
+  expect(instructions.set).not.toHaveBeenCalled();
   // A caller's own signal stops the call too.
   const stop = new AbortController();
   await hosted?.get(stop.signal);
-  const signal = instructions.get.mock.calls[1]?.[0].signal;
+  const signal = instructions.get.mock.calls.at(-1)?.[0].signal;
   if (!signal) throw new Error("The provider was not called.");
   expect(signal.aborted).toBe(false);
   stop.abort();

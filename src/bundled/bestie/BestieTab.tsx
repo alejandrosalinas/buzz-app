@@ -274,6 +274,7 @@ function BestieTab({
       {removing && (
         <RemoveBestie
           name={name}
+          hosted={agent.place === "hosted"}
           remove={() => clearDefaultAgent(session, scope ?? "")}
           onClose={() => setRemoving(false)}
         />
@@ -286,10 +287,13 @@ function BestieTab({
  * goes with it; the agent then shows Former Bestie while a setting is on. */
 function RemoveBestie({
   name,
+  hosted,
   remove,
   onClose,
 }: {
   name: string;
+  /** A hosted agent has no check-ins and no Former Bestie tab. */
+  hosted: boolean;
   remove(): Promise<void>;
   onClose(): void;
 }) {
@@ -299,7 +303,11 @@ function RemoveBestie({
   return (
     <AlertDialog
       title={`Remove ${name} as your Bestie?`}
-      description={`${name} stays in Agents, with your chats in your DMs. Its check-ins stop. Its memory rules and private channels stay; turn them off in its Former Bestie tab.`}
+      description={
+        hosted
+          ? `${name} stays in Agents, with your chats in your DMs. Its memory rules stay in its instructions, and it stays in its private channels; remove them there.`
+          : `${name} stays in Agents, with your chats in your DMs. Its check-ins stop. Its memory rules and private channels stay; turn them off in its Former Bestie tab.`
+      }
       initialFocus={keep}
       pending={pending}
       onClose={onClose}
@@ -386,11 +394,12 @@ function FeatureSwitch({
     setError(undefined);
     try {
       await task();
-      // The provider's copy is the one the switch shows next.
-      await hosted?.read();
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : String(cause));
     } finally {
+      // The provider's copy is the one the switch shows next, after a failed
+      // save too: one refused as changed elsewhere then shows the change.
+      await hosted?.read();
       setSaving(false);
     }
   };

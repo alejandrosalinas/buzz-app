@@ -183,7 +183,8 @@ function saveInstructions(
   if (agent.place === "hosted") {
     const hosted = agents.hostedInstructions?.(agent.pubkey);
     if (!hosted) throw new Error("Not available with remote agents yet.");
-    return hosted.set(instructions);
+    // Its provider replaces the copy this switch shows, never a newer one.
+    return hosted.set(instructions, instructionsOf(agent));
   }
   return agents.save(agent.key, {
     config: { ...(agent.config as object), instructions },

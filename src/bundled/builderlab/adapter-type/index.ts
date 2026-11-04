@@ -77,12 +77,16 @@ export function builderlabType(
     if (!agent) throw new Error("Agent not found in this Builderlab account.");
     return remember(pubkey, agent.id);
   }
-  /** The signed-in account's listing of the agent, with its instructions. */
+  /** The signed-in account's listing of the agent, with its instructions.
+   * It never starts browser login: only the pane's Sign in does, so a tab
+   * that reads instructions when it opens asks the owner to sign in first. */
   async function listed(pubkey: string, signal: AbortSignal) {
-    await session.ensureSignedIn(signal);
+    const credential = session.credential();
     const agent = (await client.list(signal)).find(
       (row) => row.pubkey === pubkey,
     );
+    if (session.credential() !== credential)
+      throw new DOMException("Builderlab session changed.", "AbortError");
     if (!agent) throw new Error("Agent not found in this Builderlab account.");
     return agent;
   }

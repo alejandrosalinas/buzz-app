@@ -49,7 +49,10 @@ hosted Bestie shows the tab, and its provider can hold its instructions: where
 it does (Builderlab does), **Remembers you** reads and saves them through the
 provider, as a local agent's synced instructions are, and the row says why
 when they can't be read or saved, such as when they would pass the provider's
-length limit. **Check-ins** stay unavailable for it, as hosted agents have no
+length limit or you aren't signed in to it. Reading them never starts the
+provider's sign-in. A save replaces only the copy the tab shows: if they were
+changed elsewhere since, it saves nothing, says so and shows the newer copy.
+**Check-ins** stay unavailable for it, as hosted agents have no
 Attention timers; a hosted agent whose provider holds no instructions shows
 both rows as unavailable. A remote Bestie doesn't start with Remembers you
 on. **Remove as Bestie** asks,

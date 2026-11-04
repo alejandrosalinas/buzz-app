@@ -70,6 +70,10 @@ it("saves a hosted agent's feature through its provider, not Agents", async () =
     config: { instructions: "Be brief." },
   } as unknown as Agent;
   await saveFeature(agents, agent, memory, true);
-  expect(set).toHaveBeenCalledWith(withFeature("Be brief.", memory, true));
+  // The provider replaces only the copy the switch showed.
+  expect(set).toHaveBeenCalledWith(
+    withFeature("Be brief.", memory, true),
+    "Be brief.",
+  );
   expect(save).not.toHaveBeenCalled();
 });

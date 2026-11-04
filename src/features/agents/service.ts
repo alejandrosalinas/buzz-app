@@ -922,8 +922,14 @@ export type RemoteAgentType = Readonly<{
 /** A hosted agent's instructions, read and replaced through its provider. */
 export type HostedInstructions = Readonly<{
   get(signal?: AbortSignal): Promise<string>;
-  set(instructions: string, signal?: AbortSignal): Promise<void>;
+  /** Replaces them only while the provider still holds `base`, the copy the
+   * caller last read; otherwise it rejects and replaces nothing, so an edit
+   * saved elsewhere is never overwritten from an older copy. */
+  set(instructions: string, base: string, signal?: AbortSignal): Promise<void>;
 }>;
+/** A hosted agent's instructions changed since the caller read them. */
+export const HOSTED_INSTRUCTIONS_CHANGED =
+  "Its instructions were changed elsewhere. Check the latest, then try again.";
 export type RegisteredAgentType = Contribution<AgentType>;
 export type RetypePreview = Readonly<{
   /** Destination settings after applying the target type's migration policy. */
@@ -3737,8 +3743,14 @@ export class AgentsService extends Service implements Agents {
     };
     return {
       get: (signal) => provider.get(call(signal)),
-      set: (instructions, signal) =>
-        provider.set({ ...call(signal), instructions }),
+      async set(instructions, base, signal) {
+        // No provider offers compare-and-swap, so read again just before
+        // replacing. An edit saved between this read and the write can still
+        // be lost; one saved before the owner acted cannot.
+        if ((await provider.get(call(signal))) !== base)
+          throw new Error(HOSTED_INSTRUCTIONS_CHANGED);
+        await provider.set({ ...call(signal), instructions });
+      },
     };
   }
   /** Stops the hosted agent's turn in `place`; false when none was running. */

@@ -415,6 +415,20 @@ it("replaces a hosted agent's instructions with the provider's update", async ()
   );
 });
 
+it("never starts browser login to read or replace a hosted agent's instructions", async () => {
+  const h = await fixture();
+  h.session.signOut();
+  const acquire = vi.spyOn(h.session, "ensureSignedIn");
+  await expect(h.remote.instructions?.get(edit)).rejects.toThrow(
+    "Sign in to Builderlab first.",
+  );
+  await expect(
+    h.remote.instructions?.set({ ...edit, instructions: "Be kind." }),
+  ).rejects.toThrow("Sign in to Builderlab first.");
+  expect(acquire).not.toHaveBeenCalled();
+  expect(h.request).not.toHaveBeenCalled();
+});
+
 it("refuses instructions the provider cannot take, and an agent it does not list", async () => {
   const h = await fixture();
   h.request.mockResolvedValueOnce(withInstructions("Be brief."));

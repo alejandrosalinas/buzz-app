@@ -269,12 +269,17 @@ it("shows a hosted Bestie's switches as unavailable when its provider has no ins
 
 /** A hosted Bestie whose provider holds `text`, read and replaced as its
  * provider's `get` and `set` do. */
+const CHANGED_ELSEWHERE = "Its instructions were changed elsewhere.";
 function hostedBestie(text: string) {
   let held = text;
   const get = vi.fn(async (_signal?: AbortSignal) => held);
-  const set = vi.fn(async (next: string, _signal?: AbortSignal) => {
-    held = next;
-  });
+  // As Agents does: replace only while the provider still holds `base`.
+  const set = vi.fn(
+    async (next: string, base: string, _signal?: AbortSignal) => {
+      if (held !== base) throw new Error(CHANGED_ELSEWHERE);
+      held = next;
+    },
+  );
   const remote = {
     ...ada,
     place: "hosted",
@@ -282,7 +287,17 @@ function hostedBestie(text: string) {
   } as Agent;
   const { agents, save } = host(["block.builderlab/builderlab"], [remote, bea]);
   const hosted = { ...agents, hostedInstructions: () => ({ get, set }) };
-  return { remote, agents: hosted, save, get, set };
+  return {
+    remote,
+    agents: hosted,
+    save,
+    get,
+    set,
+    /** An edit saved through the provider's own settings or another device. */
+    editElsewhere: (next: string) => {
+      held = next;
+    },
+  };
 }
 
 it("shows a hosted Bestie's tab, not one on another device's", async () => {
@@ -327,6 +342,35 @@ it("turns a hosted Bestie's memory on and off through its provider, and never to
   expect(
     screen.getAllByText("Not available with remote agents yet."),
   ).toHaveLength(1);
+});
+
+it("never replaces a hosted Bestie's instructions edited elsewhere since the tab read them", async () => {
+  const user = userEvent.setup();
+  const { relay } = community(ada.pubkey);
+  const { remote, agents, get, set, editElsewhere } = hostedBestie("Be brief.");
+  const Tab = bestieTab(relay, agents).component;
+  await act(async () => {
+    render(<Tab agent={remote} />);
+  });
+  const remembers = await screen.findByRole("switch", {
+    name: "Remembers you",
+  });
+  // The owner saves a restriction in the provider while the tab stays open.
+  editElsewhere("Be brief. Never email anyone.");
+  await user.click(remembers);
+  expect(await screen.findByText(CHANGED_ELSEWHERE)).toBeVisible();
+  expect(set).toHaveBeenCalledTimes(1);
+  expect(await get.mock.results.at(-1)?.value).toBe(
+    "Be brief. Never email anyone.",
+  );
+  // The switch now saves from the newer copy, keeping the owner's edit.
+  await user.click(screen.getByRole("switch", { name: "Remembers you" }));
+  await vi.waitFor(() =>
+    expect(screen.getByRole("switch", { name: "Remembers you" })).toBeChecked(),
+  );
+  expect(set.mock.calls.at(-1)?.[0]).toBe(
+    withFeature("Be brief. Never email anyone.", memory, true),
+  );
 });
 
 it("says why a hosted Bestie's instructions can't be read or saved, and lets either be tried again", async () => {
