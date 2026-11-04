@@ -18,7 +18,7 @@ import {
 } from "../../features/navigation/controller";
 import { createMemoryHistory } from "../../features/navigation/history";
 import type { PageNavigation } from "../../features/navigation/service";
-import type { OpenTarget } from "../../features/navigation/targets";
+import type { JsonValue, OpenTarget } from "../../features/navigation/targets";
 import { formStateToYaml, yamlToFormState } from "./workflowFormTypes";
 import type { ChannelList } from "../../features/relay/contracts";
 import type { RelaySession } from "../../features/relay/session";
@@ -1494,7 +1494,8 @@ const pageTarget = {
   scope: pageScope,
 } as const satisfies OpenTarget;
 
-/** The page under a host that records its visits in a memory history. */
+/** The page under a host that records its visits, and their positions, in a
+ * memory history. Like the shell, it renders the page only while it is shown. */
 function navigatedPage(
   route?: WorkflowsRoute,
   owner = fixtureViewer,
@@ -1508,6 +1509,7 @@ function navigatedPage(
     ),
   );
   const navigator = controller.navigation;
+  const positions = new Map<string, JsonValue>();
   function Host({ session }: { session: RelaySession }) {
     const snapshot = useSyncExternalStore(
       navigator.subscribe,
@@ -1518,8 +1520,9 @@ function navigatedPage(
         entryId: snapshot.entry.id,
         target: snapshot.entry.target,
         signal: snapshot.attempt.signal,
-        position: () => undefined,
-        savePosition() {},
+        position: (key) => positions.get(`${snapshot.entry.id}:${key}`),
+        savePosition: (key, value) =>
+          void positions.set(`${snapshot.entry.id}:${key}`, value),
         forSession: () => request,
         resolve: () => false,
         complete: (result) => controller.complete(snapshot.attempt, result),
@@ -1529,7 +1532,7 @@ function navigatedPage(
     useEffect(() => {
       navigation.complete({ status: "opened" });
     }, [navigation]);
-    return (
+    return snapshot.entry.target.kind === "page" ? (
       <WorkflowCommunity
         session={session}
         viewer={fixtureViewer}
@@ -1537,7 +1540,7 @@ function navigatedPage(
         navigation={navigation}
         navigator={navigator}
       />
-    );
+    ) : null;
   }
   const fixture = mount(
     fixtureYaml,
@@ -1730,6 +1733,41 @@ it("returns to the link visit when a workflow selected from it closes", async ()
     expect(
       screen.queryByRole("button", { name: "Owner: My workflows" }),
     ).toBeNull();
+  } finally {
+    page.dispose();
+  }
+});
+
+it("returns to the link visit when a workflow restored after leaving the page closes", async () => {
+  const page = navigatedPage({ channel: fixtureChannel, owner: fixtureViewer });
+  try {
+    fireEvent.click(
+      await screen.findByRole("button", { name: /^Open Message helper:/ }),
+    );
+    await waitFor(() => expect(page.routed()?.workflow).toBeDefined());
+    // The channel replaces the page, which mounts again when Back restores it.
+    fireEvent.click(
+      await detailPane().findByRole("button", { name: "#Fixture channel" }),
+    );
+    await waitFor(() =>
+      expect(screen.queryByRole("region", { name: "Workflows" })).toBeNull(),
+    );
+    act(() => page.navigator.back());
+    fireEvent.click(
+      await detailPane().findByRole("button", {
+        name: "Close Message helper tab",
+      }),
+    );
+    await waitFor(() =>
+      expect(page.routed()).toEqual({
+        channel: fixtureChannel,
+        owner: fixtureViewer,
+      }),
+    );
+    expect(page.navigator.snapshot().canGoBack).toBe(false);
+    expect(
+      screen.getByRole("button", { name: /^Channels(?::|$)/ }),
+    ).toHaveAccessibleName("Channels: Fixture channel");
   } finally {
     page.dispose();
   }

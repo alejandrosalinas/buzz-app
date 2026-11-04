@@ -56,6 +56,10 @@ type WorkflowsNavigation = {
   navigation?: PageNavigation | undefined;
   navigator?: Navigation | undefined;
 };
+/** The landing a workflow visit returns to when it closes. */
+const LANDING = "landing";
+const landingOf = (navigation: PageNavigation) =>
+  navigation.position(LANDING) as OpenTarget | undefined;
 
 export function WorkflowsPage({
   relay,
@@ -183,10 +187,17 @@ export function WorkflowCommunity({
         : undefined,
     [navigation, params, routePending],
   );
-  // Each workflow visit this page pushes remembers the landing it left, so
-  // Close returns there however the reader reached the visit since. Visits
-  // that arrived from elsewhere have no landing to return to.
-  const landings = useRef(new Map<string, OpenTarget>());
+  // Each workflow visit this page pushes keeps the landing it left as its
+  // position, saved once its presentation arrives, so Close returns there
+  // however the reader reached the visit since, even through another page.
+  // Visits that arrived from elsewhere have no landing to return to.
+  const pushed = useRef<{ visit: string; landing: OpenTarget }>(undefined);
+  useEffect(() => {
+    const next = pushed.current;
+    if (!navigation || next?.visit !== navigation.entryId) return;
+    pushed.current = undefined;
+    navigation.savePosition(LANDING, next.landing);
+  }, [navigation]);
   // A selection the reader makes is a visit; switching selection replaces it
   // and closing retires it. Visits keep the page's scope, bound or not, so
   // Close finds the page again.
@@ -205,9 +216,7 @@ export function WorkflowCommunity({
       const routed = routedWorkflow(params);
       if (workflow) {
         if (routed && workflowKey(routed) === workflowKey(workflow)) return;
-        const landing = routed
-          ? landings.current.get(navigation.entryId)
-          : page;
+        const landing = routed ? landingOf(navigation) : page;
         void navigator.open(
           workflowsTarget(page, {
             channel: workflow.channelId,
@@ -219,11 +228,9 @@ export function WorkflowCommunity({
         // Pushes land synchronously; a guarded departure leaves the entry.
         const visit = navigator.snapshot().entry.id;
         if (landing && (routed || visit !== navigation.entryId))
-          landings.current.set(visit, landing);
+          pushed.current = { visit, landing };
       } else if (closing) {
-        const fallback =
-          landings.current.get(navigation.entryId) ?? workflowsTarget(page);
-        landings.current.delete(navigation.entryId);
+        const fallback = landingOf(navigation) ?? workflowsTarget(page);
         const pageKey = targetKey(workflowsTarget(page));
         navigator.dismiss((visit) => {
           if (visit.kind !== "page") return false;
