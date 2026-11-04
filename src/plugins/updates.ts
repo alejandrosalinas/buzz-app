@@ -33,7 +33,11 @@ export function pluginUpdateSource(plugins: PluginManager, id: string) {
         path: managed.path,
         commit: managed.commit,
       }
-    : saved;
+    : {
+        repository: saved.repository,
+        reference: saved.reference,
+        path: saved.path,
+      };
 }
 
 export const updateSourceKey = (source: GitUpdateSource) =>
@@ -106,6 +110,25 @@ export function createPluginUpdates(
         return;
       lastCheck = now;
       pending = true;
+      const repositories = new Map<string, Promise<ImportPreview | null>>();
+      const discover = (source: GitUpdateSource) => {
+        const key = JSON.stringify([source.repository, source.reference]);
+        let result = repositories.get(key);
+        if (!result) {
+          result = (async () => {
+            const signed = await authorizeGit(source.repository);
+            return (
+              plugins.imports?.checkGit(
+                signed?.repository ?? source.repository,
+                source.reference,
+                signed?.token,
+              ) ?? null
+            );
+          })();
+          repositories.set(key, result);
+        }
+        return result;
+      };
       try {
         for (const plugin of configuration.catalog.plugins) {
           if (closed) return;
@@ -118,12 +141,7 @@ export function createPluginUpdates(
             installedRevision: plugin.revision,
           };
           try {
-            const signed = await authorizeGit(source.repository);
-            const preview = await plugins.imports.checkGit(
-              signed?.repository ?? source.repository,
-              source.reference,
-              signed?.token,
-            );
+            const preview = await discover(source);
             if (!preview) throw new Error("No update source found. Try again.");
             if (
               source.commit &&

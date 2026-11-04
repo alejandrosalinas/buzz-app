@@ -395,3 +395,38 @@ it("retires a pending preview when the saved source changes", async () => {
   expect(f.installImport).not.toHaveBeenCalled();
   expect(f.imports.discard).toHaveBeenCalledWith("immutable-preview");
 });
+
+it("requires review when a fresh update removes a process artifact constraint", async () => {
+  const f = fixture();
+  const process = { id: "worker", program: "worker", args: [] };
+  f.plugin.manifest = {
+    ...f.plugin.manifest,
+    host: {
+      processes: [
+        {
+          ...process,
+          artifact: { path: "bin/worker", sha256: "a".repeat(64) },
+        },
+      ],
+    },
+  };
+  f.candidate.manifest = f.plugin.manifest;
+  f.freshCandidate.manifest = {
+    ...f.plugin.manifest,
+    host: { processes: [process] },
+  };
+  f.mount();
+  fireEvent.click(
+    await screen.findByRole("button", { name: "Update and reload" }),
+  );
+  const dialog = await screen.findByRole("dialog", { name: "Update Notes" });
+  const confirm = await within(dialog).findByRole("button", { name: "Update" });
+  await waitFor(() => expect(confirm).toBeEnabled());
+  expect(f.installImport).not.toHaveBeenCalled();
+  fireEvent.click(within(dialog).getByRole("button", { name: /Start worker/ }));
+  await waitFor(() =>
+    expect(within(dialog).getByText("bin/worker")).toBeVisible(),
+  );
+  fireEvent.click(confirm);
+  await waitFor(() => expect(f.installImport).toHaveBeenCalledOnce());
+});

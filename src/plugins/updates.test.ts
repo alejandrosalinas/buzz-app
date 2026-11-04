@@ -178,3 +178,51 @@ it("discards late discovery after disposal or removal and prevents overlapping c
   await pending;
   expect(updates.snapshot()).toEqual([]);
 });
+
+it("checks a saved Git source after its recommendation is removed", async () => {
+  const f = fixture();
+  const source = f.plugin.updateSource;
+  if (!source || !("repository" in source))
+    throw new Error("Expected Git source");
+  f.plugin.updateSource = { ...source, commit: "b".repeat(40) };
+  const updates = createPluginUpdates(f.manager, f.authorize);
+  await updates.check();
+  expect(updates.snapshot()[0]?.candidate?.revision).toBe("new");
+  expect(updates.snapshot()[0]?.source.commit).toBeUndefined();
+  updates.dispose();
+});
+
+it("reuses discovery for plugins in the same repository and reference", async () => {
+  const f = fixture();
+  const configuration = f.get();
+  if (configuration.status !== "ready") throw new Error("Expected catalog");
+  const source = f.plugin.updateSource;
+  if (!source || !("repository" in source))
+    throw new Error("Expected Git source");
+  const other = {
+    ...f.plugin,
+    manifest: { ...f.plugin.manifest, id: "example.other" },
+    updateSource: { ...source, path: "other" },
+  };
+  const stable = {
+    ...f.plugin,
+    manifest: { ...f.plugin.manifest, id: "example.stable" },
+    updateSource: { ...source, reference: "stable" },
+  };
+  f.preview.candidates.push(
+    { path: "other", manifest: other.manifest, revision: "other-new" },
+    { path: ".", manifest: stable.manifest, revision: "stable-new" },
+  );
+  f.set({
+    ...configuration,
+    catalog: { ...configuration.catalog, plugins: [f.plugin, other, stable] },
+  });
+  const updates = createPluginUpdates(f.manager, f.authorize);
+  await updates.check();
+  expect(
+    updates.snapshot().map((update) => update.candidate?.revision),
+  ).toEqual(["new", "other-new", "stable-new"]);
+  expect(f.checkGit).toHaveBeenCalledTimes(2);
+  expect(f.authorize).toHaveBeenCalledTimes(2);
+  updates.dispose();
+});

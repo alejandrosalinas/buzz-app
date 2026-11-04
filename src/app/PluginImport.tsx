@@ -674,7 +674,9 @@ export function PluginImport({
         signed?.repository ?? source.repository,
         source.reference,
         signed?.token,
-        ...(!checkOnly && source.commit ? [source.commit] : []),
+        ...(!checkOnly && updateAction?.source.commit
+          ? [updateAction.source.commit]
+          : []),
       );
     };
     if (!checkOnly) {
