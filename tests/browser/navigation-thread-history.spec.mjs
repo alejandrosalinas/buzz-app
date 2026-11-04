@@ -657,12 +657,25 @@ test("closing an active thread highlights its visible channel origin without scr
   const origin = item.locator(":scope > [data-layout]");
   // Keep another side tab open so closing does not change the channel width
   // and rewrap the history independently of the highlight.
+  const side = page.locator("[data-panel-workspace]");
   await timeline
     .locator(`[data-message-id="${roots[1].id}"]`)
     .getByRole("button", { name: /^View thread:/ })
     .click();
-  await item.getByRole("button", { name: /^View thread:/ }).click();
-  const side = page.locator("[data-panel-workspace]");
+  await expect(
+    side.locator(`[role="tab"][data-tab-value="thread:alpha:${roots[1].id}"]`),
+  ).toHaveAttribute("aria-selected", "true");
+  // Opening the pane rewraps the virtualized history. Finish that layout and
+  // the target's own scroll before clicking, rather than letting click retry
+  // through moving rows while the virtualizer suppresses pointer events.
+  await virtuaIdle(page, timeline);
+  const trigger = item.getByRole("button", { name: /^View thread:/ });
+  await trigger.scrollIntoViewIfNeeded();
+  await virtuaIdle(page, timeline);
+  await trigger.click();
+  await expect(
+    side.locator(`[role="tab"][data-tab-value="thread:alpha:${roots[0].id}"]`),
+  ).toHaveAttribute("aria-selected", "true");
   await expect(
     side.locator('[role="tab"][data-tab-value^="thread:"]'),
   ).toHaveCount(2);
