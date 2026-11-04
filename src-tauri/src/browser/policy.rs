@@ -39,6 +39,16 @@ impl NavigationPolicy {
         }
         Ok(url)
     }
+
+    /// The http address to load when `url` fails over https, if this policy permits it.
+    pub(super) fn http_fallback(&self, url: &Url) -> Option<Url> {
+        if url.scheme() != "https" {
+            return None;
+        }
+        let mut http = url.clone();
+        http.set_scheme("http").ok()?;
+        self.validate(http.as_str()).ok()
+    }
 }
 
 /// Coordinates relative to the main webview's CSS viewport.
@@ -95,6 +105,30 @@ mod tests {
             "https://example.com/a?q=x#part"
         );
         assert!(policy.validate("http://127.0.0.1:5123/page").is_ok());
+    }
+
+    #[test]
+    fn http_fallback_keeps_the_address_and_explicit_port() {
+        let policy = NavigationPolicy::new(Some(Url::parse("http://localhost:1430").unwrap()));
+        let fallback = |target: &str| {
+            policy
+                .http_fallback(&Url::parse(target).unwrap())
+                .map(String::from)
+        };
+        assert_eq!(
+            fallback("https://grugbrain.dev/a?q=x#part").as_deref(),
+            Some("http://grugbrain.dev/a?q=x#part")
+        );
+        assert_eq!(
+            fallback("https://localhost:3000/").as_deref(),
+            Some("http://localhost:3000/")
+        );
+        assert_eq!(
+            fallback("https://example.com:443/").as_deref(),
+            Some("http://example.com/")
+        );
+        assert_eq!(fallback("http://example.com/"), None);
+        assert_eq!(fallback("https://localhost:1430/"), None);
     }
 
     #[test]

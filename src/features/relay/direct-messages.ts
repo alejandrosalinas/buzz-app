@@ -106,17 +106,23 @@ export function createDirectMessages(
       const authority = verifiedAuthority();
       if (!authority) return undefined;
       if (!pubkeys.length) return { authority, profiles: new Map() };
+      // People a search just answered for need no read.
+      const answered = searchProfiles.verifiedHeads(pubkeys, authority);
+      const unasked = pubkeys.filter((pubkey) => !answered.has(pubkey));
       const active = AbortSignal.any([lifetime, signal]);
-      const events = await directoryReader.read(
-        [verifiedProfileFilter(authority.pubkey, pubkeys)],
-        { signal: active, priority: "background" },
-      );
+      const events = unasked.length
+        ? await directoryReader.read(
+            [verifiedProfileFilter(authority.pubkey, unasked)],
+            { signal: active, priority: "background" },
+          )
+        : [];
       active.throwIfAborted();
       if (verifiedAuthority() !== authority) return undefined;
       // The newest head per subject decides, so a newer malformed one hides
       // an older name, as in the shared directory.
       const heads = new Map<string, RelayEvent>();
-      for (const event of events) {
+      for (const event of [...answered.values(), ...events]) {
+        if (!event) continue;
         const subject = verifiedProfileSubject(event, authority);
         if (subject && pubkeys.includes(subject))
           heads.set(subject, newer(heads.get(subject), event));

@@ -24,7 +24,6 @@ import {
   BoxArrowUpIcon,
   CheckCircleIcon,
   CircleNotchIcon,
-  LinkBreakIcon,
   GlobeIcon,
   SignOutIcon,
   TrashIcon,
@@ -570,7 +569,8 @@ export function HostedCommunities({
                 <p className="text-body-sm text-muted">
                   Your Builderlab account is linked to another Buzz key.
                   Creating communities and copying addresses are paused until
-                  the identities match.
+                  the identities match. To keep the account’s key, sign in to
+                  Buzz on this device with that key instead of switching.
                 </p>
                 <dl className="text-body-sm">
                   <dt className="text-muted">Account uses</dt>
@@ -580,18 +580,28 @@ export function HostedCommunities({
                 </dl>
                 <Button
                   variant="primary"
-                  loading={action === "switch"}
                   disabled={busy || !local}
                   onClick={() =>
-                    void run("switch", async () => {
-                      check(
-                        await api.call("unbind"),
-                        "Could not release the previously connected Buzz identity.",
-                      );
-                      setPendingDeletion(null);
-                      // Unbound is a valid resting state; Connect recovers it.
-                      setIdentity(null);
-                      if (activeRef.current()) await bind();
+                    setConfirm({
+                      title: "Switch to this device’s identity?",
+                      // kgoose revokes an unlinked key: binding it again answers 409.
+                      // The client can't tell whether this device's key already was.
+                      description:
+                        "The key your account uses now will be permanently unlinked. It can never be linked to a Builderlab account again. If this device’s key was unlinked before, Builderlab refuses it too, and your account is left with no key.",
+                      action: "Switch identity",
+                      run: async () => {
+                        check(
+                          await api.call("unbind"),
+                          "Could not release the previously connected Buzz identity.",
+                        );
+                        setPendingDeletion(null);
+                        // Unbound is a valid resting state; Connect recovers it.
+                        setIdentity(null);
+                        // The unlink is done: retire its confirmation so a
+                        // failed bind is never retried by unlinking again.
+                        setConfirm(null);
+                        if (activeRef.current()) await bind();
+                      },
                     })
                   }
                 >
@@ -599,39 +609,13 @@ export function HostedCommunities({
                 </Button>
               </section>
             ) : (
-              <div className="flex flex-wrap items-center justify-between gap-3">
-                <p className="m-0 flex min-w-0 flex-wrap items-center gap-2 text-body-sm">
-                  <CheckCircleIcon size={16} aria-hidden="true" />
-                  Buzz identity connected{" "}
-                  <span className="break-all font-mono text-muted">
-                    {npub(bound)}
-                  </span>
-                </p>
-                <Button
-                  variant="ghost"
-                  size="sm"
-                  disabled={busy}
-                  onClick={() =>
-                    setConfirm({
-                      title: "Unpair this Buzz identity?",
-                      description:
-                        "Your Builderlab account will no longer be connected to this Buzz key. You can reconnect any key later, but community actions stay unavailable until you do.",
-                      action: "Unpair identity",
-                      run: async () => {
-                        check(
-                          await api.call("unbind"),
-                          "Could not unpair the Buzz identity.",
-                        );
-                        setPendingDeletion(null);
-                        setIdentity(null);
-                        await settle();
-                      },
-                    })
-                  }
-                >
-                  <LinkBreakIcon aria-hidden="true" /> Unpair identity
-                </Button>
-              </div>
+              <p className="m-0 flex min-w-0 flex-wrap items-center gap-2 text-body-sm">
+                <CheckCircleIcon size={16} aria-hidden="true" />
+                Buzz identity connected{" "}
+                <span className="break-all font-mono text-muted">
+                  {npub(bound)}
+                </span>
+              </p>
             )}
           </SettingsGroup>
           <div className="mt-section-gap">

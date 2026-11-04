@@ -9,7 +9,10 @@ import { npubEncode } from "nostr-tools/nip19";
 import type { BackupStatus } from "../features/identity/backup";
 import { BACKUP_FAILURES } from "../features/identity/backup-failure";
 import { BackupPrompt } from "../features/identity/BackupConsent";
-import { backupOfferedFor } from "../features/identity/builderlab-account";
+import {
+  backupOfferedFor,
+  federatedBuilderlabAccount,
+} from "../features/identity/builderlab-account";
 import type { Identity } from "../features/identity/service";
 import type { FederatedIdentity } from "../features/federated-identity/service";
 import { recoveryMessage } from "../features/federated-identity/CommunitySignIn";
@@ -20,6 +23,9 @@ import { SettingsGroup } from "../shared/design-system/ui/SettingsGroup";
 import { PreferenceRow } from "../shared/design-system/ui/PreferenceRow";
 import { IconButton } from "../shared/design-system/ui/IconButton";
 import { Button } from "../shared/design-system/ui/Button";
+import { relativeTimestamp } from "../shared/relative-timestamp";
+import { CHANNEL_ACTIVITY_KINDS } from "../features/relay/channel-activity";
+import type { RelaySession } from "../features/relay/session";
 import { Tooltip } from "../shared/design-system/ui/Tooltip";
 import { ToastNotice } from "../shared/design-system/ui/Toast";
 import { CopyIcon } from "../shared/design-system/icons";
@@ -153,16 +159,181 @@ function BackupRow({
   );
 }
 
+/**
+ * When `pubkey` was last active in a channel on the current community's relay,
+ * in Unix seconds; undefined without any activity there. Throws without a
+ * connected session, so that reads as unchecked rather than inactive.
+ */
+export async function keyActivity(
+  session: Pick<RelaySession, "read"> | undefined,
+  pubkey: string,
+): Promise<number | undefined> {
+  if (!session) throw new Error("The relay isn’t connected");
+  const [latest] = await session.read(
+    // Relay reads must name kinds: channel activity, the messages people see.
+    [{ kinds: [...CHANNEL_ACTIVITY_KINDS], authors: [pubkey], limit: 1 }],
+    { priority: "background" },
+  );
+  return latest?.created_at;
+}
+
+type BackedUp =
+  | { revision: string; key: string | null }
+  | { revision: string; failed: string };
+
+/**
+ * The account's linked key when it is backed up, read with the organization
+ * sign-in as first run reads it (`nsec-backups/status`). Backups of other keys
+ * are left out: making one the account's would unlink the linked key, and
+ * kgoose never links an unlinked key again.
+ */
+function BackedUpKey({
+  viewer,
+  identity,
+  federated,
+  lastActive,
+}: {
+  viewer: string;
+  identity: Identity;
+  federated: FederatedIdentity;
+  lastActive?: ((pubkey: string) => Promise<number | undefined>) | undefined;
+}) {
+  const session = useSyncExternalStore(
+    federated.subscribe,
+    federated.snapshot,
+    federated.snapshot,
+  );
+  const revision =
+    session.status === "signed-in" && session.authority
+      ? session.revision
+      : undefined;
+  // A backup finishing after the read may have just added the linked key.
+  const backedUp =
+    useSyncExternalStore(identity.backup.subscribe, identity.backup.snapshot)
+      ?.status === "complete";
+  const [read, setRead] = useState<BackedUp>();
+  // biome-ignore lint/correctness/useExhaustiveDependencies: a finished backup reads the account again.
+  useEffect(() => {
+    if (!revision) return;
+    let current = true;
+    const account = federatedBuilderlabAccount(
+      { value: revision },
+      federated,
+      identity,
+    );
+    Promise.all([account.linkedKey(), account.backupStatus()]).then(
+      ([linked, backups]) => {
+        if (!current) return;
+        const key =
+          linked && backups !== "unavailable" && backups.includes(linked)
+            ? linked
+            : null;
+        setRead({ revision, key });
+      },
+      (error: unknown) => {
+        if (current)
+          setRead({
+            revision,
+            failed: error instanceof Error ? error.message : String(error),
+          });
+      },
+    );
+    return () => {
+      current = false;
+    };
+  }, [revision, federated, identity, backedUp]);
+  const shown = read?.revision === revision ? read : undefined;
+  const key = shown && "key" in shown ? shown.key : null;
+  // undefined: checking; null: no events there; false: the read failed.
+  const [active, setActive] = useState<number | null | false>();
+  useEffect(() => {
+    if (!key || !lastActive) return;
+    let current = true;
+    setActive(undefined);
+    lastActive(key).then(
+      (at) => {
+        if (current) setActive(at ?? null);
+      },
+      (error: unknown) => {
+        console.warn("Couldn’t read the backed-up key’s activity", error);
+        if (current) setActive(false);
+      },
+    );
+    return () => {
+      current = false;
+    };
+  }, [key, lastActive]);
+  if (!revision)
+    return (
+      <PreferenceRow
+        title="Backed-up key"
+        subtitle="Sign in to your organization to see your backed-up key."
+      />
+    );
+  if (!shown)
+    return (
+      <PreferenceRow
+        title="Backed-up key"
+        subtitle={<span role="status">Checking your backup…</span>}
+      />
+    );
+  if ("failed" in shown)
+    return (
+      <PreferenceRow
+        title="Backed-up key"
+        subtitle={
+          <span role="alert">Couldn’t check your backup. {shown.failed}</span>
+        }
+      />
+    );
+  if (!shown.key) return null;
+  return (
+    <PreferenceRow
+      title={["Backed-up key", shown.key === viewer && "This device", "Linked"]
+        .filter(Boolean)
+        .join(" · ")}
+      subtitle={
+        <>
+          <code className={`text-mono ${styles.identityValue}`}>
+            {npubEncode(shown.key)}
+          </code>
+          {lastActive &&
+            (active === undefined
+              ? "Checking activity…"
+              : active === null
+                ? "No activity here"
+                : active === false
+                  ? "Couldn’t check activity"
+                  : `Last active ${relativeTimestamp(active)}`)}
+        </>
+      }
+    />
+  );
+}
+
 export function IdentitySettings({
   viewer,
   identity,
   federatedIdentity,
+  builderlabIdentity,
+  lastActive,
 }: {
   viewer?: string | undefined;
   identity?: Identity | undefined;
   federatedIdentity?: FederatedIdentity | undefined;
+  /**
+   * The same session as the Builderlab plugin's bundled installation, as
+   * first run uses it: the host's own refuses authenticated requests.
+   */
+  builderlabIdentity?: FederatedIdentity | undefined;
+  /** When `pubkey` was last active in a channel on the current community's relay. */
+  lastActive?: ((pubkey: string) => Promise<number | undefined>) | undefined;
 }) {
   const [signingOut, setSigningOut] = useState(false);
+  const [offered, setOffered] = useState(false);
+  useEffect(() => {
+    if (identity) void backupOfferedFor(identity.backup).then(setOffered);
+  }, [identity]);
   const [copyStatus, setCopyStatus] = useState<{
     message: string;
     failed: boolean;
@@ -236,6 +407,14 @@ export function IdentitySettings({
               </SettingsGroup>
               <SettingsGroup>
                 <BackupRow identity={identity} viewer={viewer} />
+                {offered && viewer && builderlabIdentity && (
+                  <BackedUpKey
+                    viewer={viewer}
+                    identity={identity}
+                    federated={builderlabIdentity}
+                    lastActive={lastActive}
+                  />
+                )}
                 <PreferenceRow
                   title="Sign out of Buzz"
                   subtitle="Remove your private key from this device. Also signs you out of your organization and ends Builderlab and hosted community logins."

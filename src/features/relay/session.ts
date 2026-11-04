@@ -752,7 +752,9 @@ export function createRelaySession(
         }
       : {}),
   };
-  const searchProfiles = createProfileSearch(verified);
+  const searchProfiles = createProfileSearch(verified, Date.now, () =>
+    profiles.queries.verifiedAuthority?.(),
+  );
   /** Directory reads bypass shared profile admission. Retry one access
    * invalidation here, where caller/cache/connection lifetimes are known. */
   function directoryRead<T>(

@@ -2568,6 +2568,7 @@ it("groups a team's refusals with one reason into one alert whose Retry adds the
   // One combined notice, instead of each retry announcing its own.
   await screen.findByText("Ada and Cy are in the channel.");
   const added = t.publish.mock.calls
+    .filter(([event]) => event.tags.filter(([tag]) => tag === "p").length === 1)
     .map(([event]) => event.tags.find((tag) => tag[0] === "p")?.[1])
     .sort();
   expect(added).toEqual([t.ada, t.ada, t.cy, t.cy].sort());
@@ -2617,7 +2618,14 @@ it("names three refused members and counts the rest", async () => {
 });
 it("shows a team's refusals with different reasons as separate alerts", async () => {
   const t = await teamSetup();
-  t.publish.mockRejectedValueOnce(new PublishRejected("Agent is archived"));
+  const base = t.publish.getMockImplementation();
+  if (!base) throw new Error("Missing publish fixture");
+  t.publish.mockImplementation(async (event) => {
+    const recipients = event.tags.filter(([tag]) => tag === "p");
+    if (recipients.length === 1 && recipients[0]?.[1] === t.ada)
+      throw new PublishRejected("Agent is archived");
+    return base(event);
+  });
   t.fail("Invitation denied");
   await t.user.click(screen.getByRole("button", { name: "Add team Crew" }));
   const refusals = () =>
@@ -2626,9 +2634,9 @@ it("shows a team's refusals with different reasons as separate alerts", async ()
       .map((item) => item.textContent ?? "")
       .filter((content) => /^(Ada|Cy): /.test(content));
   await vi.waitFor(() => expect(refusals()).toHaveLength(2));
-  expect(refusals()).toEqual([
-    expect.stringMatching(/^(Ada|Cy): Agent is archived/),
-    expect.stringMatching(/^(Ada|Cy): Invitation denied/),
+  expect(refusals().sort()).toEqual([
+    expect.stringMatching(/^Ada: Agent is archived/),
+    expect.stringMatching(/^Cy: Invitation denied/),
   ]);
   expect(
     screen.getAllByRole("button", { name: /^Retry adding (Ada|Cy)$/ }),

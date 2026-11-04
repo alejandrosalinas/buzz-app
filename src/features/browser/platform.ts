@@ -29,6 +29,21 @@ export function validateBrowsableUrl(url: string): UrlValidation {
   return { ok: true, url: normalized };
 }
 
+// A colon followed by a digit is a port ("localhost:3000"), not a scheme.
+const EXPLICIT_SCHEME = /^[a-z][a-z\d+.-]*:(?!\d)/i;
+
+/** Address-bar input without a scheme loads over https and falls back to
+ * http if that load fails, as Chrome does. */
+export function addressInputUrl(input: string): {
+  url: string;
+  fallbackToHttp: boolean;
+} {
+  const trimmed = input.trim();
+  if (!trimmed || EXPLICIT_SCHEME.test(trimmed))
+    return { url: trimmed, fallbackToHttp: false };
+  return { url: `https://${trimmed}`, fallbackToHttp: true };
+}
+
 export type BrowserBounds = Readonly<{
   x: number;
   y: number;
@@ -58,7 +73,12 @@ export interface BrowserPlatform {
     bounds: BrowserBounds,
     visible: boolean,
   ): Promise<void>;
-  navigate(sessionId: string, url: string): Promise<void>;
+  /** With `fallbackToHttp`, an https load that fails to connect retries over http. */
+  navigate(
+    sessionId: string,
+    url: string,
+    fallbackToHttp?: boolean,
+  ): Promise<void>;
   action(sessionId: string, action: BrowserAction): Promise<void>;
   status(sessionId: string): Promise<BrowserStatus>;
   detach(sessionId: string): Promise<void>;
@@ -101,7 +121,11 @@ export function createBrowserPlatform(): BrowserPlatform {
         builderlab.signal.addEventListener("abort", close, { once: true });
         try {
           builderlab.signal.throwIfAborted();
-          await invoke("browser_navigate", { sessionId, url: target });
+          await invoke("browser_navigate", {
+            sessionId,
+            url: target,
+            fallbackToHttp: false,
+          });
           builderlab.signal.throwIfAborted();
         } catch (error) {
           await invoke("browser_detach", { sessionId });
@@ -114,8 +138,12 @@ export function createBrowserPlatform(): BrowserPlatform {
     },
     setBounds: (sessionId, bounds, visible) =>
       invoke("browser_set_bounds", { sessionId, bounds, visible }),
-    navigate: async (sessionId, url) =>
-      invoke("browser_navigate", { sessionId, url: normalizedUrl(url) }),
+    navigate: async (sessionId, url, fallbackToHttp = false) =>
+      invoke("browser_navigate", {
+        sessionId,
+        url: normalizedUrl(url),
+        fallbackToHttp,
+      }),
     action: (sessionId, action) =>
       invoke("browser_action", { sessionId, action }),
     status: (sessionId) =>
