@@ -30,6 +30,7 @@ export function StatusDisplay({
               value={status.emoji}
               url={status.emojiUrl}
               session={session}
+              name="hint"
             />
             {status.emoji && status.text && " "}
             {status.text}
@@ -40,6 +41,7 @@ export function StatusDisplay({
               value={status.emoji}
               url={status.emojiUrl}
               session={session}
+              name="hint"
             />
             {status.emoji && status.text && " "}
             <span className={styles.text}>{status.text}</span>
@@ -55,6 +57,7 @@ export function StatusDisplay({
             value={status.emoji}
             url={status.emojiUrl}
             session={session}
+            name="inline"
           />
           {status.text && <span>{status.text}</span>}
         </span>

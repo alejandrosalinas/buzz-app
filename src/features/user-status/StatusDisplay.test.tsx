@@ -6,6 +6,7 @@ import {
   fireEvent,
   render,
   screen,
+  waitFor,
   within,
 } from "@testing-library/react";
 import { afterEach, expect, it } from "vitest";
@@ -31,7 +32,7 @@ function harness(status: UserStatus) {
   });
   owners.push(owner);
   const { session } = owner;
-  render(
+  const view = (status: UserStatus) => (
     <>
       <section aria-label="Full">
         <StatusDisplay status={status} session={session} />
@@ -39,11 +40,13 @@ function harness(status: UserStatus) {
       <section aria-label="Compact">
         <StatusDisplay compact status={status} session={session} />
       </section>
-    </>,
+    </>
   );
+  const { rerender } = render(view(status));
   const catalogRead = () =>
     wire.pending.find((entry) => entry.filters[0]?.kinds?.includes(30030));
   return {
+    update: (next: UserStatus) => rerender(view(next)),
     full: within(screen.getByRole("region", { name: "Full" })),
     compact: screen.getByRole("img", { name: `${status.emoji} Buzzin'` }),
     catalogRead,
@@ -74,6 +77,14 @@ async function tooltip(trigger: HTMLElement) {
   act(() => trigger.focus());
   return screen.findByRole("tooltip");
 }
+/** A full status's emoji is not focusable; its name hint opens on hover alone. */
+async function hint(emoji: HTMLElement) {
+  fireEvent.mouseEnter(emoji);
+  fireEvent.mouseMove(emoji);
+  const tip = await screen.findByRole("tooltip");
+  fireEvent.mouseLeave(emoji);
+  return tip;
+}
 
 it("renders a status's own image in every mode without reading the catalog", async () => {
   const h = harness(status(":bee:", beeUrl));
@@ -84,9 +95,13 @@ it("renders a status's own image in every mode without reading the catalog", asy
   const decorative = h.compact.querySelector("img");
   expect(decorative).toHaveAttribute("src", beeUrl);
   expect(decorative).toHaveAttribute("alt", "");
+  expect(
+    await hint(h.full.getByRole("img", { name: ":bee:" })),
+  ).toHaveTextContent(/^:bee:$/);
+  await waitFor(() => expect(screen.queryByRole("tooltip")).toBeNull());
   const tip = await tooltip(h.compact);
   expect(tip.querySelector("img")).toHaveAttribute("src", beeUrl);
-  expect(tip).toHaveTextContent("Buzzin'");
+  expect(tip).toHaveTextContent(/^:bee:Buzzin'$/);
   expect(h.catalogRead()).toBeUndefined();
   // A failed image falls back to the catalog, then degrades like an unresolved code.
   if (decorative) fireEvent.error(decorative);
@@ -96,6 +111,31 @@ it("renders a status's own image in every mode without reading the catalog", asy
   expect(fallback).toHaveAttribute("src", catalogUrl);
   if (fallback) fireEvent.error(fallback);
   expect(h.compact).toHaveTextContent(/^💬$/);
+});
+
+it("names a Unicode status emoji on hover, as reactions do", async () => {
+  const h = harness(status("🏠"));
+  expect(await hint(h.full.getByText("🏠"))).toHaveTextContent(/^:house:$/);
+  await waitFor(() => expect(screen.queryByRole("tooltip")).toBeNull());
+  // The compact slot's status hint names the emoji beside it.
+  expect(await tooltip(h.compact)).toHaveTextContent(/^🏠:house:Buzzin'$/);
+  expect(h.compact).toHaveAccessibleName("🏠 Buzzin'");
+  // A status that changes between a glyph and an image keeps its hint.
+  act(() => h.compact.blur());
+  await waitFor(() => expect(screen.queryByRole("tooltip")).toBeNull());
+  h.update(status(":bee:", beeUrl));
+  expect(
+    await hint(h.full.getByRole("img", { name: ":bee:" })),
+  ).toHaveTextContent(/^:bee:$/);
+});
+
+it("gives free text in the emoji slot no name", async () => {
+  const h = harness(status("🐝 working from the office"));
+  // Completion barrier: the hint's name table has loaded.
+  await act(() => import("../messages/reaction-name"));
+  expect(await tooltip(h.compact)).toHaveTextContent(
+    /^🐝 working from the officeBuzzin'$/,
+  );
 });
 
 it("resolves from the catalog when a status's own URL is not loadable", async () => {
