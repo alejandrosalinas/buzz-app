@@ -170,6 +170,27 @@ export function backUp(
 }
 
 /**
+ * Real: a key the account already holds a backup of stays backed up. Only its
+ * automatic choice is saved, unless one already is, so setup uploads nothing
+ * and no backup prompt asks about it later. A build whose uploader cannot back
+ * up to Builderlab (a dev account seed's backups) has no choice to save.
+ * Rejects with a `BackupError`.
+ */
+export function keepBackup(identity: Identity): SetupStep {
+  return {
+    label: "Backing up your key…",
+    run: async () => {
+      if ((await identity.backup.ready()).builderlab)
+        await identity
+          .setBackupChoice(viewer(identity), true, true)
+          .catch(() => {
+            throw new BackupError("interrupted");
+          });
+    },
+  };
+}
+
+/**
  * Real: the communities the linked account owns, for Join a community's rows
  * and the start-over page. Runs only once a key is on the device and the
  * account is linked (the list is meaningless otherwise). A failed list is

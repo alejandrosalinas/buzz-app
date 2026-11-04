@@ -25,7 +25,8 @@ import type {
   SidebarFilterMode,
 } from "../relay/sidebar-preferences";
 import type { RelayData, RelaySnapshot } from "../relay/service";
-import type { ChannelList } from "../relay/contracts";
+import type { ChannelList, ChannelSummary } from "../relay/contracts";
+import type { UnreadSnapshot } from "../relay/unread";
 import type { Navigation } from "../navigation/controller";
 import type {
   RegisteredSidebarSection,
@@ -1285,6 +1286,90 @@ it("rejects a deferred header Create section after its navigation origin retires
     screen.queryByRole("dialog", { name: "Move to new section" }),
   ).not.toBeInTheDocument();
   expect(preferences.queries.snapshot().data?.sections).toEqual([]);
+  preferences.dispose();
+});
+
+it("offers only Copy link for a not-joined preview, keeping sidebar actions for a joined guest", async () => {
+  const preferences = createSidebarPreferencesStore({
+    read: async () => ({
+      sections: [],
+      assignments: {},
+      starred: [],
+      muted: [],
+    }),
+    available: true,
+    write: vi.fn(async () => ({ sections: [], assignments: {} })),
+    writeStar: vi.fn(async () => []),
+    writeMute: vi.fn(async () => []),
+  });
+  await preferences.queries.ensure();
+  const h = fixture(preferences.queries);
+  // Read state that offers Mark as read/unread wherever the menu allows it.
+  const sync = {
+    capability: "frontier-sync",
+    status: "reconciled",
+    completeness: "snapshot",
+  } as const;
+  const snapshots = new Map<string, UnreadSnapshot>();
+  h.session.unread = {
+    ...h.session.unread,
+    sync: () => sync,
+    snapshot: (target) => {
+      const key = JSON.stringify(target);
+      const snapshot = snapshots.get(key) ?? {
+        target,
+        observedCount: 0,
+        attentionCount: 0,
+        manual: "none",
+        coverage: "observed",
+        freshness: "observed",
+      };
+      snapshots.set(key, snapshot);
+      return snapshot;
+    },
+    subscribe: () => () => {},
+  };
+  const user = userEvent.setup();
+  const header = (channel: ChannelSummary) =>
+    h.view(
+      "alpha",
+      <ChannelHeaderMenu
+        channel={channel}
+        session={h.session}
+        trigger={createRef<HTMLButtonElement>()}
+        openDetails={() => {}}
+      />,
+    );
+  // A public channel previewed from search: not in the roster, read-only.
+  const preview: ChannelSummary = {
+    id: "open",
+    name: "open",
+    channelType: "stream",
+    visibility: "public",
+    readOnly: true,
+  };
+  const mounted = render(header(preview));
+  await user.click(screen.getByRole("button", { name: "Channel actions" }));
+  expect(
+    await screen.findByRole("menuitem", { name: "Copy link" }),
+  ).toBeVisible();
+  expect(
+    screen.getByRole("menuitem", { name: "View channel details" }),
+  ).toBeVisible();
+  expect(screen.queryByRole("menuitem", { name: "Move channel" })).toBeNull();
+  expect(screen.queryByRole("menuitem", { name: "Mute" })).toBeNull();
+  expect(screen.queryByRole("menuitem", { name: /^Mark as/ })).toBeNull();
+  await user.keyboard("{Escape}");
+
+  mounted.rerender(header({ ...preview, viewerRole: "guest" }));
+  await user.click(screen.getByRole("button", { name: "Channel actions" }));
+  expect(
+    await screen.findByRole("menuitem", { name: "Move channel" }),
+  ).toBeVisible();
+  expect(screen.getByRole("menuitem", { name: "Mute" })).toBeVisible();
+  expect(
+    screen.getByRole("menuitem", { name: "Mark as unread" }),
+  ).toBeVisible();
   preferences.dispose();
 });
 

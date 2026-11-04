@@ -2,6 +2,7 @@ import { hoverMessage } from "./message-actions.mjs";
 import { test, expect } from "./fixture.mjs";
 import { open } from "./timeline.mjs";
 import { settlePanelMotion } from "./navigation.mjs";
+import { generateSecretKey, getPublicKey } from "nostr-tools";
 
 test.use({
   productionBroker: true,
@@ -435,6 +436,15 @@ test("branch hooks land on each reply's avatar across sides and row shapes", asy
   page,
   app,
 }) => {
+  const agent = generateSecretKey();
+  await page.route("**/agent-library", (route) =>
+    route.fulfill({
+      json: {
+        definitions: [],
+        identities: [{ pubkey: getPublicKey(agent), name: "Hook Agent" }],
+      },
+    }),
+  );
   const root = app.histories
     .get("primary/alpha")
     .find((event) => event.content === "Thread root 0");
@@ -469,6 +479,7 @@ test("branch hooks land on each reply's avatar across sides and row shapes", asy
   const emoji = post("Emoji branch", false);
   const emojiReply = post("🎉", false, emoji.id);
   await open(page, app);
+  app.serveProfile(agent, { name: "Hook Agent", is_agent: true });
   await page.setViewportSize({ width: 1280, height: 1600 });
   await page
     .locator(`[data-channel-timeline] [data-message-id="${root.id}"]`)
@@ -562,6 +573,56 @@ test("branch hooks land on each reply's avatar across sides and row shapes", asy
   const hook = await hookFor(reacted);
   expect(hook.itemBottom - hook.avatar.center).toBeGreaterThan(30);
   expectHookOnAvatar(hook, "left");
+
+  // An agent's activity under a reply carries the agent's avatar on the left;
+  // the hook stays on the reply's own avatar rather than crossing the
+  // transparent activity bubble to reach it. An agents reply mounts its
+  // activity only inside its open disclosure.
+  const disclosure = row(agentPeerReply).getByRole("button", {
+    name: /coordination note/,
+  });
+  await row(agentPeerReply).scrollIntoViewIfNeeded();
+  await disclosure.click();
+  await expect(disclosure).toHaveAttribute("aria-expanded", "true");
+  await row(agentPeerReply).evaluate((node) =>
+    Promise.all(
+      node.getAnimations({ subtree: true }).map((motion) => motion.finished),
+    ),
+  );
+  await expect.poll(() => app.relay.hasRoute("primary", "observer")).toBe(true);
+  for (const [index, reply] of [
+    peerReply,
+    viewerReply,
+    agentPeerReply,
+  ].entries())
+    app.observer(
+      {
+        kind: "turn_started",
+        seq: index + 1,
+        timestamp: new Date().toISOString(),
+        channelId: "alpha",
+        sessionId: "hooks",
+        turnId: `hooks-${index}`,
+        payload: { triggeringEventIds: [reply.id] },
+      },
+      agent,
+    );
+  for (const [reply, side] of [
+    [peerReply, "left"],
+    [viewerReply, "right"],
+    [agentPeerReply, "left"],
+  ]) {
+    const activity = row(reply).getByRole("region", {
+      name: "Agent activity on this message",
+      exact: true,
+    });
+    await expect(activity).toBeVisible();
+    await activity.evaluate((section) =>
+      Promise.all(section.getAnimations().map((motion) => motion.finished)),
+    );
+    await row(reply).scrollIntoViewIfNeeded();
+    expectHookOnAvatar(await hookFor(row(reply)), side);
+  }
 });
 
 test("an exact linked reply stays readable when its parent is outside loaded history", async ({

@@ -17,19 +17,20 @@ export const WINDOW_KINDS: readonly number[] = CHANNEL_ROW_KINDS.filter(
 );
 export const NOTICE_PAGE_SIZE = 500;
 
-/** NIP-CW window request: top-level rows plus aux closure and thread summaries, paged by the relay's composite cursor. */
+/** NIP-CW window request: top-level rows plus aux closure and thread summaries, paged by the relay's composite cursor.
+ * A bare (`full: false`) request reads rows only, for a seek's probes. */
 export function windowFilter(
   channelId: string,
   cursor: WindowCursor | null,
   limit = WINDOW_PAGE_SIZE,
+  full = true,
 ): ReadFilter {
   return {
     kinds: [...WINDOW_KINDS],
     "#h": [channelId],
     limit: Math.max(1, Math.min(200, limit)),
     top_level: true,
-    include_aux: true,
-    include_summaries: true,
+    ...(full ? { include_aux: true, include_summaries: true } : {}),
     ...(cursor ? { until: cursor.createdAt, before_id: cursor.eventId } : {}),
   };
 }

@@ -1,3 +1,4 @@
+import { finalizeEvent, generateSecretKey, getPublicKey } from "nostr-tools";
 import { test, expect } from "./fixture.mjs";
 import { open } from "./timeline.mjs";
 import { openPage } from "./navigation.mjs";
@@ -770,4 +771,53 @@ test("a narrow DM tab keeps portalled media dismissal inside the tab", async ({
   await expect(detail).toBeVisible();
   await expect(mediaOpener).toBeFocused();
   await expect(row.getByRole("img", { name: "Unread" })).toHaveCount(0);
+});
+
+// Browser-only: leaving a channel releases its profile room in a layout effect
+// and shrinks the cache a task later, after the Inbox's mount effect has asked
+// for names. The shrink must not cancel that read.
+test.describe("Inbox names after leaving a channel", () => {
+  const launch = "5b0c1d2e-3f40-4a51-8b62-7c83d94ea5f6";
+  test.use({
+    threadUnread: false,
+    threadUnreadMentions: false,
+    inboxDm: false,
+    channelIds: ["alpha", launch],
+    channelNames: { [launch]: "Launch" },
+    historyCounts: { alpha: 1, [launch]: 0 },
+  });
+  test("names an author seen only in the Inbox", async ({ page, app }) => {
+    const key = generateSecretKey();
+    const author = getPublicKey(key);
+    app.serveProfile(key, { name: "Priya Shah" });
+    app.histories.get(`primary/${launch}`).push(
+      finalizeEvent(
+        {
+          kind: 9,
+          created_at: Math.floor(Date.now() / 1000) - 3600,
+          tags: [
+            ["h", launch],
+            ["p", app.viewer],
+          ],
+          content: "Can you check the release notes?",
+        },
+        key,
+      ),
+    );
+    await open(page, app);
+    await page.getByRole("button", { name: "Inbox", exact: true }).click();
+    const row = page
+      .getByRole("region", { name: "Inbox", exact: true })
+      .getByRole("list", { name: "Inbox conversations" })
+      .getByRole("listitem")
+      .filter({ hasText: "release notes" });
+    await expect(row).toContainText("Priya Shah");
+    // Her name came from the first read; nothing cancelled it and asked again.
+    expect(
+      app.report.queries.filter(
+        ({ filter }) =>
+          filter.kinds?.includes(0) && filter.authors?.includes(author),
+      ),
+    ).toHaveLength(1);
+  });
 });

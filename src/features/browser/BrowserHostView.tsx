@@ -16,11 +16,12 @@ import {
 import { IconButton } from "../../shared/design-system/ui/IconButton";
 import { Input } from "../../shared/design-system/ui/Input";
 import type { BrowserViewProps } from "./api";
-import type {
-  BrowserAction,
-  BrowserBounds,
-  BrowserPlatform,
-  BrowserStatus,
+import {
+  addressInputUrl,
+  type BrowserAction,
+  type BrowserBounds,
+  type BrowserPlatform,
+  type BrowserStatus,
 } from "./platform";
 import type { BrowserSessions } from "./sessions";
 import styles from "./BrowserHostView.module.css";
@@ -398,7 +399,10 @@ export function BrowserHostView({
   function navigate(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     editing.current = false;
-    void run((sessionId) => platform.navigate(sessionId, draft));
+    const target = addressInputUrl(draft);
+    void run((sessionId) =>
+      platform.navigate(sessionId, target.url, target.fallbackToHttp),
+    );
   }
 
   function action(value: BrowserAction) {

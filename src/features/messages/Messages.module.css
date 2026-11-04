@@ -2156,12 +2156,13 @@ html[data-keyboard-navigation] .replyBranchCollapse:focus-visible {
   pointer-events: none;
 }
 /* Each reply's own avatar anchors its hook, so the hook lands on the avatar
-   whatever renders around it: reactions, delivery notices, or an open
-   agents disclosure. */
+   whatever renders around it: reactions, delivery notices, an open agents
+   disclosure, or an agent's activity on the reply, whose avatar is not the
+   reply's. */
 .replyItem {
   anchor-scope: --reply-avatar;
 }
-:where(.replyItem) .messageAvatar,
+:where(.replyItem) .messageAvatar:not([data-message-activity] *),
 :where(.replyItem .audienceLine) > .audienceAvatar:first-child {
   anchor-name: --reply-avatar;
 }

@@ -764,7 +764,7 @@ test("Create new supports cancel, moves before publication, and retries the same
     await started.promise;
     await expect(dialog).toHaveCount(0);
     const createdGroup = sidebar(page)
-      .locator("[data-sidebar-section]")
+      .locator('[data-sidebar-section^="group:"]')
       .filter({ has: page.locator("summary", { hasText: /^Launch$/ }) });
     await expect(
       createdGroup.locator('[data-channel-id="beta"]'),
@@ -821,7 +821,7 @@ test("Create new supports cancel, moves before publication, and retries the same
     await dialog.getByRole("button", { name: "Create and move" }).click();
     await nextStarted.promise;
     const nextGroup = sidebar(page)
-      .locator("[data-sidebar-section]")
+      .locator('[data-sidebar-section^="group:"]')
       .filter({
         has: page.locator("summary", { hasText: /^Follow-up$/ }),
       });
@@ -950,7 +950,7 @@ test("Create new retains its draft when preferences fail before submission and r
     await dialog.getByRole("button", { name: "Create and move" }).click();
     await expect(dialog).toHaveCount(0);
     const destination = sidebar(page)
-      .locator("[data-sidebar-section]")
+      .locator('[data-sidebar-section^="group:"]')
       .filter({
         has: page.locator("summary", { hasText: /^Retained launch$/ }),
       })

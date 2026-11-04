@@ -1,11 +1,13 @@
-import { expect, it, vi } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { ReadError } from "./errors";
-import type { ReadFilter, RelayEvent } from "./events";
+import { eventDto, type ReadFilter, type RelayEvent } from "./events";
 import {
   createProfileSearch,
+  PROFILE_SEARCH_HEADS_MS,
   PROFILE_SEARCH_QUERY_MAX,
   PROFILE_SEARCH_RETRY_MS,
 } from "./profile-search";
+import type { VerifiedProfileAuthority } from "./verified-profile";
 import type { ReadOptions } from "./reader";
 import { keypair, signed } from "./testing";
 
@@ -187,4 +189,99 @@ it("uses NIP-50 search when the transport has no endpoint", async () => {
   expect(reads).toEqual([
     [{ kinds: [0], search: "wes", search_mode: "prefix", limit: 15 }],
   ]);
+});
+
+describe("verified heads from a searchable relay", () => {
+  const relay = keypair(),
+    stranger = keypair(),
+    fake = keypair(),
+    plain = keypair();
+  // Transports admit signed events; the relay key decides, not the signature.
+  const head = (author: ReturnType<typeof keypair>, created_at: number) =>
+    eventDto(
+      signed(author, {
+        kind: 30382,
+        created_at,
+        content: "",
+        tags: [["d", fake.pubkey]],
+      }),
+    );
+  const fakeProfile = signed(fake, {
+    kind: 0,
+    content: JSON.stringify({ name: "Fak" }),
+    tags: [],
+  });
+  const plainProfile = signed(plain, {
+    kind: 0,
+    content: JSON.stringify({ name: "Plain" }),
+    tags: [],
+  });
+  const older = head(relay, 1_000);
+  const newest = head(relay, 2_000);
+  const response = [
+    fakeProfile,
+    older,
+    newest,
+    head(stranger, 3_000),
+    plainProfile,
+  ];
+  function headsSetup(
+    authority: VerifiedProfileAuthority | undefined,
+    events: RelayEvent[] = response,
+  ) {
+    const clock = { now: 1_000_000 };
+    const current = { authority };
+    const searchProfiles = createProfileSearch(
+      { read: vi.fn(async () => [nip50]), searchProfiles: async () => events },
+      () => clock.now,
+      () => current.authority,
+    );
+    return { searchProfiles, clock, current };
+  }
+  const searchable: VerifiedProfileAuthority = {
+    pubkey: relay.pubkey,
+    multipleIssuers: false,
+    searchable: true,
+  };
+
+  it("keeps each found person\x27s newest relay head, or none, once", async () => {
+    const t = headsSetup(searchable);
+    expect(
+      await t.searchProfiles("fak", { limit: 30, signal: signal() }),
+    ).toEqual([fakeProfile, plainProfile]);
+    const pubkeys = [fake.pubkey, plain.pubkey, keypair().pubkey];
+    expect(t.searchProfiles.verifiedHeads(pubkeys, searchable)).toEqual(
+      new Map([
+        [fake.pubkey, newest],
+        [plain.pubkey, undefined],
+      ]),
+    );
+    // A taken answer is not given again; the next look reads.
+    expect(t.searchProfiles.verifiedHeads(pubkeys, searchable).size).toBe(0);
+  });
+
+  it("keeps nothing unless the authority is searchable", async () => {
+    const t = headsSetup({ pubkey: relay.pubkey, multipleIssuers: false });
+    await t.searchProfiles("fak", { limit: 30, signal: signal() });
+    const current = t.current.authority as VerifiedProfileAuthority;
+    expect(t.searchProfiles.verifiedHeads([fake.pubkey], current).size).toBe(0);
+  });
+
+  it("answers only the same authority, and only while recent", async () => {
+    const t = headsSetup(searchable);
+    await t.searchProfiles("fak", { limit: 30, signal: signal() });
+    expect(
+      t.searchProfiles.verifiedHeads([fake.pubkey], { ...searchable }).size,
+    ).toBe(0);
+    await t.searchProfiles("fak", { limit: 30, signal: signal() });
+    t.clock.now += PROFILE_SEARCH_HEADS_MS - 1;
+    expect(t.searchProfiles.verifiedHeads([fake.pubkey], searchable).size).toBe(
+      1,
+    );
+    await t.searchProfiles("fak", { limit: 30, signal: signal() });
+    t.clock.now += PROFILE_SEARCH_HEADS_MS;
+    expect(t.searchProfiles.verifiedHeads([fake.pubkey], searchable).size).toBe(
+      0,
+    );
+  });
 });

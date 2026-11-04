@@ -35,14 +35,19 @@ the interface unless an available tool actually supports that action.
   if backup fails temporarily, retry to complete setup. If backup is not supported
   by the build or account, choose **Continue without backup** to finish setup.
   Independent-community key imports
-  without Builderlab sign-in do not upload a backup. After signing in to the
+  without Builderlab sign-in do not upload a backup during setup. Later, while
+  signed in to Builderlab on a build with backup, a key with no backup choice is
+  backed up automatically if you belong to a Builderlab-hosted community;
+  otherwise Buzz asks **Sync your identity with Builderlab?**, again on the
+  next launch or sign-in if the dialog is closed. **Settings → Buzz → Identity
+  → Identity sync** shows the sync status and, while backup is off, offers
+  **Sync with Builderlab**. After signing in to the
   public Builderlab, **Connect to a community** also offers **Create a
   community** when that account is linked to this device’s key and may create one.
   Choose an available address, then **Create community** joins it right away,
   with no **Join Community** confirmation. Other Builderlab deployments do not
   offer it during setup.
-  Existing community profiles
-  are preserved and skip setup. A new profile needs a name; an avatar is optional. A returning account may restore
+  Existing community profiles are preserved and skip setup. A new profile needs a name; an avatar is optional. A returning account may restore
   its backed-up key where the build and account allow it. If the older Buzz app
   was used on this computer, a **Continue with your Buzz identity?** dialog
   brings that identity over without signing in; **Not now** keeps the welcome
@@ -53,6 +58,10 @@ the interface unless an available tool actually supports that action.
   to paste a private key into a conversation or send it to you.
 - **Settings → Buzz → Identity → Copy private key** lets someone make their own
   backup, for example in a password manager. They should handle it privately.
+  When Builderlab backup is on, the same page shows the account's linked key
+  when it is backed up, with when it was last active in the current community;
+  until the organization is signed in, that row asks them to sign in instead.
+  Backups of other keys are not shown, and the row is read-only.
   Backup and restore options depend on the build and account; do not promise
   recovery or assume automatic backup is on. Losing every copy of the private
   key can mean losing the identity.
@@ -168,7 +177,8 @@ that agent in Buzz; they do not notify the external app through this connection.
   you. Unmute restores ordinary unread emphasis and dots. Manual **Mark as unread**
   can still make the name bold. Muted rows show no unread dots, including thread
   dots, and do not contribute to the sidebar’s floating **N unread** buttons or
-  their avatar previews. Muting does not mark messages or threads as read.
+  their avatar previews. Muted activity does not light the macOS Dock unread dot.
+  Muting does not mark messages or threads as read.
 - **Message link previews** appear when you hover or focus a Buzz message link.
   When the message can't be shown, the card says why: the channel is private,
   gone or in another community; the message isn't available, and may have
@@ -184,7 +194,22 @@ that agent in Buzz; they do not notify the external app through this connection.
 - **Message search** treats the last word you type as the start of a word, so
   it searches only once that word has at least three characters, even with
   `from:` or `in:`. A shorter last word shows how many characters to type, not
-  "no results".
+  "no results". Filters narrow it, alone or with text:
+  - `from:me`, `from:@name`: messages by you or someone else.
+  - `in:#channel`, `in:@person`: one channel, or your DM with someone
+    (`in:@me` is your own). A name that matches several conversations, or
+    none, says so instead of searching.
+  - `after:`, `before:`, `on:` a date (`YYYY-MM-DD`, `today`, `yesterday`), and
+    `during:` a day, month (`2026-10`, `october`), or year, in local time.
+    `after:` includes its day; `before:` does not.
+  - `"exact phrase"` and `-word` match whole words, not word starts. Anything
+    inside quotes, `from:` or `-` included, is part of the phrase.
+  Other words with a colon, such as `has:link`, are searched as text. An
+  unfinished `from:` or `in:@` lists people, `in:` or `in:#` your channels,
+  `after:`, `before:` or `during:` common dates, and `on:` a calendar; choose
+  one to make it a chip. Click a chip to remove it, or press Backspace at the
+  start of the text to edit the last one. With a filter, search shows only
+  messages.
 - **Channel, people, and message search** shows “Searching…” beside each section heading
   if a lookup takes more than a second. You can open results already shown
   while the rest of the search finishes.
@@ -279,10 +304,19 @@ that agent in Buzz; they do not notify the external app through this connection.
   and Linux) an HTTP(S) link in a message to open it in your default browser
   instead of a side panel. You can also right-click the link and choose
   **Open in browser**.
+- **Inbox preview**: with a mouse or trackpad, rest the pointer on **Inbox** in
+  the sidebar to see recent mentions, DMs, and thread replies without opening
+  the Inbox page. Archived conversations are not shown. Clicking a conversation
+  opens it directly; **Open Inbox** opens the page. The card's **Unread only**
+  switch is separate from the Inbox page's filters. The preview is not shown on
+  touch devices or while the Inbox page is open.
 - **Sidebar width**: drag the sidebar's right edge, or focus its resize handle
   and use the Left/Right arrow keys. Double-click the handle to reset the width.
   Messages and plugin pages share the saved width within the same community
   and identity; narrow windows use a navigation drawer instead.
+- **Sidebar sections**: in **All**, use the arrow beside **Solo** or **Team** to
+  collapse either section independently. Buzz remembers the collapsed sections
+  for that community and identity.
 - **Panel dividers**: the divider between a page and its side panel (such as
   the Inbox list and a conversation) works the same way. Each page remembers
   its own width within the same community and identity; double-click to reset.
@@ -382,6 +416,9 @@ confirmation.
   macOS (inside the app's installed name, such as `Buzz Foundation.app`), with
   no setup or token. Without such a plugin there are no tools to
   offer; do not promise them.
+- The **GitHub** plugin’s pull request panel offers **Queue for merge** when
+  the target branch requires a merge queue. After confirmation, it queues the
+  displayed commit and shows **Queued for merge**; GitHub controls when it merges.
 - Some desktop plugins can upload images you provide to services they declare.
 - Agents running on this computer can write plugins while the **Plugin
   development** plugin is on (it is by default). It gives them

@@ -104,6 +104,16 @@ fn lock(path: &Path, exclusive: bool) -> Result<Lease> {
 /// Only `Some(true)` authorizes backup. Keep the returned value alive until completion.
 pub(crate) fn read(path: &Path, config: &Config, pubkey: &str) -> Result<BackupChoice> {
     let lease = lock(path, false)?;
+    Ok(BackupChoice {
+        available: true,
+        pubkey: pubkey.into(),
+        automatic: saved(path, config, pubkey)?,
+        _lease: Some(lease),
+    })
+}
+
+/// The choice saved for `pubkey`. The caller holds the choice lock.
+fn saved(path: &Path, config: &Config, pubkey: &str) -> Result<Option<bool>> {
     let record: Option<Record> = match fs::File::open(path) {
         Ok(file) => {
             let mut bytes = Vec::new();
@@ -118,25 +128,23 @@ pub(crate) fn read(path: &Path, config: &Config, pubkey: &str) -> Result<BackupC
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
         Err(_) => return Err(FAILED.into()),
     };
-    let automatic = record
+    // An opt-out holds for its key under every service, namespace and version,
+    // so no build change turns backup on; an opt-in holds only where it was saved.
+    Ok(record
         .filter(|record| {
-            record.version == 1
-                && record.pubkey == pubkey
-                && record.service == config.service_url
-                && record.namespace == config.namespace
+            record.pubkey == pubkey
+                && (!record.automatic
+                    || record.version == 1
+                        && record.service == config.service_url
+                        && record.namespace == config.namespace)
         })
-        .map(|record| record.automatic);
-    Ok(BackupChoice {
-        available: true,
-        pubkey: pubkey.into(),
-        automatic,
-        _lease: Some(lease),
-    })
+        .map(|record| record.automatic))
 }
 
 /// Consent's shared lease for a backup pass, or `None` when backup is not
-/// authorized. A managed build ignores the saved choice, so even a malformed
-/// one cannot stop backup.
+/// authorized. A key with no saved choice waits too: the renderer fills it in.
+/// A managed build ignores the saved choice, so even a malformed one cannot
+/// stop backup.
 pub(crate) fn admit(
     path: &Path,
     config: &Config,
@@ -150,6 +158,9 @@ pub(crate) fn admit(
     Ok(choice._lease.filter(|_| choice.automatic == Some(true)))
 }
 
+/// Saves `automatic` for `pubkey`. With `unless_saved`, a choice already saved
+/// for it stands and is returned instead. The check holds the write's
+/// exclusive lock, so a choice another copy saves meanwhile is never replaced.
 pub(crate) async fn set(
     identity: &IdentityHost,
     path: &Path,
@@ -157,6 +168,7 @@ pub(crate) async fn set(
     pubkey: &str,
     automatic: bool,
     managed: bool,
+    unless_saved: bool,
 ) -> Result<BackupChoice> {
     if identity.viewer().await? != pubkey {
         return Err("This device’s identity changed. Read its backup choice again.".into());
@@ -173,8 +185,32 @@ pub(crate) async fn set(
                 _lease: None,
             });
         }
+        // Only a pass with this exact consent holds the shared lease past its
+        // read, so turning backup on again while it runs changes nothing, and
+        // neither does keeping a saved choice. Any other choice reports busy
+        // rather than dropping the consent.
+        Err(error) if automatic && error == BUSY => {
+            let current = read(path, config, pubkey)?;
+            if current.automatic != Some(true) && !(unless_saved && current.automatic.is_some()) {
+                return Err(error);
+            }
+            return Ok(BackupChoice {
+                _lease: None,
+                ..current
+            });
+        }
         Err(error) => return Err(error),
     };
+    if unless_saved {
+        if let Some(saved) = saved(path, config, pubkey)? {
+            return Ok(BackupChoice {
+                available: true,
+                pubkey: pubkey.into(),
+                automatic: Some(saved),
+                _lease: None,
+            });
+        }
+    }
     let record = Record {
         version: 1,
         pubkey: pubkey.into(),
@@ -223,9 +259,15 @@ pub(crate) async fn nsec_backup_set_choice(
     identity: tauri::State<'_, IdentityHost>,
     pubkey: String,
     automatic: bool,
+    unless_saved: Option<bool>,
 ) -> Result<BackupChoice> {
-    host.set_choice(identity.inner().clone(), &pubkey, automatic)
-        .await
+    host.set_choice(
+        identity.inner().clone(),
+        &pubkey,
+        automatic,
+        unless_saved == Some(true),
+    )
+    .await
 }
 
 #[cfg(test)]

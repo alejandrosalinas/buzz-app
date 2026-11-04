@@ -153,14 +153,17 @@ function failure(status: BackupStatus): BackupFailureKind | undefined {
  * handed back on every exit after the handoff, so the credential never
  * outlives the step; a settled pass is not running, so that publishes nothing
  * and the outcome stays visible. Consent stays on after a failure, so a later
- * Builderlab sign-in may finish what the user asked for; declining turns it off.
+ * Builderlab sign-in may finish what the user asked for. Continue without
+ * backup keeps what was saved: consent after `not_offered`, and no choice on a
+ * build that can't back up to Builderlab, which fails before saving one, so
+ * `BackupConsent` fills it in once the app opens.
  * The caller must hold the `builderlab` slot alone for the step: handing it
  * back empties it rather than restoring an earlier credential, so a signed-in
  * Builderlab plugin would lose its native session until its own changes. An
  * FI revision is the session that plugin hands over too, so after a completed
  * pass it stays in the slot, at the cost of a fresh pass. After a failure it
- * is emptied: a fresh pass would hold the consent lease that Try again's
- * consent write needs. Rejects with a `BackupError`.
+ * is emptied like any other exit, and Try again hands it over again. Rejects
+ * with a `BackupError`.
  */
 export async function backUpWith(
   identity: Pick<Identity, "backup" | "setBackupChoice">,

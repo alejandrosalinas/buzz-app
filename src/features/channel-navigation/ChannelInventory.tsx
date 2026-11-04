@@ -100,6 +100,15 @@ import styles from "../../bundled/channels/Channels.module.css";
 import { avatarMedia } from "../../shared/avatar-source";
 import { useBestieConversation } from "../../app/shell/bestie-context";
 
+/** The sidebar entry selected by a destination, excluding nested message state. */
+export function sidebarEntryLocation(target: OpenTarget) {
+  return target.kind === "conversation"
+    ? `conversation:${target.channelId}`
+    : target.kind === "page"
+      ? `page:${target.pluginId}/${target.pageId}:${JSON.stringify(target.route?.params ?? null)}`
+      : target.kind;
+}
+
 type Inventory = {
   sidebar: ReturnType<typeof useSidebarView>;
   dmPreviews: ReadonlyMap<string, UnreadDmPreview>;
@@ -216,11 +225,7 @@ export function ChannelInventory({
       (target.scope.viewer !== viewer ||
         target.scope.communityOrigin !== scope.slice(0, -(viewer.length + 1)))
       ? undefined
-      : target.kind === "conversation"
-        ? `conversation:${target.channelId}`
-        : target.kind === "page"
-          ? `page:${target.pluginId}/${target.pageId}:${JSON.stringify(target.route?.params ?? null)}`
-          : target.kind,
+      : sidebarEntryLocation(target),
   );
   const { channels, profiles: dmProfiles } = useChannelLabels(
     list.channels,
@@ -984,6 +989,11 @@ export function ChannelInventory({
     menuActions?.publish((channel, surface) => {
       if (cached || channel.cached || relay.snapshot().session !== queries)
         return [];
+      // A not-joined preview has no sidebar row to place, mute or mark read.
+      if (channel.readOnly && channel.viewerRole !== "guest")
+        return [
+          <ChannelCopyLinkMenuItem key="copy-link" channelId={channel.id} />,
+        ];
       const placement = sections.find((section) =>
         section.rows.some((row) => row.id === channel.id),
       );

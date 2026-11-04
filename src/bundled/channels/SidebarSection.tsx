@@ -62,6 +62,7 @@ export function SidebarSection({
   headerActions,
   headerNotice,
   hideMoreActions = false,
+  persistentChevron = false,
   createChannel,
   createSection,
   newMessage,
@@ -92,6 +93,8 @@ export function SidebarSection({
   onRemove?: (() => unknown) | undefined;
   onRename?: ((name: string) => unknown) | undefined;
   hideMoreActions?: boolean;
+  /** Keep the disclosure affordance visible instead of revealing it on hover. */
+  persistentChevron?: boolean;
   channelCount?: number | undefined;
   removalFocus?: (() => HTMLElement | null | undefined) | undefined;
   createChannel?:
@@ -167,6 +170,7 @@ export function SidebarSection({
   if (hideTitle)
     return (
       <div className={`${styles.channelSection} ${styles.untitledSection}`}>
+        {headerNotice}
         <div
           id={id}
           className={`${styles.sectionContent} ${styles.untitledSectionContent}`}
@@ -174,6 +178,7 @@ export function SidebarSection({
           <div>{children}</div>
         </div>
         <div className={styles.sectionActions}>
+          {headerActions}
           {newMessage && (
             <IconButton
               hint="familiar"
@@ -196,6 +201,7 @@ export function SidebarSection({
       data-drop-edge={dropEdge}
       data-section-dragging={dragging || undefined}
       data-menu-open={menuOpen || undefined}
+      data-persistent-chevron={persistentChevron || undefined}
     >
       <div className={styles.sectionHeader}>
         <details open={open}>
@@ -218,7 +224,13 @@ export function SidebarSection({
               ) : (
                 icon
               )}
-              <FadingLabel className={styles.sectionTitle}>{title}</FadingLabel>
+              <FadingLabel
+                className={`${styles.sectionTitle} ${
+                  persistentChevron ? styles.scopeSectionTitle : ""
+                }`}
+              >
+                {title}
+              </FadingLabel>
             </span>
             <span className={`${styles.sidebarIcon} ${styles.sectionChevron}`}>
               <CaretDownIcon strokeWidth={2.5} size={15} />

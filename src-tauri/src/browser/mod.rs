@@ -85,18 +85,20 @@ struct BrowserSession {
     instance: String,
     host: Webview,
     guest: WebView,
-    // WKWebView's UI delegate reference is weak.
+    // WKWebView's UI and navigation delegate references are weak.
     _permissions: platform::Permissions,
+    navigation: platform::Navigation,
     snapshot: Rc<RefCell<BrowserSnapshot>>,
     policy: NavigationPolicy,
 }
 
 impl BrowserSession {
-    fn navigate(&self, target: &str) -> Result<(), String> {
+    fn navigate(&self, target: &str, fallback_to_http: bool) -> Result<(), String> {
         let url = self.policy.validate(target)?;
-        self.guest
-            .load_url(url.as_str())
-            .map_err(|error| error.to_string())?;
+        let http_fallback = fallback_to_http
+            .then(|| self.policy.http_fallback(&url))
+            .flatten();
+        platform::load(&self.guest, &self.navigation, &url, http_fallback)?;
         let mut snapshot = self.snapshot.borrow_mut();
         snapshot.url = url.to_string();
         snapshot.loading = true;
@@ -265,17 +267,19 @@ fn build_contents(
         .with_new_window_req_handler(|_, _| wry::NewWindowResponse::Deny);
     let guest = platform::build_guest(builder, &host.window())?;
     let permissions = platform::deny_permissions(&guest)?;
+    let navigation = platform::observe_navigation(&guest)?;
     let browser = BrowserSession {
         instance: uuid::Uuid::new_v4().to_string(),
         host,
         guest,
         _permissions: permissions,
+        navigation,
         snapshot,
         policy,
     };
     platform::resize_guest(&browser.guest, &browser.host, bounds)?;
     if !defer_navigation {
-        browser.navigate(target.as_str())?;
+        browser.navigate(target.as_str(), false)?;
     }
     Ok(browser)
 }
@@ -376,9 +380,12 @@ pub async fn browser_navigate(
     app: AppHandle,
     session_id: String,
     url: String,
+    fallback_to_http: bool,
 ) -> Result<(), String> {
     on_main_thread(&app, move || {
-        with_browser(&session_id, |browser| browser.navigate(&url))
+        with_browser(&session_id, |browser| {
+            browser.navigate(&url, fallback_to_http)
+        })
     })
     .await
 }

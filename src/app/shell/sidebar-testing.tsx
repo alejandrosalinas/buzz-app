@@ -181,6 +181,7 @@ export function fixture(
     session,
     generation: 1,
     scope,
+    viewer,
   };
   const relay: RelayData = {
     snapshot: () => snapshot,

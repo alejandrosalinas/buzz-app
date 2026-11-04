@@ -132,7 +132,7 @@ export const COMPONENTS: readonly ComponentDefinition[] = [
       "Explain an empty collection, introduce setup, or present a status action.",
     behavior:
       "Static content with a decorative icon, grouped copy, and an optional action. Uses label-sm/body-sm type, a 48ch measure, and logical spacing; callers distinguish empty results from loading or errors.",
-    variants: ["with action", "informational"],
+    variants: ["with action", "informational", "unframed"],
     status: "proposed",
     collection: "components",
     source: "shared/design-system/ui/EmptyState.tsx",

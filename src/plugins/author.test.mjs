@@ -33,7 +33,7 @@ test("generated author package in a path with spaces exposes shared message fact
       join(dir, "consumer.ts"),
       `
 import { createElement } from "react";
-import type { Context, Delivery, HarnessConversation, McpHandler, StandaloneTurn, TurnResult, DecisionResult, Host, HostRequestOnceOptions, AddedTool, AddedToolContext, AddedToolReply, BuzzClient, Media, HostByteUpload, HostByteRequest, HostByteResponse, HostSavedBytes, PluginManifest, NamingPolicy, PageSidebarProps, SidebarSectionContribution, SidebarSections, UnreadCapability } from "@buzz/author";
+import type { Context, Delivery, HarnessConversation, McpHandler, StandaloneTurn, TurnResult, DecisionResult, Host, HostRequestOnceOptions, AddedTool, AddedToolContext, AddedToolReply, BuzzClient, Media, HostByteUpload, HostByteRequest, HostByteResponse, HostSavedBytes, PluginManifest, NamingPolicy, PagePreviewProps, PageSidebarProps, SidebarSectionContribution, SidebarSections, UnreadCapability } from "@buzz/author";
 export const manifest: PluginManifest = {
   id: "example.plugin", name: "Example", apiVersion: 1,
   host: {
@@ -46,6 +46,8 @@ const ExampleSidebar = ({ target, children }: PageSidebarProps) => {
   void target.kind;
   return children;
 };
+const ExamplePreview = ({ close }: PagePreviewProps) =>
+  createElement("button", { type: "button", onClick: close }, "Open");
 export const inject = ["agents", "decisions", "host", "identityNames", "pages", "relay"];
 export function apply(ctx: Context) {
   const unread: UnreadCapability = ctx.relay.snapshot().session.unread;
@@ -144,6 +146,14 @@ export function apply(ctx: Context) {
     primary: true,
     placement: "toolbar",
     sidebar: ExampleSidebar,
+    preview: ExamplePreview,
+  });
+  ctx.pages.register({
+    id: "bad-preview",
+    title: "Bad preview",
+    component: () => null,
+    // @ts-expect-error A page preview must be a React component.
+    preview: "card",
   });
   ctx.pages.register({
     id: "bad-sidebar",

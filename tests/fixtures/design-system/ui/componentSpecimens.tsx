@@ -2498,6 +2498,23 @@ export const COMPONENT_SPECIMENS: Record<string, () => ReactNode> = {
           description="Save a starting setup to reuse in new channels."
         />
       </SpecimenFrame>
+      <SpecimenFrame
+        code={`<EmptyState
+  frame="none"
+  level={4}
+  icon={<SmileyIcon />}
+  title="You're all caught up"
+  description="Inside a popover, the popover is the frame."
+/>`}
+      >
+        <EmptyState
+          frame="none"
+          level={4}
+          icon={<SmileyIcon />}
+          title="You're all caught up"
+          description="Inside a popover, the popover is the frame."
+        />
+      </SpecimenFrame>
     </div>
   ),
   header: () => (

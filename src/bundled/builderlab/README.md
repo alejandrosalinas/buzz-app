@@ -230,5 +230,8 @@ The plugin also offers Builderlab as a Decisions API provider. It reads
 Builderlab is not listed in Settings > Decisions API and no decision request
 goes to it. While it is registered, it answers unless the user chose another
 provider; when it goes away, TypeSafe answers. Sign out and back in to refresh
-this capability. An FI build does not offer it: native `decide` sends the
-legacy credential, which an FI build does not have.
+this capability. In an FI build the plugin names the native session by its
+revision, and native `decide` posts to the identity origin's API with that
+session as `Authorization: Bearer`, as for the build's other Builderlab calls;
+the token never reaches the webview. A 401 there refuses only that call, and
+native asks the adapter once whether the session still stands.

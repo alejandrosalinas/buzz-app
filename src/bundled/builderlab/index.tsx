@@ -179,9 +179,13 @@ export const apply: PluginModule["apply"] = (ctx) => {
     });
     ctx.effect(() => () => stopProvider());
     // Native validation stays in place; the dev transport uses a public revision.
-    // FI builds still do not offer this legacy decision backend.
-    if (legacy || dev)
-      offerBuilderlabDecisions(ctx, session, loginAvailable, dev?.decide);
+    offerBuilderlabDecisions(
+      ctx,
+      session,
+      loginAvailable,
+      dev?.decide,
+      openIdentity,
+    );
     ctx.provide("builderlab", hostedAgentSettings(session, agents));
   }
   // Link the Buzz key at sign-in. Best effort: activation links again and

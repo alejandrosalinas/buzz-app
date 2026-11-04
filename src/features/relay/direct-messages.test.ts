@@ -453,6 +453,67 @@ describe("verified names for a search page", () => {
     }
   });
 
+  it.each([true, false])(
+    "names a searched page without a read where the relay is searchable (%s)",
+    async (searchable) => {
+      const viewer = keypair(),
+        relay = keypair(),
+        fake = keypair(),
+        plain = keypair();
+      const head = assertion(relay, fake.pubkey, {
+        display: "fname",
+        full: "Fake Name",
+      });
+      const query = vi.fn(async (_filters: readonly ReadFilter[]) => [
+        eventDto(head),
+      ]);
+      const owner = createRelaySession({
+        viewer: viewer.pubkey,
+        relayAuthor: relay.pubkey,
+        media: () => undefined,
+        query,
+        searchProfiles: async () =>
+          [
+            profile(fake, { name: "Fak" }),
+            head,
+            profile(plain, { name: "Plain" }),
+          ].map((event) => eventDto(event)),
+        verifiedProfiles: {
+          pubkey: relay.pubkey,
+          multipleIssuers: false,
+          ...(searchable ? { searchable: true as const } : {}),
+        },
+      });
+      try {
+        const signal = new AbortController().signal;
+        const { people } = await owner.session.directMessages.people(
+          "fname",
+          1,
+          signal,
+        );
+        expect(people.map(({ pubkey }) => pubkey)).toEqual([
+          fake.pubkey,
+          plain.pubkey,
+        ]);
+        const verified = await owner.session.directMessages.verified(
+          [fake.pubkey, plain.pubkey],
+          signal,
+        );
+        expect(query).toHaveBeenCalledTimes(searchable ? 0 : 1);
+        expect([...(verified?.profiles.keys() ?? [])]).toEqual([fake.pubkey]);
+        expect(verified?.profiles.get(fake.pubkey)).toMatchObject({
+          displayName: "fname",
+          fullName: "Fake Name",
+        });
+        // The search answered once; asking again reads.
+        await owner.session.directMessages.verified([fake.pubkey], signal);
+        expect(query).toHaveBeenCalledTimes(searchable ? 1 : 2);
+      } finally {
+        owner.dispose();
+      }
+    },
+  );
+
   const changes: [string, () => VerifiedProfileAuthority | undefined][] = [
     ["withdrawn", () => undefined],
     ["rotated", () => ({ pubkey: keypair().pubkey, multipleIssuers: false })],
@@ -487,7 +548,7 @@ describe("verified names for a search page", () => {
         undefined,
         new AbortController().signal,
         directoryReader,
-        undefined as never,
+        { verifiedHeads: () => new Map() } as never,
         () => authority,
       );
       const pending = directMessages.verified(

@@ -33,7 +33,8 @@ export function KeyImport({
 }: {
   /** The hex key linked to the signed-in account, when the lane has one. */
   expectedPubkey?: string | undefined;
-  automaticBackup?: boolean;
+  /** `kept`: the account holds the key's backup, so a saved opt-out stands. */
+  automaticBackup?: boolean | "kept";
   onBack: () => void;
   onLost?: (() => void) | undefined;
   /** Rejects with the native refusal, shown under the field. */
@@ -129,9 +130,12 @@ export function KeyImport({
               </p>
               {automaticBackup && (
                 <p className="text-body-sm text-subtle">
-                  Your key will be backed up to your Builderlab account
-                  automatically. Block can use that copy to restore this key,
-                  including anywhere else you use it.
+                  Buzz will automatically sync this key with your Builderlab
+                  account
+                  {automaticBackup === "kept" &&
+                    " unless you chose to manage it yourself"}
+                  . Block can use that copy to restore your identity, including
+                  anywhere else you use it.
                 </p>
               )}
               <div className={styles.importForm}>

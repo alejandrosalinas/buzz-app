@@ -1,11 +1,15 @@
 import { Context } from "@deepseek-ai/cordis";
 import { expect, it, vi } from "vitest";
 import { createCommunities } from "./service";
-import { importLegacyCommunities } from "./legacy-communities";
+import {
+  importLegacyCommunities,
+  legacyImportPending,
+} from "./legacy-communities";
 import { flush } from "../relay/testing";
 
-it("imports once and only after consent", async () => {
-  const viewer = "a".repeat(64);
+const viewer = "a".repeat(64);
+
+function setup() {
   const storage = new Map<string, string>();
   vi.stubGlobal("localStorage", {
     getItem: (key: string) => storage.get(key) ?? null,
@@ -20,6 +24,11 @@ it("imports once and only after consent", async () => {
     undefined,
     Promise.resolve(viewer),
   );
+  return { storage, root, communities };
+}
+
+it("imports once and only after consent", async () => {
+  const { storage, root, communities } = setup();
   let answer!: (approved: boolean) => void;
   const pending = new Promise<boolean>((resolve) => {
     answer = resolve;
@@ -34,8 +43,10 @@ it("imports once and only after consent", async () => {
     expect(confirm).toHaveBeenCalledWith(["https://old.example"]);
     expect(communities.snapshot().memberships).toEqual([]);
     expect(storage.size).toBe(0);
+    expect(legacyImportPending()).toBe(true);
     answer(true);
     await flush();
+    expect(legacyImportPending()).toBe(false);
     expect(communities.snapshot().memberships).toEqual([
       { id: "https://old.example", name: "old.example" },
     ]);
@@ -50,6 +61,28 @@ it("imports once and only after consent", async () => {
   } finally {
     dispose();
     answer(false);
+    await root.fiber.dispose();
+    vi.unstubAllGlobals();
+  }
+});
+
+it("a failed read is no longer pending and is retried on the next launch", async () => {
+  const { storage, root, communities } = setup();
+  const confirm = vi.fn(async () => true);
+  const read = vi.fn(async () => {
+    throw new Error("Old Buzz's storage is locked");
+  });
+  const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+  const dispose = importLegacyCommunities(communities, confirm, read);
+  try {
+    await flush();
+    expect(read).toHaveBeenCalledOnce();
+    expect(legacyImportPending()).toBe(false);
+    expect(confirm).not.toHaveBeenCalled();
+    expect(storage.size).toBe(0);
+  } finally {
+    dispose();
+    warn.mockRestore();
     await root.fiber.dispose();
     vi.unstubAllGlobals();
   }

@@ -1041,7 +1041,12 @@ addition to the heading’s own top inset; invitation/recovery spacing is unchan
 The search composition reduces the shared header-to-body gap by `--space-2`
 (16px normally, 8px at the compact breakpoint) without affecting other dialogs.
 The member-list area flexes into the remaining dialog height and owns the only
-scrollbar, including search results and recovery messages. Current-member groups render at most 50 rows per page, with Previous/Next controls and whole-group counts. Search still filters the whole roster, and query or role-filter changes reset paging. Live roster changes retain the current page, clamped to the last available page. Subsequent growth retains that clamped page. Large-roster ordering and group membership stay stable while names update; live roster changes remove departed identities and append arrivals without re-sorting survivors. Reopening or refreshing takes a new ordering. Agents counts and the role filter reflect agent identities known at that point and can be partial when profiles have not loaded; newly learned agent badges can appear under People until reopen or refresh. Large rosters show the verified list without waiting for optional names; name enrichment requests only the displayed member pages through the existing profile directory, without warming the entire roster. Name search combines cached labels with paged relay name-search results for existing roster members, including when the viewer cannot add members; public-key search covers every member. Public-key labels remain available when a name is absent or evicted from that shared directory. The role groups and
+scrollbar, including search results and data recovery messages. Member
+administration errors, refused additions, Send message progress and errors, and
+Copy link failures sit above the list instead, so a long roster never hides them.
+Refused additions are grouped by reason: one alert names the people (up to three,
+then a count) and its one **Retry** resubmits all of them; Solo agents, which join
+directly, keep one alert each. Current-member groups render at most 50 rows per page, with Previous/Next controls and whole-group counts. Search still filters the whole roster, and query or role-filter changes reset paging. Live roster changes retain the current page, clamped to the last available page. Subsequent growth retains that clamped page. Large-roster ordering and group membership stay stable while names update; live roster changes remove departed identities and append arrivals without re-sorting survivors. Reopening or refreshing takes a new ordering. Agents counts and the role filter reflect agent identities known at that point and can be partial when profiles have not loaded; newly learned agent badges can appear under People until reopen or refresh. Large rosters show the verified list without waiting for optional names; name enrichment requests only the displayed member pages through the existing profile directory, without warming the entire roster. Name search combines cached labels with paged relay name-search results for existing roster members, including when the viewer cannot add members; public-key search covers every member. Public-key labels remain available when a name is absent or evicted from that shared directory. The role groups and
 Not in this channel flow naturally one after the other; empty groups are hidden. Only the bordered viewport fills spare
 height, never a group inside it. The shared Dialog's opt-in flex body
 keeps the outer body non-scrolling; other dialogs are unchanged.
@@ -1197,7 +1202,8 @@ The port retains the prepared-store implementation and its behavior tests:
   open and active (not a retained background tab), it reserves room for its whole
   roster on top of that base, up to 10,240 entries. Leaving gives the room back
   after the current task, so a remount or a roster count change keeps the loaded
-  profiles; the shrink cancels background profile reads still in flight, and
+  profiles; the shrink cancels background profile reads asked for before
+  leaving, not the next view's, and
   stops the verified-name syncs it emptied. Verified-name syncs (128 people
   each) have their own pool of 80, enough for the largest cache, apart from the
   32 artifact syncs. A background profile read of many pages publishes once,

@@ -7,12 +7,18 @@ import { PanelWorkspace } from "../../src/features/panels/PanelWorkspace";
 import { Panel } from "../../src/shared/design-system/ui/Panel";
 import { useKeyboardFocusVisibility } from "../../src/shared/design-system/useKeyboardFocusVisibility";
 
-// Real panel and menu; GitHub reads and draft conversion stay in memory.
+// Real panel and menu; GitHub reads and changes stay in memory.
 const ready = new URLSearchParams(location.search).has("ready");
+const queue = new URLSearchParams(location.search).has("queue");
+let queued = false;
 let draft = false;
 const gh: GitHubCli = async (query) => {
   if (query.startsWith("mutation($input:ConvertPullRequestToDraftInput!")) {
     draft = true;
+    return JSON.parse("{}");
+  }
+  if (query.startsWith("mutation($input:EnqueuePullRequestInput!")) {
+    queued = true;
     return JSON.parse("{}");
   }
   if (!query.startsWith("query("))
@@ -29,6 +35,8 @@ const gh: GitHubCli = async (query) => {
           title: "Keep the release notes easy to scan",
           state: "OPEN",
           isDraft: draft,
+          isMergeQueueEnabled: queue,
+          isInMergeQueue: queued,
           body: "This sample change groups release notes by feature.\n\nReview the checklist above, then open the action menu to see the available options. All names and pull request data on this page are fictional.",
           author: { login: "alex-example" },
           baseRefName: "main",

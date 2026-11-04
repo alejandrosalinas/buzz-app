@@ -40,6 +40,8 @@ import { relayDebug } from "./debug";
 import { clientMetrics } from "../developer/client-metrics";
 import { MessageClock } from "./message-order";
 import { yieldToHost } from "./yield";
+import { locate, SEEK_PAGE, type SeekRead } from "./history-seek";
+import type { WindowPage } from "./window";
 import { MatchRank, matchRank } from "../search/match";
 
 type Listener = () => void;
@@ -51,6 +53,15 @@ type WindowState = {
   cursor: WindowCursor | null;
   events: readonly RelayEvent[];
   atHead: boolean;
+  /** Detached: rows created at or after this (unix seconds) are not loaded;
+   * the window holds a seek segment below it. Undefined at the head. */
+  ceiling?: number | undefined;
+  /** Live rows above the ceiling that arrived while a newer page loads: the
+   * page that reaches the head may predate them. */
+  above?: Map<string, RelayEvent> | undefined;
+  /** The channel's latest message as of the last attached snapshot: a
+   * detached segment is old history, not the channel's latest. */
+  preview?: string | undefined;
   /** Oldest point any page read reached, in created_at seconds; 0 once a read
    * reached the start. Only falls while the window lives: a catch-up head can
    * move `cursor` past rows the reader already has, and those must stay. */
@@ -363,7 +374,7 @@ export function createChannelStore(
     const channels = next.channels.map((channel) => {
       const pending = metadataPending(channel.id);
       const preview =
-        messagePreview(windows.get(channel.id)?.snapshot.rows) ??
+        windows.get(channel.id)?.preview ??
         tails.peek(channel.id)?.preview ??
         messagePreview(heads.peek(channel.id)?.rows);
       const old = previous.get(channel.id);
@@ -417,6 +428,23 @@ export function createChannelStore(
     });
     notify(listListeners);
   }
+  /** A head read replaces a detached segment: its rows and floor go with it.
+   * Live rows that arrived above it during the read join the head. */
+  function attached(state: WindowState) {
+    if (state.ceiling === undefined) return;
+    state.ceiling = undefined;
+    state.floor = undefined;
+    if (state.above?.size)
+      state.events = [
+        ...new Map(
+          [...state.events, ...state.above.values()].map((event) => [
+            event.id,
+            event,
+          ]),
+        ).values(),
+      ];
+    state.above = undefined;
+  }
   function moveCursor(state: WindowState, cursor: WindowCursor | null) {
     state.cursor = cursor;
     state.floor = Math.min(state.floor ?? Infinity, cursor?.createdAt ?? 0);
@@ -434,9 +462,10 @@ export function createChannelStore(
         [...state.events, ...state.notices.values(), ...state.traffic.values()]
           .filter(
             (event) =>
-              floor === undefined ||
-              event.created_at >= floor ||
-              !channelRowKind(event.kind),
+              !channelRowKind(event.kind) ||
+              ((floor === undefined || event.created_at >= floor) &&
+                (state.ceiling === undefined ||
+                  event.created_at < state.ceiling)),
           )
           .map((event) => [event.id, event as import("./events").EventData]),
       );
@@ -468,14 +497,19 @@ export function createChannelStore(
         state.projection.reconcile([...combined.values()], operations),
       );
     }
-    const next = { ...state.snapshot, ...patch, rows };
+    const next = {
+      ...state.snapshot,
+      ...patch,
+      rows,
+      hasNewer: state.ceiling !== undefined || undefined,
+    };
     if (
       Object.entries(next).every(
         ([key, value]) => value === state.snapshot[key as keyof ChannelWindow],
       )
     )
       return;
-    const previousPreview = messagePreview(state.snapshot.rows);
+    const previousPreview = state.preview;
     if (rows.length && !state.snapshot.rows.length)
       clientMetrics.channelData(
         state.channelId,
@@ -483,7 +517,8 @@ export function createChannelStore(
       );
     state.snapshot = Object.freeze(next);
     notify(windowListeners.get(state.channelId));
-    if (previousPreview !== messagePreview(rows)) setList(list);
+    if (state.ceiling === undefined) state.preview = messagePreview(rows);
+    if (previousPreview !== state.preview) setList(list);
   }
   const idleWindows = new Map<string, ChannelWindow>();
   function idleWindow(channelId: string): ChannelWindow {
@@ -626,8 +661,9 @@ export function createChannelStore(
    * than any gap, not overlap with it. The head replaces the rows, so it
    * replaces the snapshot too (a cached head adopted on revisit is re-read). */
   function adoptHead(state: WindowState, head: Head) {
-    moveCursor(state, head.cursor);
     state.events = head.events;
+    attached(state);
+    moveCursor(state, head.cursor);
     state.atHead = true;
     state.restored = head.restored === true;
     if (dropped) state.kept = rowIds(state);
@@ -641,6 +677,8 @@ export function createChannelStore(
    * over from them. A failed read only leaves notices out until the next page
    * or head read. */
   async function fillNotices(state: WindowState, head: boolean) {
+    // Notices are read down from the head; a detached segment shows none.
+    if (state.ceiling !== undefined) return;
     if (head) state.noticeHead = true;
     const reading = state.noticeRead;
     if (
@@ -937,6 +975,7 @@ export function createChannelStore(
       }
       state.events = retained;
       state.atHead = !cursor;
+      if (!cursor) attached(state);
       moveCursor(state, page.cursor);
       state.restored = false;
       if (dropped && !cursor) state.kept = rowIds(state);
@@ -980,6 +1019,99 @@ export function createChannelStore(
       )
         setWindow(state, { refreshing: undefined });
     }
+  }
+  /** Seek reads: window pages of `SEEK_PAGE` rows, bare for probes. */
+  const seekRead =
+    (channelId: string, signal: AbortSignal): SeekRead =>
+    async (cursor, full) => {
+      if (!transport) throw new Error("Relay is unavailable");
+      const source = transport;
+      const events = await retryRead(
+        (attempt) =>
+          source.read([windowFilter(channelId, cursor, SEEK_PAGE, full)], {
+            signal: attempt,
+          }),
+        signal,
+      );
+      return parseWindow(channelId, cursor, source.relayAuthor, events);
+    };
+  const nowSeconds = () => Math.floor(now() / 1000);
+  /** Message rows, oldest first; the first at or after `from`, else the newest. */
+  function landing(state: WindowState, from: number) {
+    const rows = state.snapshot.rows.filter((row) => !row.membership);
+    return (rows.find((row) => row.createdAt >= from) ?? rows.at(-1))?.id;
+  }
+  /** Replace a detached window with the head, cancelling its reads. The
+   * segment stays until the head page lands; live rows wait for it. */
+  function reattach(state: WindowState) {
+    state.controller?.abort();
+    state.controller = undefined;
+    const above = new Map<string, RelayEvent>();
+    state.above = above;
+    state.generation++;
+    setWindow(state, { loadingOlder: false, loadingNewer: undefined });
+    // A failed read leaves the segment; the next head read has these rows.
+    return loadPage(state, null).finally(() => {
+      if (state.above === above) state.above = undefined;
+    });
+  }
+  /** Replace the window with a seek page; a null ceiling is the head page. */
+  function install(
+    state: WindowState,
+    page: WindowPage,
+    ceiling: number | null,
+  ) {
+    state.controller?.abort();
+    state.controller = undefined;
+    state.generation++;
+    state.events = page.events;
+    state.atHead = ceiling === null;
+    state.ceiling = ceiling ?? undefined;
+    state.floor = undefined;
+    state.kept = undefined;
+    state.restored = false;
+    moveCursor(state, page.cursor);
+    setWindow(state, {
+      status: "ready",
+      hasMore: page.hasMore && page.cursor !== null,
+      loadingOlder: false,
+      loadingNewer: undefined,
+      refreshing: undefined,
+      historyLimited: false,
+      error: undefined,
+      freshness: "verified",
+    });
+    void fetchProfiles(state.snapshot.rows);
+  }
+  /** Keep a detached window within the history budget by dropping its oldest
+   * rows: the next older page continues from the oldest row kept. */
+  function trimOldest(state: WindowState, events: readonly RelayEvent[]) {
+    const rows = events
+      .filter((event) => channelRowKind(event.kind))
+      .sort(newestFirst);
+    if (
+      rows.length <= maxHistoryRows &&
+      listByteSize(events) <= maxHistoryBytes
+    )
+      return events;
+    let kept = rows.slice(0, maxHistoryRows);
+    const retain = (ids: ReadonlySet<string>) =>
+      events.filter(
+        (event) =>
+          ids.has(event.id) ||
+          (!channelRowKind(event.kind) &&
+            event.tags.some((tag) => tag[0] === "e" && ids.has(tag[1] ?? ""))),
+      );
+    let retained = retain(new Set(kept.map((event) => event.id)));
+    while (kept.length > 1 && listByteSize(retained) > maxHistoryBytes) {
+      kept = kept.slice(0, -Math.max(1, Math.ceil(kept.length / 4)));
+      retained = retain(new Set(kept.map((event) => event.id)));
+    }
+    const oldest = kept.at(-1);
+    state.floor = undefined;
+    if (oldest)
+      moveCursor(state, { createdAt: oldest.created_at, eventId: oldest.id });
+    return retained;
   }
   async function hydrate() {
     const reveal = revealHydration;
@@ -3281,6 +3413,113 @@ export function createChannelStore(
       setWindow(state, { loadingOlder: true, error: undefined });
       void loadPage(state, state.cursor);
     },
+    async seek(channelId: string, from: number, signal: AbortSignal) {
+      const state = windows.get(channelId);
+      if (
+        disposed ||
+        !transport ||
+        !state ||
+        state.snapshot.status !== "ready" ||
+        !canReadRemote(channelId)
+      )
+        throw new Error("Channel history is unavailable");
+      const rows = state.snapshot.rows.filter((row) => !row.membership);
+      // Held rows answer when they reach below `from` and either hold a row
+      // at or after it or end at the head.
+      if (
+        (!state.snapshot.hasMore || rows.some((row) => row.createdAt < from)) &&
+        (state.ceiling === undefined ||
+          rows.some((row) => row.createdAt >= from))
+      )
+        return landing(state, from);
+      const generation = state.generation;
+      const controller = new AbortController();
+      const abort = () => controller.abort();
+      signal.addEventListener("abort", abort, { once: true });
+      controllers.add(controller);
+      try {
+        signal.throwIfAborted();
+        const read = seekRead(channelId, controller.signal);
+        let located = await locate(read, from, nowSeconds(), from > 0);
+        if (located.kind === "newest" && state.ceiling !== undefined)
+          located = {
+            kind: "segment",
+            page: await read(null, true),
+            ceiling: null,
+          };
+        controller.signal.throwIfAborted();
+        if (!live(state, generation))
+          throw new DOMException("Stale history seek", "AbortError");
+        if (located.kind === "segment")
+          install(state, located.page, located.ceiling);
+        return landing(state, from);
+      } finally {
+        signal.removeEventListener("abort", abort);
+        controllers.delete(controller);
+      }
+    },
+    loadNewer(channelId: string) {
+      const state = windows.get(channelId);
+      const from = state?.ceiling;
+      if (
+        disposed ||
+        !transport ||
+        !state ||
+        from === undefined ||
+        state.controller ||
+        !canReadRemote(channelId)
+      )
+        return;
+      const generation = state.generation;
+      const controller = new AbortController();
+      state.controller = controller;
+      state.above = new Map();
+      setWindow(state, { loadingNewer: true, error: undefined });
+      void (async () => {
+        try {
+          const located = await locate(
+            seekRead(state.channelId, controller.signal),
+            from,
+            nowSeconds(),
+            true,
+          );
+          if (!live(state, generation) || controller.signal.aborted) return;
+          // Nothing at or after the ceiling: the segment already ends at the head.
+          const page = located.kind === "segment" ? located.page : undefined;
+          const merged = new Map(
+            state.events.map((event) => [event.id, event]),
+          );
+          for (const event of page?.events ?? []) merged.set(event.id, event);
+          const head = located.kind !== "segment" || located.ceiling === null;
+          if (head)
+            for (const event of state.above?.values() ?? [])
+              merged.set(event.id, event);
+          const trimmed = trimOldest(state, [...merged.values()]);
+          const dropped = trimmed.length < merged.size;
+          state.events = trimmed;
+          state.ceiling = head ? undefined : (located.ceiling ?? undefined);
+          setWindow(state, {
+            loadingNewer: undefined,
+            freshness: "verified",
+            ...(dropped ? { hasMore: true, historyLimited: false } : {}),
+          });
+          void fetchProfiles(state.snapshot.rows);
+        } catch (error) {
+          if (isAbort(error) || !live(state, generation)) return;
+          setWindow(state, { loadingNewer: undefined, error: describe(error) });
+        } finally {
+          if (state.controller === controller) {
+            state.controller = undefined;
+            state.above = undefined;
+          }
+        }
+      })();
+    },
+    attach(channelId: string) {
+      const state = windows.get(channelId);
+      if (disposed || !transport || state?.ceiling === undefined) return;
+      void reattach(state);
+    },
   });
   let previousLocal = new Map(
     (local?.snapshot() ?? []).map((item) => [item.event.id, item]),
@@ -3455,6 +3694,15 @@ export function createChannelStore(
             )
           )
             continue;
+          // Rows above a detached segment would show past its gap.
+          if (
+            state.ceiling !== undefined &&
+            channelRowKind(event.kind) &&
+            event.created_at >= state.ceiling
+          ) {
+            state.above?.set(event.id, event);
+            continue;
+          }
           incoming.push(event);
           incomingIds.add(event.id);
           changed = true;
@@ -3508,7 +3756,17 @@ export function createChannelStore(
       const tail = tails.peek(channelId);
       const state = windows.get(channelId);
       if (tail && state) {
-        const next = { ...tail, preview: messagePreview(state.snapshot.rows) };
+        // A detached window shows an older segment; live messages still
+        // move its preview.
+        if (state.ceiling !== undefined)
+          state.preview =
+            messagePreview(
+              foldChannelMessages(channelId, transport.relayAuthor, [
+                ...(heads.peek(channelId)?.events ?? []),
+                ...tail.events,
+              ]),
+            ) ?? state.preview;
+        const next = { ...tail, preview: state.preview };
         tails.set(channelId, next, tailBytes(next));
       }
     }
@@ -3693,6 +3951,12 @@ export function createChannelStore(
       if (cached) heads.set(channelId, { ...cached, cached: true });
       const retained = windows.get(channelId);
       if (!retained) return false;
+      // A detached segment is not what the head reaches: return to the head,
+      // keeping the segment until the head lands.
+      if (retained.ceiling !== undefined) {
+        await reattach(retained);
+        return retained.ceiling === undefined;
+      }
       const epochAtStart = epoch;
       const generation = retained.generation;
       const valid = () => epoch === epochAtStart && live(retained, generation);

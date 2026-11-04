@@ -60,7 +60,9 @@ the sign-in pending with the address held; the key it creates is linked to that
 account and backed up there), and setup then lands on **Join Community** for
 the address;
 **I already have a key** opens **Enter your private key** and, with no account
-signed in, continues from there with no link step and no backup offer; **Back**
+signed in, continues from there with no link step and no backup offer (once the
+app opens, the key's backup choice is
+[filled in like any missing one](#automatic-backup-consent-hooks)); **Back**
 returns to the welcome screen with the address kept.
 
 Success continues to **Getting ready**, with an animated bee. Detailed operation
@@ -153,6 +155,8 @@ saved before installation succeeds.
 **I lost my key** opens **Lost your key?**, which first suggests checking another
 signed-in device or a usable backup. Starting over replaces the linked key;
 old messages and profiles are not deleted, but access does not carry over.
+A warning says the old key can never be linked again: kgoose revokes an
+unlinked key, and binding it later fails.
 Owned community hostnames appear only when present; a failed lookup still shows
 its error. **Go back** returns to the prior screen. **Start over with a new key**
 creates a key, unlinks the old key, links the new one, then automatically backs it up.
@@ -197,14 +201,28 @@ open. Quitting with a key on the device but no saved community ends first run:
 the next launch restores the key and, with setup idle, lifts the gate straight
 into the in-app **Join a community** landing (`CommunityLanding`), the page a
 key without a community has always opened on. The key stays on the device, and
-the **Key backup** row in Settings → Identity shows the backup state. A link or
-backup step still running at quit ends with the process: the native uploader's
-pass is retired, and whether the link committed on kgoose is unknown to the
-client. Both are safe to run again — the link reads the account's current key
-first and does nothing when it already holds this one, and the uploader runs
+the **Identity sync** row in Settings → Identity shows the backup state. A
+link or backup step still running at quit ends with the process: the native
+uploader's pass is retired, and whether the link committed on kgoose is unknown
+to the client. Both are safe to run again — the link reads the account's current
+key first and does nothing when it already holds this one, and the uploader runs
 again when the user next signs in to Builderlab in Settings — but nothing
-re-runs the link on its own, and Settings has no row for it; the Key backup row
-reports only what the uploader's last pass found.
+re-runs the link on its own, and Settings has no row for it; the Identity
+sync row reports only what the uploader's last pass found. Below it, a **Backed-up key**
+row shows the account's linked key when `nsec-backups/status` (read with the
+bundled Builderlab session as first run reads it) lists it, marked This device
+when it is, with when it was last active in a channel on the current
+community's relay. Backups of other keys are left out and the row is
+read-only: making another key the account's would unlink the current one, and
+kgoose never links a key again once it is unlinked.
+
+In Builderlab → Communities, a mismatched account offers **Switch to this
+device’s identity** only behind a confirmation that the account's current key
+will be permanently unlinked, and that this device's key is refused too if it
+was unlinked before (as after Start over on another device), leaving the
+account with no key. The client can't detect that revocation, so the mismatch
+copy also points to the safe path: sign in on this device with the account's
+key. There is no Unpair action.
 
 Every lane ends with *Restoring your communities…* when the account check
 listed destinations saved to the account (`src/features/identity/restore-communities.ts`):
@@ -410,7 +428,8 @@ prompt follows that click; the offer itself checks only the folder. It takes
 the item's `identity` entry and saves it exactly as a pasted import would:
 validated, create-only, never over a saved key, and never writing the old item.
 A failed import shows its error in the dialog, where Continue tries again. Success enters the app with no Builderlab sign-in, link
-or backup, where that key's old communities are offered
+or backup choice (one is [filled in](#automatic-backup-consent-hooks) once
+Builderlab is signed in), where that key's old communities are offered
 ([Import from the previous desktop app](communities.md#import-from-the-previous-desktop-app)).
 **Not now** or Escape leaves the welcome screen as it was, with focus on its
 heading, and the dialog stays closed until the app next starts with no key. It
@@ -494,9 +513,10 @@ Desktop builds configured with `BUZZ_NSEC_BACKUP_SERVICE_URL` and
 `BUZZ_NSEC_BACKUP_NAMESPACE` back up a local identity only after an explicit saved
 automatic-backup choice, Builderlab login, and matching key
 binding. Unset, self-managed, corrupt or mismatched consent prevents all backup
-requests, including retries. An organization-managed build also sets
-`BUZZ_NSEC_BACKUP_CONSENT=managed`: backup then needs no saved choice and
-ignores one, so every local key is backed up, including one created before
+requests, including retries; a key with no saved choice waits for the app to
+[fill one in](#automatic-backup-consent-hooks). An organization-managed build
+also sets `BUZZ_NSEC_BACKUP_CONSENT=managed`: backup then needs no saved choice
+and ignores one, so every local key is backed up, including one created before
 backup was configured. The service and namespace are paired
 native build-process inputs; unset or empty leaves the feature disabled. Preview
 releases that sign in to `app.builderlab.xyz` set them to that origin's
@@ -521,7 +541,9 @@ idle, running, complete, waiting for consent, a session or a key binding, or
 failed with a named kind; no service response body reaches the renderer. A login
 handoff or retry resolves to the number of the pass it starts, or to none, so a
 caller can wait for that pass's own outcome. A pass superseded by a key install
-reports nothing; reloading the window mid-pass reports idle.
+reports nothing; reloading the window mid-pass or during a wait for consent
+reports idle. Handing the session back ends a running pass or a wait for
+consent as waiting for a session.
 
 First run's **Backing up your key** is a pass of this uploader. It saves the
 automatic choice for the key, hands the first-run Builderlab sign-in to the
@@ -564,8 +586,10 @@ secure-storage acceptance. No backend provisioning or activation is part of this
 
 Identity setup offers Restore when secure storage confirms that no local key is present.
 The existing restore UI presents the current identity and explicit previous-identity
-selection. Restoring a key does not enable automatic backup or change its saved
-consent; no consent selection UI is added in this stack.
+selection. Restoring a key saves automatic backup for it unless it has a saved
+choice, since the account already holds its backup: its remembered completion
+lets the next pass report it backed up without uploading it again, and the app
+does not ask about it. A saved opt-out stands.
 
 A shared credential blob can reduce repeated OS prompts by caching many credentials
 after one read. For this one human key, one cached item retains that read-once benefit without
@@ -801,13 +825,47 @@ change identity readiness. Reading a choice does not contact a server; saving
 automatic backup wakes the existing native uploader if a session is connected.
 Builderlab first run discloses automatic backup before replacing or importing a
 key, says the account manages a key it creates, then enables backup after
-linking. There is no separate backup-choice screen or failure bypass.
-Independent imports without Builderlab sign-in do not enable backup. Settings
-retains control over future automatic uploads.
+linking. Importing a key the account already holds a backup of is disclosed and
+enabled too unless it has a saved choice, but setup uploads nothing; with
+automatic backup on, the uploader's next pass with a session backs it up again
+from this device. A saved opt-out stands, and the notice says so. There is no separate first-run backup-choice
+screen. An independent import without Builderlab sign-in and **Continue with
+your Buzz identity?** save no choice. **Continue without backup** keeps what the
+failed step saved: no choice on a build that can't back up to Builderlab, which
+fails before saving one, but automatic backup when the account isn't offered it,
+so that key is never asked about and each later pass ends as not offered.
 
-The choice is bound to the current public key and trusted build-configured backup
-service and namespace. Missing or mismatched metadata returns no choice;
-unreadable metadata fails closed. An unavailable build rejects choice writes.
+Outside a managed build, a key with no saved choice is never backed up. Once the
+app is open, never during first run, the renderer fills the choice in whenever
+the uploader waits for consent (which it does only with a Builderlab session on
+a configured build): at launch, on a Builderlab sign-in, after a key install
+such as old Buzz's, and when the saved community memberships change. Nothing is
+decided or asked while the launch screen shows or old Buzz's communities are
+being offered or added; it then decides with the communities that import added.
+A refused save or failed read decides again on the next community update.
+Membership in any community this build's Builderlab hosts, by the welcome
+screen's `builderlab-hosted.ts` list matched on the saved relay host alone (no
+relay is read for its `self`), saves automatic backup with no prompt, unless
+a choice was saved since it was read: the save checks under the choice lock.
+Otherwise **Sync your identity with Builderlab?** asks: **Sync with
+Builderlab** and **I will manage my own key** save the answer, which a hosted
+membership arriving while it is saved does not override; closing it saves
+nothing, and it asks again on the next launch or Builderlab sign-in. A build
+whose Builderlab hosts no listed community, including an FI build, always asks.
+Settings → **Identity sync** explains what syncing is for and shows the
+uploader's status: **Syncing…** while a pass runs, **Synced with Builderlab**
+only once an upload is confirmed, and loading, sign-in and failure feedback
+below the description. While it waits for consent, **Sync with Builderlab**
+opens the same prompt, which closes if the wait settles without its answer.
+Settings does not turn automatic backup off. A successful restore, and a
+welcome-back import of a key the account already backs up, save automatic
+backup the same way, only when the key has no saved choice.
+
+An automatic choice is bound to the current public key and the trusted
+build-configured backup service and namespace; a self-managed choice holds for its
+public key under every service, namespace and choice version. Missing or
+mismatched metadata otherwise returns no choice; unreadable metadata fails closed.
+An unavailable build rejects choice writes.
 Debug and release use their existing separate key-custody namespaces. Only the
 main WebView can read or save the choice.
 Plain sign-out retains the choice; sign-out and erase removes it through the
@@ -816,7 +874,10 @@ existing resumable wipe, without erasing the other key-custody namespace.
 The native uploader consumes `nsec_backup_choice::read` before any
 backup request and retain its returned value through the upload. Its shared file
 lease prevents a successful choice change from racing an admitted upload across
-app copies. Saving a choice reports busy while such a lease is held. Disabling
+app copies. Saving a choice reports busy while such a lease is held, unless it
+turns automatic backup on where it is already on for that key, service and
+namespace: the running pass already backs it up, so the saved choice is returned
+without a write. Disabling
 automatic backup governs future uploads and does not delete existing backups.
 The consent hooks are the base of the draft stack:
 #1137 consent hooks → #1106 gated uploader → #1107 recovery → #1101 restore UI.

@@ -78,6 +78,7 @@ export function SoloInventory({
     header: ReactNode,
     trigger: RefObject<HTMLButtonElement | null>,
     pendingClick: RefObject<ReturnType<typeof setTimeout> | undefined>,
+    headerActions: ReactNode,
   ) => ReactNode;
 }) {
   const list = useChannelList(session.channels);
@@ -337,7 +338,14 @@ export function SoloInventory({
       aria-label={`${regions.regions.find((region) => region.source)?.title ?? "Solo"} conversations`}
     >
       {renderContents ? (
-        renderContents(content, creationItems, header, trigger, pendingClick)
+        renderContents(
+          content,
+          creationItems,
+          header,
+          trigger,
+          pendingClick,
+          actions,
+        )
       ) : (
         <>
           {header}

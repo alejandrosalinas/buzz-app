@@ -229,9 +229,16 @@ export function createIdentity() {
     exportKey: () => invoke<string>("identity_export"),
     /** Public consent only; enabling it wakes the configured native uploader after sign-in. */
     getBackupChoice: () => invoke<BackupChoice>("nsec_backup_choice"),
-    /** Pass the key returned by getBackupChoice so a stale selection cannot affect another key. */
-    setBackupChoice: (pubkey: string, automatic: boolean) =>
-      invoke<BackupChoice>("nsec_backup_set_choice", { pubkey, automatic }),
+    /**
+     * Pass the key returned by getBackupChoice so a stale selection cannot affect another key.
+     * With `unlessSaved`, a choice already saved for it stands and is returned instead.
+     */
+    setBackupChoice: (pubkey: string, automatic: boolean, unlessSaved?: true) =>
+      invoke<BackupChoice>("nsec_backup_set_choice", {
+        pubkey,
+        automatic,
+        unlessSaved,
+      }),
     /** Why this build can't wipe, if it can't; `sign_out` enforces it either way. */
     wipeRefusal: () => invoke<string | null>("sign_out_wipe_refusal"),
     /** Stops agents and restarts; the key (and data, with wipe) goes on next launch. */

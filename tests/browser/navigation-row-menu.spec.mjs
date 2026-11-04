@@ -39,18 +39,13 @@ test.describe("menu placement lifetime", () => {
       name: "Subscribed channels",
       includeHidden: true,
     });
-    const work = sidebar
-      .locator("[data-sidebar-section]")
-      .filter({ has: page.locator("summary", { hasText: /^Work$/ }) });
-    const starred = sidebar
-      .locator("[data-sidebar-section]")
-      .filter({ has: page.locator("summary", { hasText: /Starred$/ }) });
+    const work = sidebar.locator('[data-sidebar-section="group:work"]');
+    const starred = sidebar.locator('[data-sidebar-section="starred"]');
     // A section move retains an inert exit copy until its fade finishes.
-    const beta = sidebar.locator(
-      'button[data-channel-id="beta"]:not([inert] *)',
-    );
+    const activeBeta = 'button[data-channel-id="beta"]:not([inert] *)';
+    const beta = sidebar.locator(activeBeta);
     const menu = page.getByRole("menu", { name: "Actions for Beta" });
-    await expect(work.locator('[data-channel-id="beta"]')).toBeVisible();
+    await expect(work.locator(activeBeta)).toBeVisible();
     await openChannelDetails(page);
     await page.getByText("Diagnostics", { exact: true }).click();
     const refresh = page.getByRole("button", {
@@ -119,7 +114,7 @@ test.describe("menu placement lifetime", () => {
       await expect(menu).toBeVisible();
       const leaving = await beta.elementHandle();
       release();
-      await expect(starred.locator('[data-channel-id="beta"]')).toBeVisible();
+      await expect(starred.locator(activeBeta)).toBeVisible();
       await expect
         .poll(() => exits.evaluate(({ held }) => held.length))
         .toBeGreaterThan(0);
@@ -131,7 +126,7 @@ test.describe("menu placement lifetime", () => {
       stars = ["alpha"];
       await expect(refresh).toBeEnabled();
       await refresh.click();
-      await expect(work.locator('[data-channel-id="beta"]')).toBeVisible();
+      await expect(work.locator(activeBeta)).toBeVisible();
       await expect(menu).toHaveCount(0);
       await beta.focus();
       await page.keyboard.press("Shift+F10");

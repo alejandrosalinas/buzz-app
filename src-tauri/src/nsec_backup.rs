@@ -310,13 +310,21 @@ impl NsecBackupHost {
         identity: IdentityHost,
         pubkey: &str,
         automatic: bool,
+        unless_saved: bool,
     ) -> Result<crate::nsec_backup_choice::BackupChoice> {
         let config = self.config.as_ref().as_ref().ok_or(UNAVAILABLE)?;
         let path = self.root.as_ref().ok_or(UNAVAILABLE)?.join("choice.json");
         let managed = managed_build();
-        let choice =
-            crate::nsec_backup_choice::set(&identity, &path, config, pubkey, automatic, managed)
-                .await?;
+        let choice = crate::nsec_backup_choice::set(
+            &identity,
+            &path,
+            config,
+            pubkey,
+            automatic,
+            managed,
+            unless_saved,
+        )
+        .await?;
         if automatic {
             self.trigger(identity);
         }
@@ -330,7 +338,14 @@ impl NsecBackupHost {
         // Source counters restart with each renderer document.
         state.generations = [None, None];
         // The watcher stays: a stale channel drops sends, and the new document registers.
-        if state.progress == Progress::Running {
+        // A consent wait belonged to a cleared session, so it ends too.
+        if matches!(
+            state.progress,
+            Progress::Running
+                | Progress::Waiting {
+                    reason: Waiting::NoConsent
+                }
+        ) {
             self.publish(&mut state, Progress::Idle);
         }
     }
@@ -546,7 +561,14 @@ impl NsecBackupHost {
         let Some(session) = state.sessions.last().cloned() else {
             // A pass retired by a null handoff ends here, with no outcome of its own;
             // numbering it as the latest ticket settles a queued rerun's ticket too.
-            if state.progress == Progress::Running {
+            // A consent wait belonged to the session that is gone, so it ends too.
+            if matches!(
+                state.progress,
+                Progress::Running
+                    | Progress::Waiting {
+                        reason: Waiting::NoConsent
+                    }
+            ) {
                 state.pass = state.requested;
                 self.publish(
                     &mut state,
@@ -961,18 +983,29 @@ impl NsecBackupHost {
         }
         .await;
         if result.is_ok() {
-            let mut state = self.state.lock().map_err(|_| CANCELED)?;
-            if !state.closed
-                && state.restore_epoch == epoch
-                && state
-                    .restore
-                    .as_ref()
-                    .is_some_and(|attempt| attempt.id == id)
             {
-                state.restore.take();
+                let mut state = self.state.lock().map_err(|_| CANCELED)?;
+                if !state.closed
+                    && state.restore_epoch == epoch
+                    && state
+                        .restore
+                        .as_ref()
+                        .is_some_and(|attempt| attempt.id == id)
+                {
+                    state.restore.take();
+                }
             }
-            drop(state);
-            self.trigger(identity);
+            // The account already holds this key's backup, so it stays backed
+            // up with no prompt unless its owner saved a choice; saving wakes
+            // the uploader.
+            if self
+                .set_choice(identity.clone(), &pubkey, true, true)
+                .await
+                .is_err()
+            {
+                eprintln!("Automatic identity backup consent deferred");
+                self.trigger(identity);
+            }
         } else if let Ok(mut state) = self.state.lock() {
             if let Some(attempt) = state.restore.as_mut().filter(|attempt| attempt.id == id) {
                 attempt.installing = false;

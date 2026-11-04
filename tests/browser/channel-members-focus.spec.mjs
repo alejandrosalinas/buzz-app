@@ -209,7 +209,7 @@ test("overlapping idle additions restore focus when the suggestion list retires"
         });
         await expect(recovery).toBeVisible();
         await expect(
-          recovery.getByRole("button", { name: "Retry", exact: true }),
+          recovery.getByRole("button", { name: "Retry adding Agent 2" }),
         ).toBeEnabled();
       } else {
         await expect(

@@ -7,16 +7,23 @@ export function EmptyState({
   description,
   action,
   level = 3,
+  frame = "card",
 }: {
   icon: ReactNode;
   title: string;
   description?: ReactNode;
   action?: ReactNode;
   level?: 3 | 4;
+  /** `none` drops the card border inside a surface that already frames it, such as a popover. */
+  frame?: "card" | "none";
 }) {
   const Heading = level === 4 ? "h4" : "h3";
   return (
-    <div data-buzz-ui="" className="buzz-empty-state">
+    <div
+      data-buzz-ui=""
+      data-frame={frame === "none" ? "none" : undefined}
+      className="buzz-empty-state"
+    >
       <div className="buzz-empty-state-content">
         <span className="buzz-empty-state-icon" aria-hidden="true">
           {icon}

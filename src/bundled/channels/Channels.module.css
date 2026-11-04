@@ -449,6 +449,9 @@ body:has([data-create-section-drop][data-drop-target]) .channelDragOverlay {
   overflow: hidden;
   white-space: nowrap;
 }
+.scopeSectionTitle {
+  color: var(--text-standard);
+}
 .contributionFeedback {
   margin: 0;
   padding: var(--space-1) var(--space-2);
@@ -469,6 +472,9 @@ body:has([data-create-section-drop][data-drop-target]) .channelDragOverlay {
   place-items: center;
   color: var(--text-subtle);
   transition: transform 160ms ease-out;
+}
+.channelSection[data-persistent-chevron] .sectionChevron {
+  opacity: 1;
 }
 .sectionHeader details:not([open]) .sectionChevron {
   transform: rotate(-90deg);

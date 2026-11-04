@@ -35,6 +35,20 @@ Solo chats include ordinary incoming top-level messages, excluding agent-only co
 
 Four shortcuts open the Inbox page with its filters applied, including from the composer, like Slack's: ⌘⇧A (Ctrl+Shift+A elsewhere) opens All activity with Unread only, and ⌘⇧T, ⌘⇧M and ⌘⇧K open Threads, Mentions and DMs. Each also shows Inbox rather than Archived and leaves Drafts. Threads, Mentions and DMs keep the saved Unread only choice; Sender is never changed. They are rebindable in Settings → Shortcuts. The shortcut opens `buzz.inbox/inbox` with a versioned route (`{ attention?, activity?, show?, sender? }`, or `{ drafts: true }` alone) that the page validates, and a plain open from the sidebar or topbar carries none and leaves saved filters alone. Omitted fields keep their saved choice, except that a filter route shows Inbox unless it names `show: "archived"`; a Drafts route opens Drafts and changes no saved filter. Plugins and `buzz://plugin?id=buzz.inbox&page=inbox&route.<key>=<value>` links use the same route; a link spells Drafts `route.drafts=true`. The page applies a route once per presentation of the visit, but not when Back/Forward returns to it, which keeps the filters as they were left, using the same saved choices as the filter menu, so pressing a shortcut again after changing the filters by hand applies it again, even though the host treats an identical address as the same history entry.
 
+### Sidebar preview
+
+Resting a pointer on the sidebar's Inbox row opens a card of recent conversations
+through the page contract's `preview`. It reads the same `session.unread.inbox()`
+and `session.inboxFeed` projection as the page, with All activity and Everyone,
+newest first and bounded to 50 rows. It filters archived conversations read-only;
+reopening archives remains the page's write. The header counts unread
+conversations once each, as a DM, mention or thread. Unread only is the card's own
+choice, saved on this device per account and community, and never changes the
+page's filters. A row opens its conversation directly, through the same
+conversation target as the page's fallback, and closes the card without opening
+Inbox; reading follows the ordinary channel visit. **Open Inbox** opens the page.
+The shell hides the card while Inbox is selected and on devices without hover.
+
 ## Drafts (PR5)
 
 Drafts is a quiet Inbox header action. It lists only meaningful saved composer

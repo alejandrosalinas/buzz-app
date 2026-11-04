@@ -23,6 +23,12 @@ describe("channel window bounds", () => {
       windowFilter(channel, { createdAt: 5, eventId: id }, 999),
     ).toMatchObject({ until: 5, before_id: id, limit: 200 });
   });
+  it("leaves aux and summaries out of bare probe reads", () => {
+    const bare = windowFilter(channel, null, 200, false);
+    expect(bare).toMatchObject({ top_level: true, limit: 200 });
+    expect(bare).not.toHaveProperty("include_aux");
+    expect(bare).not.toHaveProperty("include_summaries");
+  });
   it("reads the relay's membership notices apart, by the same composite cursor", () => {
     expect(noticeFilter(channel, relay.pubkey, null)).toEqual({
       kinds: [40099],

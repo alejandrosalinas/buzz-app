@@ -3,12 +3,22 @@ use wry::{WebView, WebViewBuilder};
 
 #[cfg(target_os = "macos")]
 mod macos {
+    use std::cell::RefCell;
+
     use block2::Block;
-    use objc2::{define_class, msg_send, rc::Retained, runtime::ProtocolObject, MainThreadOnly};
-    use objc2_foundation::{MainThreadMarker, NSObject, NSObjectProtocol};
+    use objc2::{
+        define_class, msg_send,
+        rc::Retained,
+        runtime::{AnyObject, ProtocolObject, Sel},
+        sel, DefinedClass, MainThreadOnly,
+    };
+    use objc2_foundation::{
+        MainThreadMarker, NSError, NSObject, NSObjectProtocol, NSString, NSURLErrorCancelled,
+        NSURLErrorDomain, NSURLRequest, NSURL,
+    };
     use objc2_web_kit::{
-        WKFrameInfo, WKMediaCaptureType, WKPermissionDecision, WKSecurityOrigin, WKUIDelegate,
-        WKWebView,
+        WKFrameInfo, WKMediaCaptureType, WKNavigation, WKNavigationDelegate, WKPermissionDecision,
+        WKSecurityOrigin, WKUIDelegate, WKWebView,
     };
     use wry::{WebView, WebViewExtMacOS};
 
@@ -60,6 +70,134 @@ mod macos {
                 .setUIDelegate(Some(ProtocolObject::from_ref(&*delegate)));
         }
         Ok(delegate)
+    }
+
+    pub struct NavigationIvars {
+        wry: Retained<ProtocolObject<dyn WKNavigationDelegate>>,
+        // The load that retries over http if it fails, and the http URL.
+        fallback: RefCell<Option<(Retained<WKNavigation>, String)>>,
+    }
+
+    define_class!(
+        // Wry's navigation delegate reports no failed loads. This one adds
+        // that and forwards every message Wry's delegate handles to it.
+        #[unsafe(super(NSObject))]
+        #[name = "BuzzBrowserNavigationDelegate"]
+        #[thread_kind = MainThreadOnly]
+        #[ivars = NavigationIvars]
+        pub struct NavigationDelegate;
+
+        impl NavigationDelegate {
+            #[unsafe(method(respondsToSelector:))]
+            fn responds_to_selector(&self, selector: Sel) -> bool {
+                let own: bool = unsafe { msg_send![super(self), respondsToSelector: selector] };
+                own || self.ivars().wry.respondsToSelector(selector)
+            }
+
+            #[unsafe(method(forwardingTargetForSelector:))]
+            fn forwarding_target(&self, _selector: Sel) -> *mut AnyObject {
+                Retained::as_ptr(&self.ivars().wry) as *mut AnyObject
+            }
+        }
+
+        unsafe impl NSObjectProtocol for NavigationDelegate {}
+
+        unsafe impl WKNavigationDelegate for NavigationDelegate {
+            #[unsafe(method(webView:didFailProvisionalNavigation:withError:))]
+            fn did_fail_provisional_navigation(
+                &self,
+                webview: &WKWebView,
+                navigation: Option<&WKNavigation>,
+                error: &NSError,
+            ) {
+                let fallback = fallback_after(
+                    &mut self.ivars().fallback.borrow_mut(),
+                    |load| navigation.is_some_and(|navigation| std::ptr::eq(&**load, navigation)),
+                    retries_over_http(error),
+                );
+                if let Some(url) =
+                    fallback.and_then(|url| NSURL::URLWithString(&NSString::from_str(&url)))
+                {
+                    unsafe {
+                        webview.loadRequest(&NSURLRequest::requestWithURL(&url));
+                    }
+                }
+            }
+        }
+    );
+
+    /// Uses up `pending`'s http URL when its own load fails with `retryable`.
+    fn fallback_after<Load>(
+        pending: &mut Option<(Load, String)>,
+        is_failed_load: impl Fn(&Load) -> bool,
+        retryable: bool,
+    ) -> Option<String> {
+        if !retryable
+            || !pending
+                .as_ref()
+                .is_some_and(|(load, _)| is_failed_load(load))
+        {
+            return None;
+        }
+        pending.take().map(|(_, url)| url)
+    }
+
+    /// A cancelled load was replaced by another, which owns what loads next.
+    fn retries_over_http(error: &NSError) -> bool {
+        error.domain().isEqualToString(unsafe { NSURLErrorDomain })
+            && error.code() != NSURLErrorCancelled
+    }
+
+    pub fn observe_navigation(guest: &WebView) -> Result<Retained<NavigationDelegate>, String> {
+        let marker = MainThreadMarker::new()
+            .ok_or("Browser navigation must be observed on the UI thread")?;
+        let view = guest.webview();
+        let wry = unsafe { view.navigationDelegate() }
+            .ok_or("Browser navigation delegate is unavailable")?;
+        let allocated = NavigationDelegate::alloc(marker).set_ivars(NavigationIvars {
+            wry,
+            fallback: RefCell::new(None),
+        });
+        let delegate: Retained<NavigationDelegate> = unsafe { msg_send![super(allocated), init] };
+        // WebKit asks which messages a delegate handles only when it is set and
+        // allows every navigation whose policy message goes unanswered.
+        for selector in [
+            sel!(webView:decidePolicyForNavigationAction:decisionHandler:),
+            sel!(webView:decidePolicyForNavigationResponse:decisionHandler:),
+            sel!(webView:didCommitNavigation:),
+            sel!(webView:didFinishNavigation:),
+        ] {
+            if !delegate.respondsToSelector(selector) {
+                return Err(format!(
+                    "Browser navigation delegate does not forward {}",
+                    selector.name().to_string_lossy()
+                ));
+            }
+        }
+        unsafe {
+            view.setNavigationDelegate(Some(ProtocolObject::from_ref(&*delegate)));
+        }
+        Ok(delegate)
+    }
+
+    /// Loads `url` as Wry's `load_url` does, keeping the load to recognize its failure.
+    pub fn load(
+        guest: &WebView,
+        navigation: &NavigationDelegate,
+        url: &url::Url,
+        http_fallback: Option<url::Url>,
+    ) -> Result<(), String> {
+        let target =
+            NSURL::URLWithString(&NSString::from_str(url.as_str())).ok_or("Malformed URL")?;
+        let load = unsafe {
+            guest
+                .webview()
+                .loadRequest(&NSURLRequest::requestWithURL(&target))
+        };
+        *navigation.ivars().fallback.borrow_mut() = load
+            .zip(http_fallback)
+            .map(|(load, url)| (load, url.to_string()));
+        Ok(())
     }
 
     /// Named website data stores exist from macOS 14. Earlier, Wry falls
@@ -165,6 +303,39 @@ mod macos {
     #[cfg(test)]
     mod binding_tests {
         use super::*;
+
+        fn error(domain: &NSString, code: isize) -> Retained<NSError> {
+            unsafe { NSError::errorWithDomain_code_userInfo(domain, code, None) }
+        }
+
+        #[test]
+        fn only_the_failed_address_load_falls_back_once() {
+            let is_load = |id: u32| move |load: &u32| *load == id;
+            let mut pending = Some((1, "http://grugbrain.dev/".to_string()));
+            assert_eq!(fallback_after(&mut pending, is_load(2), true), None);
+            assert_eq!(fallback_after(&mut pending, is_load(1), false), None);
+            assert_eq!(
+                fallback_after(&mut pending, is_load(1), true).as_deref(),
+                Some("http://grugbrain.dev/")
+            );
+            assert_eq!(pending, None);
+            assert_eq!(fallback_after(&mut pending, is_load(1), true), None);
+        }
+
+        #[test]
+        fn only_failed_connections_retry_over_http() {
+            let url_errors = unsafe { NSURLErrorDomain };
+            // Connection refused, TLS handshake failure and an untrusted certificate.
+            for code in [-1004, -1200, -1202] {
+                assert!(retries_over_http(&error(url_errors, code)));
+            }
+            assert!(!retries_over_http(&error(url_errors, NSURLErrorCancelled)));
+            // WebKit's "frame load interrupted", as when the navigation policy refuses a URL.
+            assert!(!retries_over_http(&error(
+                &NSString::from_str("WebKitErrorDomain"),
+                102
+            )));
+        }
         #[test]
         fn viewer_cookie_matches_existing_domain_http_only_secure_and_expiry() {
             // Foundation caps far-future cookies. Use a short future date while asserting exact parsing,
@@ -280,13 +451,37 @@ pub(super) fn resize_guest(
 
 #[cfg(target_os = "macos")]
 pub(super) use macos::{
-    back, current_url, deny_permissions, focused, forward, install_builderlab_cookie, loading,
+    back, current_url, deny_permissions, focused, forward, install_builderlab_cookie, load,
+    loading, observe_navigation,
 };
 #[cfg(target_os = "macos")]
 pub(super) type Permissions = objc2::rc::Retained<macos::PermissionDelegate>;
+#[cfg(target_os = "macos")]
+pub(super) type Navigation = objc2::rc::Retained<macos::NavigationDelegate>;
 
 #[cfg(not(target_os = "macos"))]
 pub(super) struct Permissions;
+
+/// Elsewhere a failed load does not retry over http.
+#[cfg(not(target_os = "macos"))]
+pub(super) struct Navigation;
+
+#[cfg(not(target_os = "macos"))]
+pub(super) fn observe_navigation(_guest: &WebView) -> Result<Navigation, String> {
+    Ok(Navigation)
+}
+
+#[cfg(not(target_os = "macos"))]
+pub(super) fn load(
+    guest: &WebView,
+    _navigation: &Navigation,
+    url: &url::Url,
+    _http_fallback: Option<url::Url>,
+) -> Result<(), String> {
+    guest
+        .load_url(url.as_str())
+        .map_err(|error| error.to_string())
+}
 
 #[cfg(not(target_os = "macos"))]
 pub(super) fn current_url(guest: &WebView) -> Result<Option<String>, String> {

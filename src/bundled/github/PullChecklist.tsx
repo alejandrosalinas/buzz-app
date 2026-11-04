@@ -212,6 +212,7 @@ function ReviewRow({ review }: { review: Checklist["review"] }) {
 function MergeRow({ pull, action }: { pull: Checklist; action?: ReactNode }) {
   const base = <span className={styles.branchLabel}>{pull.base}</span>;
   const [tone, text]: [Tone, ReactNode] = (() => {
+    if (pull.queued) return ["pending", <>Queued for merge into {base}</>];
     switch (pull.merge) {
       case "CLEAN":
       case "HAS_HOOKS":
@@ -223,7 +224,7 @@ function MergeRow({ pull, action }: { pull: Checklist; action?: ReactNode }) {
           "pending",
           <>
             Blocked by {base}’s rules
-            {pull.canBypass && " · you can bypass them"}
+            {pull.canBypass && !pull.queueRequired && " · you can bypass them"}
           </>,
         ];
       case "BEHIND":
@@ -245,7 +246,17 @@ function MergeRow({ pull, action }: { pull: Checklist; action?: ReactNode }) {
 
 /** Whether the merge button can merge now, and whether that bypasses rules. */
 function mergeability(pull: Checklist) {
-  if (pull.state !== "open") return { now: false, bypass: false };
+  if (pull.state !== "open" || pull.queued)
+    return { now: false, bypass: false };
+  // A queue-required branch can report BLOCKED until enqueued; GitHub
+  // validates its prerequisites when accepting the enqueue request.
+  if (pull.queueRequired)
+    return {
+      now: ["CLEAN", "HAS_HOOKS", "UNSTABLE", "BLOCKED", "BEHIND"].includes(
+        pull.merge,
+      ),
+      bypass: false,
+    };
   if (["CLEAN", "HAS_HOOKS", "UNSTABLE"].includes(pull.merge))
     return { now: true, bypass: false };
   if (["BLOCKED", "BEHIND"].includes(pull.merge) && pull.canBypass)
@@ -278,6 +289,7 @@ function Actions({
         head: string;
         base: string;
         bypass: boolean;
+        queue: boolean;
       }>
     >();
   const alive = useRef(true);
@@ -309,23 +321,30 @@ function Actions({
       head: pull.head,
       base: pull.base,
       bypass: merge.bypass,
+      queue: pull.queueRequired,
     });
   };
   const confirming =
     merge.now &&
     asked?.head === pull.head &&
     asked.base === pull.base &&
-    asked.bypass === merge.bypass
+    asked.bypass === merge.bypass &&
+    asked.queue === pull.queueRequired
       ? asked
       : undefined;
   // Forgotten during render, so changing back does not reopen it.
   if (asked && !confirming) setConfirming(undefined);
   const canAutoMerge =
+    !pull.queueRequired &&
+    !pull.queued &&
     pull.canEnableAutoMerge &&
     !pull.autoMerge &&
     pull.state === "open" &&
     !["CLEAN", "HAS_HOOKS", "DIRTY"].includes(pull.merge);
-  const others = pull.methods.filter((method) => method !== pull.method);
+  const others =
+    pull.queueRequired || pull.queued
+      ? []
+      : pull.methods.filter((method) => method !== pull.method);
   const menu = [
     ...(merge.now
       ? others.map((method) => (
@@ -369,7 +388,9 @@ function Actions({
             Ready for review
           </Button>
         )}
-        {pull.autoMerge ? (
+        {pull.queued ? (
+          <span className={styles.pullActionNote}>Queued for merge</span>
+        ) : pull.autoMerge ? (
           <>
             <span className={styles.pullActionNote}>
               Merges automatically when ready
@@ -393,7 +414,7 @@ function Actions({
             disabled={!!busy}
             onClick={() => confirm(pull.method)}
           >
-            {mergeLabels[pull.method]}
+            {pull.queueRequired ? "Queue for merge" : mergeLabels[pull.method]}
           </Button>
         ) : (
           canAutoMerge && (
@@ -443,13 +464,15 @@ function Actions({
       )}
       {confirming && (
         <AlertDialog
-          title={`${mergeLabels[confirming.method]} #${number}?`}
+          title={`${confirming.queue ? "Queue for merge" : mergeLabels[confirming.method]} #${number}?`}
           description={
-            confirming.bypass
-              ? `${title}. This bypasses ${pull.base}’s branch rules, which haven’t all passed.`
-              : `${title}, into ${pull.base} at the commit shown here.`
+            confirming.queue
+              ? `${title}, into ${pull.base} at the commit shown here. GitHub will merge it through the queue once the required checks pass.`
+              : confirming.bypass
+                ? `${title}. This bypasses ${pull.base}’s branch rules, which haven’t all passed.`
+                : `${title}, into ${pull.base} at the commit shown here.`
           }
-          pending={busy === "merge"}
+          pending={busy === "merge" || busy === "enqueue"}
           onClose={() => {
             setConfirming(undefined);
             setError(undefined);
@@ -457,7 +480,7 @@ function Actions({
           actions={
             <>
               <Button
-                disabled={busy === "merge"}
+                disabled={busy === "merge" || busy === "enqueue"}
                 onClick={() => {
                   setConfirming(undefined);
                   setError(undefined);
@@ -467,15 +490,17 @@ function Actions({
               </Button>
               <Button
                 variant={confirming.bypass ? "attention" : "prominent"}
-                loading={busy === "merge"}
+                loading={busy === "merge" || busy === "enqueue"}
                 onClick={() =>
                   void run(
-                    { type: "merge", method: confirming.method },
+                    confirming.queue
+                      ? { type: "enqueue" }
+                      : { type: "merge", method: confirming.method },
                     confirming.head,
                   )
                 }
               >
-                Merge
+                {confirming.queue ? "Queue for merge" : "Merge"}
               </Button>
             </>
           }

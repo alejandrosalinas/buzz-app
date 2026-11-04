@@ -184,4 +184,27 @@ describe("page decoration validation", () => {
     expect(pages.snapshot()).toEqual([]);
     await root.fiber.dispose();
   });
+
+  it("requires a callable page preview", async () => {
+    const root = new Context();
+    root.provide("pluginStatus", {
+      isActive: () => true,
+      subscribe: () => () => {},
+    });
+    const pages = new PagesService(root);
+    const scope = root.extend({
+      pluginOwner: { id: "example", revision: "one" },
+    });
+    const fiber = scope.plugin((ctx) => {
+      const base = { id: "main", title: "Main", component: () => null };
+      for (const preview of [null, "card", {}])
+        expect(() => ctx.pages.register({ ...base, preview } as never)).toThrow(
+          "A page needs an id, a title, and a React component function",
+        );
+      ctx.pages.register({ ...base, primary: true, preview: () => null });
+    });
+    await fiber.await();
+    expect(typeof pages.snapshot()[0]?.preview).toBe("function");
+    await root.fiber.dispose();
+  });
 });

@@ -43,8 +43,12 @@ test("selected author remains a removable chip through typing and date completio
     .getByRole("option", { name: /Yesterday/ })
     .click();
   await expect(chip).toBeVisible();
-  await expect(input).toHaveValue(/deploy before:\d{4}-\d{2}-\d{2}/);
-  await expect(input).not.toHaveValue(new RegExp(app.viewer));
+  await expect(
+    dialog.getByRole("button", {
+      name: /^Remove date before:\d{4}-\d{2}-\d{2}$/,
+    }),
+  ).toBeVisible();
+  await expect(input).toHaveValue("deploy ");
   await expect
     .poll(() =>
       app.report.queries.some(

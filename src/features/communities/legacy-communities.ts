@@ -9,6 +9,23 @@ export type LegacyCommunity = { relayUrl: string; pubkey?: string };
 const importedKey = (viewer: string) => `buzz-legacy-communities.v1:${viewer}`;
 const imported = "1";
 
+let importing = 0;
+const importListeners = new Set<() => void>();
+function setImporting(delta: number) {
+  importing += delta;
+  for (const listener of importListeners) listener();
+}
+/** Whether an import is reading, offering or adding a viewer's old
+ * communities: a later app-level prompt waits for it, so it never opens over
+ * this one's dialog and reads the communities it adds. */
+export const legacyImportPending = () => importing > 0;
+export function subscribeLegacyImport(listener: () => void) {
+  importListeners.add(listener);
+  return () => {
+    importListeners.delete(listener);
+  };
+}
+
 /** The removal addresses a pending import recorded for this viewer. */
 function pendingRemovals(viewer: string): string[] {
   try {
@@ -93,6 +110,7 @@ export function importLegacyCommunities(
     if (disposed || status !== "ready" || !viewer || attempted.has(viewer))
       return;
     attempted.add(viewer);
+    setImporting(1);
     try {
       if (localStorage.getItem(importedKey(viewer)) === imported) return;
       const saved = await read();
@@ -130,6 +148,8 @@ export function importLegacyCommunities(
       localStorage.setItem(importedKey(viewer), imported);
     } catch (error) {
       console.warn("Couldn't add old Buzz's communities", error);
+    } finally {
+      setImporting(-1);
     }
   }
   const unsubscribe = communities.subscribe(() => void run());

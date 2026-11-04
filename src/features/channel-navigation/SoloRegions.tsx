@@ -61,6 +61,9 @@ export function SoloRegions({
   ordinaryActions,
   creationTrigger,
   fallback,
+  fallbackHeaderActions,
+  groupDisclosure,
+  hidePrimaryHeading = false,
   pendingClick: sharedPendingClick,
 }: {
   session: RelaySession;
@@ -72,6 +75,16 @@ export function SoloRegions({
   ordinaryActions?: ReactNode;
   creationTrigger?: RefObject<HTMLButtonElement | null> | undefined;
   fallback?: ReactNode;
+  fallbackHeaderActions?: ReactNode;
+  hidePrimaryHeading?: boolean;
+  groupDisclosure?:
+    | {
+        sectionKey: string;
+        title: string;
+        open: boolean;
+        onToggle(open: boolean): void;
+      }
+    | undefined;
   pendingClick?: RefObject<ReturnType<typeof setTimeout> | undefined>;
 }) {
   const localPendingClick = useRef<ReturnType<typeof setTimeout> | undefined>(
@@ -87,38 +100,108 @@ export function SoloRegions({
     })),
     sidebar.contributionOrder,
   ).map(({ region }) => region);
-  if (!service) return fallback ?? null;
   const primary = regions.findIndex((region) => region.source);
+  const current = target.kind === "conversation" ? target.channelId : undefined;
+  const currentChannel = current
+    ? session.channels.list().channels.find((channel) => channel.id === current)
+    : undefined;
+  const fallbackOwnsCurrent =
+    primary < 0 &&
+    currentChannel?.channelType === "solo" &&
+    !snapshot.excluded.has(currentChannel.id);
+  const fallbackSectionKey = groupDisclosure?.sectionKey;
+  const fallbackOpen = groupDisclosure?.open;
+  useLayoutEffect(
+    () =>
+      sidebar.beforeReveal((location) => {
+        if (
+          !fallbackSectionKey ||
+          fallbackOpen ||
+          !fallbackOwnsCurrent ||
+          !current ||
+          location !== `conversation:${current}`
+        )
+          return true;
+        sidebar.toggle(fallbackSectionKey, true);
+        return false;
+      }),
+    [
+      current,
+      fallbackOpen,
+      fallbackOwnsCurrent,
+      fallbackSectionKey,
+      sidebar.beforeReveal,
+      sidebar.toggle,
+    ],
+  );
+  const fallbackContents = groupDisclosure ? (
+    <SidebarSection
+      sectionKey={groupDisclosure.sectionKey}
+      title={groupDisclosure.title}
+      open={groupDisclosure.open}
+      onToggle={groupDisclosure.onToggle}
+      hideMoreActions
+      persistentChevron
+      headerActions={fallbackHeaderActions}
+    >
+      {ordinary}
+    </SidebarSection>
+  ) : hidePrimaryHeading ? (
+    <SidebarSection
+      sectionKey="scope:solo"
+      title="Solo"
+      open
+      onToggle={() => {}}
+      hideTitle
+      headerActions={fallbackHeaderActions}
+    >
+      {ordinary}
+    </SidebarSection>
+  ) : (
+    (fallback ?? null)
+  );
+  if (!service) return fallbackContents;
   return (
     <>
       {regions.map((region, index) => (
-        <RegionFrame
+        <div
           key={`${region.key}:${snapshot.binding?.incarnation ?? "recovery"}`}
-          region={region}
-          service={service}
-          session={session}
-          scope={scope}
-          navigator={navigator}
-          pendingClick={pendingClick}
-          target={target}
-          sidebar={sidebar}
-          move={(offset) => {
-            const ids = regions.map((item) => `solo-region:${item.key}`);
-            ids.splice(index, 1);
-            ids.splice(index + offset, 0, `solo-region:${region.key}`);
-            sidebar.setContributionOrder([
-              ...sidebar.contributionOrder.filter((key) => !ids.includes(key)),
-              ...ids,
-            ]);
-          }}
-          first={index === 0}
-          last={index === regions.length - 1}
-          ordinary={index === primary ? ordinary : undefined}
-          ordinaryActions={index === primary ? ordinaryActions : undefined}
-          creationTrigger={index === primary ? creationTrigger : undefined}
-        />
+          hidden={
+            !!groupDisclosure && !groupDisclosure.open && index !== primary
+          }
+        >
+          <RegionFrame
+            region={region}
+            service={service}
+            session={session}
+            scope={scope}
+            navigator={navigator}
+            pendingClick={pendingClick}
+            target={target}
+            sidebar={sidebar}
+            move={(offset) => {
+              const ids = regions.map((item) => `solo-region:${item.key}`);
+              ids.splice(index, 1);
+              ids.splice(index + offset, 0, `solo-region:${region.key}`);
+              sidebar.setContributionOrder([
+                ...sidebar.contributionOrder.filter(
+                  (key) => !ids.includes(key),
+                ),
+                ...ids,
+              ]);
+            }}
+            first={index === 0}
+            last={index === regions.length - 1}
+            ordinary={index === primary ? ordinary : undefined}
+            ordinaryActions={index === primary ? ordinaryActions : undefined}
+            creationTrigger={index === primary ? creationTrigger : undefined}
+            groupDisclosure={index === primary ? groupDisclosure : undefined}
+            groupSectionKey={groupDisclosure?.sectionKey}
+            hideHeading={hidePrimaryHeading && index === primary}
+          />
+        </div>
       ))}
-      {primary < 0 ? fallback : null}
+      {primary < 0 ? fallbackContents : null}
     </>
   );
 }
@@ -137,6 +220,9 @@ function RegionFrame({
   ordinary,
   ordinaryActions,
   creationTrigger,
+  groupDisclosure,
+  groupSectionKey,
+  hideHeading,
   pendingClick,
 }: {
   scope: string;
@@ -153,6 +239,16 @@ function RegionFrame({
   ordinary?: ReactNode;
   ordinaryActions?: ReactNode;
   creationTrigger?: RefObject<HTMLButtonElement | null> | undefined;
+  groupDisclosure?:
+    | {
+        sectionKey: string;
+        title: string;
+        open: boolean;
+        onToggle(open: boolean): void;
+      }
+    | undefined;
+  groupSectionKey?: string | undefined;
+  hideHeading?: boolean;
 }) {
   const binding = service.snapshot().binding;
   const source = region.source;
@@ -218,11 +314,20 @@ function RegionFrame({
       )
         return true;
       prepared = true;
+      if (groupSectionKey) toggle(groupSectionKey, true);
       toggle(sectionKey, true);
       service.reveal(current, false);
       return false; // Retry against the expanded source path after its commit.
     });
-  }, [sidebar.beforeReveal, current, ownsCurrent, sectionKey, toggle, service]);
+  }, [
+    sidebar.beforeReveal,
+    current,
+    ownsCurrent,
+    sectionKey,
+    toggle,
+    service,
+    groupSectionKey,
+  ]);
   useLayoutEffect(() => {
     if (sidebar.collapsed.includes(sectionKey)) return;
     if (revealRequest?.explicit && revealRequest.id === current) revealAgain();
@@ -231,6 +336,7 @@ function RegionFrame({
   });
   const reveal = useEffectEvent((id: string, explicit: boolean) => {
     if (!region.channels.some((channel) => channel.id === id)) return false;
+    if (groupSectionKey) toggle(groupSectionKey, true);
     toggle(sectionKey, true);
     setRevealRequest({ id, explicit });
     return true;
@@ -315,15 +421,22 @@ function RegionFrame({
       <div ref={root}>
         <SidebarSection
           sectionKey={sectionKey}
-          title={region.title}
+          title={groupDisclosure?.title ?? region.title}
+          {...(hideHeading ? { hideTitle: true } : {})}
           icon={source?.icon}
-          open={!sidebar.collapsed.includes(sectionKey)}
-          onToggle={(open) => sidebar.toggle(sectionKey, open)}
+          open={
+            groupDisclosure?.open ?? !sidebar.collapsed.includes(sectionKey)
+          }
+          onToggle={
+            groupDisclosure?.onToggle ??
+            ((open) => sidebar.toggle(sectionKey, open))
+          }
           move={{
             ...(!first ? { up: () => move(-1) } : {}),
             ...(!last ? { down: () => move(1) } : {}),
           }}
           hideMoreActions={first && last}
+          persistentChevron={!!groupDisclosure}
           headerActions={
             <>
               {actions
@@ -382,8 +495,9 @@ function RegionFrame({
           ) : (
             recovery
           )}
+          {groupDisclosure ? ordinary : null}
         </SidebarSection>
-        {ordinary}
+        {groupDisclosure ? null : ordinary}
       </div>
     </RegionDestinationContext.Provider>
   );

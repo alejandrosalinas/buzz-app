@@ -1,0 +1,123 @@
+.card {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  /* --available-height is set by the popover positioner. */
+  max-height: min(34rem, var(--available-height));
+}
+
+.header {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+  /* Line up with row content, not the row's hover background. */
+  padding: var(--space-2) calc(var(--space-control-inset) - var(--space-1))
+    var(--space-2) var(--space-control-inset);
+  border-bottom: 1px solid var(--border-standard);
+}
+
+.headerCopy {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.title,
+.summary {
+  margin: 0;
+}
+
+.summary {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.toggle {
+  display: flex;
+  flex: 0 0 auto;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--space-1);
+}
+
+.body {
+  flex: 1 1 auto;
+  min-height: 0;
+  /* 300px at the default text size; scales with enlarged text. */
+  max-height: 18.75rem;
+  overflow-y: auto;
+  padding-block: var(--space-1);
+}
+
+.list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  --radius-row: var(--floating-inner-radius);
+}
+
+.notice {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-3);
+  margin: 0;
+  padding: var(--space-2) var(--space-control-inset);
+}
+
+.empty {
+  padding: var(--space-2);
+}
+
+/* Loading reserves roughly three rows. Static fills, no shimmer. */
+.placeholderRow {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-row-gap);
+  padding: var(--space-row-gap) var(--space-control-inset);
+}
+
+.placeholderAvatar {
+  flex: 0 0 auto;
+  width: 2rem;
+  height: 2rem;
+  border-radius: var(--radius-pill);
+  background: var(--interaction-row-hover);
+}
+
+.placeholderLines {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  gap: var(--space-2);
+  padding-block: var(--space-1);
+}
+
+.placeholderLine {
+  height: 0.625rem;
+  border-radius: var(--radius-pill);
+  background: var(--interaction-row-hover);
+}
+
+.placeholderLine:nth-child(1) {
+  width: 45%;
+}
+
+.placeholderLine:nth-child(2) {
+  width: 92%;
+}
+
+.placeholderLine:nth-child(3) {
+  width: 70%;
+}
+
+.footer {
+  display: flex;
+  flex: 0 0 auto;
+  flex-direction: column;
+  padding-top: var(--space-1);
+  border-top: 1px solid var(--border-standard);
+}

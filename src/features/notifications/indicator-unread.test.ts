@@ -3,6 +3,10 @@ import type { Communities } from "../communities/service";
 import { createRelaySession } from "../relay/session";
 import type { RelayEvent } from "../relay/events";
 import { readJournal, type ReadJournal } from "../relay/read-state-storage";
+import type {
+  SidebarDecoder,
+  SidebarMuteMutator,
+} from "../relay/sidebar-preferences";
 import { keypair, message, metadata, roster, signed } from "../relay/testing";
 import { bindUnreadIndicator, type IndicatorGates } from "./indicator-unread";
 
@@ -10,7 +14,12 @@ const cleanups: (() => void)[] = [];
 afterEach(() => {
   for (const stop of cleanups.splice(0).reverse()) stop();
 });
-function setup() {
+function setup(
+  sidebar?: Readonly<{
+    decode: SidebarDecoder;
+    write: SidebarMuteMutator;
+  }>,
+) {
   const viewer = keypair(),
     peer = keypair(),
     relay = keypair();
@@ -30,6 +39,12 @@ function setup() {
         },
         publish: async () => {},
       },
+      ...(sidebar
+        ? {
+            decodeSidebarPreferences: sidebar.decode,
+            writeSidebarMute: sidebar.write,
+          }
+        : {}),
       subscribe(callbacks) {
         incoming = callbacks.receive;
         return { update() {}, retry() {}, dispose() {} };
@@ -230,6 +245,39 @@ it.each(["huddle", "metadataPending"] as const)(
     expect(h.project.mock.calls).toEqual([[false]]);
   },
 );
+
+it("removes muted channel activity from the Dock indicator without marking it read", async () => {
+  const h = setup({
+    decode: async () => ({
+      sections: [],
+      assignments: {},
+      starred: [],
+      muted: [],
+    }),
+    write: async ({ muted }) => (muted ? ["room"] : []),
+  });
+  h.grant();
+  await h.session.sidebarPreferences.ensure();
+  h.bind();
+  const row = message(h.peer, "room", "arrival", 11);
+  h.emit([row]);
+  expect(h.project).toHaveBeenLastCalledWith(true);
+
+  await h.session.sidebarPreferences.setMute("room", true);
+  expect(h.project).toHaveBeenLastCalledWith(false);
+  expect(h.session.unread.snapshot(target).observedCount).toBe(1);
+
+  await h.session.unread.markThrough(target, row.id);
+  h.emit([message(h.peer, "room", "muted arrival", 12)]);
+  expect(h.session.unread.snapshot(target).observedCount).toBe(1);
+  expect(h.project).toHaveBeenLastCalledWith(false);
+
+  await h.session.unread.markUnreadLocal(target);
+  expect(h.project).toHaveBeenLastCalledWith(false);
+
+  await h.session.sidebarPreferences.setMute("room", false);
+  expect(h.project).toHaveBeenLastCalledWith(true);
+});
 
 it("stays off for coordination between agents and lights for the next message to everyone", () => {
   const h = setup();

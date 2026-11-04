@@ -231,11 +231,12 @@ test("section disclosure toggles content and honors reduced motion", async ({
   app,
 }) => {
   await open(page, app);
-  const summary = page
+  const section = page
     .getByRole("navigation", { name: "Subscribed channels" })
-    .locator("summary")
-    .filter({ hasText: /^Channels$/ });
-  const section = summary.locator("xpath=ancestor::*[@data-sidebar-section]");
+    .locator('[data-sidebar-section="channels"]');
+  const summary = section.locator(
+    ":scope > div:first-child > details > summary",
+  );
   const contentId = await summary.getAttribute("aria-controls");
   expect(contentId).toBeTruthy();
   const content = section.locator(`[id="${contentId}"]`);

@@ -143,6 +143,7 @@ async function setup(
           : event.tags.find(([key]) => key === "role")?.[1];
     tick++;
   });
+  const write = vi.fn();
   let dialogReads = false;
   const query = vi.fn(async (filters: Parameters<typeof matchesEvent>[1][]) => {
     if (targetRole === "absent" && filters.some((filter) => filter.search))
@@ -160,25 +161,29 @@ async function setup(
     (url: string, size?: "small") =>
       `https://media.example/${size ?? "original"}?url=${encodeURIComponent(url)}`,
   );
-  const sessionOwner = createRelaySession({
-    viewer: viewer.pubkey,
-    relayAuthor: relay.pubkey,
-    media,
-    query,
-    ...(supported
-      ? {
-          memberAdministration: {
-            sign: async (template) => signed(viewer, template),
-            publish,
-          },
-        }
-      : {}),
-    writer: {
-      kinds: [9, 9000],
-      sign: async (template) => signed(viewer, template),
-      publish: vi.fn(),
+  const sessionOwner = createRelaySession(
+    {
+      viewer: viewer.pubkey,
+      relayAuthor: relay.pubkey,
+      media,
+      query,
+      ...(supported
+        ? {
+            memberAdministration: {
+              sign: async (template) => signed(viewer, template),
+              publish,
+            },
+          }
+        : {}),
+      writer: {
+        kinds: [9, 9000],
+        sign: async (template) => signed(viewer, template),
+        publish: write,
+      },
     },
-  });
+    // jsdom has no IndexedDB; plain Add needs a loadable outbox.
+    { outboxStorage: { load: () => [], save: () => {} } },
+  );
   stops.push(sessionOwner.dispose);
   const session = sessionOwner.session;
   session.channels.ensureList();
@@ -227,6 +232,7 @@ async function setup(
     user,
     session,
     publish,
+    write,
     query,
     onOpenLink,
     onOpenConversation,
@@ -1833,6 +1839,63 @@ it("closing Members aborts the DM waiter and prevents late navigation", async ()
   expect(signal.aborted).toBe(true);
   await act(async () => release("dm-1"));
   expect(t.onOpenConversation).not.toHaveBeenCalled();
+  expect(t.publish).not.toHaveBeenCalled();
+});
+
+it("shows action feedback above the member list so a long roster cannot hide it", async () => {
+  const t = await setup(
+    "member",
+    "absent",
+    true,
+    undefined,
+    false,
+    undefined,
+    true,
+  );
+  const list = memberData();
+  const aboveList = (element: HTMLElement) => {
+    expect(list).not.toContainElement(element);
+    expect(
+      element.compareDocumentPosition(list) & Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
+  };
+  let fail!: (reason: Error) => void;
+  t.openMessage.mockImplementationOnce(
+    () =>
+      new Promise((_resolve, reject) => {
+        fail = reject;
+      }),
+  );
+  await t.user.click(
+    screen.getByRole("button", { name: /^Actions for Owner$/ }),
+  );
+  await t.user.click(
+    await screen.findByRole("menuitem", { name: "Send message" }),
+  );
+  aboveList(await screen.findByText("Opening conversation…"));
+  await act(async () => fail(new Error("DM unavailable")));
+  aboveList(await screen.findByText("DM unavailable"));
+  vi.spyOn(navigator.clipboard, "writeText").mockRejectedValueOnce(
+    new Error("Clipboard unavailable"),
+  );
+  await t.user.click(screen.getByRole("button", { name: "Copy link" }));
+  aboveList(await screen.findByText("Couldn’t copy the link."));
+  t.write.mockRejectedValueOnce(
+    new PublishRejected(
+      "blocked: you are not allowed to add members to this channel",
+    ),
+  );
+  await t.user.type(screen.getByRole("searchbox"), "Morgan");
+  await t.user.click(
+    await screen.findByRole("button", { name: /^Add Morgan \(/ }),
+  );
+  const refusal = await screen.findByText(/blocked: you are not allowed/);
+  aboveList(refusal);
+  expect(
+    within(refusal).getByRole("button", { name: "Retry adding Morgan" }),
+  ).toBeEnabled();
+  expect(within(list).queryByRole("alert")).toBeNull();
+  expect(screen.getAllByRole("alert")).toHaveLength(3);
   expect(t.publish).not.toHaveBeenCalled();
 });
 

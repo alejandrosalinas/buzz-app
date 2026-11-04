@@ -1,6 +1,11 @@
+import { PROFILE_CACHE_BASE } from "./budget";
 import { ReadError } from "./errors";
-import type { RelayEvent } from "./events";
+import { newer, type RelayEvent } from "./events";
 import type { RelayReader } from "./reader";
+import {
+  verifiedProfileSubject,
+  type VerifiedProfileAuthority,
+} from "./verified-profile";
 
 /** The relay's `POST /profiles/search` page-size ceiling. */
 export const PROFILE_SEARCH_MAX = 100;
@@ -22,6 +27,9 @@ export type ProfileSearchOptions = {
 /** How long a relay's 404 or 405 keeps searches on NIP-50 before the endpoint
  * is tried again. A relay upgraded while the app runs is used within this time. */
 export const PROFILE_SEARCH_RETRY_MS = 5 * 60_000;
+/** How long a search's verified answer stands in for a read: a page names
+ * its rows right after it settles. */
+export const PROFILE_SEARCH_HEADS_MS = 30_000;
 
 /** Finds people by profile name. Uses the relay's name-only endpoint, which
  * applies the NIP-50 prefix rule and paging to just `name` and `display_name`.
@@ -34,13 +42,65 @@ export const PROFILE_SEARCH_RETRY_MS = 5 * 60_000;
  * same way.
  *
  * Both searches go through the given reader, which owns their deadline,
- * cancellation and stale-result checks. */
+ * cancellation and stale-result checks.
+ *
+ * Where the authority is `searchable`, the endpoint also returns each found
+ * person's current verified head, and none when they have none. Those
+ * answers are kept, a page at a time, for {@link verifiedHeads}. */
 export function createProfileSearch(
   fallback: RelayReader,
   now: () => number = Date.now,
+  authority: () => VerifiedProfileAuthority | undefined = () => undefined,
 ) {
   let fallbackUntil = Number.NEGATIVE_INFINITY;
-  return async function searchProfiles(
+  const answers = new Map<
+    string,
+    { authority: VerifiedProfileAuthority; at: number; head?: RelayEvent }
+  >();
+  function keep(events: readonly RelayEvent[]) {
+    const current = authority();
+    if (!current?.searchable) return;
+    const at = now();
+    const page = new Map<string, RelayEvent | undefined>();
+    for (const event of events) {
+      if (event.kind === 0 && !page.has(event.pubkey))
+        page.set(event.pubkey, undefined);
+      const subject = verifiedProfileSubject(event, current);
+      if (subject) page.set(subject, newer(page.get(subject), event));
+    }
+    for (const [pubkey, head] of page) {
+      answers.delete(pubkey);
+      answers.set(pubkey, {
+        authority: current,
+        at,
+        ...(head ? { head } : {}),
+      });
+    }
+    for (const pubkey of answers.keys()) {
+      if (answers.size <= PROFILE_CACHE_BASE) break;
+      answers.delete(pubkey);
+    }
+  }
+  /** Takes the recent answers this authority gave for `pubkeys`: each one's
+   * head, or undefined for none. A taken answer is not given again. */
+  function verifiedHeads(
+    pubkeys: readonly string[],
+    current: VerifiedProfileAuthority,
+  ): ReadonlyMap<string, RelayEvent | undefined> {
+    const taken = new Map<string, RelayEvent | undefined>();
+    for (const pubkey of pubkeys) {
+      const answer = answers.get(pubkey);
+      if (!answer) continue;
+      answers.delete(pubkey);
+      if (
+        answer.authority === current &&
+        now() - answer.at < PROFILE_SEARCH_HEADS_MS
+      )
+        taken.set(pubkey, answer.head);
+    }
+    return taken;
+  }
+  async function searchProfiles(
     query: string,
     { limit, page, signal, priority = "foreground" }: ProfileSearchOptions,
     reader: RelayReader = fallback,
@@ -68,6 +128,7 @@ export function createProfileSearch(
           priority,
           fresh: true,
         });
+        keep(events);
         return events.filter((event) => event.kind === 0);
       } catch (error) {
         if (
@@ -90,6 +151,7 @@ export function createProfileSearch(
       ],
       { signal, priority, fresh: true },
     );
-  };
+  }
+  return Object.assign(searchProfiles, { verifiedHeads });
 }
 export type ProfileSearch = ReturnType<typeof createProfileSearch>;

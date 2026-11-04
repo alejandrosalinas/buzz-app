@@ -451,6 +451,13 @@ it("signs in through the native NIP-FI session in an FI build, with no OAuth or 
     if (command === "nsec_backup_session" || command === "nsec_backup_retry")
       return;
     if (command === "identity_restore") return viewer;
+    if (command === "decide")
+      return {
+        outcome: "answered",
+        backend: "builderlab",
+        model: "test",
+        answers: { a: { type: "yes_no", probability: 0.7 } },
+      };
     throw new Error(`Unexpected command ${command}`);
   });
   const identity = federatedFixture();
@@ -517,8 +524,24 @@ it("signs in through the native NIP-FI session in an FI build, with no OAuth or 
     expect(identity.request).toHaveBeenCalledWith(
       expect.objectContaining({ path: "/api/goose/v1/auth/me" }),
     );
-    // Native `decide` has no FI credential to send, so none is offered.
-    expect(decisions.providers()).toEqual([]);
+    // Decisions name the native session; its token stays in native.
+    const [provider] = decisions.providers();
+    if (!provider) throw new Error("Missing FI Decisions provider");
+    expect(decisions.backend()).toBe("block.builderlab/builderlab");
+    const question = {
+      timeoutMs: 30_000,
+      state: "test",
+      community: "wss://buzz.example.com",
+      questions: { a: { type: "yes_no" as const, instructions: "test" } },
+    };
+    await expect(
+      provider.decide(question, { signal: new AbortController().signal }),
+    ).resolves.toMatchObject({ outcome: "answered" });
+    expect(native.invoke).toHaveBeenCalledWith("decide", {
+      backend: "builderlab",
+      request: question,
+      federated: "user:1",
+    });
     await waitFor(() =>
       expect(native.invoke).toHaveBeenCalledWith("nsec_backup_session", {
         source: "builderlab",

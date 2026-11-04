@@ -1,11 +1,12 @@
 // @vitest-environment jsdom
 import "@testing-library/jest-dom/vitest";
 import { Context } from "@deepseek-ai/cordis";
-import { expect, it, vi } from "vitest";
+import { afterEach, expect, it, vi } from "vitest";
 import { DecisionsService } from "../../features/decisions/service";
 import { flush } from "../../features/relay/testing";
 import {
   builderlabProvider,
+  nativeBuilderlabDecide,
   offerBuilderlabDecisions,
   type BuilderlabDecide,
 } from "./decisions";
@@ -27,6 +28,35 @@ const request = {
   timeoutMs: 30_000,
 };
 const signal = new AbortController().signal;
+const tauri = vi.hoisted(() => ({
+  isTauri: vi.fn(() => false),
+  invoke: vi.fn(async () => ({})),
+}));
+vi.mock("@tauri-apps/api/core", () => tauri);
+afterEach(() => {
+  vi.unstubAllEnvs();
+  tauri.isTauri.mockReturnValue(false);
+});
+
+it("sends a legacy sign-in itself, and names an FI session by its revision", async () => {
+  tauri.isTauri.mockReturnValue(true);
+  const legacy = credential("legacy-secret");
+  vi.stubEnv("VITE_BUZZ_FEDERATED_IDENTITY", "0");
+  await nativeBuilderlabDecide()?.(request, legacy);
+  expect(tauri.invoke).toHaveBeenLastCalledWith("decide", {
+    backend: "builderlab",
+    request,
+    session: "legacy-secret",
+  });
+  vi.stubEnv("VITE_BUZZ_FEDERATED_IDENTITY", "1");
+  const federated = { account: legacy.account, revision: "fi-revision" };
+  await nativeBuilderlabDecide()?.(request, federated);
+  expect(tauri.invoke).toHaveBeenLastCalledWith("decide", {
+    backend: "builderlab",
+    request,
+    federated: "fi-revision",
+  });
+});
 
 it("needs a sign-in, then sends it to native with each call", async () => {
   const session = createOAuthSession(async () => credential("first"));
@@ -50,7 +80,7 @@ it("needs a sign-in, then sends it to native with each call", async () => {
     model: "builderlab-1",
     answers: { a: { type: "yes_no", probability: 0.7 } },
   });
-  expect(decide).toHaveBeenCalledWith(request, "first");
+  expect(decide).toHaveBeenCalledWith(request, session.credential());
 });
 
 it("signs out only the sign-in Builderlab refused", async () => {
@@ -87,6 +117,22 @@ it("signs out only the sign-in Builderlab refused", async () => {
   });
   expect(session.snapshot().status).toBe("signed-out");
   expect(provider.status()).toBe("needs-setup");
+});
+
+it("never ends an FI session for a decisions 401", async () => {
+  vi.stubEnv("VITE_BUZZ_FEDERATED_IDENTITY", "1");
+  const session = createOAuthSession(async () => credential("first"));
+  await session.signIn();
+  const provider = builderlabProvider(session, true, async () => ({
+    outcome: "failed",
+    backend: "builderlab",
+    reason: "session_expired",
+  }));
+  await expect(provider.decide(request, { signal })).resolves.toEqual({
+    outcome: "failed",
+    reason: "unauthorized",
+  });
+  expect(session.snapshot().status).toBe("signed-in");
 });
 
 it("keeps the shared sign-in when only decisions are refused", async () => {

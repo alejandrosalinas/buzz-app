@@ -91,7 +91,8 @@ export function createVerifiedProfileDirectory(
         if (
           !enabled ||
           authority?.pubkey !== next.pubkey ||
-          authority.multipleIssuers !== next.multipleIssuers
+          authority.multipleIssuers !== next.multipleIssuers ||
+          authority.searchable !== next.searchable
         )
           authority = { ...next };
         enabled = true;

@@ -570,6 +570,16 @@ nothing and leaves navigation usable. Toolbar badges are clipped to a compact
 content. The overflow popover uses ordinary labelled rows with trailing badges.
 Pages without `primary` have no navigation entry, so their badge is not shown.
 
+A primary page may also supply `preview`, supplemental content the shell shows
+in a popover while a pointer rests on the page's sidebar row, after the design
+system's Preview hover delay. The shell owns the trigger, timing, placement and
+dismissal, and passes the content `close()` for actions that navigate. When the
+content has a `<header>`, the shell lifts the card so the line under it meets
+the row's top edge. It never
+shows a preview without a hover pointer, for header or overflow entries, or
+while that page is selected, so everything in it must stay reachable from the
+page itself. A preview that throws renders nothing and leaves navigation usable.
+
 `notifications.register({ id, label })` adds a category with its own switch in
 Settings and returns `submit({ sourceKey, target, title?, body? })`. Submissions
 share the host's permission, preference, duplicate and click handling. The host

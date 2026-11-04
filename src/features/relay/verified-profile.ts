@@ -14,6 +14,9 @@ const key = /^[0-9a-f]{64}$/;
 export type VerifiedProfileAuthority = Readonly<{
   pubkey: string;
   multipleIssuers: boolean;
+  /** People search also returns each found person's head (NIP-11
+   * `public_profile.searchable`), so a missing one means there is none. */
+  searchable?: true;
 }>;
 
 export type VerifiedProfile = Readonly<{
@@ -60,6 +63,7 @@ export function verifiedProfileDiscovery(
   return Object.freeze({
     pubkey: info.self,
     multipleIssuers: fields.multiple_issuers,
+    ...(fields.searchable === true ? { searchable: true as const } : {}),
   });
 }
 

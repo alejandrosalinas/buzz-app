@@ -191,6 +191,7 @@ function AppShellContent({
           pages={sidebarPages}
           selected={selected}
           onSelect={onSelect}
+          previews
         />
       </nav>
     ) : null;

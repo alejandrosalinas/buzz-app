@@ -203,6 +203,9 @@ export type ChannelWindow = Readonly<{
   historyLimited?: boolean;
   /** A head read is in flight for these rows; older pages wait for it. */
   refreshing?: boolean | undefined;
+  /** Detached: the rows are a seek segment and newer history is not loaded. */
+  hasNewer?: boolean | undefined;
+  loadingNewer?: boolean | undefined;
 }>;
 /** Post-write discovery opts into writer reads; browsing keeps the default. */
 export type ChannelReadOptions = ReadOptions & Pick<ReadFilter, "consistency">;
@@ -346,6 +349,17 @@ export interface ChannelQueries {
   ensureList(): void;
   ensure(channelId: string): void;
   loadOlder(channelId: string): void;
+  /** Detach the window to history at `from` (unix seconds; 0 is the channel
+   * start). Resolves the first message at or after `from`, else the newest. */
+  seek?(
+    channelId: string,
+    from: number,
+    signal: AbortSignal,
+  ): Promise<string | undefined>;
+  /** Read the rows above a detached window; reattaches on reaching the head. */
+  loadNewer?(channelId: string): void;
+  /** Return a detached window to the newest messages. */
+  attach?(channelId: string): void;
   /** Explicit same-scope head revalidation; replaces the bounded head, not a realtime tail. */
   refresh?(channelId: string): void;
   /** Intent warming is optional for fixture-only query implementations. */

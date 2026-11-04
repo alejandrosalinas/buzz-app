@@ -34,8 +34,19 @@
 .layout > * {
   flex-shrink: 0;
 }
+/* Action feedback above the list stacks tighter than the layout's sections. */
+.feedback {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
 .memberList {
   container: member-list / size;
+  /* Contain absolutely positioned descendants (sr-only pager text) here.
+     Otherwise they reach the overflow: hidden dialog body, giving it hidden
+     scroll overflow that highlight scrolling and scroll anchoring then move,
+     pushing the search field and the feedback above this list out of view. */
+  position: relative;
   display: flex;
   flex-direction: column;
   flex: 1;

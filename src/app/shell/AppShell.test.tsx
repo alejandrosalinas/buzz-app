@@ -12,6 +12,7 @@ import {
   fireEvent,
   render,
   screen,
+  waitFor,
   within,
 } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
@@ -598,6 +599,124 @@ it("routes compact header pages through the labelled overflow with main focus ha
   await userEvent.click(notes);
   expect(onSelect).toHaveBeenCalledWith("example/notes");
   expect(document.getElementById("main-content")).toHaveFocus();
+});
+
+it("previews a sidebar page on hover only, away from its selected page and header placements", async () => {
+  const current = createServices();
+  services = current;
+  let hover = true;
+  vi.stubGlobal("matchMedia", (media: string) => ({
+    media,
+    matches: hover && media.includes("(hover: hover)"),
+    addEventListener() {},
+    removeEventListener() {},
+  }));
+  const user = userEvent.setup();
+  const onSelect = vi.fn();
+  const page = (
+    id: string,
+    preview: RegisteredPage["preview"],
+    placement?: RegisteredPage["placement"],
+  ): RegisteredPage => ({
+    id,
+    key: `example/${id}`,
+    pluginId: "example",
+    revision: "1",
+    title: id,
+    component: () => null,
+    primary: true,
+    ...(preview ? { preview } : {}),
+    ...(placement ? { placement } : {}),
+  });
+  const pages = [
+    page("Home", undefined),
+    page("Inbox", ({ close }) => (
+      <button type="button" onClick={close}>
+        Recent item
+      </button>
+    )),
+    page("Broken", () => {
+      throw new Error("broken preview");
+    }),
+    page("Notes", () => <span>Topbar preview</span>, "topbar"),
+  ];
+  const shell = (selected: string) => (
+    <ToastProvider>
+      <AppShell
+        pages={pages}
+        selected={selected}
+        navigationAttempt=""
+        onSelect={onSelect}
+        tone="default"
+        communities={current.communities}
+        accountActions={current.accountActions}
+        appearance={testAppearance}
+      >
+        content
+      </AppShell>
+    </ToastProvider>
+  );
+  const error = vi.spyOn(console, "error").mockImplementation(() => {});
+  try {
+    const view = render(shell("example/Home"));
+    const nav = screen.getByRole("navigation", { name: "Pages" });
+    const inbox = within(nav).getByRole("button", { name: "Inbox" });
+    // The card replaces the native title tooltip; header pages get no preview.
+    expect(inbox).toHaveAttribute("aria-haspopup", "dialog");
+    expect(inbox).not.toHaveAttribute("title");
+    expect(screen.getByRole("tab", { name: "Notes" })).not.toHaveAttribute(
+      "aria-haspopup",
+    );
+    await user.hover(inbox);
+    const card = await screen.findByRole("dialog", { name: "Inbox" });
+    expect(inbox).toHaveAttribute("data-popup-preview");
+    // Content closes the card, for example after opening a conversation, and
+    // focus is not pulled back to the row.
+    await user.click(within(card).getByRole("button", { name: "Recent item" }));
+    await waitFor(() => expect(card).not.toBeInTheDocument());
+    expect(inbox).not.toHaveFocus();
+
+    // A throwing preview renders nothing and leaves navigation usable.
+    const broken = within(nav).getByRole("button", { name: "Broken" });
+    await user.hover(broken);
+    expect(
+      await screen.findByRole("dialog", { name: "Broken" }),
+    ).toBeEmptyDOMElement();
+    await user.click(broken);
+    expect(onSelect).toHaveBeenLastCalledWith("example/Broken");
+    await user.unhover(broken);
+    await waitFor(() =>
+      expect(screen.queryByRole("dialog")).not.toBeInTheDocument(),
+    );
+
+    // Pressing the row selects its page instead of opening the card.
+    fireEvent.click(inbox);
+    expect(onSelect).toHaveBeenLastCalledWith("example/Inbox");
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+
+    // A selected page shows no preview of itself.
+    view.rerender(shell("example/Inbox"));
+    expect(
+      within(nav).getByRole("button", { name: "Inbox" }),
+    ).not.toHaveAttribute("aria-haspopup");
+    expect(within(nav).getByRole("button", { name: "Inbox" })).toHaveAttribute(
+      "title",
+      "Inbox",
+    );
+    view.unmount();
+
+    // Devices without hover never get one.
+    hover = false;
+    render(shell("example/Home"));
+    expect(
+      within(screen.getByRole("navigation", { name: "Pages" })).getByRole(
+        "button",
+        { name: "Inbox" },
+      ),
+    ).not.toHaveAttribute("aria-haspopup");
+  } finally {
+    error.mockRestore();
+  }
 });
 
 it("falls back from a failed toolbar image and isolates toolbar badge errors", () => {
