@@ -14,6 +14,10 @@ import { FAMILIAR_HINT_REST_MS, HELPFUL_HINT_REST_MS } from "./hoverIntent";
 /** DESIGN.md "Hover timing": how long a hint waits for a resting pointer. */
 export type HintTiming = "helpful" | "familiar";
 
+const promote = (positioner: HTMLDivElement | null) => {
+  positioner?.showPopover?.();
+};
+
 /** Hints in one provider open instantly while a neighbor is showing. */
 export function TooltipProvider({ children }: { children: ReactNode }) {
   return <BaseTooltip.Provider>{children}</BaseTooltip.Provider>;
@@ -81,6 +85,9 @@ export function Tooltip({
     [children.props["aria-describedby"], open && !expanded ? id : undefined]
       .filter(Boolean)
       .join(" ") || undefined;
+  // A native top-layer surface, such as a preview card, paints above any
+  // z-index. A hint inside one joins the top layer after it.
+  const topLayer = !!trigger?.closest(":popover-open");
   return (
     <BaseTooltip.Root
       open={open}
@@ -108,6 +115,8 @@ export function Tooltip({
       />
       <BaseTooltip.Portal>
         <BaseTooltip.Positioner
+          popover={topLayer ? "manual" : undefined}
+          ref={topLayer ? promote : undefined}
           // A host can keep hints inside its pane, including when a sibling
           // pane contains native content above the document's paint layer.
           collisionBoundary={

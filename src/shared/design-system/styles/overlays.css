@@ -415,6 +415,15 @@
   .buzz-tooltip-positioner {
     z-index: var(--layer-tooltip);
   }
+  /* A hint over a top-layer surface keeps Base UI's geometry, not popover UA chrome. */
+  .buzz-tooltip-positioner[popover] {
+    margin: 0;
+    padding: 0;
+    border: 0;
+    overflow: visible;
+    background: transparent;
+    color: inherit;
+  }
   .buzz-tooltip {
     @apply text-caption;
     max-width: min(24rem, calc(100vw - 2rem), var(--available-width, 100vw));

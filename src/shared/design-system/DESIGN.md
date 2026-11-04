@@ -1375,7 +1375,9 @@ feedback with the action owner. Pointer offsets clear the physical cursor silhou
 rather than following text-scale spacing. Real pointer geometry needs browser/native
 inspection; DOM tests do not establish placement.
 Overlay layers keep toasts, then menus and hints, above dialogs, so feedback a
-dialog raises stays visible.
+dialog raises stays visible. A hint inside a native top-layer surface, such as a
+hover preview or floating message actions, joins the top layer after it so the
+hint paints above that surface.
 Adding a hint must preserve the host's keyboard contract. A focus-opened tooltip
 can consume Escape before a panel's Back handler; the existing PanelSubview
 controls expose this conflict. Preserve their accessible names and current Back
