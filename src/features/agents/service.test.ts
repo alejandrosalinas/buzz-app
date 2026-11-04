@@ -9432,6 +9432,60 @@ it("has a hosted agent's provider stop its turn in one conversation", async () =
   ).resolves.toBe(true);
 });
 
+it("reads and replaces a hosted agent's instructions through its provider", async () => {
+  const { service, plugin } = await setup();
+  const { type, remote } = cloud();
+  const instructions = {
+    get: vi.fn(
+      async (_: { pubkey: string; community: string; signal: AbortSignal }) =>
+        "Be brief.",
+    ),
+    set: vi.fn(
+      async (_: {
+        pubkey: string;
+        community: string;
+        instructions: string;
+        signal: AbortSignal;
+      }) => {},
+    ),
+  };
+  plugin.agents.register({ ...type, remote: { ...remote, instructions } });
+  await service.create({ type: "example/cloud", name: "Sky" });
+  const hosted = service.hostedInstructions(hostedKey);
+  await expect(hosted?.get()).resolves.toBe("Be brief.");
+  await hosted?.set("Be kind.");
+  expect(instructions.get).toHaveBeenCalledWith({
+    pubkey: hostedKey,
+    community: "wss://relay.example.test",
+    signal: expect.any(AbortSignal),
+  });
+  expect(instructions.set).toHaveBeenCalledWith({
+    pubkey: hostedKey,
+    community: "wss://relay.example.test",
+    instructions: "Be kind.",
+    signal: expect.any(AbortSignal),
+  });
+  // A caller's own signal stops the call too.
+  const stop = new AbortController();
+  await hosted?.get(stop.signal);
+  const signal = instructions.get.mock.calls[1]?.[0].signal;
+  if (!signal) throw new Error("The provider was not called.");
+  expect(signal.aborted).toBe(false);
+  stop.abort();
+  expect(signal.aborted).toBe(true);
+  // A local agent, or one nobody has, has none.
+  await service.create({ type: "example/echo", name: "Echo" });
+  expect(service.hostedInstructions(bot)).toBeUndefined();
+  expect(service.hostedInstructions("f".repeat(64))).toBeUndefined();
+});
+
+it("offers no instructions for a hosted agent whose provider has none", async () => {
+  const { service, plugin } = await setup();
+  plugin.agents.register(cloud().type);
+  await service.create({ type: "example/cloud", name: "Sky" });
+  expect(service.hostedInstructions(hostedKey)).toBeUndefined();
+});
+
 it("refuses to stop a hosted agent whose provider cannot", async () => {
   const { service, plugin } = await setup();
   const { type } = cloud();

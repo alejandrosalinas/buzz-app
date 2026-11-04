@@ -348,6 +348,7 @@ function setup(
     remove: vi.fn(async (_pubkey: string): Promise<void> => {}),
     unarchive: vi.fn(async (): Promise<string | undefined> => undefined),
     interruptible: () => false,
+    hostedInstructions: () => undefined,
     interrupt: vi.fn(async () => false),
     note: () => false,
     classifier: () => "unavailable",

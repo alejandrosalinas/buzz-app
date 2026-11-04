@@ -43,9 +43,16 @@ another agent and asks before replacing your Bestie. A remote agent, hosted or
 on another device, can be your Bestie too. Change, **Make my bestie** and **Make
 my Bestie again** offer it, and say before saving that some bestie features
 aren't available with remote agents, as **Choosing a Bestie** does: one
-question, the replacement's, when it replaces your Bestie. A remote Bestie's
-switches show as unavailable, as its instructions and timers aren't on this
-device, and it doesn't start with Remembers you on. **Remove as Bestie** asks,
+question, the replacement's, when it replaces your Bestie. A Bestie on another
+device shows no tab, as its instructions and timers aren't on this device. A
+hosted Bestie shows the tab, and its provider can hold its instructions: where
+it does (Builderlab does), **Remembers you** reads and saves them through the
+provider, as a local agent's synced instructions are, and the row says why
+when they can't be read or saved, such as when they would pass the provider's
+length limit. **Check-ins** stay unavailable for it, as hosted agents have no
+Attention timers; a hosted agent whose provider holds no instructions shows
+both rows as unavailable. A remote Bestie doesn't start with Remembers you
+on. **Remove as Bestie** asks,
 then saves no Bestie to your account: the agent stays, its check-ins stop, and
 its memory section and private channels stay, which its Former Bestie tab can
 turn off.

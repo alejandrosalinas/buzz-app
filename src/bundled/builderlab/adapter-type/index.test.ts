@@ -369,3 +369,65 @@ it("sends the picture when provisioning and publishes profile changes through Be
     }),
   );
 });
+
+const withInstructions = (instructions: string, status = 2) =>
+  response({
+    status: 1,
+    agents: [
+      {
+        agent_id: "provider-id",
+        agent_pubkey: pubkey,
+        agent_name: "Helper",
+        status,
+        agent_instructions: instructions,
+      },
+    ],
+  });
+const edit = {
+  pubkey,
+  community: provision.community,
+  signal: provision.signal,
+};
+
+it("reads a hosted agent's instructions from the account's listing", async () => {
+  const h = await fixture();
+  h.request.mockResolvedValueOnce(withInstructions("Be brief."));
+  expect(await h.remote.instructions?.get(edit)).toBe("Be brief.");
+  expect(h.request).toHaveBeenLastCalledWith(
+    expect.objectContaining({ url: expect.stringContaining("/list-agents") }),
+  );
+  h.request.mockResolvedValueOnce(listing);
+  expect(await h.remote.instructions?.get(edit)).toBe("");
+});
+
+it("replaces a hosted agent's instructions with the provider's update", async () => {
+  const h = await fixture();
+  h.request
+    .mockResolvedValueOnce(withInstructions("Be brief."))
+    .mockResolvedValueOnce(response({ status: 1 }));
+  await h.remote.instructions?.set({ ...edit, instructions: "Be kind." });
+  expect(h.bodies()[1]).toEqual({
+    agent_pubkey: pubkey,
+    agent_instructions: "Be kind.",
+  });
+  expect(h.request).toHaveBeenLastCalledWith(
+    expect.objectContaining({ url: expect.stringContaining("/update-agent") }),
+  );
+});
+
+it("refuses instructions the provider cannot take, and an agent it does not list", async () => {
+  const h = await fixture();
+  h.request.mockResolvedValueOnce(withInstructions("Be brief."));
+  await expect(
+    h.remote.instructions?.set({ ...edit, instructions: "x".repeat(20_001) }),
+  ).rejects.toThrow("up to 20000 characters");
+  // Only Active agents take an edit, as in Builderlab's own settings.
+  h.request.mockResolvedValueOnce(withInstructions("Be brief.", 1));
+  await expect(
+    h.remote.instructions?.set({ ...edit, instructions: "Be kind." }),
+  ).rejects.toThrow("Only Active agents");
+  h.request.mockResolvedValueOnce(response({ status: 1 }));
+  await expect(h.remote.instructions?.get(edit)).rejects.toThrow(
+    "Agent not found in this Builderlab account.",
+  );
+});

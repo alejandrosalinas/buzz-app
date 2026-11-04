@@ -91,6 +91,7 @@ it("keeps the registered Bestie tab in sync with the account choice", async () =
     pubkey: h.agent,
     relay: COMMUNITY,
     owner: h.viewer,
+    place: "here",
   } as Agent;
   expect(tab?.when?.(agent)).toBe(false);
   await chooseDefaultAgent(h.session(), h.session().scope, h.agent);

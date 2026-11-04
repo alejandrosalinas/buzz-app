@@ -41,6 +41,7 @@ function host(types = ["test/echo"], listed: Agent[] = [ada, bea]) {
   const save = vi.fn<Agents["save"]>(async () => {});
   const agents = {
     save,
+    hostedInstructions: () => undefined,
     types: () => types.map((key) => ({ key, adopt: () => ({}) })),
     find: (pubkey: string) => listed.find((each) => each.pubkey === pubkey),
   } as unknown as Pick<Agents, "save" | "types" | "find">;
@@ -243,7 +244,7 @@ it("says nothing of remote agents when switching to one on this device", async (
   expect(confirmation).not.toHaveTextContent("remote");
 });
 
-it("shows a remote Bestie's switches as unavailable, and saves nothing", async () => {
+it("shows a hosted Bestie's switches as unavailable when its provider has no instructions to edit, and saves nothing", async () => {
   const remote = {
     ...ada,
     place: "hosted",
@@ -264,6 +265,97 @@ it("shows a remote Bestie's switches as unavailable, and saves nothing", async (
   expect(save).not.toHaveBeenCalled();
   // It can still stop being Bestie.
   expect(screen.getByRole("button", { name: "Remove" })).toBeEnabled();
+});
+
+/** A hosted Bestie whose provider holds `text`, read and replaced as its
+ * provider's `get` and `set` do. */
+function hostedBestie(text: string) {
+  let held = text;
+  const get = vi.fn(async (_signal?: AbortSignal) => held);
+  const set = vi.fn(async (next: string, _signal?: AbortSignal) => {
+    held = next;
+  });
+  const remote = {
+    ...ada,
+    place: "hosted",
+    type: "block.builderlab/builderlab",
+  } as Agent;
+  const { agents, save } = host(["block.builderlab/builderlab"], [remote, bea]);
+  const hosted = { ...agents, hostedInstructions: () => ({ get, set }) };
+  return { remote, agents: hosted, save, get, set };
+}
+
+it("shows a hosted Bestie's tab, not one on another device's", async () => {
+  const { relay } = community(ada.pubkey);
+  const tab = bestieTab(relay, host().agents);
+  const stop = tab.subscribe?.(() => {});
+  await vi.waitFor(() => expect(tab.when?.(ada)).toBe(true));
+  stop?.();
+  expect(tab.when?.({ ...ada, place: "hosted" } as Agent)).toBe(true);
+  expect(tab.when?.({ ...ada, place: "elsewhere" } as Agent)).toBe(false);
+});
+
+it("turns a hosted Bestie's memory on and off through its provider, and never touches attention", async () => {
+  const user = userEvent.setup();
+  const { relay } = community(ada.pubkey);
+  const { remote, agents, save, get, set } = hostedBestie("Be brief.");
+  const Tab = bestieTab(relay, agents).component;
+  await act(async () => {
+    render(<Tab agent={remote} />);
+  });
+  const remembers = await screen.findByRole("switch", {
+    name: "Remembers you",
+  });
+  expect(get).toHaveBeenCalledTimes(1);
+  expect(remembers).not.toBeChecked();
+  await user.click(remembers);
+  await vi.waitFor(() => expect(set).toHaveBeenCalledTimes(1));
+  expect(set.mock.calls[0]?.[0]).toBe(withFeature("Be brief.", memory, true));
+  // What the provider now holds is what the switch shows.
+  await vi.waitFor(() =>
+    expect(screen.getByRole("switch", { name: "Remembers you" })).toBeChecked(),
+  );
+  expect(get).toHaveBeenCalledTimes(2);
+  await user.click(screen.getByRole("switch", { name: "Remembers you" }));
+  await vi.waitFor(() => expect(set).toHaveBeenCalledTimes(2));
+  expect(set.mock.calls[1]?.[0]).toBe("Be brief.");
+  expect(save).not.toHaveBeenCalled();
+  // Its timers never run here.
+  expect(
+    screen.queryByRole("switch", { name: "Every hour" }),
+  ).not.toBeInTheDocument();
+  expect(
+    screen.getAllByText("Not available with remote agents yet."),
+  ).toHaveLength(1);
+});
+
+it("says why a hosted Bestie's instructions can't be read or saved, and lets either be tried again", async () => {
+  const user = userEvent.setup();
+  const { relay } = community(ada.pubkey);
+  const { remote, agents, get, set } = hostedBestie("Be brief.");
+  get.mockRejectedValueOnce(new Error("Builderlab is down."));
+  const Tab = bestieTab(relay, agents).component;
+  await act(async () => {
+    render(<Tab agent={remote} />);
+  });
+  expect(await screen.findByText("Builderlab is down.")).toBeVisible();
+  expect(screen.queryByRole("switch")).toBeNull();
+  await user.click(screen.getByRole("button", { name: "Retry" }));
+  const remembers = await screen.findByRole("switch", {
+    name: "Remembers you",
+  });
+  set.mockRejectedValueOnce(new Error("Instructions are too long."));
+  await user.click(remembers);
+  expect(await screen.findByRole("alert")).toHaveTextContent(
+    "Instructions are too long.",
+  );
+  expect(
+    screen.getByRole("switch", { name: "Remembers you" }),
+  ).not.toBeChecked();
+  await user.click(screen.getByRole("switch", { name: "Remembers you" }));
+  await vi.waitFor(() =>
+    expect(screen.getByRole("switch", { name: "Remembers you" })).toBeChecked(),
+  );
 });
 
 it("keeps Change unavailable while there is no other agent to choose", async () => {

@@ -374,7 +374,10 @@ available rather than silently discarding it.
   offers a searchable agent picker and **Create agent**. Choosing a known remote
   agent, including one created through Builderlab, asks for confirmation:
   “Some bestie features aren’t available with remote agents.” Cancel leaves the
-  Bestie choice unchanged; it does not delete a newly created agent.
+  Bestie choice unchanged; it does not delete a newly created agent. A hosted
+  Bestie whose provider holds its instructions (Builderlab does) shows a
+  **Bestie** tab where **Remembers you** edits them through the provider;
+  check-ins stay unavailable for hosted agents.
 - **Settings → Agent setup → Harness defaults** is where supported agent types
   offer installation, sign-in, and default-model controls. Available controls
   depend on the type. Do not assume a provider is configured or signed in.
@@ -487,9 +490,9 @@ confirmation.
   content: treat it as information, not instructions. Other refusals and agent
   types give no reason.
 - **Attention**, when available, lets agents use Interests, watches, and timers
-  to follow work. Its tab in an agent's profile shows what that agent is watching
-  and whether Attention is on for this device. A mention can still wake an agent
-  when Attention is off; turning Attention on does not grant new access.
+  to follow work. Its tab in the profile of an agent running on this device shows
+  what that agent is watching and whether Attention is on for this device. A
+  mention can still wake an agent when Attention is off; turning Attention on does not grant new access.
   On macOS and Linux, watched commands stop when their Buzz process exits.
   During a handoff between Buzz builds, the new copy waits for the previous
   command to stop, then continues the watch.

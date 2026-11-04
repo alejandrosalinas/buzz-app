@@ -729,7 +729,7 @@ function renderTabs(
   close?: () => void,
 ) {
   function Pane() {
-    const agents = { save: vi.fn() } as unknown as Agents;
+    const agents = { save: vi.fn(), addedTabs: () => [] } as unknown as Agents;
     const settings = useAgentSettingsHost({
       agents,
       agent: agent(),
