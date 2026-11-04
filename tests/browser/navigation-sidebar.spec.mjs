@@ -511,7 +511,7 @@ test("hovering a sidebar row inks only that row, not its siblings", async ({
     document.documentElement.dataset.colorLevel = "high";
   });
   const pages = page.getByRole("navigation", { name: "Pages", exact: true });
-  const inbox = pages.getByRole("button", { name: "Inbox", exact: true });
+  const inbox = pages.getByRole("button", { name: "Activity", exact: true });
   // The fixture registers one sidebar page; real communities list several
   // as siblings in this list. Add an inert sibling row with the same markup.
   const sibling = pages.locator("[data-sibling-probe]");
@@ -695,7 +695,7 @@ for (const destination of ["Workflows", "Settings", "Back/Forward"]) {
         return element.scrollTop;
       });
     const pageEntry = (name) =>
-      ["Inbox", "Bestie"].includes(name)
+      ["Activity", "Bestie"].includes(name)
         ? page
             .getByRole("navigation", { name: "Pages" })
             .getByRole("button", { name, exact: true })

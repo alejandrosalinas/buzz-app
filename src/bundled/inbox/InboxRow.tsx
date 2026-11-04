@@ -133,7 +133,7 @@ export function InboxRowButton({
               (id) => id !== undefined && feed.incomplete.includes(id),
             )
               ? feed.status === "error"
-                ? "Preview unavailable. Retry inbox."
+                ? "Preview unavailable. Retry activity."
                 : "Preview updating…"
               : messagePreview(item.preview)}
           </span>

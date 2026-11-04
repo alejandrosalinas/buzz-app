@@ -6,48 +6,53 @@
   min-height: 0;
 }
 
-/* Status fills only the unused toolbar space, never wrapping controls or rows. */
-.headerTitle {
+/* Status fills the unused space after Unread, never wrapping controls or
+   rows: its margin cancels the gap before it, so it takes no room
+   on a full line, and its text keeps that gap instead. */
+.refreshSlot {
   display: flex;
   flex: 1;
   width: 0;
   min-width: 0;
   align-items: center;
+  margin-inline-start: calc(var(--space-2) * -1);
 }
 
-.filterSummary {
-  white-space: normal;
-  overflow-wrap: anywhere;
+/* Type tabs (sized to their words, like Slack's), From and Unread read as one
+   left-aligned group, so Unread stays in view on a wide page; the status after
+   them fills the row. Too narrow, Unread wraps first to the start of the next
+   line, then From. */
+.filters {
+  display: flex;
+  flex: 1 1 auto;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-1) var(--space-2);
+  min-width: 0;
+  padding-block: var(--space-1);
+}
+
+/* The panel tab strip insets its tabs by the focus ring's room; cancel that
+   here so the first tab's text starts on the toolbar edge, like Unread and
+   From when they wrap, and From follows DMs about a tab gap away. */
+.typeTabs {
+  flex: 0 1 auto;
+  min-width: 0;
+  margin-inline: calc(var(--space-1) * -1);
 }
 
 .refreshStatus {
   min-width: 0;
+  padding-inline-start: var(--space-3);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
-.workspace {
-  display: grid;
-  /* Match usePanelSplit's 320px list reserve and 316px detail minimum. */
-  grid-template-rows: auto minmax(0, 1fr);
-  grid-template-columns: minmax(320px, 1fr) minmax(
-      316px,
-      var(--secondary-panel-width, 2fr)
-    );
-  flex: 1;
-  min-height: 0;
-}
-
-.workspace:not([data-selected]) {
-  grid-template-columns: minmax(0, 1fr);
-}
-
-.listPane,
-.detail,
-.detailBody,
-.draftEditor {
+.workspace,
+.listPane {
   display: flex;
+  flex: 1;
   flex-direction: column;
   min-width: 0;
   min-height: 0;
@@ -56,73 +61,10 @@
 .scroll {
   container-name: inbox-list;
   container-type: inline-size;
-}
-
-.detail {
-  position: relative;
-  border-inline-start: 1px solid var(--border-standard);
-}
-
-.detailBody,
-.draftEditor {
   flex: 1;
-}
-
-.detailHeadingTitle {
-  min-width: 0;
-}
-
-.detailHeadingLink {
-  display: block;
-  max-width: 100%;
-  padding: 0;
-  border: 0;
-  background: transparent;
-  color: inherit;
-  font: inherit;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  cursor: pointer;
-  text-align: start;
-}
-
-.detailHeadingLink:hover {
-  text-decoration: underline;
-}
-
-html[data-keyboard-navigation] .detailHeadingLink:focus-visible {
-  outline: 2px solid var(--border-focus);
-  outline-offset: -2px;
-}
-
-/* Share the header row even when larger text makes its controls wrap. */
-.workspace[data-selected] > .detail {
-  grid-column: 2;
-}
-
-.workspace[data-selected] > .listPane,
-.workspace[data-selected] > .detail {
-  display: grid;
-  grid-row: 1 / span 2;
-  grid-template-rows: subgrid;
-}
-
-.previewFrame {
-  display: flex;
-  flex: 1;
-  flex-direction: column;
-  min-width: 0;
   min-height: 0;
-  overflow: hidden;
-}
-
-.previewHistory {
-  display: flex;
-  flex: 1;
-  flex-direction: column;
-  min-height: 0;
-  overflow: hidden;
+  min-width: 0;
+  overflow: auto;
 }
 
 .toolbar {
@@ -133,47 +75,12 @@ html[data-keyboard-navigation] .detailHeadingLink:focus-visible {
   align-items: center;
   justify-content: space-between;
   gap: var(--space-1);
-  padding-inline: var(--space-1);
+  /* Start the first tab's text on the title bar's bell: the panel header's
+     inset plus its label's. */
+  padding-inline: calc(var(--space-1) + var(--space-2));
   border-bottom: 1px solid var(--border-standard);
 }
 
-.scroll,
-.draftList {
-  flex: 1;
-  min-height: 0;
-  min-width: 0;
-  overflow: auto;
-}
-
-/* Drafts places its toolbar/list directly in the same grid, without a wrapper. */
-.workspace > .toolbar,
-.workspace > .draftList {
-  grid-column: 1;
-}
-
-.workspace:not([data-selected]) > .listPane {
-  grid-row: 1 / span 2;
-}
-
-@container (max-width: 700px) {
-  .workspace[data-selected] {
-    grid-template-columns: minmax(0, 1fr);
-  }
-  .workspace[data-selected] > .listPane,
-  .workspace[data-selected] > .toolbar,
-  .workspace[data-selected] > .draftList {
-    display: none;
-  }
-  .detail > [data-panel-resize] {
-    display: none;
-  }
-  .workspace[data-selected] > .detail {
-    grid-column: 1;
-    border-inline-start: 0;
-  }
-}
-
-.coverage,
 .notice {
   margin: 0;
   padding: var(--space-3) var(--space-panel-inset);
@@ -226,8 +133,9 @@ html[data-keyboard-navigation] .detailHeadingLink:focus-visible {
   height: var(--space-2);
 }
 
-/* Revealed on hover or keyboard focus; always shown without a hover pointer. */
-.rowArchive {
+/* Mark as read, on unread rows only: revealed on hover or keyboard focus over
+   the date, and always shown without a hover pointer. */
+.rowAction {
   display: flex;
   position: absolute;
   inset-block-start: var(--space-row-gap);
@@ -239,8 +147,8 @@ html[data-keyboard-navigation] .detailHeadingLink:focus-visible {
   opacity: 0;
 }
 
-.row:hover .rowArchive,
-.row:focus-within .rowArchive {
+.row:hover .rowAction,
+.row:focus-within .rowAction {
   opacity: 1;
 }
 
@@ -252,17 +160,17 @@ html[data-keyboard-navigation] .detailHeadingLink:focus-visible {
   justify-content: flex-end;
 }
 
-.row:hover .rowDate,
-.row:focus-within .rowDate {
+.row[data-action]:hover .rowDate,
+.row[data-action]:focus-within .rowDate {
   opacity: 0;
 }
 
 @media (hover: none), (pointer: coarse) {
-  .rowArchive {
+  .rowAction {
     opacity: 1;
   }
 
-  .rowDate {
+  .row[data-action] .rowDate {
     opacity: 0;
   }
 }

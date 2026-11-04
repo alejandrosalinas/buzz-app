@@ -259,7 +259,7 @@ test("opt-in Todos saves ordinary Canvas and disabling leaves it editable", asyn
     exact: true,
   });
   const pages = sidebar.getByRole("navigation", { name: "Pages" });
-  for (const destination of ["Inbox", "Bestie"]) {
+  for (const destination of ["Activity", "Bestie"]) {
     await pages.getByRole("button", { name: destination, exact: true }).click();
     await expect(
       page.getByRole("region", { name: destination, exact: true }),

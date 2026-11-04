@@ -18,8 +18,8 @@ test("Inbox edits an owned reply in place and restores the reply draft", async (
   app,
 }, testInfo) => {
   await page.goto(app.origin);
-  await openPage(page, "Inbox");
-  const inbox = page.getByRole("region", { name: "Inbox", exact: true });
+  await openPage(page, "Activity");
+  const inbox = page.getByRole("region", { name: "Activity", exact: true });
   await expect(inbox.getByText("Checking recent activity…")).toHaveCount(0);
   // The preview can settle on either reply as thread inputs arrive; the
   // conversation's accessible identity is the stable target for this test.

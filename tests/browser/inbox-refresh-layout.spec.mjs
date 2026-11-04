@@ -20,16 +20,15 @@ for (const width of [1280, 280]) {
   }, testInfo) => {
     await page.setViewportSize({ width, height: 800 });
     await page.goto(app.origin);
-    await openPage(page, "Inbox");
-    const inbox = page.getByRole("region", { name: "Inbox", exact: true });
+    await openPage(page, "Activity");
+    const inbox = page.getByRole("region", { name: "Activity", exact: true });
     const status = inbox.getByText("Checking recent activity…", {
       exact: true,
     });
-    const list = inbox.getByRole("list", { name: "Inbox conversations" });
+    const list = inbox.getByRole("list", { name: "Activity", exact: true });
     const rows = list.getByRole("listitem");
     const filters = inbox.getByRole("button", {
-      name: "Inbox filters",
-      exact: true,
+      name: /^From /,
     });
     await expect(rows).toHaveCount(3);
     await expect(status).toHaveCount(0);
@@ -50,13 +49,13 @@ for (const width of [1280, 280]) {
     });
     // The list's toolbar, not the page's tab strip above it.
     const toolbar = inbox.locator("header").filter({
-      has: page.getByRole("button", { name: "Inbox filters", exact: true }),
+      has: page.getByRole("button", { name: /^From / }),
     });
     await expect(toolbar).toHaveCount(1);
     const geometry = () =>
       inbox.evaluate((element) => {
         const header = element
-          .querySelector('[aria-label="Inbox filters"]')
+          .querySelector('header button[aria-haspopup="menu"]')
           .closest("header");
         const box = (node) => {
           const { x, y, width, height } = node.getBoundingClientRect();
@@ -64,13 +63,20 @@ for (const width of [1280, 280]) {
         };
         return {
           rows: [
-            ...element.querySelectorAll(
-              '[aria-label="Inbox conversations"] > li',
-            ),
+            ...element.querySelectorAll('[aria-label="Activity"] > li'),
           ].map((row) => ({ ...box(row), text: row.textContent })),
           header: box(header),
-          filters: box(element.querySelector('[aria-label="Inbox filters"]')),
-          unread: box(element.querySelector('[aria-label="Unread only"]')),
+          filters: box(
+            element.querySelector('header button[aria-haspopup="menu"]'),
+          ),
+          unread: box(
+            element.querySelector('[role="switch"][aria-label="Unread"]'),
+          ),
+          types: box(
+            element.querySelector(
+              '[role="tablist"][aria-label="Activity type"]',
+            ),
+          ),
         };
       });
     const measurements = [];
@@ -112,13 +118,11 @@ for (const width of [1280, 280]) {
     await expect(status).toHaveCount(0);
     await expect.poll(geometry).toEqual(before);
     await expect(inbox.getByRole("alert")).toHaveCount(0);
-    await expect(filters).toHaveText("All");
+    await expect(filters).toHaveAccessibleName("From anyone");
     await filters.click();
-    for (const name of ["People", "Agents"]) {
-      await expect(
-        page.getByRole("menuitemcheckbox", { name, exact: true }),
-      ).toBeChecked();
-    }
+    await expect(
+      page.getByRole("menuitemradio", { name: "Anyone", exact: true }),
+    ).toBeChecked();
     await page.keyboard.press("Escape");
     await testInfo.attach("refresh-geometry", {
       body: JSON.stringify(measurements, null, 2),
@@ -127,9 +131,9 @@ for (const width of [1280, 280]) {
   });
 }
 
-// Only a browser can prove that the sibling Archive control leaves readable
+// Only a browser can prove that the sibling Mark as read control leaves readable
 // label space when the host's interface size doubles at a narrow width.
-test("narrow enlarged-text rows overlay Archive without erasing their labels", async ({
+test("narrow enlarged-text rows overlay Mark as read without erasing their labels", async ({
   page,
   app,
 }) => {
@@ -138,16 +142,16 @@ test("narrow enlarged-text rows overlay Archive without erasing their labels", a
     localStorage.setItem("buzz-font-scale.v1", "2");
   });
   await page.goto(app.origin);
-  await openPage(page, "Inbox");
-  const inbox = page.getByRole("region", { name: "Inbox", exact: true });
-  const list = inbox.getByRole("list", { name: "Inbox conversations" });
+  await openPage(page, "Activity");
+  const inbox = page.getByRole("region", { name: "Activity", exact: true });
+  const list = inbox.getByRole("list", { name: "Activity", exact: true });
   const rows = list.getByRole("listitem");
   await expect(rows).toHaveCount(3);
   await expect(inbox.getByText("Checking recent activity…")).toHaveCount(0);
   await expect(list).toHaveAttribute("aria-busy", "false");
   const row = rows.first();
   const open = row.getByRole("button", { name: /^Open / });
-  const archive = row.getByRole("button", { name: /^Archive / });
+  const check = row.getByRole("button", { name: /^Mark as read / });
   const geometry = () =>
     row.evaluate((element) => {
       const open = element.querySelector(".navigation-item");
@@ -167,7 +171,7 @@ test("narrow enlarged-text rows overlay Archive without erasing their labels", a
     });
   const measured = await geometry();
   // NavigationItem truncates long labels at enlarged text sizes; this checks
-  // that Archive reserves no additional inline space, not full visual acceptance.
+  // that Mark as read reserves no additional inline space, not full visual acceptance.
   expect(measured.label.width).toBeGreaterThanOrEqual(2 * measured.root);
   expect(measured.open.x + measured.open.width).toBe(
     measured.row.x + measured.row.width,
@@ -177,47 +181,33 @@ test("narrow enlarged-text rows overlay Archive without erasing their labels", a
     measured.open.y + measured.open.height,
   );
   await open.focus();
-  await expect(archive.locator("xpath=..")).toHaveCSS("opacity", "1");
+  await expect(check.locator("xpath=..")).toHaveCSS("opacity", "1");
   await expect(row.locator("time")).toHaveCSS("opacity", "0");
-  await archive.click();
-  await expect(rows).toHaveCount(2);
-  await inbox
-    .getByRole("button", { name: "Inbox filters", exact: true })
-    .click();
-  await page
-    .getByRole("menuitemradio", { name: "Archived", exact: true })
-    .click();
-  await expect(rows).toHaveCount(1);
-  await expect(
-    inbox.getByRole("button", { name: "Inbox filters", exact: true }),
-  ).toContainText("Archived");
-  await expect(page.getByRole("menu", { name: "Inbox filters" })).toHaveCount(
-    0,
-  );
-  await rows.getByRole("button", { name: /^Open / }).focus();
-  await rows.getByRole("button", { name: /^Restore / }).click();
-  await expect(rows).toHaveCount(0);
+  await check.click();
+  // With Unread off the row stays, read: its ✓ goes and its date returns.
+  await expect(row.getByRole("img", { name: "Unread" })).toHaveCount(0);
+  await expect(check).toHaveCount(0);
+  await expect(rows).toHaveCount(3);
+  await expect(row.locator("time")).toHaveCSS("opacity", "1");
   // Row actions never open a conversation tab.
   await expect(
     inbox.getByRole("region", { name: /^Conversation in / }),
   ).toHaveCount(0);
   const filters = inbox.getByRole("button", {
-    name: "Inbox filters",
-    exact: true,
+    name: /^From /,
   });
-  await filters.click();
-  const menu = page.getByRole("menu", { name: "Inbox filters" });
-  await menu.getByRole("menuitemradio", { name: "Inbox", exact: true }).click();
+  const menu = page.getByRole("menu", { name: "From" });
+  const mentions = inbox
+    .getByRole("tablist", { name: "Activity type" })
+    .getByRole("tab", { name: "Mentions", exact: true });
+  await mentions.click();
+  await expect(mentions).toHaveAttribute("aria-selected", "true");
   await filters.click();
   await menu
-    .getByRole("menuitemradio", { name: "Mentions", exact: true })
+    .getByRole("menuitemradio", { name: "Agents", exact: true })
     .click();
-  await filters.click();
-  await menu
-    .getByRole("menuitemcheckbox", { name: "People", exact: true })
-    .click();
-  await page.keyboard.press("Escape");
-  await expect(filters).toHaveText("Mentions · Agents");
+  await expect(menu).toHaveCount(0);
+  await expect(filters).toHaveAccessibleName("From agents");
   await expect
     .poll(() =>
       filters.evaluate((element) => element.getBoundingClientRect().right),

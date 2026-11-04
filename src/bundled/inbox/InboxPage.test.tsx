@@ -15,11 +15,11 @@ import {
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import userEvent from "@testing-library/user-event";
 import { PageTabs } from "../channels/PageTabs";
-import { InboxPage, type ArchiveShortcut } from "./InboxPage";
+import { InboxPage } from "./InboxPage";
 import { InboxPreview } from "./InboxPreview";
 import { huddleDescription } from "../../features/huddle/lifecycle";
-import { archiveKey, readArchives, updateArchive } from "./archive";
-import { viewRevision, writeView } from "../../shared/view-state";
+import { ToastProvider } from "../../shared/design-system/ui/Toast";
+import { writeView } from "../../shared/view-state";
 import { composerDOMFixture } from "../../features/messages/composer-testing";
 import { stubAvatarBrowserApis } from "../../features/agents/avatar-testing";
 import type { ComposerInputElement } from "../../features/messages/composer-dom";
@@ -63,445 +63,12 @@ afterEach(() => {
   vi.useRealTimers();
 });
 
-it.each(["reply", "message", "message after reply"])(
-  "reopens archived DMs durably for an ordinary %s without resurfacing old mentions",
-  async (arrival) => {
-    const h = fixture({ withDm: true });
-    const root = message(h.viewer, "dm-room", "DM discussion", 24);
-    h.addEvent(root);
-    act(() => h.emit([root]));
-    const previous = message(h.alice, "dm-room", "Earlier DM mention", 25, [
-      ["p", h.viewer.pubkey],
-      ...(arrival === "message after reply"
-        ? [["e", root.id, "", "reply"]]
-        : []),
-    ]);
-    h.addEvent(previous);
-    act(() => h.emit([previous]));
-    const view = render(h.view);
-    await waitFor(() => expect(rows()).toHaveLength(3));
-    await chooseFilter("DMs");
-    await waitFor(() => expect(rows()).toHaveLength(1));
-    const row = rows()[0];
-    if (!row) throw new Error("Missing DM row");
-    fireEvent.click(within(row).getByRole("button", { name: /^Archive / }));
-    await waitFor(() => expect(rows()).toHaveLength(0));
-    const fresh = message(
-      h.alice,
-      "dm-room",
-      "Ordinary DM arrival",
-      Math.floor(Date.now() / 1000) + 1,
-      arrival === "reply" ? [["e", root.id, "", "reply"]] : [],
-    );
-    h.addEvent(fresh);
-    act(() => h.emit([fresh]));
-    await waitFor(() =>
-      expect(
-        h.session.unread
-          .inbox()
-          .items.find((item) => item.channelId === "dm-room"),
-      ).toMatchObject({
-        thread: arrival !== "message",
-        target: { kind: "channel" },
-        messageIds: expect.arrayContaining([fresh.id]),
-      }),
-    );
-    await waitFor(() => expect(rows()).toHaveLength(1));
-    expect(rows()[0]).toHaveAttribute("data-inbox-row", "dm-room:dm-room");
-    await chooseFilter("All activity");
-    await waitFor(() => expect(rows()).toHaveLength(3));
-    view.unmount();
-    render(h.view);
-    await waitFor(() => expect(rows()).toHaveLength(3));
-    await chooseFilter("DMs");
-    await waitFor(() => expect(rows()).toHaveLength(1));
-    await chooseFilter("Archived", "Show");
-    await waitFor(() => expect(rows()).toHaveLength(0));
-    await chooseFilter("Mentions");
-    await waitFor(() => expect(rows()).toHaveLength(0));
-    await chooseFilter("Inbox", "Show");
-    await waitFor(() => expect(rows()).toHaveLength(1));
-    expect(rows()[0]).not.toHaveAttribute("data-inbox-row", "dm-room:dm-room");
-    await chooseFilter("Archived", "Show");
-    const mention = message(
-      h.alice,
-      "dm-room",
-      "Fresh explicit DM mention",
-      Math.floor(Date.now() / 1000) + 2,
-      [["p", h.viewer.pubkey]],
-    );
-    h.addEvent(mention);
-    act(() => h.emit([mention]));
-    await waitFor(() => expect(rows()).toHaveLength(0));
-    await chooseFilter("Inbox", "Show");
-    await waitFor(() => expect(rows()).toHaveLength(1));
-    expect(rows()[0]).not.toHaveAttribute("data-inbox-row", "dm-room:dm-room");
-    await chooseFilter("DMs");
-    await waitFor(() => expect(rows()).toHaveLength(1));
-    expect(rows()[0]).toHaveAttribute("data-inbox-row", "dm-room:dm-room");
-    expect(rows()[0]).toHaveTextContent("Fresh explicit DM mention");
-  },
-);
-
-it.each([
-  ["button", 0],
-  ["menu", 0],
-  ["button", 1],
-  ["menu", 1],
-] as const)(
-  "Mentions row Archive via %s retains already-observed replies at cutoff + %s",
-  async (action, offset) => {
-    vi.useFakeTimers({ toFake: ["Date"] });
-    vi.setSystemTime(new Date("2030-01-01T00:00:00Z"));
-    const h = fixture();
-    if (!h.root) throw new Error("Missing fixture root");
-    const now = Math.floor(Date.now() / 1000);
-    const mention = message(
-      h.alice,
-      "room",
-      "Matching thread mention",
-      now - 1,
-      [
-        ["e", h.root.id, "", "reply"],
-        ["p", h.viewer.pubkey],
-      ],
-    );
-    const reply = message(
-      h.alice,
-      "room",
-      "Already observed progress",
-      now + offset,
-      [["e", h.root.id, "", "reply"]],
-    );
-    h.addEvent(mention);
-    h.addEvent(reply);
-    act(() => h.emit([mention, reply]));
-    const view = render(h.view);
-    await waitFor(() => expect(rows()).toHaveLength(2));
-    await chooseFilter("Mentions");
-    const thread = rows().find((row) =>
-      row.textContent?.includes("Matching thread mention"),
-    );
-    if (!thread) throw new Error("Missing matching-mention row");
-    if (action === "menu") {
-      fireEvent.contextMenu(
-        within(thread).getByRole("button", { name: /^Open / }),
-      );
-      fireEvent.click(
-        await screen.findByRole("menuitem", { name: "Archive conversation" }),
-      );
-    } else {
-      fireEvent.click(
-        within(thread).getByRole("button", { name: /^Archive / }),
-      );
-    }
-    await waitFor(() => expect(rows()).toHaveLength(1));
-    await waitFor(() =>
-      expect(
-        screen.getByRole("list", { name: "Inbox conversations" }),
-      ).toHaveAttribute("aria-busy", "false"),
-    );
-    expect(queryReader()).not.toBeInTheDocument();
-    expect(readArchives(viewRevision(h.session.scope, archiveKey))).toEqual([
-      expect.objectContaining({
-        id: `room:${h.root.id}`,
-        through: now + offset,
-        messageIds: expect.arrayContaining([mention.id, reply.id]),
-      }),
-    ]);
-    await chooseFilter("All activity");
-    expect(rows()).toHaveLength(1);
-    await chooseFilter("Archived", "Show");
-    expect(rows()).toHaveLength(1);
-    expect(rows()[0]).toHaveAttribute("data-inbox-row", `room:${h.root.id}`);
-    view.unmount();
-    render(h.view);
-    await waitFor(() => expect(rows()).toHaveLength(1));
-    expect(rows()[0]).toHaveAttribute("data-inbox-row", `room:${h.root.id}`);
-    await chooseFilter("Mentions");
-    expect(rows()).toHaveLength(1);
-    expect(rows()[0]).toHaveTextContent("Matching thread mention");
-  },
-);
-
-it("archives a conversation durably, restores it, and reopens for participating replies", async () => {
-  const h = fixture();
-  const view = render(h.view);
-  const rows = () =>
-    within(screen.getByRole("list", { name: "Inbox conversations" }));
-  await waitFor(() =>
-    expect(rows().getAllByRole("button", { name: /^Open / })).toHaveLength(2),
-  );
-  const row = rows()
-    .getAllByRole("button", { name: /^Open / })
-    .find((button) => button.textContent?.includes("A thread update"));
-  if (!row) throw new Error("Missing fixture thread row");
-  fireEvent.click(row);
-  await archiveOpened(h);
-  await waitFor(() =>
-    expect(rows().getAllByRole("button", { name: /^Open / })).toHaveLength(1),
-  );
-  // The reader stays open and advances to the next conversation's tab.
-  expect(reader()).toBeInTheDocument();
-  expect(sideTabs()).toHaveLength(1);
-  expect(rows().getByRole("listitem")).toHaveAttribute("data-selected");
-  await archiveOpened(h);
-  await waitFor(() =>
-    expect(rows().queryAllByRole("listitem")).toHaveLength(0),
-  );
-  // Archiving the last conversation in view closes its tab.
-  expect(queryReader()).not.toBeInTheDocument();
-  expect(sideTabs()).toEqual([]);
-  await chooseFilter("Archived", "Show");
-  await waitFor(() => expect(rows().getAllByRole("listitem")).toHaveLength(2));
-  const other = rows()
-    .getAllByRole("button", { name: /^Restore / })
-    .find(
-      (button) =>
-        !button.closest("li")?.textContent?.includes("A thread update"),
-    );
-  if (!other) throw new Error("Missing second archived row");
-  fireEvent.click(other);
-  await waitFor(() => expect(rows().getAllByRole("listitem")).toHaveLength(1));
-  await chooseFilter("Inbox", "Show");
-  await waitFor(() =>
-    expect(rows().getAllByRole("button", { name: /^Open / })).toHaveLength(1),
-  );
-  view.unmount();
-  render(h.view);
-  await waitFor(() =>
-    expect(rows().getAllByRole("button", { name: /^Open / })).toHaveLength(1),
-  );
-  await chooseFilter("Archived", "Show");
-  await waitFor(() =>
-    expect(rows().getAllByRole("button", { name: /^Open / })).toHaveLength(1),
-  );
-  fireEvent.click(rows().getByRole("button", { name: /^Open / }));
-  await archiveOpened(h);
-  await waitFor(() =>
-    expect(rows().queryAllByRole("button", { name: /^Open / })).toHaveLength(0),
-  );
-  await chooseFilter("Inbox", "Show");
-  await waitFor(() =>
-    expect(rows().getAllByRole("button", { name: /^Open / })).toHaveLength(2),
-  );
-  const restoredRow = rows()
-    .getAllByRole("button", { name: /^Open / })
-    .find((button) => button.textContent?.includes("A thread update"));
-  if (!restoredRow) throw new Error("Missing restored thread row");
-  fireEvent.click(restoredRow);
-  await archiveOpened(h);
-  await waitFor(() =>
-    expect(rows().getAllByRole("button", { name: /^Open / })).toHaveLength(1),
-  );
-  const post = (content: string, at: number, mentioned = false) => {
-    if (!h.root) throw new Error("Missing fixture thread root");
-    const event = message(h.alice, "room", content, at, [
-      ["e", h.root.id, "", "reply"],
-      ...(mentioned ? [["p", h.viewer.pubkey]] : []),
-    ]);
-    h.addEvent(event);
-    act(() => h.emit([event]));
-  };
-  const now = Math.floor(Date.now() / 1000);
-  post("Agent progress", now + 1);
-  await waitFor(() =>
-    expect(
-      h.owner.session.unread
-        .inbox()
-        .items.some(
-          (item) => item.latestMessageId !== h.reply.id && item.thread,
-        ),
-    ).toBe(true),
-  );
-  await waitFor(() =>
-    expect(rows().getAllByRole("button", { name: /^Open / })).toHaveLength(2),
-  );
-  post("John, please decide", now + 2, true);
-  await waitFor(() =>
-    expect(rows().getAllByRole("button", { name: /^Open / })).toHaveLength(2),
-  );
-});
-
-it.each(["Threads", "Mentions"])(
-  "ordinary participating replies reopen Threads and All activity but not old Mentions (arrival in %s)",
-  async (activity) => {
-    const h = fixture();
-    if (!h.root) throw new Error("Missing fixture root");
-    const root = h.root;
-    let view = render(h.view);
-    await waitFor(() => expect(rows()).toHaveLength(2));
-    const post = (content: string, at: number, mentioned = false) => {
-      const event = message(h.alice, "room", content, at, [
-        ["e", root.id, "", "reply"],
-        ...(mentioned ? [["p", h.viewer.pubkey]] : []),
-      ]);
-      h.addEvent(event);
-      act(() => h.emit([event]));
-      return event;
-    };
-    post("Earlier thread mention", 23, true);
-    await chooseFilter("Threads");
-    await waitFor(() => expect(rows()).toHaveLength(1));
-    const threadRow = rows()[0];
-    if (!threadRow) throw new Error("Missing participating thread row");
-    fireEvent.click(
-      within(threadRow).getByRole("button", { name: /^Archive / }),
-    );
-    await waitFor(() => expect(rows()).toHaveLength(0));
-    await chooseFilter(activity);
-    const fresh = post(
-      "New ordinary participating reply",
-      Math.floor(Date.now() / 1000) + 1,
-    );
-    await waitFor(() =>
-      expect(
-        h.session.unread
-          .inbox()
-          .items.some((item) => item.messageIds.includes(fresh.id)),
-      ).toBe(true),
-    );
-    await chooseFilter("Threads");
-    await waitFor(() => expect(rows()).toHaveLength(1));
-    await chooseFilter("All activity");
-    await waitFor(() => expect(rows()).toHaveLength(2));
-    await chooseFilter("Mentions");
-    await waitFor(() => expect(rows()).toHaveLength(1));
-    expect(rows()[0]).toHaveTextContent("Please review");
-    view.unmount();
-    view = render(h.view);
-    await waitFor(() => expect(rows()).toHaveLength(1));
-    expect(rows()[0]).toHaveTextContent("Please review");
-    await chooseFilter("Threads");
-    await waitFor(() => expect(rows()).toHaveLength(1));
-    await chooseFilter("Mentions");
-    post(
-      "Fresh explicit thread mention",
-      Math.floor(Date.now() / 1000) + 2,
-      true,
-    );
-    await waitFor(() => expect(rows()).toHaveLength(2));
-    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
-    view.unmount();
-    render(h.view);
-    await waitFor(() => expect(rows()).toHaveLength(2));
-  },
-);
-
-it("archives and restores the open conversation from the Archive shortcut", async () => {
-  const h = fixture();
-  render(h.view);
-  const list = () =>
-    within(screen.getByRole("list", { name: "Inbox conversations" }));
-  await waitFor(() =>
-    expect(list().getAllByRole("button", { name: /^Open / })).toHaveLength(2),
-  );
-  expect(h.archive.current).toBeUndefined();
-  const [first] = list().getAllByRole("button", { name: /^Open / });
-  if (!first) throw new Error("Missing fixture row");
-  fireEvent.click(first);
-  await archiveOpened(h);
-  await waitFor(() =>
-    expect(list().getAllByRole("button", { name: /^Open / })).toHaveLength(1),
-  );
-  // Archiving the open conversation advances to the next one's tab.
-  expect(list().getByRole("listitem")).toHaveAttribute("data-selected");
-  expect(sideTabs()).toHaveLength(1);
-  await waitFor(() =>
-    expect(
-      reader().querySelector(`[data-message-id="${h.mention.id}"]`),
-    ).toHaveFocus(),
-  );
-  await chooseFilter("Archived", "Show");
-  fireEvent.click(list().getByRole("button", { name: /^Open / }));
-  await archiveOpened(h);
-  await waitFor(() =>
-    expect(list().queryAllByRole("button", { name: /^Open / })).toHaveLength(0),
-  );
-});
-
-it("offers the Archive shortcut only for an opened conversation while no action is pending", async () => {
-  const h = fixture();
-  render(h.view);
-  const list = () =>
-    within(screen.getByRole("list", { name: "Inbox conversations" }));
-  await waitFor(() =>
-    expect(list().getAllByRole("button", { name: /^Open / })).toHaveLength(2),
-  );
-  await waitFor(() =>
-    expect(
-      screen.getByRole("list", { name: "Inbox conversations" }),
-    ).toHaveAttribute("aria-busy", "false"),
-  );
-  expect(h.archive.current).toBeUndefined();
-  const [first] = list().getAllByRole("button", { name: /^Open / });
-  if (!first) throw new Error("Missing fixture row");
-  fireEvent.click(first);
-  await waitFor(() => expect(h.archive.current).toBeDefined());
-  act(() => h.archive.current?.());
-  // While the archive is pending, the shortcut is unavailable.
-  expect(
-    screen.getByRole("list", { name: "Inbox conversations" }),
-  ).toHaveAttribute("aria-busy", "true");
-  expect(h.archive.current).toBeUndefined();
-  await waitFor(() => expect(h.archive.current).toBeDefined());
-});
-
-it.each(["shortcut", "row"])(
-  "a conversation tab restored after leaving Inbox still archives and advances from its %s",
-  async (from) => {
-    const h = fixture();
-    const view = render(h.view);
-    const list = () =>
-      within(screen.getByRole("list", { name: "Inbox conversations" }));
-    await waitFor(() =>
-      expect(list().getAllByRole("button", { name: /^Open / })).toHaveLength(2),
-    );
-    const [first] = list().getAllByRole("button", { name: /^Open / });
-    if (!first) throw new Error("Missing fixture row");
-    fireEvent.click(first);
-    await waitFor(() => expect(h.archive.current).toBeDefined());
-    const [tab] = sideTabs();
-    await waitFor(() =>
-      expect(
-        screen.getByRole("list", { name: "Inbox conversations" }),
-      ).toHaveAttribute("aria-busy", "false"),
-    );
-    await Promise.all(h.readSteps.map((step) => step.work));
-    const readSteps = h.readSteps.length;
-    // Leaving Inbox and returning restores the tab with its row's selection.
-    view.unmount();
-    render(h.view);
-    await waitFor(() => expect(sideTabs()).toEqual([tab]));
-    const selected = await waitFor(() => {
-      const row = list()
-        .getAllByRole("listitem")
-        .find((item) => item.hasAttribute("data-selected"));
-      if (!row) throw new Error("No selected row");
-      return row;
-    });
-    // Restoring the presentation must not replay the row's read command.
-    expect(h.readSteps).toHaveLength(readSteps);
-    if (from === "shortcut") await archiveOpened(h);
-    else
-      fireEvent.click(
-        within(selected).getByRole("button", { name: /^Archive / }),
-      );
-    await waitFor(() =>
-      expect(list().getAllByRole("button", { name: /^Open / })).toHaveLength(1),
-    );
-    expect(list().getByRole("listitem")).toHaveAttribute("data-selected");
-    expect(sideTabs()).toHaveLength(1);
-  },
-);
-
 it.each([false, true])(
   "retires a conversation moved to the main pane when its room becomes a Huddle (focus elsewhere: %s)",
   async (elsewhere) => {
     const h = fixture({ withWriter: true });
     render(h.view);
-    const list = () =>
-      within(screen.getByRole("list", { name: "Inbox conversations" }));
+    const list = () => within(screen.getByRole("list", { name: "Activity" }));
     await waitFor(() =>
       expect(list().getAllByRole("button", { name: /^Open / })).toHaveLength(2),
     );
@@ -518,7 +85,7 @@ it.each([false, true])(
         shiftKey: true,
       });
     });
-    expect(tabs("Inbox tabs")).toHaveLength(2);
+    expect(tabs("Activity tabs")).toHaveLength(2);
     // Another visible control, such as the app's sidebar, keeps its focus.
     const other = document.body.appendChild(document.createElement("button"));
     if (elsewhere) other.focus();
@@ -544,29 +111,25 @@ it.each([false, true])(
         }),
       ]),
     );
-    await waitFor(() => expect(tabs("Inbox tabs")).toHaveLength(1));
+    await waitFor(() => expect(tabs("Activity tabs")).toHaveLength(1));
     expect(queryReader()).not.toBeInTheDocument();
     if (elsewhere) expect(other).toHaveFocus();
-    else
-      expect(
-        screen.getByRole("button", { name: "Inbox filters" }),
-      ).toHaveFocus();
+    else expect(fromTrigger()).toHaveFocus();
     other.remove();
   },
 );
 
+// The Archived view was the only way to end a selection while keeping its tab;
+// its cases ("selection cleared first: true") left with it.
 it.each([
   [false, false],
-  [true, false],
   [false, true],
-  [true, true],
 ])(
   "retires an opened conversation when its room becomes a Huddle (selection cleared first: %s, focus in a link dialog: %s)",
   async (cleared, dialog) => {
     const h = fixture({ withWriter: true });
     render(h.view);
-    const list = () =>
-      within(screen.getByRole("list", { name: "Inbox conversations" }));
+    const list = () => within(screen.getByRole("list", { name: "Activity" }));
     await waitFor(() =>
       expect(list().getAllByRole("button", { name: /^Open / })).toHaveLength(2),
     );
@@ -578,8 +141,6 @@ it.each([
         reader().querySelector(`[data-message-id="${h.reply.id}"]`),
       ).toHaveFocus(),
     );
-    // Showing Archived ends the selection but keeps its tab.
-    if (cleared) await chooseFilter("Archived", "Show");
     (await screen.findByRole("textbox")).focus();
     if (dialog) {
       // The dialog is portalled outside the tab that owns it.
@@ -615,7 +176,6 @@ it.each([
       ]),
     );
     await waitFor(() => expect(queryReader()).not.toBeInTheDocument());
-    expect(h.archive.current).toBeUndefined();
     if (cleared) {
       expect(
         screen.getByText("This conversation is no longer available."),
@@ -625,348 +185,74 @@ it.each([
       expect(document.activeElement).toHaveAttribute("aria-selected", "true");
     } else {
       expect(sideTabs()).toEqual([]);
-      expect(
-        screen.getByRole("button", { name: "Inbox filters" }),
-      ).toHaveFocus();
+      expect(fromTrigger()).toHaveFocus();
     }
   },
 );
-
-it("offers no Archive shortcut while Drafts is shown", async () => {
-  const h = fixture();
-  render(h.view);
-  const list = () =>
-    within(screen.getByRole("list", { name: "Inbox conversations" }));
-  await waitFor(() =>
-    expect(list().getAllByRole("button", { name: /^Open / })).toHaveLength(2),
-  );
-  const [first] = list().getAllByRole("button", { name: /^Open / });
-  if (!first) throw new Error("Missing fixture row");
-  fireEvent.click(first);
-  await waitFor(() => expect(h.archive.current).toBeDefined());
-  await waitFor(() =>
-    expect(
-      reader().querySelector(`[data-message-id="${h.reply.id}"]`),
-    ).toHaveFocus(),
-  );
-  await chooseFilter("Drafts");
-  await waitFor(() => expect(h.archive.current).toBeUndefined());
-});
-
-it("archives from the row without opening it, remembers filters, and resets an empty archive's filters, then its Status", async () => {
-  const h = fixture();
-  const view = render(h.view);
-  await waitFor(() => expect(rows()).toHaveLength(2));
-  const [first, second] = rows();
-  if (!first || !second) throw new Error("Missing fixture rows");
-  fireEvent.click(within(first).getByRole("button", { name: /^Archive / }));
-  await waitFor(() => expect(rows()).toHaveLength(1));
-  expect(queryReader()).not.toBeInTheDocument();
-  expect(within(second).getByRole("button", { name: /^Open / })).toHaveFocus();
-
-  await chooseFilter("Archived", "Show");
-  await chooseFilter("Unread only", "Attention");
-  view.unmount();
-  render(h.view);
-  await waitFor(() =>
-    expect(
-      screen.getByRole("button", { name: "Inbox filters" }),
-    ).toHaveTextContent("Archived"),
-  );
-  expect(screen.getByRole("button", { name: "Unread only" })).toHaveAttribute(
-    "aria-pressed",
-    "true",
-  );
-  expect(rows()).toHaveLength(1);
-  await chooseFilter("DMs");
-  await screen.findByText("No archived conversations match Unread only");
-  const filters = screen.getByRole("button", { name: "Inbox filters" });
-  // Clear filters resets Type, From and Unread only, keeping Archived.
-  fireEvent.click(screen.getByRole("button", { name: "Clear filters" }));
-  await waitFor(() => expect(rows()).toHaveLength(1));
-  expect(filters).toHaveFocus();
-  expect(filters).toHaveTextContent(/^Archived$/);
-  expect(screen.getByRole("button", { name: "Unread only" })).toHaveAttribute(
-    "aria-pressed",
-    "false",
-  );
-
-  const [archived] = rows();
-  if (!archived) throw new Error("Missing archived row");
-  fireEvent.click(within(archived).getByRole("button", { name: /^Restore / }));
-  await screen.findByText("No archived conversations in this view");
-  expect(
-    screen.queryByRole("button", { name: "Clear filters" }),
-  ).not.toBeInTheDocument();
-  fireEvent.click(screen.getByRole("button", { name: "Show Inbox" }));
-  await waitFor(() => expect(rows()).toHaveLength(2));
-  expect(filters).toHaveFocus();
-  expect(filters).toHaveTextContent(/^All$/);
-
-  // An unfiltered, empty Inbox has nothing to reset.
-  for (const remaining of [1, 0]) {
-    const [row] = rows();
-    if (!row) throw new Error("Missing Inbox row");
-    const action = within(row).getByRole("button", { name: /^Archive / });
-    await waitFor(() => expect(action).toBeEnabled());
-    fireEvent.click(action);
-    await waitFor(() => expect(rows()).toHaveLength(remaining));
-  }
-  const empty = await screen.findByText("No recent activity in this view");
-  const status = empty.closest<HTMLElement>('[role="status"]');
-  if (!status) throw new Error("Missing empty state");
-  expect(within(status).queryAllByRole("button")).toEqual([]);
-});
 
 it.each([
   ["DMs", "Activity type"],
   ["Agents", "Sender"],
   ["Unread only", "Attention"],
 ] as const)(
-  "offers Clear filters when %s empties Inbox, keeping Status",
+  "offers Clear filters when %s empties a filtered view",
   async (label, control) => {
     const h = fixture();
     render(h.view);
     await waitFor(() => expect(rows()).toHaveLength(2));
-    if (control === "Attention")
+    if (control === "Attention") {
       await act(async () => {
         await h.owner.session.unread.markChannelRead("room");
       });
+      // Unread alone means caught up; with a type it is a filtered view.
+      await chooseFilter("DMs");
+    }
     await chooseFilter(label, control);
     await screen.findByText(
       control === "Attention"
         ? "No unread activity in this view"
         : "No recent activity in this view",
     );
-    expect(
-      screen.queryByRole("button", { name: "Show Inbox" }),
-    ).not.toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "Clear filters" }));
     await waitFor(() => expect(rows()).toHaveLength(2));
-    const filters = screen.getByRole("button", { name: "Inbox filters" });
+    const filters = fromTrigger();
     expect(filters).toHaveFocus();
-    expect(filters).toHaveTextContent(/^All$/);
-    expect(screen.getByRole("button", { name: "Unread only" })).toHaveAttribute(
-      "aria-pressed",
+    expect(filters).toHaveAccessibleName("From anyone");
+    expect(screen.getByRole("switch", { name: "Unread" })).toHaveAttribute(
+      "aria-checked",
       "false",
     );
   },
 );
 
-it.each([
-  ["button", true],
-  ["menu", true],
-  ["button", false],
-  ["menu", false],
-] as const)(
-  "selected-row Archive via %s advances when a visible successor exists (%s)",
-  async (action, withSuccessor) => {
-    const h = fixture({ withWriter: true });
-    render(h.view);
-    await waitFor(() => expect(rows()).toHaveLength(2));
-    if (!withSuccessor) await chooseFilter("Threads");
-    const thread = rows().find((row) =>
-      row.textContent?.includes("A thread update"),
-    );
-    if (!thread) throw new Error("Missing fixture thread row");
-    const open = within(thread).getByRole("button", { name: /^Open / });
-    fireEvent.click(open);
-    const editor = (await screen.findByRole("textbox")) as ComposerInputElement;
-    act(() => {
-      editor.insertText("Keep the selected draft");
-    });
-    await waitFor(() =>
-      expect(
-        screen.getByRole("list", { name: "Inbox conversations" }),
-      ).toHaveAttribute("aria-busy", "false"),
-    );
-    expect(h.journal()?.state.frontiers[`msg:${h.mention.id}`]).toBeUndefined();
-    if (action === "menu") {
-      fireEvent.contextMenu(open);
-      fireEvent.click(
-        await screen.findByRole("menuitem", { name: "Archive conversation" }),
-      );
-    } else {
-      fireEvent.click(
-        within(thread).getByRole("button", { name: /^Archive / }),
-      );
-    }
-    await waitFor(() => expect(rows()).toHaveLength(withSuccessor ? 1 : 0));
-    await waitFor(() =>
-      expect(
-        screen.getByRole("list", { name: "Inbox conversations" }),
-      ).toHaveAttribute("aria-busy", "false"),
-    );
-    if (withSuccessor) {
-      expect(rows()[0]).toHaveAttribute("data-selected");
-      expect(sideTabs()).toHaveLength(1);
-      await waitFor(() =>
-        expect(h.journal()?.state.frontiers[`msg:${h.mention.id}`]).toBe(21),
-      );
-      expect(screen.getByRole("textbox")).not.toBe(editor);
-    } else {
-      expect(queryReader()).not.toBeInTheDocument();
-      expect(sideTabs()).toEqual([]);
-      expect(
-        h.journal()?.state.frontiers[`msg:${h.mention.id}`],
-      ).toBeUndefined();
-    }
-    await chooseFilter("Archived", "Show");
-    const archivedThread = rows().find((row) =>
-      row.textContent?.includes("A thread update"),
-    );
-    if (!archivedThread) throw new Error("Missing archived draft row");
-    fireEvent.click(
-      within(archivedThread).getByRole("button", { name: /^Open / }),
-    );
-    expect(await screen.findByRole("textbox")).toHaveTextContent(
-      "Keep the selected draft",
-    );
-  },
-);
-
-it.each([
-  ["shortcut", "message"],
-  ["menu", "message"],
-  ["shortcut", "DM"],
-  ["menu", "DM"],
-] as const)(
-  "Archive via %s from the composer hands focus to its %s successor",
-  async (action, successor) => {
-    const dm = successor === "DM";
-    const h = fixture({ withWriter: true, withDm: dm });
-    render(h.view);
-    await waitFor(() => expect(rows()).toHaveLength(dm ? 3 : 2));
-    if (dm) {
-      // Leave the DM above the opened row with nothing below it, so Archive
-      // advances to the DM.
-      expect(rows()[0]).toHaveTextContent("A direct reply");
-      const last = rows()[2];
-      if (!last) throw new Error("Missing fixture row");
-      fireEvent.click(within(last).getByRole("button", { name: /^Archive / }));
-      await waitFor(() => expect(rows()).toHaveLength(2));
-    }
-    const row = dm
-      ? rows()[1]
-      : rows().find((item) => item.textContent?.includes("A thread update"));
-    const label = (item: HTMLElement | undefined) =>
-      item && within(item).getByRole("button", { name: /^Open / }).ariaLabel;
-    const after = label(rows().find((item) => item !== row));
-    if (!row || !after) throw new Error("Missing fixture row");
-    const open = within(row).getByRole("button", { name: /^Open / });
-    fireEvent.click(open);
-    (await screen.findByRole("textbox")).focus();
-    if (action === "shortcut") await archiveOpened(h);
-    else {
-      fireEvent.contextMenu(open);
-      fireEvent.click(
-        await screen.findByRole("menuitem", { name: "Archive conversation" }),
-      );
-    }
-    await waitFor(() => expect(rows()).toHaveLength(1));
-    expect(rows()[0]).toHaveAttribute("data-selected");
-    expect(label(rows()[0])).toBe(after);
-    expect(sideTabs()).toHaveLength(1);
-    // Focus settles in the successor: a revealed message, or the composer of a
-    // conversation opened without one.
-    await waitFor(() => {
-      const list = screen
-        .getAllByRole("tablist")
-        .find((item) => item.getAttribute("aria-label") !== "Inbox tabs");
-      if (!list) throw new Error("Missing side tabs");
-      const tab = within(list).getByRole("tab", { selected: true });
-      const panel = document.getElementById(
-        tab.getAttribute("aria-controls") ?? "",
-      );
-      expect(panel).toContainElement(document.activeElement as HTMLElement);
-      if (dm) expect(document.activeElement).toHaveAttribute("role", "textbox");
-    });
-  },
-);
-
-it("Archive from the composer focuses the successor's tab while its message cannot be revealed", async () => {
-  const h = fixture({ withWriter: true });
-  render(h.view);
-  await waitFor(() => expect(rows()).toHaveLength(2));
-  const row = rows().find((item) =>
-    item.textContent?.includes("A thread update"),
-  );
-  if (!row) throw new Error("Missing fixture row");
-  fireEvent.click(within(row).getByRole("button", { name: /^Open / }));
-  (await screen.findByRole("textbox")).focus();
-  const release = h.holdHistory("room");
-  try {
-    await archiveOpened(h);
-    await waitFor(() => expect(rows()).toHaveLength(1));
-    expect(rows()[0]).toHaveTextContent("Please review this");
-    expect(rows()[0]).toHaveAttribute("data-selected");
-    expect(sideTabs()).toHaveLength(1);
-    await waitFor(() =>
-      expect(document.activeElement).toBe(
-        screen
-          .getAllByRole("tablist")
-          .find((item) => item.getAttribute("aria-label") !== "Inbox tabs")
-          ?.querySelector('[role="tab"][aria-selected="true"]'),
-      ),
-    );
-  } finally {
-    await act(async () => release());
-  }
-});
-
-it("the Archive shortcut advances from an ordinary-reply visit after switching to Mentions", async () => {
+it("All caught up offers Show all once Unread leaves nothing, then shows the read conversations", async () => {
   const h = fixture();
-  const root = h.root;
-  if (!root) throw new Error("Missing fixture root");
-  const mention = message(h.alice, "room", "Decision in our discussion", 23, [
-    ["e", root.id, "", "reply"],
-    ["p", h.viewer.pubkey],
-  ]);
-  const progress = message(h.alice, "room", "Later ordinary progress", 24, [
-    ["e", root.id, "", "reply"],
-  ]);
-  h.addEvent(mention);
-  h.addEvent(progress);
   render(h.view);
   await waitFor(() => expect(rows()).toHaveLength(2));
-  act(() => h.emit([mention, progress]));
   await act(async () => {
-    await h.owner.session.unread.markThrough(
-      { kind: "thread", channelId: "room", rootId: root.id },
-      progress.id,
-    );
+    await h.owner.session.unread.markChannelRead("room");
   });
-  await screen.findByText("Later ordinary progress");
-  const thread = rows().find((row) =>
-    row.textContent?.includes("Later ordinary progress"),
+  await chooseFilter("Unread only", "Attention");
+  const empty = await screen.findByText("All caught up");
+  const status = empty.closest<HTMLElement>('[role="status"]');
+  if (!status) throw new Error("Missing empty state");
+  expect(status).toHaveTextContent(
+    "New replies, mentions and DMs show up here.",
   );
-  if (!thread) throw new Error("Missing ordinary progress row");
-  fireEvent.click(within(thread).getByRole("button", { name: /^Open / }));
-  await waitFor(() =>
-    expect(
-      reader().querySelector(`[data-message-id="${progress.id}"]`),
-    ).toHaveFocus(),
-  );
-  await chooseFilter("Mentions");
-  expect(rows().map((row) => row.textContent)).toEqual([
-    expect.stringContaining("Decision in our discussion"),
-    expect.stringContaining("Please review this"),
-  ]);
-  await waitFor(() => expect(h.archive.current).toBeDefined());
-  expect(h.journal()?.state.frontiers[`msg:${h.mention.id}`]).toBeUndefined();
-  act(() => h.archive.current?.());
-  await waitFor(() => expect(rows()).toHaveLength(1));
-  expect(rows()[0]).toHaveTextContent("Please review this");
-  expect(rows()[0]).toHaveAttribute("data-selected");
-  expect(reader()).toBeInTheDocument();
-  expect(sideTabs()).toHaveLength(1);
-  await waitFor(() =>
-    expect(h.journal()?.state.frontiers[`msg:${h.mention.id}`]).toBe(21),
-  );
+  expect(status).not.toHaveTextContent(/archiv/i);
+  expect(
+    within(status)
+      .queryAllByRole("button")
+      .map((button) => button.textContent),
+  ).toEqual(["Show all"]);
+  fireEvent.click(within(status).getByRole("button", { name: "Show all" }));
+  await waitFor(() => expect(rows()).toHaveLength(2));
+  expect(unreadToggle()).toHaveAttribute("aria-checked", "false");
+  expect(fromTrigger()).toHaveFocus();
 });
 
 it.each(["button", "menu"] as const)(
-  "unselected-row Archive via %s leaves the reader and its draft alone",
+  "unselected-row Mark as read via %s reads that row in place and leaves the reader and its draft alone",
   async (action) => {
     const h = fixture({ withWriter: true });
     render(h.view);
@@ -982,483 +268,44 @@ it.each(["button", "menu"] as const)(
     const editor = (await screen.findByRole("textbox")) as ComposerInputElement;
     act(() => editor.insertText("Keep the open draft"));
     await waitFor(() =>
-      expect(
-        screen.getByRole("list", { name: "Inbox conversations" }),
-      ).toHaveAttribute("aria-busy", "false"),
+      expect(screen.getByRole("list", { name: "Activity" })).toHaveAttribute(
+        "aria-busy",
+        "false",
+      ),
     );
     if (action === "menu") {
       fireEvent.contextMenu(
         within(mention).getByRole("button", { name: /^Open / }),
       );
       fireEvent.click(
-        await screen.findByRole("menuitem", { name: "Archive conversation" }),
+        await screen.findByRole("menuitem", { name: "Mark as read" }),
       );
     } else {
       fireEvent.click(
-        within(mention).getByRole("button", { name: /^Archive / }),
+        within(mention).getByRole("button", { name: /^Mark as read / }),
       );
     }
-    await waitFor(() => expect(rows()).toHaveLength(1));
-    expect(rows()[0]).toBe(thread);
+    await waitFor(() =>
+      expect(h.journal()?.state.frontiers[`msg:${h.mention.id}`]).toBe(21),
+    );
+    // With Unread off the row stays, no longer unread, and offers no Undo.
+    await waitFor(() =>
+      expect(within(mention).queryByRole("img", { name: "Unread" })).toBeNull(),
+    );
+    expect(rows()).toHaveLength(2);
+    expect(rows()).toContain(mention);
+    expect(
+      within(mention).queryByRole("button", { name: /^Mark as read / }),
+    ).toBeNull();
+    expect(screen.queryByText("Marked as read")).not.toBeInTheDocument();
     expect(thread).toHaveAttribute("data-selected");
     expect(screen.getByRole("textbox")).toBe(editor);
     expect(editor).toHaveTextContent("Keep the open draft");
-    expect(h.journal()?.state.frontiers[`msg:${h.mention.id}`]).toBeUndefined();
-  },
-);
-
-it("archives and restores conversations in an active member channel across remounts", async () => {
-  const h = fixture();
-  let view = render(h.view);
-  await waitFor(() => expect(rows()).toHaveLength(2));
-  expect(
-    h.session.channels.list().channels.find((channel) => channel.id === "room"),
-  ).toMatchObject({
-    members: expect.arrayContaining([h.viewer.pubkey]),
-  });
-  expect(
-    h.session.channels.list().channels.find((channel) => channel.id === "room")
-      ?.archived,
-  ).toBeFalsy();
-  const threadRow = () =>
-    rows().find((row) => row.textContent?.includes("A thread update"));
-  const thread = threadRow();
-  if (!thread) throw new Error("Missing fixture thread row");
-  fireEvent.click(within(thread).getByRole("button", { name: /^Archive / }));
-  await waitFor(() => expect(threadRow()).toBeUndefined());
-  expect(screen.queryByRole("alert")).not.toBeInTheDocument();
-  expect(queryReader()).not.toBeInTheDocument();
-
-  view.unmount();
-  view = render(h.view);
-  await waitFor(() => expect(rows()).toHaveLength(1));
-  await chooseFilter("Archived", "Show");
-  await waitFor(() => expect(rows()).toHaveLength(1));
-  const archivedThread = threadRow();
-  if (!archivedThread) throw new Error("Missing archived thread row");
-  fireEvent.click(
-    within(archivedThread).getByRole("button", { name: /^Restore / }),
-  );
-  await waitFor(() => expect(rows()).toHaveLength(0));
-  expect(screen.queryByRole("alert")).not.toBeInTheDocument();
-
-  view.unmount();
-  render(h.view);
-  await screen.findByText("No archived conversations in this view");
-  await chooseFilter("Inbox", "Show");
-  await waitFor(() => expect(rows()).toHaveLength(2));
-  expect(threadRow()).toBeDefined();
-});
-
-it("defaults saved filters field by field", async () => {
-  const h = fixture();
-  localStorage.setItem(
-    `buzz-view.v1:${JSON.stringify([h.owner.session.scope, "inbox:filters"])}`,
-    JSON.stringify({ show: "archived", activity: "bogus" }),
-  );
-  render(h.view);
-  await waitFor(() =>
-    expect(
-      screen.getByRole("button", { name: "Inbox filters" }),
-    ).toHaveTextContent("Archived"),
-  );
-  expect(
-    screen.getByRole("button", { name: "Inbox filters" }),
-  ).toHaveTextContent(/^Archived$/);
-  expect(screen.getByRole("button", { name: "Unread only" })).toHaveAttribute(
-    "aria-pressed",
-    "false",
-  );
-});
-
-it.each([
-  [false, false],
-  [true, false],
-  [false, true],
-  [true, true],
-])(
-  "Restore from the Archive shortcut preserves its reader/draft and unread neighbor (neighbor=%s, Retry=%s)",
-  async (withNeighbor, retry) => {
-    const h = fixture({ withWriter: true });
-    render(h.view);
-    await waitFor(() => expect(rows()).toHaveLength(2));
-    const thread = rows().find((row) =>
-      row.textContent?.includes("A thread update"),
-    );
-    if (!thread) throw new Error("Missing fixture thread row");
-    fireEvent.click(within(thread).getByRole("button", { name: /^Archive / }));
-    await waitFor(() => expect(rows()).toHaveLength(1));
-    if (withNeighbor) {
-      const remaining = rows()[0];
-      if (!remaining) throw new Error("Missing neighbor row");
-      fireEvent.click(
-        within(remaining).getByRole("button", { name: /^Archive / }),
-      );
-      await waitFor(() => expect(rows()).toHaveLength(0));
-    }
-    await chooseFilter("Archived", "Show");
-    await waitFor(() => expect(rows()).toHaveLength(withNeighbor ? 2 : 1));
-    const archivedThread = rows().find((row) =>
-      row.textContent?.includes("A thread update"),
-    );
-    if (!archivedThread) throw new Error("Missing archived fixture thread");
-    fireEvent.click(
-      within(archivedThread).getByRole("button", { name: /^Open / }),
-    );
-    const editor = (await screen.findByRole("textbox")) as ComposerInputElement;
-    act(() => editor.insertText("Keep the restored reader draft"));
-    const list = screen.getByRole("list", { name: "Inbox conversations" });
-    await waitFor(() => expect(list).toHaveAttribute("aria-busy", "false"));
-    const detail = reader();
-    expect(h.journal()?.state.frontiers[`msg:${h.mention.id}`]).toBeUndefined();
-    const save = Storage.prototype.setItem;
-    const storage = retry
-      ? vi.spyOn(Storage.prototype, "setItem").mockImplementation(function (
-          this: Storage,
-          key,
-          value,
-        ) {
-          if (key.includes("inbox:archives")) throw new Error("disk full");
-          save.call(this, key, value);
-        })
-      : undefined;
-    try {
-      await archiveOpened(h);
-      if (retry) {
-        await waitFor(() =>
-          expect(screen.getByRole("alert")).toHaveTextContent(
-            "Could not save the Inbox archive",
-          ),
-        );
-        expect(rows()).toHaveLength(withNeighbor ? 2 : 1);
-        expect(reader()).toBe(detail);
-        expect(screen.getByRole("textbox")).toBe(editor);
-        expect(editor).toHaveTextContent("Keep the restored reader draft");
-        expect(
-          h.journal()?.state.frontiers[`msg:${h.mention.id}`],
-        ).toBeUndefined();
-        storage?.mockImplementation(function (this: Storage, key, value) {
-          save.call(this, key, value);
-        });
-        fireEvent.click(screen.getByRole("button", { name: "Retry inbox" }));
-      }
-      await waitFor(() => expect(rows()).toHaveLength(withNeighbor ? 1 : 0));
-      await waitFor(() => expect(list).toHaveAttribute("aria-busy", "false"));
-      expect(reader()).toBe(detail);
-      expect(screen.getByRole("textbox")).toBe(editor);
-      expect(editor).toHaveTextContent("Keep the restored reader draft");
-      await waitFor(() => expect(h.archive.current).toBeDefined());
-      expect(
-        h.journal()?.state.frontiers[`msg:${h.mention.id}`],
-      ).toBeUndefined();
-      if (withNeighbor) {
-        const neighbor = rows()[0];
-        if (!neighbor) throw new Error("Missing unread neighbor");
-        expect(
-          within(neighbor).getByRole("img", { name: "Unread" }),
-        ).toBeInTheDocument();
-      }
-    } finally {
-      storage?.mockRestore();
-    }
-  },
-);
-
-it("keeps an archived thread and its composer mounted when a new mention reopens it", async () => {
-  const h = fixture({ withWriter: true });
-  render(h.view);
-  await waitFor(() => expect(rows()).toHaveLength(2));
-  const threadRow = rows().find((row) =>
-    row.textContent?.includes("A thread update"),
-  );
-  if (!threadRow) throw new Error("Missing fixture thread row");
-  fireEvent.click(within(threadRow).getByRole("button", { name: /^Open / }));
-  await findReader();
-  await archiveOpened(h);
-  await waitFor(() => expect(rows()).toHaveLength(1));
-  // Archiving advances the reader; let its read of the next conversation settle.
-  await waitFor(() =>
-    expect(
-      screen.getByRole("list", { name: "Inbox conversations" }),
-    ).toHaveAttribute("aria-busy", "false"),
-  );
-  await waitFor(() =>
-    expect(
-      reader().querySelector(`[data-message-id="${h.mention.id}"]`),
-    ).toBeInTheDocument(),
-  );
-  await chooseFilter("Archived", "Show");
-  await waitFor(() => expect(rows()).toHaveLength(1));
-  const [archivedRow] = rows();
-  if (!archivedRow) throw new Error("Missing archived thread row");
-  fireEvent.click(within(archivedRow).getByRole("button", { name: /^Open / }));
-  const editor = (await screen.findByRole("textbox")) as ComposerInputElement;
-  expect(editor.insertText("Keep this draft")).toBe(true);
-  expect(editor).toHaveTextContent("Keep this draft");
-
-  if (!h.root) throw new Error("Missing fixture thread root");
-  const incoming = message(
-    h.alice,
-    "room",
-    "New mention",
-    Math.floor(Date.now() / 1000) + 2,
-    [
-      ["e", h.root.id, "", "reply"],
-      ["p", h.viewer.pubkey],
-    ],
-  );
-  h.addEvent(incoming);
-  act(() => h.emit([incoming]));
-
-  await waitFor(() => expect(rows()).toHaveLength(0));
-  expect(reader()).toBeInTheDocument();
-  expect(screen.getByRole("textbox")).toBe(editor);
-  expect(editor).toHaveTextContent("Keep this draft");
-});
-
-it("keeps the conversation visible and reports a failed archive save", async () => {
-  const h = fixture();
-  render(h.view);
-  const list = screen.getByRole("list", { name: "Inbox conversations" });
-  await waitFor(() =>
-    expect(
-      within(list).getAllByRole("button", { name: /^Open / }),
-    ).toHaveLength(2),
-  );
-  const row = within(list).getAllByRole("button", { name: /^Open / })[0];
-  if (!row) throw new Error("Missing fixture row");
-  fireEvent.click(row);
-  await waitFor(() => expect(h.archive.current).toBeDefined());
-  const save = Storage.prototype.setItem;
-  vi.spyOn(Storage.prototype, "setItem").mockImplementation(function (
-    this: Storage,
-    key,
-    value,
-  ) {
-    if (key.includes("inbox:archives")) throw new Error("disk full");
-    save.call(this, key, value);
-  });
-  act(() => h.archive.current?.());
-  await waitFor(() =>
-    expect(screen.getByRole("alert")).toHaveTextContent(
-      "Could not save the Inbox archive",
-    ),
-  );
-  expect(within(list).getAllByRole("button", { name: /^Open / })).toHaveLength(
-    2,
-  );
-  expect(reader()).toBeInTheDocument();
-});
-it.each(["reply", "unrelated", "mention"] as const)(
-  "archive Retry survives an intervening %s projection update",
-  async (update) => {
-    vi.useFakeTimers({ toFake: ["Date"] });
-    vi.setSystemTime(new Date("2030-01-01T00:00:00Z"));
-    const h = fixture();
-    render(h.view);
-    await waitFor(() => expect(rows()).toHaveLength(2));
-    const thread = rows().find((row) =>
-      row.textContent?.includes("A thread update"),
-    );
-    if (!thread || !h.root) throw new Error("Missing fixture thread");
-    const admitted = h.session.unread.inbox().items.find((item) => item.thread);
-    if (!admitted) throw new Error("Missing admitted conversation");
-    const save = Storage.prototype.setItem;
-    const storage = vi
-      .spyOn(Storage.prototype, "setItem")
-      .mockImplementation(function (this: Storage, key, value) {
-        if (key.includes("inbox:archives")) throw new Error("disk full");
-        save.call(this, key, value);
-      });
-    fireEvent.click(within(thread).getByRole("button", { name: /^Archive / }));
-    expect(await screen.findByRole("alert")).toHaveTextContent(
-      "Could not save the Inbox archive",
-    );
-    storage.mockRestore();
-    const incoming = message(
-      h.alice,
-      "room",
-      `Intervening ${update}`,
-      Math.floor(Date.now() / 1000) + 1,
-      update === "unrelated"
-        ? [["p", h.viewer.pubkey]]
-        : [
-            ["e", h.root.id, "", "reply"],
-            ...(update === "mention" ? [["p", h.viewer.pubkey]] : []),
-          ],
-    );
-    h.addEvent(incoming);
-    act(() => h.emit([incoming]));
-    await waitFor(() => {
-      const current = h.session.unread.inbox().items;
-      expect(current).not.toContain(admitted);
-      expect(
-        current.some((item) => item.messageIds.includes(incoming.id)),
-      ).toBe(true);
-    });
-    vi.setSystemTime(new Date("2030-01-01T00:00:05Z"));
-    fireEvent.click(screen.getByRole("button", { name: "Retry inbox" }));
-    if (update !== "unrelated") {
-      await waitFor(() =>
-        expect(screen.queryByRole("alert")).not.toBeInTheDocument(),
-      );
-      expect(
-        rows().some((row) =>
-          row.textContent?.includes(`Intervening ${update}`),
-        ),
-      ).toBe(true);
-      await chooseFilter("Archived", "Show");
-      expect(rows()).toHaveLength(0);
-      return;
-    }
-    await waitFor(() =>
-      expect(
-        rows().some((row) => row.textContent?.includes("A thread update")),
-      ).toBe(false),
-    );
-    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
-    await chooseFilter("Archived", "Show");
-    expect(rows()).toHaveLength(1);
-    expect(rows()[0]).toHaveTextContent("A thread update");
-  },
-);
-
-it("archive Retry cannot survive access revoke and regrant", async () => {
-  const h = fixture();
-  render(h.view);
-  await waitFor(() => expect(rows()).toHaveLength(2));
-  const thread = rows().find((row) =>
-    row.textContent?.includes("A thread update"),
-  );
-  if (!thread) throw new Error("Missing fixture thread");
-  const save = Storage.prototype.setItem;
-  const storage = vi
-    .spyOn(Storage.prototype, "setItem")
-    .mockImplementation(function (this: Storage, key, value) {
-      if (key.includes("inbox:archives")) throw new Error("disk full");
-      save.call(this, key, value);
-    });
-  fireEvent.click(within(thread).getByRole("button", { name: /^Archive / }));
-  expect(await screen.findByRole("alert")).toHaveTextContent(
-    "Could not save the Inbox archive",
-  );
-  storage.mockRestore();
-  act(() => {
-    h.revokeRoom();
-    h.restoreRoom();
-  });
-  await waitFor(() => expect(rows()).toHaveLength(2));
-  fireEvent.click(screen.getByRole("button", { name: "Retry inbox" }));
-  expect(await screen.findByRole("alert")).toHaveTextContent(
-    "Inbox action expired",
-  );
-  await chooseFilter("Archived", "Show");
-  expect(rows()).toHaveLength(0);
-});
-
-it("archive Retry advances the reader and saves the next conversation's read frontier", async () => {
-  const h = fixture();
-  render(h.view);
-  await waitFor(() => expect(rows()).toHaveLength(2));
-  const thread = rows().find((row) =>
-    row.textContent?.includes("A thread update"),
-  );
-  if (!thread) throw new Error("Missing fixture thread row");
-  fireEvent.click(within(thread).getByRole("button", { name: /^Open / }));
-  await waitFor(() => expect(h.archive.current).toBeDefined());
-  expect(h.journal()?.state.frontiers[`msg:${h.mention.id}`]).toBeUndefined();
-  const save = Storage.prototype.setItem;
-  const storage = vi
-    .spyOn(Storage.prototype, "setItem")
-    .mockImplementation(function (this: Storage, key, value) {
-      if (key.includes("inbox:archives")) throw new Error("disk full");
-      save.call(this, key, value);
-    });
-  act(() => h.archive.current?.());
-  expect(await screen.findByRole("alert")).toHaveTextContent(
-    "Could not save the Inbox archive",
-  );
-  expect(rows()).toHaveLength(2);
-  expect(thread).toHaveAttribute("data-selected");
-  storage.mockRestore();
-  fireEvent.click(screen.getByRole("button", { name: "Retry inbox" }));
-  await waitFor(() => expect(rows()).toHaveLength(1));
-  expect(rows()[0]).toHaveAttribute("data-selected");
-  expect(reader()).toBeInTheDocument();
-  expect(sideTabs()).toHaveLength(1);
-  await waitFor(() =>
-    expect(h.journal()?.state.frontiers[`msg:${h.mention.id}`]).toBe(21),
-  );
-});
-
-it.each([false, true])(
-  "Archive shortcut Retry uses the current Threads list (visible successor: %s)",
-  async (withSuccessor) => {
-    const h = fixture();
-    const root = message(h.viewer, "room", "Another discussion", 17);
-    const reply = message(h.alice, "room", "Another thread update", 18, [
-      ["e", root.id, "", "reply"],
-    ]);
-    if (withSuccessor) {
-      h.addEvent(root);
-      h.addEvent(reply);
-      act(() => h.emit([root, reply]));
-    }
-    render(h.view);
-    await waitFor(() => expect(rows()).toHaveLength(withSuccessor ? 3 : 2));
-    const thread = rows().find((row) =>
-      row.textContent?.includes("A thread update"),
-    );
-    if (!thread) throw new Error("Missing fixture thread row");
-    fireEvent.click(within(thread).getByRole("button", { name: /^Open / }));
-    await waitFor(() => expect(h.archive.current).toBeDefined());
-    const save = Storage.prototype.setItem;
-    const storage = vi
-      .spyOn(Storage.prototype, "setItem")
-      .mockImplementation(function (this: Storage, key, value) {
-        if (key.includes("inbox:archives")) throw new Error("disk full");
-        save.call(this, key, value);
-      });
-    act(() => h.archive.current?.());
-    expect(await screen.findByRole("alert")).toHaveTextContent(
-      "Could not save the Inbox archive",
-    );
-    storage.mockRestore();
-    await chooseFilter("Threads");
-    await waitFor(() => expect(rows()).toHaveLength(withSuccessor ? 2 : 1));
-    fireEvent.click(screen.getByRole("button", { name: "Retry inbox" }));
-    await waitFor(() => expect(rows()).toHaveLength(withSuccessor ? 1 : 0));
-    await waitFor(() =>
-      expect(
-        screen.getByRole("list", { name: "Inbox conversations" }),
-      ).toHaveAttribute("aria-busy", "false"),
-    );
-    expect(h.journal()?.state.frontiers[`msg:${h.mention.id}`]).toBeUndefined();
-    if (withSuccessor) {
-      expect(rows()[0]).toHaveTextContent("Another thread update");
-      expect(rows()[0]).toHaveAttribute("data-selected");
-      expect(sideTabs()).toHaveLength(1);
-      await waitFor(() =>
-        expect(h.journal()?.state.frontiers[`thread:${root.id}`]).toBe(18),
-      );
-    } else {
-      expect(queryReader()).not.toBeInTheDocument();
-      expect(sideTabs()).toEqual([]);
-    }
-    await chooseFilter("All activity");
-    const mention = rows().find((row) =>
-      row.textContent?.includes("Please review"),
-    );
-    if (!mention) throw new Error("Missing unread mention row");
-    expect(
-      within(mention).getByRole("img", { name: "Unread" }),
-    ).toBeInTheDocument();
-    expect(mention).not.toHaveAttribute("data-selected");
   },
 );
 
 it.each([false, true])(
-  "sending leaves the conversation in Inbox (DM: %s)",
+  "sending leaves the conversation open in its list (DM: %s)",
   async (dm) => {
     const h = fixture({ withWriter: true, withDm: dm });
     render(h.view);
@@ -1470,9 +317,6 @@ it.each([false, true])(
     if (!row) throw Error("Missing send fixture row");
     fireEvent.click(within(row).getByRole("button", { name: /^Open / }));
     const editor = (await screen.findByRole("textbox")) as ComposerInputElement;
-    expect(
-      screen.queryByRole("checkbox", { name: "Archive on send" }),
-    ).not.toBeInTheDocument();
     act(() => {
       editor.insertText("Keep conversation open");
     });
@@ -1483,57 +327,55 @@ it.each([false, true])(
   },
 );
 
-it("does not archive a failed send or discard its draft", async () => {
-  const h = fixture({ withWriter: true });
-  render(h.view);
-  await waitFor(() => expect(rows()).toHaveLength(2));
-  const row = rows().find((entry) =>
-    entry.textContent?.includes("A thread update"),
+it("defaults saved filters field by field and loads a retired Archived view as the normal list", async () => {
+  const h = fixture();
+  localStorage.setItem(
+    `buzz-view.v1:${JSON.stringify([h.owner.session.scope, "inbox:filters"])}`,
+    JSON.stringify({ show: "archived", activity: "bogus", sender: "agents" }),
   );
-  if (!row) throw Error("Missing thread row");
-  fireEvent.click(within(row).getByRole("button", { name: /^Open / }));
-  const editor = (await screen.findByRole("textbox")) as ComposerInputElement;
-  vi.spyOn(h.session.messages, "reply").mockImplementation(() => {
-    throw Error("Send rejected");
-  });
-  act(() => {
-    editor.insertText("Retain failed response");
-  });
-  fireEvent.click(screen.getByRole("button", { name: "Send message" }));
-  await screen.findByText("Send rejected");
-  expect(rows()).toHaveLength(2);
-  expect(screen.getByRole("textbox")).toBe(editor);
-  expect(editor).toHaveValue("Retain failed response");
+  render(h.view);
+  // Archive is gone: the saved Archived view shows every conversation.
+  await waitFor(() => expect(rows()).toHaveLength(0));
+  expect(fromTrigger()).toHaveAccessibleName("From agents");
+  expect(
+    screen.getByRole("tab", { name: "All", selected: true }),
+  ).toBeInTheDocument();
+  expect(unreadToggle()).toHaveAttribute("aria-checked", "false");
+  fireEvent.click(fromTrigger());
+  fireEvent.click(await screen.findByRole("menuitemradio", { name: "Anyone" }));
+  await waitFor(() => expect(rows()).toHaveLength(2));
+  expect(fromTrigger()).toHaveAccessibleName("From anyone");
+  expect(savedFilters(h)).not.toHaveProperty("show");
 });
 
-it("keeps an already archived conversation selected after sending in Archived", async () => {
-  const h = fixture({ withWriter: true });
-  render(h.view);
-  await waitFor(() => expect(rows()).toHaveLength(2));
-  const row = rows().find((entry) =>
-    entry.textContent?.includes("A thread update"),
-  );
-  if (!row) throw Error("Missing thread row");
-  fireEvent.click(within(row).getByRole("button", { name: /^Archive / }));
-  await chooseFilter("Archived", "Show");
-  await waitFor(() => expect(rows()).toHaveLength(1));
-  const [archivedRow] = rows();
-  if (!archivedRow) throw Error("Missing archived row");
-  fireEvent.click(within(archivedRow).getByRole("button", { name: /^Open / }));
-  const editor = (await screen.findByRole("textbox")) as ComposerInputElement;
-  await waitFor(() =>
+it.each([
+  ["everyone", "From anyone", "Anyone"],
+  ["humans", "From people", "People"],
+  ["agents", "From agents", "Agents"],
+] as const)(
+  "a saved %s sender loads as %s with its From choice checked",
+  async (sender, label, choice) => {
+    const h = fixture();
+    localStorage.setItem(
+      `buzz-view.v1:${JSON.stringify([h.owner.session.scope, "inbox:filters"])}`,
+      JSON.stringify({ sender }),
+    );
+    render(h.view);
+    await waitFor(() => expect(fromTrigger()).toHaveAccessibleName(label));
+    fireEvent.click(fromTrigger());
+    const menu = await screen.findByRole("menu", { name: "From" });
     expect(
-      screen.getByRole("list", { name: "Inbox conversations" }),
-    ).toHaveAttribute("aria-busy", "false"),
-  );
-  act(() => {
-    editor.insertText("Archived reply");
-  });
-  fireEvent.click(screen.getByRole("button", { name: "Send message" }));
-  await waitFor(() => expect(editor).toHaveValue(""));
-  expect(screen.getByRole("textbox")).toBe(editor);
-  expect(rows()).toHaveLength(1);
-});
+      within(menu)
+        .getAllByRole("menuitemradio")
+        .map((item) => [item.textContent, item.getAttribute("aria-checked")]),
+    ).toEqual(
+      ["Anyone", "People", "Agents"].map((name) => [
+        name,
+        String(name === choice),
+      ]),
+    );
+  },
+);
 
 it("reconciles saved preferences from another window", async () => {
   const h = fixture({ withWriter: true });
@@ -1567,17 +409,10 @@ it("reconciles saved preferences from another window", async () => {
       );
     }
   });
-  expect(
-    screen.getByRole("button", { name: "Inbox filters" }),
-  ).not.toHaveTextContent("Inbox and archived");
-  expect(
-    screen.getByRole("button", { name: "Inbox filters" }),
-  ).toHaveTextContent("All");
-  expect(
-    screen.getByRole("button", { name: "Inbox filters" }),
-  ).toHaveTextContent("Agents");
-  expect(screen.getByRole("button", { name: "Unread only" })).toHaveAttribute(
-    "aria-pressed",
+  expect(activityType()).toBe("All");
+  expect(fromTrigger()).toHaveAccessibleName("From agents");
+  expect(screen.getByRole("switch", { name: "Unread" })).toHaveAttribute(
+    "aria-checked",
     "true",
   );
 });
@@ -1591,9 +426,9 @@ const previewAt = (h: ReturnType<typeof fixture>, close = vi.fn()) => (
   />
 );
 const previewRows = () =>
-  within(
-    screen.getByRole("list", { name: "Recent Inbox conversations" }),
-  ).queryAllByRole("listitem");
+  within(screen.getByRole("list", { name: "Recent activity" })).queryAllByRole(
+    "listitem",
+  );
 async function markRead(h: ReturnType<typeof fixture>, channelId: string) {
   const items = h.session.unread
     .inbox()
@@ -1609,7 +444,7 @@ async function markRead(h: ReturnType<typeof fixture>, channelId: string) {
   });
 }
 
-it("previews recent conversations without archived ones and opens a row directly", async () => {
+it("previews recent conversations and opens a row directly", async () => {
   const h = fixture({ withDm: true });
   const close = vi.fn();
   render(previewAt(h, close));
@@ -1617,28 +452,19 @@ it("previews recent conversations without archived ones and opens a row directly
   expect(
     screen.getByText("1 mention · 1 thread · 1 DM unread"),
   ).toBeInTheDocument();
-  // The card reads archives but never reopens them; that write is the page's.
-  const dm = h.session.unread
-    .inbox()
-    .items.find((item) => item.channelId === "dm-room");
-  if (!dm) throw new Error("Missing DM conversation");
-  act(() =>
-    updateArchive(h.session.scope, dm, true, Math.floor(Date.now() / 1000)),
-  );
-  await waitFor(() => expect(previewRows()).toHaveLength(2));
-  expect(screen.queryByText("A direct reply")).not.toBeInTheDocument();
-  expect(screen.getByText("1 mention · 1 thread unread")).toBeInTheDocument();
 
-  // The newest row opens at its exact message, in its thread when it has one.
+  // The newest #Design row opens at its exact message, in its thread when it has one.
   const [newest] = h.session.unread
     .inbox()
     .items.filter((item) => item.channelId === "room")
     .sort((a, b) => b.createdAt - a.createdAt || a.id.localeCompare(b.id));
   if (!newest) throw new Error("Missing room conversation");
+  const roomRow = previewRows().find((row) =>
+    within(row).queryByRole("button", { name: /^Open Alice in #Design/ }),
+  );
+  if (!roomRow) throw new Error("Missing room preview row");
   fireEvent.click(
-    within(previewRows()[0] as HTMLElement).getByRole("button", {
-      name: /^Open Alice in #Design/,
-    }),
+    within(roomRow).getByRole("button", { name: /^Open Alice in #Design/ }),
   );
   expect(close).toHaveBeenCalledOnce();
   expect(h.open).toHaveBeenLastCalledWith({
@@ -1649,15 +475,9 @@ it("previews recent conversations without archived ones and opens a row directly
     messageId: newest.messageId,
     ...(newest.rootId && { threadRootId: newest.rootId }),
   });
-  fireEvent.click(screen.getByRole("button", { name: "Open Inbox" }));
+  fireEvent.click(screen.getByRole("button", { name: "Open Activity" }));
   expect(close).toHaveBeenCalledTimes(2);
   expect(h.open).toHaveBeenLastCalledWith(inboxTarget);
-
-  act(() => {
-    for (const item of h.session.unread.inbox().items)
-      updateArchive(h.session.scope, item, true, Math.floor(Date.now() / 1000));
-  });
-  expect(await screen.findByText("No recent activity")).toBeInTheDocument();
 });
 
 it("keeps Unread only to the card and offers recent activity once caught up", async () => {
@@ -1697,13 +517,13 @@ it("shows the card's connection and read failures with their recovery", async ()
   await waitFor(() => expect(previewRows()).toHaveLength(2));
   act(() => offline.disconnect());
   expect(
-    await screen.findByText("Choose a community to see your inbox."),
+    await screen.findByText("Choose a community to see your activity."),
   ).toBeInTheDocument();
   expect(screen.getByRole("switch", { name: "Unread only" })).toHaveAttribute(
     "aria-disabled",
     "true",
   );
-  expect(screen.getByRole("button", { name: "Open Inbox" })).toBeEnabled();
+  expect(screen.getByRole("button", { name: "Open Activity" })).toBeEnabled();
   view.unmount();
 
   const h = fixture({ failRoster: true });
@@ -1711,7 +531,7 @@ it("shows the card's connection and read failures with their recovery", async ()
   expect(await screen.findByRole("alert")).toHaveTextContent("roster offline");
   const release = h.recoverRoster();
   try {
-    fireEvent.click(screen.getByRole("button", { name: "Retry inbox" }));
+    fireEvent.click(screen.getByRole("button", { name: "Retry activity" }));
     await waitFor(() => expect(h.rosterStarted()).toBe(true));
   } finally {
     await act(async () => release());
@@ -1739,7 +559,7 @@ it("refreshes the card's failed activity once its roster Retry recovers", async 
   );
   const release = h.recoverRoster();
   try {
-    fireEvent.click(screen.getByRole("button", { name: "Retry inbox" }));
+    fireEvent.click(screen.getByRole("button", { name: "Retry activity" }));
     await waitFor(() => expect(h.rosterStarted()).toBe(true));
   } finally {
     await act(async () => release());
@@ -1767,8 +587,8 @@ it.each([true, false])(
       "auxiliary history unavailable",
     );
     h.failAux(false);
-    const retry = screen.getByRole("button", { name: "Retry inbox" });
-    const openInbox = screen.getByRole("button", { name: "Open Inbox" });
+    const retry = screen.getByRole("button", { name: "Retry activity" });
+    const openInbox = screen.getByRole("button", { name: "Open Activity" });
     if (owned) {
       retry.focus();
       await user.keyboard("{Enter}");
@@ -1800,14 +620,14 @@ it("retries the card's connection, activity and read-state failures", async () =
     "auxiliary history unavailable",
   );
   h.failAux(false);
-  fireEvent.click(screen.getByRole("button", { name: "Retry inbox" }));
+  fireEvent.click(screen.getByRole("button", { name: "Retry activity" }));
   await waitFor(() => expect(h.retrySync).toHaveBeenCalledOnce());
   await waitFor(() =>
     expect(screen.queryByRole("alert")).not.toBeInTheDocument(),
   );
   act(() => h.failSync("read state offline"));
   expect(screen.getByRole("alert")).toHaveTextContent("read state offline");
-  fireEvent.click(screen.getByRole("button", { name: "Retry inbox" }));
+  fireEvent.click(screen.getByRole("button", { name: "Retry activity" }));
   await waitFor(() => expect(h.retrySync).toHaveBeenCalledTimes(2));
   act(() => h.failSync());
   expect(screen.queryByRole("alert")).not.toBeInTheDocument();
@@ -1817,7 +637,7 @@ it("retries the card's connection, activity and read-state failures", async () =
     await h.owner.clearCache();
   });
   expect(
-    screen.queryByRole("list", { name: "Recent Inbox conversations" }),
+    screen.queryByRole("list", { name: "Recent activity" }),
   ).not.toBeInTheDocument();
   expect(screen.queryByText("No recent activity")).not.toBeInTheDocument();
   expect(screen.queryByText("Nothing unread")).not.toBeInTheDocument();
@@ -2211,7 +1031,6 @@ function fixture(
     clearCache: owner.clearCache,
   };
   const open = vi.fn<Navigation["open"]>(async () => ({ status: "opened" }));
-  const archive: ArchiveShortcut = {};
   const host = {
     relay,
     navigation: { open },
@@ -2381,16 +1200,13 @@ function fixture(
     mention,
     reply,
     open,
-    archive,
     journal: () => journal,
     view: (
       <StrictMode>
         <InboxPage
-          host={host}
           tabs={(props) => <PageTabs {...props} host={host} />}
           relay={relay}
           navigator={{ open } as unknown as Navigation}
-          archive={archive}
         />
       </StrictMode>
     ),
@@ -2457,9 +1273,9 @@ function fixture(
 /** Relay-hosted, so `media()` decides which variant the row loads. */
 const alicePicture = `https://relay.test/media/${"a".repeat(64)}.png`;
 const rows = () =>
-  within(
-    screen.getByRole("list", { name: "Inbox conversations" }),
-  ).queryAllByRole("listitem");
+  within(screen.getByRole("list", { name: "Activity" })).queryAllByRole(
+    "listitem",
+  );
 /** The conversation Inbox opened in a tab beside its list. */
 const reader = () => screen.getByRole("region", { name: /^Conversation in / });
 const queryReader = () =>
@@ -2470,22 +1286,31 @@ const tabs = (name: string) =>
   within(screen.getByRole("tablist", { name }))
     .getAllByRole("tab")
     .map((tab) => tab.textContent);
-/** The side pane's tabs, beside the main pane's "Inbox tabs". */
-const sideTabs = () => {
-  const list = screen
+/** The side pane's tab list, beside the main pane's and the type filter's. */
+const sideTabList = () =>
+  screen
     .queryAllByRole("tablist")
-    .find((item) => item.getAttribute("aria-label") !== "Inbox tabs");
+    .find(
+      (item) =>
+        !["Activity tabs", "Activity type"].includes(
+          item.getAttribute("aria-label") ?? "",
+        ),
+    );
+/** The selected Activity type tab's label. */
+const activityType = () =>
+  within(screen.getByRole("tablist", { name: "Activity type" })).queryByRole(
+    "tab",
+    { selected: true },
+  )?.textContent;
+/** The side pane's tabs, beside the main pane's "Activity tabs". */
+const sideTabs = () => {
+  const list = sideTabList();
   return list
     ? within(list)
         .getAllByRole("tab")
         .map((tab) => tab.textContent)
     : [];
 };
-/** The Archive shortcut, once it acts on the conversation opened last. */
-async function archiveOpened(h: { archive: ArchiveShortcut }) {
-  await waitFor(() => expect(h.archive.current).toBeDefined());
-  act(() => h.archive.current?.());
-}
 /** A visit's presentation: every open, even of the same address, is a new object. */
 function visit(params?: InboxRoute): PageNavigation {
   return {
@@ -2516,9 +1341,9 @@ const savedFilters = (h: ReturnType<typeof fixture>) =>
       `buzz-view.v1:${JSON.stringify([h.owner.session.scope, "inbox:filters"])}`,
     ) ?? "null",
   );
-const filterSummary = () =>
-  screen.getByRole("button", { name: "Inbox filters" });
-const unreadToggle = () => screen.getByRole("button", { name: "Unread only" });
+/** The From menu's trigger, which names the current choice. */
+const fromTrigger = () => screen.getByRole("button", { name: /^From / });
+const unreadToggle = () => screen.getByRole("switch", { name: "Unread" });
 
 it.each([
   [{ activity: "all", attention: "unread" }, "All", "true"],
@@ -2532,18 +1357,16 @@ it.each([
     localStorage.setItem(
       `buzz-view.v1:${JSON.stringify([h.owner.session.scope, "inbox:filters"])}`,
       JSON.stringify({
-        show: "archived",
         activity: "all",
         sender: "agents",
         attention: "all",
       }),
     );
     render(viewAt(h, visit(params)));
-    await waitFor(() => expect(filterSummary()).toHaveTextContent(label));
-    expect(filterSummary()).not.toHaveTextContent("Archived");
-    expect(unreadToggle()).toHaveAttribute("aria-pressed", unread);
+    await waitFor(() => expect(activityType()).toBe(label));
+    expect(fromTrigger()).toHaveAccessibleName("From agents");
+    expect(unreadToggle()).toHaveAttribute("aria-checked", unread);
     expect(savedFilters(h)).toEqual({
-      show: "inbox",
       sender: "agents",
       attention: unread === "true" ? "unread" : "all",
       ...params,
@@ -2558,213 +1381,95 @@ it("keeps the saved attention when a shortcut names only an activity", async () 
     JSON.stringify({ attention: "unread" }),
   );
   render(viewAt(h, visit({ activity: "threads" })));
-  await waitFor(() => expect(filterSummary()).toHaveTextContent("Threads"));
-  expect(unreadToggle()).toHaveAttribute("aria-pressed", "true");
+  await waitFor(() => expect(activityType()).toBe("Threads"));
+  expect(unreadToggle()).toHaveAttribute("aria-checked", "true");
   expect(savedFilters(h)).toMatchObject({ attention: "unread" });
 });
 
 it("re-applies a repeated shortcut open after the filters were changed by hand", async () => {
   const h = fixture({ withDm: true });
   const view = render(viewAt(h, visit({ activity: "threads" })));
-  await waitFor(() => expect(filterSummary()).toHaveTextContent("Threads"));
+  await waitFor(() => expect(activityType()).toBe("Threads"));
   await chooseFilter("Mentions");
   await chooseFilter("Unread only", "Attention");
-  expect(filterSummary()).toHaveTextContent("Mentions");
+  expect(activityType()).toBe("Mentions");
   // A rerender of the same presentation is not a new visit.
   const same = visit({ activity: "threads" });
   view.rerender(viewAt(h, same));
-  await waitFor(() => expect(filterSummary()).toHaveTextContent("Threads"));
+  await waitFor(() => expect(activityType()).toBe("Threads"));
   await chooseFilter("DMs");
   view.rerender(viewAt(h, same));
-  expect(filterSummary()).toHaveTextContent("DMs");
+  expect(activityType()).toBe("DMs");
   // The host presents a repeated open of an identical address as a new object.
   view.rerender(viewAt(h, visit({ activity: "threads" })));
-  await waitFor(() => expect(filterSummary()).toHaveTextContent("Threads"));
+  await waitFor(() => expect(activityType()).toBe("Threads"));
   expect(savedFilters(h)).toMatchObject({ activity: "threads" });
 });
 
 it("Back/Forward to a shortcut visit keeps the filters chosen since", async () => {
   const h = fixture({ withDm: true });
   const view = render(viewAt(h, visit({ activity: "threads" })));
-  await waitFor(() => expect(filterSummary()).toHaveTextContent("Threads"));
+  await waitFor(() => expect(activityType()).toBe("Threads"));
   await chooseFilter("Mentions");
   // Traversal presents the visit as a new object carrying the same address.
   view.rerender(
     viewAt(h, { ...visit({ activity: "threads" }), traversal: true }),
   );
-  expect(filterSummary()).toHaveTextContent("Mentions");
+  expect(activityType()).toBe("Mentions");
   expect(savedFilters(h)).toMatchObject({ activity: "mentions" });
 });
 
-it("a shortcut open leaves the Drafts view", async () => {
-  const h = fixture();
-  const view = render(viewAt(h, visit()));
-  await waitFor(() => expect(rows()).toHaveLength(2));
-  await chooseFilter("Drafts");
-  expect(filterSummary()).toHaveTextContent("Drafts");
-  view.rerender(viewAt(h, visit({ activity: "mentions" })));
-  await waitFor(() => expect(filterSummary()).toHaveTextContent("Mentions"));
-  expect(filterSummary()).not.toHaveTextContent("Drafts");
-  expect(
-    screen.getByRole("list", { name: "Inbox conversations" }),
-  ).toBeVisible();
-});
-
-it("a route open applies its status and sender, keeping the other saved filters", async () => {
+it("a route open applies its sender, keeping the other saved filters", async () => {
   const h = fixture({ withDm: true });
   localStorage.setItem(
     `buzz-view.v1:${JSON.stringify([h.owner.session.scope, "inbox:filters"])}`,
     JSON.stringify({
-      show: "inbox",
       activity: "threads",
       sender: "everyone",
       attention: "unread",
     }),
   );
-  render(viewAt(h, visit({ show: "archived", sender: "agents" })));
-  await waitFor(() => expect(filterSummary()).toHaveTextContent("Archived"));
-  expect(filterSummary()).toHaveTextContent("Agents");
-  expect(savedFilters(h)).toEqual({
-    show: "archived",
+  render(viewAt(h, visit({ sender: "agents" })));
+  await waitFor(() =>
+    expect(fromTrigger()).toHaveAccessibleName("From agents"),
+  );
+  expect(activityType()).toBe("Threads");
+  expect(unreadToggle()).toBeChecked();
+  expect(savedFilters(h)).toMatchObject({
     activity: "threads",
     sender: "agents",
     attention: "unread",
   });
 });
 
-it("a route that changes Inbox and Archived ends the selection, as the menu does", async () => {
-  const h = fixture();
-  const view = render(viewAt(h, visit()));
-  const list = () =>
-    within(screen.getByRole("list", { name: "Inbox conversations" }));
-  await waitFor(() =>
-    expect(list().getAllByRole("button", { name: /^Open / })).toHaveLength(2),
-  );
-  const [first] = list().getAllByRole("button", { name: /^Open / });
-  if (!first) throw new Error("Missing fixture row");
-  fireEvent.click(first);
-  await waitFor(() => expect(h.archive.current).toBeDefined());
-  view.rerender(viewAt(h, visit({ show: "archived" })));
-  await waitFor(() => expect(filterSummary()).toHaveTextContent("Archived"));
-  // The hidden Inbox conversation is no longer the Archive shortcut's target.
-  await waitFor(() => expect(h.archive.current).toBeUndefined());
-});
-
-it("a drafts route opens Drafts and leaves saved filters alone", async () => {
-  const h = fixture();
-  const saved = {
-    show: "archived",
-    activity: "dms",
-    sender: "humans",
-    attention: "unread",
-  };
-  localStorage.setItem(
-    `buzz-view.v1:${JSON.stringify([h.owner.session.scope, "inbox:filters"])}`,
-    JSON.stringify(saved),
-  );
-  const view = render(viewAt(h, visit({ drafts: true })));
-  await waitFor(() => expect(filterSummary()).toHaveTextContent("Drafts"));
-  expect(savedFilters(h)).toEqual(saved);
-  view.rerender(viewAt(h, visit({ activity: "mentions" })));
-  await waitFor(() => expect(filterSummary()).toHaveTextContent("Mentions"));
-  expect(filterSummary()).not.toHaveTextContent("Drafts");
-});
-
-it("a drafts route retires a failed Inbox action, as the menu does", async () => {
-  const h = fixture();
-  const view = render(viewAt(h, visit({ activity: "mentions" })));
-  await screen.findByText("Please review this");
-  h.failSave();
-  fireEvent.click(
-    screen.getByRole("button", { name: "Open Alice in #Design" }),
-  );
-  expect(await screen.findByRole("alert")).toHaveTextContent("disk full");
-  view.rerender(
-    viewAt(h, {
-      ...visit({ drafts: true }),
-      entryId: "drafts",
-    } as PageNavigation),
-  );
-  await waitFor(() => expect(filterSummary()).toHaveTextContent("Drafts"));
-  view.rerender(
-    viewAt(h, {
-      ...visit({ activity: "mentions" }),
-      entryId: "back",
-    } as PageNavigation),
-  );
-  await waitFor(() => expect(filterSummary()).toHaveTextContent("Mentions"));
-  // Retry reloads the list; the read captured before Drafts doesn't replay.
-  // Either path clears the notice only after its run settles.
-  fireEvent.click(screen.getByRole("button", { name: "Retry inbox" }));
-  await waitFor(() => expect(screen.queryByRole("alert")).toBeNull());
-  expect(h.journal()?.state.frontiers[`msg:${h.mention.id}`]).toBeUndefined();
-});
-
-it("a route that swaps Drafts keeps focus on the filter trigger", async () => {
-  const h = fixture();
-  const view = render(viewAt(h, visit({ drafts: true })));
-  await waitFor(() => expect(filterSummary()).toHaveTextContent("Drafts"));
-  screen.getByRole("button", { name: "Inbox filters" }).focus();
-  view.rerender(viewAt(h, visit({ activity: "threads" })));
-  await waitFor(() => expect(filterSummary()).toHaveTextContent("Threads"));
-  expect(screen.getByRole("button", { name: "Inbox filters" })).toHaveFocus();
-  view.rerender(viewAt(h, visit({ drafts: true })));
-  await waitFor(() => expect(filterSummary()).toHaveTextContent("Drafts"));
-  expect(screen.getByRole("button", { name: "Inbox filters" })).toHaveFocus();
-});
-
-it("a route that leaves Drafts from the open filter menu returns focus to its trigger", async () => {
-  const h = fixture();
-  const view = render(viewAt(h, visit({ drafts: true })));
-  await waitFor(() => expect(filterSummary()).toHaveTextContent("Drafts"));
-  const user = userEvent.setup();
-  screen.getByRole("button", { name: "Inbox filters" }).focus();
-  await user.keyboard("{Enter}");
-  const menu = await screen.findByRole("menu", { name: "Inbox filters" });
-  await waitFor(() => expect(menu.contains(document.activeElement)).toBe(true));
-  view.rerender(viewAt(h, visit({ activity: "threads" })));
-  await waitFor(() => expect(filterSummary()).toHaveTextContent("Threads"));
-  await waitFor(() =>
-    expect(screen.getByRole("button", { name: "Inbox filters" })).toHaveFocus(),
-  );
-});
-
-it("a drafts route on a fresh Inbox leaves focus where navigation put it", async () => {
-  const h = fixture();
-  const focused: Element[] = [];
-  const record = (event: FocusEvent) => focused.push(event.target as Element);
-  document.addEventListener("focusin", record);
-  try {
-    render(viewAt(h, visit({ drafts: true })));
-    await waitFor(() => expect(filterSummary()).toHaveTextContent("Drafts"));
-    expect(
-      focused.map((element) => element.getAttribute("aria-label")),
-    ).not.toContain("Inbox filters");
-  } finally {
-    document.removeEventListener("focusin", record);
-  }
-});
-
-it("a route that swaps Drafts leaves focus elsewhere alone", async () => {
-  const h = fixture();
-  const elsewhere = document.createElement("button");
-  document.body.append(elsewhere);
-  try {
-    const view = render(viewAt(h, visit({ drafts: true })));
-    await waitFor(() => expect(filterSummary()).toHaveTextContent("Drafts"));
-    elsewhere.focus();
-    view.rerender(viewAt(h, visit({ activity: "threads" })));
-    await waitFor(() => expect(filterSummary()).toHaveTextContent("Threads"));
-    expect(elsewhere).toHaveFocus();
-  } finally {
-    elsewhere.remove();
-  }
-});
+it.each([
+  [{ show: "archived", sender: "agents" }, "From agents"],
+  [{ drafts: "true" }, "From anyone"],
+] as const)(
+  "a link from before Archived and Drafts were removed, %j, still opens the page",
+  async (params, from) => {
+    const h = fixture();
+    render(
+      viewAt(h, {
+        ...visit(),
+        target: {
+          version: 1,
+          kind: "page",
+          pluginId: "buzz.inbox",
+          pageId: "inbox",
+          route: { version: 1, params },
+        },
+      }),
+    );
+    await waitFor(() => expect(fromTrigger()).toHaveAccessibleName(from));
+    expect(activityType()).toBe("All");
+    expect(screen.getByRole("list", { name: "Activity" })).toBeVisible();
+  },
+);
 
 it("a plain open leaves saved filters alone", async () => {
   const h = fixture();
   const saved = {
-    show: "archived",
     activity: "mentions",
     sender: "humans",
     attention: "unread",
@@ -2774,57 +1479,51 @@ it("a plain open leaves saved filters alone", async () => {
     JSON.stringify(saved),
   );
   const view = render(viewAt(h, visit()));
-  await waitFor(() => expect(filterSummary()).toHaveTextContent("Archived"));
-  expect(unreadToggle()).toHaveAttribute("aria-pressed", "true");
+  await waitFor(() =>
+    expect(fromTrigger()).toHaveAccessibleName("From people"),
+  );
+  expect(unreadToggle()).toHaveAttribute("aria-checked", "true");
   view.rerender(viewAt(h, visit()));
   expect(savedFilters(h)).toEqual(saved);
-  expect(filterSummary()).toHaveTextContent("Archived");
+  expect(fromTrigger()).toHaveAccessibleName("From people");
+  expect(activityType()).toBe("Mentions");
 });
 
 async function chooseFilter(label: string, control = "Activity type") {
   if (control === "Attention") {
-    const toggle = screen.getByRole("button", { name: "Unread only" });
+    const toggle = screen.getByRole("switch", { name: "Unread" });
     if (
-      toggle.getAttribute("aria-pressed") !== String(label === "Unread only")
+      toggle.getAttribute("aria-checked") !== String(label === "Unread only")
     ) {
       fireEvent.click(toggle);
     }
     expect(toggle).toHaveAttribute(
-      "aria-pressed",
+      "aria-checked",
       String(label === "Unread only"),
     );
     return;
   }
   const user = userEvent.setup();
-  const trigger = screen.getByRole("button", { name: "Inbox filters" });
-  await user.click(trigger);
-  const menu = await screen.findByRole("menu", { name: "Inbox filters" });
-  const items = within(menu);
-  if (control === "Show") {
-    await user.click(items.getByRole("menuitemradio", { name: label }));
-  } else if (control === "Sender") {
-    const people = items.getByRole("menuitemcheckbox", { name: "People" });
-    const agents = items.getByRole("menuitemcheckbox", { name: "Agents" });
-    // Enable the desired sender before disabling the other: never select none.
-    if (label !== "Agents" && people.getAttribute("aria-checked") !== "true")
-      await user.click(people);
-    if (label !== "Humans" && agents.getAttribute("aria-checked") !== "true")
-      await user.click(agents);
-    if (label === "Agents" && people.getAttribute("aria-checked") === "true")
-      await user.click(people);
-    if (label === "Humans" && agents.getAttribute("aria-checked") === "true")
-      await user.click(agents);
-    await user.keyboard("{Escape}");
-  } else {
+  if (control === "Activity type") {
     await user.click(
-      items.getByRole("menuitemradio", {
-        name: label === "All activity" ? "All" : label,
-      }),
+      within(screen.getByRole("tablist", { name: "Activity type" })).getByRole(
+        "tab",
+        { name: label === "All activity" ? "All" : label },
+      ),
     );
+    return;
   }
+  await user.click(fromTrigger());
+  const menu = await screen.findByRole("menu", { name: "From" });
+  await user.click(
+    within(menu).getByRole("menuitemradio", {
+      name:
+        label === "Humans" ? "People" : label === "Everyone" ? "Anyone" : label,
+    }),
+  );
   await waitFor(() =>
     expect(
-      screen.queryByRole("menu", { name: "Inbox filters" }),
+      screen.queryByRole("menu", { name: "From" }),
     ).not.toBeInTheDocument(),
   );
 }
@@ -2941,7 +1640,7 @@ it("lets a joined Guest read an Inbox item and change its personal unread state"
   );
   expect(
     screen.queryByText(
-      "Inbox action expired. Close and reopen the conversation.",
+      "This action expired. Close and reopen the conversation.",
     ),
   ).not.toBeInTheDocument();
   fireEvent.click(await openRowMenu());
@@ -3063,9 +1762,7 @@ it("reads a reopened row again after its tab closes", async () => {
   fireEvent.contextMenu(within(row()).getByRole("button", { name: /^Open / }));
   fireEvent.click(await screen.findByRole("menuitem", { name: "Mark unread" }));
   await waitFor(() => expect(unread()).toBeInTheDocument());
-  const side = screen
-    .getAllByRole("tablist")
-    .find((item) => item.getAttribute("aria-label") !== "Inbox tabs");
+  const side = sideTabList();
   if (!side) throw new Error("Missing side tabs");
   fireEvent.click(within(side).getByRole("button", { name: /^Close / }));
   await waitFor(() => expect(queryReader()).not.toBeInTheDocument());
@@ -3155,7 +1852,7 @@ it("retires a failed captured read on archive during a held unread refresh", asy
     await waitFor(() => expect(rows()).toHaveLength(1));
     expect(h.owner.session.unread.inbox().status).toBe("loading");
     expect(
-      screen.queryByRole("button", { name: "Retry inbox" }),
+      screen.queryByRole("button", { name: "Retry activity" }),
     ).not.toBeInTheDocument();
   } finally {
     await act(async () => {
@@ -3326,7 +2023,7 @@ it("renders all loaded rows without pagination while preserving unread filtering
   expect(
     screen.queryByRole("button", { name: "Show more" }),
   ).not.toBeInTheDocument();
-  fireEvent.click(screen.getByRole("button", { name: "Unread only" }));
+  fireEvent.click(screen.getByRole("switch", { name: "Unread" }));
   expect(rows()).toHaveLength(51);
   expect(screen.queryByRole("button", { name: "Show more" })).toBeNull();
 });
@@ -3335,9 +2032,7 @@ it("intersects activity and representative sender evidence without inferring mis
   const h = fixture({ withDm: true, withSenders: true, holdProfiles: true });
   render(h.view);
   await screen.findByText("Agent direct reply");
-  expect(
-    screen.getByRole("button", { name: "Inbox filters" }),
-  ).toHaveTextContent("All");
+  expect(activityType()).toBe("All");
   await chooseFilter("DMs");
   await chooseFilter("Agents", "Sender");
   // Inbox's idle-only ensure reads the shared choices; no filter-owned inventory.
@@ -3379,18 +2074,21 @@ it("intersects activity and representative sender evidence without inferring mis
   }
 });
 
-it("offers only open and archive row buttons and preserves disabled unread via right-click", async () => {
+it("offers Open and Mark as read only on unread rows, and Mark as read and a disabled Mark unread via right-click", async () => {
   const h = fixture();
   render(h.view);
   await screen.findByText("Please review this");
   await chooseFilter("Mentions");
   const row = rows()[0];
   if (!row) throw new Error("Missing inbox row");
-  expect(
+  const buttons = () =>
     within(row)
       .getAllByRole("button")
-      .map((button) => button.getAttribute("aria-label")?.split(" ")[0]),
-  ).toEqual(["Open", "Archive"]);
+      .map((button) => button.getAttribute("aria-label"));
+  expect(buttons()).toEqual([
+    "Open Alice in #Design",
+    "Mark as read Alice in #Design",
+  ]);
   expect(
     within(row).queryByRole("button", { name: /^Actions for / }),
   ).not.toBeInTheDocument();
@@ -3398,8 +2096,216 @@ it("offers only open and archive row buttons and preserves disabled unread via r
   expect(within(row).getByRole("img", { name: "Unread" })).toBeInTheDocument();
   const action = await openRowMenu("context");
   expect(action).toHaveAttribute("aria-disabled", "true");
+  const menu = action.closest<HTMLElement>('[role="menu"]');
+  if (!menu) throw new Error("Missing row menu");
+  expect(
+    within(menu)
+      .getAllByRole("menuitem")
+      .map((item) => [
+        item.textContent,
+        item.getAttribute("aria-disabled") === "true",
+      ]),
+  ).toEqual([
+    ["Mark as read", false],
+    ["Mark unread", true],
+  ]);
   expect(queryReader()).not.toBeInTheDocument();
   expect(h.journal()?.state.frontiers).toEqual({});
+  fireEvent.click(within(menu).getByRole("menuitem", { name: "Mark as read" }));
+  await waitFor(() =>
+    expect(h.journal()?.state.frontiers[`msg:${h.mention.id}`]).toBe(21),
+  );
+  // A read row has nothing to mark: only Open remains, beside its date.
+  await waitFor(() => expect(buttons()).toEqual(["Open Alice in #Design"]));
+  expect(row).not.toHaveAttribute("data-action");
+});
+
+it("a failed Mark as read keeps the row unread until Retry reads it", async () => {
+  const h = fixture();
+  render(h.view);
+  await screen.findByText("Please review this");
+  await chooseFilter("Mentions");
+  const row = rows()[0];
+  if (!row) throw new Error("Missing inbox row");
+  expect(within(row).getByRole("img", { name: "Unread" })).toBeInTheDocument();
+  h.failSave();
+  fireEvent.click(within(row).getByRole("button", { name: /^Mark as read / }));
+  expect(await screen.findByRole("alert")).toHaveTextContent("disk full");
+  expect(rows()).toEqual([row]);
+  expect(within(row).getByRole("img", { name: "Unread" })).toBeInTheDocument();
+  expect(h.journal()?.state.frontiers[`msg:${h.mention.id}`]).toBeUndefined();
+  fireEvent.click(screen.getByRole("button", { name: "Retry activity" }));
+  await waitFor(() =>
+    expect(h.journal()?.state.frontiers[`msg:${h.mention.id}`]).toBe(21),
+  );
+  await waitFor(() =>
+    expect(within(row).queryByRole("img", { name: "Unread" })).toBeNull(),
+  );
+  expect(rows()).toEqual([row]);
+  expect(screen.queryByRole("alert")).toBeNull();
+});
+
+it.each(["button", "menu"] as const)(
+  "under Unread, Mark as read via %s offers Undo, which returns the row unread",
+  async (action) => {
+    const h = fixture();
+    render(h.view, { wrapper: ToastProvider });
+    await screen.findByText("Please review this");
+    await chooseFilter("Mentions");
+    await chooseFilter("Unread only", "Attention");
+    const row = rows()[0];
+    if (!row) throw new Error("Missing inbox row");
+    if (action === "menu") {
+      await openRowMenu("context");
+      fireEvent.click(screen.getByRole("menuitem", { name: "Mark as read" }));
+    } else
+      fireEvent.click(
+        within(row).getByRole("button", { name: /^Mark as read / }),
+      );
+    await screen.findByText("Marked as read");
+    await waitFor(() => expect(rows()).toHaveLength(0));
+    expect(h.journal()?.state.frontiers[`msg:${h.mention.id}`]).toBe(21);
+    fireEvent.click(
+      await screen.findByRole("button", { name: "Undo", hidden: true }),
+    );
+    await waitFor(() => expect(rows()).toHaveLength(1));
+    await waitFor(() =>
+      expect(
+        within(rows()[0] as HTMLElement).getByRole("img", { name: "Unread" }),
+      ).toBeInTheDocument(),
+    );
+  },
+);
+
+it("with Unread off, Mark as read offers no Undo and keeps focus on its row", async () => {
+  const h = fixture();
+  render(h.view, { wrapper: ToastProvider });
+  await screen.findByText("Please review this");
+  await chooseFilter("Mentions");
+  const row = rows()[0];
+  if (!row) throw new Error("Missing inbox row");
+  const check = within(row).getByRole("button", { name: /^Mark as read / });
+  check.focus();
+  fireEvent.click(check);
+  await waitFor(() =>
+    expect(h.journal()?.state.frontiers[`msg:${h.mention.id}`]).toBe(21),
+  );
+  await waitFor(() =>
+    expect(within(row).queryByRole("img", { name: "Unread" })).toBeNull(),
+  );
+  expect(rows()).toEqual([row]);
+  // The ✓ leaves with the unread mark; its focus moves to the row itself.
+  expect(
+    within(row).queryByRole("button", { name: /^Mark as read / }),
+  ).toBeNull();
+  await waitFor(() =>
+    expect(within(row).getByRole("button", { name: /^Open / })).toHaveFocus(),
+  );
+  expect(screen.queryByText("Marked as read")).not.toBeInTheDocument();
+  expect(
+    screen.queryByRole("button", { name: "Undo", hidden: true }),
+  ).not.toBeInTheDocument();
+});
+
+it("under Unread only, marking a neighbor read keeps the open conversation and its draft mounted", async () => {
+  const h = fixture({ withWriter: true });
+  render(h.view);
+  await waitFor(() => expect(rows()).toHaveLength(2));
+  fireEvent.click(screen.getByRole("switch", { name: "Unread" }));
+  await waitFor(() =>
+    expect(screen.getByRole("switch", { name: "Unread" })).toHaveAttribute(
+      "aria-checked",
+      "true",
+    ),
+  );
+  const thread = rows().find((row) =>
+    row.textContent?.includes("A thread update"),
+  );
+  const mention = rows().find((row) =>
+    row.textContent?.includes("Please review"),
+  );
+  if (!thread || !mention) throw new Error("Missing fixture rows");
+  fireEvent.click(within(thread).getByRole("button", { name: /^Open / }));
+  const editor = (await screen.findByRole("textbox")) as ComposerInputElement;
+  act(() => {
+    editor.insertText("Keep this unread-only draft");
+  });
+  await waitFor(() =>
+    expect(
+      reader().querySelector(`[data-message-id="${h.reply.id}"]`),
+    ).toHaveFocus(),
+  );
+  await waitFor(() =>
+    expect(screen.getByRole("list", { name: "Activity" })).toHaveAttribute(
+      "aria-busy",
+      "false",
+    ),
+  );
+  const opened = sideTabs();
+  fireEvent.click(
+    within(mention).getByRole("button", { name: /^Mark as read / }),
+  );
+  await waitFor(() =>
+    expect(h.journal()?.state.frontiers[`msg:${h.mention.id}`]).toBe(21),
+  );
+  // The read neighbor leaves; the open conversation stays, read but selected.
+  await waitFor(() => expect(rows()).toEqual([thread]));
+  expect(thread).toHaveAttribute("data-selected");
+  expect(sideTabs()).toEqual(opened);
+  expect(screen.getByRole("textbox")).toBe(editor);
+  expect(editor).toHaveTextContent("Keep this unread-only draft");
+  expect(
+    reader().querySelector(`[data-message-id="${h.reply.id}"]`),
+  ).toBeInTheDocument();
+});
+
+it("Mark as read reads an unselected row without opening or clearing it", async () => {
+  const h = fixture();
+  render(h.view);
+  await screen.findByText("Please review this");
+  await chooseFilter("Mentions");
+  const row = rows()[0];
+  if (!row) throw new Error("Missing inbox row");
+  await openRowMenu("context");
+  fireEvent.click(
+    await screen.findByRole("menuitem", { name: "Mark as read" }),
+  );
+  await waitFor(() =>
+    expect(h.journal()?.state.frontiers[`msg:${h.mention.id}`]).toBe(21),
+  );
+  await waitFor(() =>
+    expect(within(row).queryByRole("img", { name: "Unread" })).toBeNull(),
+  );
+  expect(rows()).toEqual([row]);
+  expect(row).not.toHaveAttribute("data-selected");
+  expect(queryReader()).not.toBeInTheDocument();
+  // Once read, Mark as read is unavailable and Mark unread returns.
+  const unread = await openRowMenu("context");
+  expect(unread).not.toHaveAttribute("aria-disabled");
+  expect(
+    screen.getByRole("menuitem", { name: "Mark as read" }),
+  ).toHaveAttribute("aria-disabled", "true");
+});
+
+it("Mark as read under Unread moves focus to the next row as its row leaves", async () => {
+  const h = fixture();
+  render(h.view);
+  await waitFor(() => expect(rows()).toHaveLength(2));
+  await chooseFilter("Unread only", "Attention");
+  await waitFor(() => expect(rows()).toHaveLength(2));
+  const [first, second] = rows();
+  if (!first || !second) throw new Error("Missing inbox rows");
+  within(first)
+    .getByRole("button", { name: /^Open / })
+    .focus();
+  await openRowMenu("keyboard");
+  fireEvent.click(screen.getByRole("menuitem", { name: "Mark as read" }));
+  await waitFor(() => expect(rows()).toEqual([second]));
+  await waitFor(() =>
+    expect(
+      within(second).getByRole("button", { name: /^Open / }),
+    ).toHaveFocus(),
+  );
 });
 
 it("opens local unread actions with the ContextMenu key without changing selection", async () => {
@@ -3445,7 +2351,7 @@ it("holds read actions pending, surfaces storage failure, and retries without lo
   expect(await screen.findByRole("alert")).toHaveTextContent("disk full");
   expect(screen.getByText("Please review this")).toBeInTheDocument();
   expect(h.journal()?.state.frontiers[`msg:${h.mention.id}`]).toBeUndefined();
-  fireEvent.click(screen.getByRole("button", { name: "Retry inbox" }));
+  fireEvent.click(screen.getByRole("button", { name: "Retry activity" }));
   await waitFor(() =>
     expect(
       screen.queryByRole("img", { name: "Unread" }),
@@ -3520,7 +2426,7 @@ it.each([false, true])(
       expect(h.readSteps).toHaveLength(1);
       expect(h.journal()?.state.frontiers[`thread:${root.id}`]).toBeUndefined();
       expect(
-        screen.getByText("Choose a community to see your inbox."),
+        screen.getByText("Choose a community to see your activity."),
       ).toBeInTheDocument();
     }
     expect(h.journal()?.state.frontiers[`msg:${root.id}`]).toBe(30);
@@ -3566,7 +2472,7 @@ it("two-step read access loss during its first save stops before the second step
   await waitFor(() =>
     expect(
       screen.getByRole("list", {
-        name: "Inbox conversations",
+        name: "Activity",
       }),
     ).toHaveAttribute("aria-busy", "false"),
   );
@@ -3597,8 +2503,8 @@ it.each(["retry", "other", "blur"] as const)(
         detail.querySelector(`[data-message-id="${h.mention.id}"]`),
       ).toHaveFocus(),
     );
-    const retry = screen.getByRole("button", { name: "Retry inbox" });
-    const other = screen.getByRole("button", { name: "Unread only" });
+    const retry = screen.getByRole("button", { name: "Retry activity" });
+    const other = screen.getByRole("switch", { name: "Unread" });
     const release = h.holdSave();
     try {
       retry.focus();
@@ -3620,10 +2526,7 @@ it.each(["retry", "other", "blur"] as const)(
     );
     expect(h.journal()?.state.frontiers[`msg:${h.mention.id}`]).toBe(21);
     // Focus the retired Retry owned moves to a stable Inbox control.
-    if (focusOwner === "retry")
-      expect(
-        screen.getByRole("button", { name: "Inbox filters" }),
-      ).toHaveFocus();
+    if (focusOwner === "retry") expect(fromTrigger()).toHaveFocus();
     else expect(focusOwner === "other" ? other : document.body).toHaveFocus();
     expect(reader()).toBe(detail);
   },
@@ -3646,7 +2549,7 @@ it("a second rejected Retry retains its focused control until a successful recov
       detail.querySelector(`[data-message-id="${h.mention.id}"]`),
     ).toHaveFocus(),
   );
-  const retry = screen.getByRole("button", { name: "Retry inbox" });
+  const retry = screen.getByRole("button", { name: "Retry activity" });
   const release = h.holdSave();
   h.failSave();
   try {
@@ -3660,7 +2563,7 @@ it("a second rejected Retry retains its focused control until a successful recov
   await waitFor(() =>
     expect(
       screen.getByRole("list", {
-        name: "Inbox conversations",
+        name: "Activity",
       }),
     ).toHaveAttribute("aria-busy", "false"),
   );
@@ -3670,7 +2573,7 @@ it("a second rejected Retry retains its focused control until a successful recov
   await waitFor(() =>
     expect(screen.queryByText("disk full")).not.toBeInTheDocument(),
   );
-  expect(screen.getByRole("button", { name: "Inbox filters" })).toHaveFocus();
+  expect(fromTrigger()).toHaveFocus();
   expect(reader()).toBe(detail);
 });
 
@@ -3691,8 +2594,8 @@ it.each([true, false])(
     );
     h.failAux(false);
     const release = h.holdAux();
-    const retry = screen.getByRole("button", { name: "Retry inbox" });
-    const other = screen.getByRole("button", { name: "Unread only" });
+    const retry = screen.getByRole("button", { name: "Retry activity" });
+    const other = screen.getByRole("switch", { name: "Unread" });
     try {
       retry.focus();
       await user.keyboard("{Enter}");
@@ -3710,46 +2613,42 @@ it.each([true, false])(
     await waitFor(() =>
       expect(screen.queryByRole("alert")).not.toBeInTheDocument(),
     );
-    expect(
-      keepFocus ? screen.getByRole("button", { name: "Inbox filters" }) : other,
-    ).toHaveFocus();
+    expect(keepFocus ? fromTrigger() : other).toHaveFocus();
   },
 );
 
-it("keeps the status choice focused through incoming row updates", async () => {
+it("keeps a From menu choice focused through incoming row updates", async () => {
   const h = fixture();
   const user = userEvent.setup();
   render(h.view);
   await waitFor(() => expect(rows()).toHaveLength(2));
-  const trigger = screen.getByRole("button", { name: "Inbox filters" });
+  const trigger = fromTrigger();
   act(() => trigger.focus());
   await user.keyboard("{Enter}");
-  const archived = await screen.findByRole("menuitemradio", {
-    name: "Archived",
-  });
-  await user.keyboard("{End}{ArrowUp}");
-  await waitFor(() => expect(archived).toHaveFocus());
+  const people = await screen.findByRole("menuitemradio", { name: "People" });
+  await user.keyboard("{End}");
+  await user.keyboard("{ArrowUp}");
+  await waitFor(() => expect(people).toHaveFocus());
   const incoming = message(h.alice, "room", "Another review request", 50, [
     ["p", h.viewer.pubkey],
   ]);
   h.addEvent(incoming);
   await act(async () => h.emit([incoming]));
   await waitFor(() => expect(rows()).toHaveLength(3));
-  expect(archived).toHaveFocus();
+  expect(people).toHaveFocus();
   await user.keyboard("{Enter}");
   await waitFor(() => expect(screen.queryByRole("menu")).toBeNull());
-  expect(trigger).toHaveTextContent("Archived");
-  expect(trigger).toHaveFocus();
+  expect(fromTrigger()).toHaveAccessibleName("From people");
+  await waitFor(() => expect(fromTrigger()).toHaveFocus());
 });
 
-it("shows Inbox scope as a filter without resetting attention filters", async () => {
+it("Mark as read keeps the type, From and Unread choices", async () => {
   const h = fixture({ withSenders: true });
   render(h.view);
   await screen.findByText("Public agent mention");
   await waitFor(() => expect(rows().length).toBeGreaterThan(0));
 
-  const show = () => screen.getByRole("button", { name: "Inbox filters" });
-  expect(show()).toHaveTextContent("All");
+  expect(activityType()).toBe("All");
   expect(screen.queryByRole("group", { name: "Inbox scope" })).toBeNull();
   expect(
     screen.queryByRole("button", { name: "About Inbox archive" }),
@@ -3767,112 +2666,155 @@ it("shows Inbox scope as a filter without resetting attention filters", async ()
   agentOpen.focus();
   fireEvent.keyDown(agentOpen, { key: "F10", shiftKey: true });
   fireEvent.click(
-    await screen.findByRole("menuitem", { name: "Archive conversation" }),
+    await screen.findByRole("menuitem", { name: "Mark as read" }),
   );
   await waitFor(() => expect(rows()).toHaveLength(1));
 
-  const expectKept = () => {
-    expect(
-      screen.getByRole("button", { name: "Inbox filters" }),
-    ).toHaveTextContent(/Mentions.*Agents/);
-    expect(screen.getByRole("button", { name: "Unread only" })).toHaveAttribute(
-      "aria-pressed",
-      "true",
+  const expectKept = (unread = "true") => {
+    expect(activityType()).toBe("Mentions");
+    expect(fromTrigger()).toHaveAccessibleName("From agents");
+    expect(screen.getByRole("switch", { name: "Unread" })).toHaveAttribute(
+      "aria-checked",
+      unread,
     );
   };
-  await chooseFilter("Archived", "Show");
-  await waitFor(() => expect(rows()).toHaveLength(1));
   expectKept();
-  await chooseFilter("Inbox", "Show");
-  await waitFor(() => expect(rows()).toHaveLength(1));
-  expectKept();
-  await chooseFilter("Archived", "Show");
-  await waitFor(() => expect(rows()).toHaveLength(1));
-  expectKept();
-  const archivedRow = rows()[0];
-  if (!archivedRow) throw new Error("Missing archived row");
-  fireEvent.click(
-    within(archivedRow).getByRole("button", { name: /^Restore / }),
-  );
-  await waitFor(() => expect(rows()).toHaveLength(0));
-  await chooseFilter("Inbox", "Show");
+  await chooseFilter("All messages", "Attention");
   await waitFor(() => expect(rows()).toHaveLength(2));
-  expectKept();
+  expectKept("false");
+});
+
+it("names the page Activity in its region, page tab and list", async () => {
+  const h = fixture();
+  render(h.view);
+  await waitFor(() => expect(rows()).toHaveLength(2));
+  expect(screen.getByRole("region", { name: "Activity" })).toBeInTheDocument();
+  expect(tabs("Activity tabs")).toEqual(["Activity"]);
+  expect(screen.getByRole("list", { name: "Activity" })).toBeInTheDocument();
+  expect(screen.queryByRole("region", { name: "Inbox" })).toBeNull();
+  expect(screen.queryByText(/\binbox\b/i)).toBeNull();
+});
+
+it.each([
+  ["Anyone", "From anyone", "ghost"],
+  ["People", "From people", "subtle"],
+  ["Agents", "From agents", "subtle"],
+])(
+  "From says %s in its name and tooltip, filled only while it narrows",
+  async (choice, name, variant) => {
+    const h = fixture();
+    render(h.view);
+    await waitFor(() => expect(rows()).toHaveLength(2));
+    if (choice !== "Anyone")
+      await chooseFilter(choice === "People" ? "Humans" : choice, "Sender");
+    const trigger = fromTrigger();
+    // The visible label stays "From"; its name and tooltip say the choice.
+    expect(trigger).toHaveAccessibleName(name);
+    expect(trigger).toHaveTextContent(/^From$/);
+    expect(trigger).toHaveAttribute("data-variant", variant);
+    act(() => trigger.blur());
+    fireEvent.keyDown(window, { key: "Tab" });
+    act(() => trigger.focus());
+    expect(await screen.findByRole("tooltip")).toHaveTextContent(name);
+    const user = userEvent.setup();
+    await user.click(trigger);
+    const menu = await screen.findByRole("menu", { name: "From" });
+    // Choices are plain words.
+    expect(
+      within(menu)
+        .getAllByRole("menuitemradio")
+        .map((item) => item.textContent),
+    ).toEqual(["Anyone", "People", "Agents"]);
+    expect(menu.querySelector(".buzz-menu-icon")).toBeNull();
+    expect(
+      within(menu).getByRole("menuitemradio", { name: choice }),
+    ).toHaveAttribute("aria-checked", "true");
+    await user.keyboard("{Escape}");
+  },
+);
+
+it("orders the toolbar as tabs, From, then Unread", async () => {
+  const h = fixture();
+  render(h.view);
+  await waitFor(() => expect(rows()).toHaveLength(2));
+  const tablist = screen.getByRole("tablist", { name: "Activity type" });
+  const unread = screen.getByRole("switch", { name: "Unread" });
+  const follows = (a: Node, b: Node) =>
+    !!(a.compareDocumentPosition(b) & Node.DOCUMENT_POSITION_FOLLOWING);
+  expect(follows(tablist, fromTrigger())).toBe(true);
+  expect(follows(fromTrigger(), unread)).toBe(true);
+});
+
+it("loads a saved Drafts view, from before Drafts left Activity, as All", async () => {
+  const h = fixture();
+  localStorage.setItem(
+    `buzz-view.v1:${JSON.stringify([h.owner.session.scope, "inbox:filters"])}`,
+    JSON.stringify({ activity: "drafts", sender: "agents" }),
+  );
+  render(h.view);
+  await waitFor(() =>
+    expect(fromTrigger()).toHaveAccessibleName("From agents"),
+  );
+  expect(activityType()).toBe("All");
+  expect(tabs("Activity type")).toEqual(["All", "Threads", "Mentions", "DMs"]);
+  expect(screen.queryByRole("list", { name: "Drafts" })).toBeNull();
+  expect(screen.getByRole("list", { name: "Activity" })).toBeInTheDocument();
 });
 
 it("combines the existing filter choices without placeholder actions", async () => {
   const h = fixture();
   render(h.view);
   await screen.findByText("Please review this");
-  const trigger = screen.getByRole("button", { name: "Inbox filters" });
-  expect(trigger).toHaveTextContent("All");
+  const trigger = fromTrigger();
+  expect(trigger).toHaveAccessibleName("From anyone");
   expect(screen.queryByRole("combobox")).toBeNull();
+  // Inbox's own tab holds the list; its only other tabs are the type filter.
+  expect(tabs("Activity tabs")).toEqual(["Activity"]);
+  expect(tabs("Activity type")).toEqual(["All", "Threads", "Mentions", "DMs"]);
+  expect(activityType()).toBe("All");
   expect(
-    screen.getByRole("button", { name: "Inbox filters" }),
-  ).toHaveTextContent("All");
-  // Inbox's own tab holds the list; its filters are not tabs.
-  expect(tabs("Inbox tabs")).toEqual(["Inbox"]);
+    within(screen.getByRole("tabpanel", { name: "Activity" }))
+      .queryAllByRole("tablist")
+      .map((list) => list.getAttribute("aria-label")),
+  ).toEqual(["Activity type"]);
   expect(
-    within(screen.getByRole("tabpanel", { name: "Inbox" })).queryByRole("tab"),
+    screen.queryByRole("button", { name: /Mark shown as read|Mark unread/ }),
   ).toBeNull();
+  // Mark as read is a per-row action, never a list-wide one.
   expect(
-    screen.queryByRole("button", {
-      name: /Mark shown as read|Mark as read|Mark unread/,
-    }),
-  ).toBeNull();
+    screen
+      .getAllByRole("button", { name: /Mark as read/ })
+      .every((button) => button.closest("li[data-inbox-row]")),
+  ).toBe(true);
   expect(
     screen.queryByText(
       /Verified recent conversations|Results are bounded|Feed history reached its result limit|Read-state sync is unavailable on this host/,
     ),
   ).toBeNull();
   expect(screen.queryByRole("button", { name: "Refresh" })).toBeNull();
-  expect(screen.getByRole("button", { name: "Unread only" })).toHaveAttribute(
-    "aria-pressed",
+  expect(screen.getByRole("switch", { name: "Unread" })).toHaveAttribute(
+    "aria-checked",
     "false",
   );
   const user = userEvent.setup();
   trigger.focus();
   await user.keyboard("{Enter}");
-  const menu = await screen.findByRole("menu", { name: "Inbox filters" });
+  const menu = await screen.findByRole("menu", { name: "From" });
+  // From is a single choice; types are tabs, not menu items.
   expect(
-    within(menu).getByRole("menuitemcheckbox", { name: "People" }),
-  ).toBeChecked();
-  expect(
-    within(menu).getByRole("menuitemcheckbox", { name: "Agents" }),
-  ).toBeChecked();
-  for (const name of ["All", "Threads", "Mentions", "DMs", "Drafts"])
-    expect(
-      within(menu).getByRole("menuitemradio", { name }),
-    ).toBeInTheDocument();
-  for (const name of ["Projects", "Needs action", "Reactions"])
+    within(menu)
+      .getAllByRole("menuitemradio")
+      .map((item) => [item.textContent, item.getAttribute("aria-checked")]),
+  ).toEqual([
+    ["Anyone", "true"],
+    ["People", "false"],
+    ["Agents", "false"],
+  ]);
+  expect(within(menu).queryAllByRole("menuitemcheckbox")).toEqual([]);
+  for (const name of ["Drafts", "Projects", "Needs action", "Reactions"])
     expect(within(menu).queryByRole("menuitemradio", { name })).toBeNull();
   await user.keyboard("{Escape}");
   expect(trigger).toHaveFocus();
-  await chooseFilter("Drafts");
-  expect(
-    screen.getByRole("button", { name: "Inbox filters" }),
-  ).toHaveTextContent("Drafts");
-  expect(screen.queryByRole("button", { name: "Unread only" })).toBeNull();
-  await user.click(screen.getByRole("button", { name: "Inbox filters" }));
-  await screen.findByRole("menu", { name: "Inbox filters" });
-  for (const name of ["Inbox", "Archived", "People", "Agents"])
-    expect(
-      screen.getByRole(
-        name === "Inbox" || name === "Archived"
-          ? "menuitemradio"
-          : "menuitemcheckbox",
-        { name },
-      ),
-    ).toHaveAttribute("aria-disabled", "true");
-  await user.click(screen.getByRole("menuitemradio", { name: /^All$/ }));
-  await waitFor(() =>
-    expect(
-      screen.getByRole("button", { name: "Inbox filters" }),
-    ).toHaveTextContent("All"),
-  );
-  expect(
-    screen.getByRole("button", { name: "Unread only" }),
-  ).toBeInTheDocument();
 });
 
 it("waits for roster recovery before explicit evidence refresh", async () => {
@@ -3882,7 +2824,7 @@ it("waits for roster recovery before explicit evidence refresh", async () => {
   const baseline = h.evidenceReads();
   const release = h.recoverRoster();
   try {
-    fireEvent.click(screen.getByRole("button", { name: "Retry inbox" }));
+    fireEvent.click(screen.getByRole("button", { name: "Retry activity" }));
     await waitFor(() => expect(h.rosterStarted()).toBe(true));
     expect(h.evidenceReads()).toBe(baseline);
     expect(h.retrySync).toHaveBeenCalledOnce();
@@ -3935,9 +2877,10 @@ it("does not accept a second row selection while its explicit read is pending", 
     if (!other) throw Error("missing second row");
     const button = within(other).getByRole("button", { name: /^Open / });
     expect(button).toBeDisabled();
-    expect(
-      screen.getByRole("list", { name: "Inbox conversations" }),
-    ).toHaveAttribute("aria-busy", "true");
+    expect(screen.getByRole("list", { name: "Activity" })).toHaveAttribute(
+      "aria-busy",
+      "true",
+    );
     fireEvent.click(button);
     expect(sideTabs()).toEqual(["Alice"]);
     expect(
@@ -3948,9 +2891,10 @@ it("does not accept a second row selection while its explicit read is pending", 
     await act(async () => release());
   }
   await waitFor(() =>
-    expect(
-      screen.getByRole("list", { name: "Inbox conversations" }),
-    ).toHaveAttribute("aria-busy", "false"),
+    expect(screen.getByRole("list", { name: "Activity" })).toHaveAttribute(
+      "aria-busy",
+      "false",
+    ),
   );
   const other = rows().find((row) =>
     row.textContent?.includes("Please review this"),
@@ -3973,9 +2917,9 @@ it("a failed captured read cannot retry after access retirement", async () => {
   expect(await screen.findByRole("alert")).toHaveTextContent("disk full");
   act(() => h.revokeRoom());
   await waitFor(() => expect(rows()).toHaveLength(0));
-  fireEvent.click(screen.getByRole("button", { name: "Retry inbox" }));
+  fireEvent.click(screen.getByRole("button", { name: "Retry activity" }));
   expect(await screen.findByRole("alert")).toHaveTextContent(
-    "Inbox action expired",
+    "This action expired",
   );
   expect(h.journal()?.state.frontiers[`msg:${h.mention.id}`]).toBeUndefined();
 });
@@ -4058,9 +3002,9 @@ it("a newer manual intent invalidates retry of an earlier rejected read", async 
       messageId: h.mention.id,
     }),
   );
-  fireEvent.click(screen.getByRole("button", { name: "Retry inbox" }));
+  fireEvent.click(screen.getByRole("button", { name: "Retry activity" }));
   expect(await screen.findByRole("alert")).toHaveTextContent(
-    "Inbox action expired",
+    "This action expired",
   );
   expect(h.journal()?.state.frontiers[`msg:${h.mention.id}`]).toBeUndefined();
   expect(h.journal()?.localUnread[`msg:${h.mention.id}`]).toBeTypeOf("number");
@@ -4089,9 +3033,9 @@ it("same-value manual writes after a failed mark-unread supersede retry even wit
       h.mention.id,
     ),
   );
-  fireEvent.click(screen.getByRole("button", { name: "Retry inbox" }));
+  fireEvent.click(screen.getByRole("button", { name: "Retry activity" }));
   expect(await screen.findByRole("alert")).toHaveTextContent(
-    "Inbox action expired",
+    "This action expired",
   );
   expect(h.journal()?.localUnread[`msg:${h.mention.id}`]).toBeUndefined();
 });
@@ -4135,7 +3079,7 @@ it("routine delayed publication does not cancel Retry for a failed mark-unread s
   });
   expect(h.journal()?.acceptedRevision).toBe(revision);
   expect(h.owner.session.unread.revision()).toBe(revision);
-  fireEvent.click(screen.getByRole("button", { name: "Retry inbox" }));
+  fireEvent.click(screen.getByRole("button", { name: "Retry activity" }));
   await act(async () => {
     await vi.advanceTimersByTimeAsync(0);
   });
@@ -4298,10 +3242,6 @@ it("Inbox keeps an open Solo chat timeline when a late reply regroups its mentio
   expect(
     screen.queryByRole("textbox", { name: "Reply to thread" }),
   ).not.toBeInTheDocument();
-  // Archiving the regrouped row still closes the tab it opened.
-  fireEvent.click(within(row).getByRole("button", { name: /^Archive / }));
-  await waitFor(() => expect(queryReader()).not.toBeInTheDocument());
-  expect(sideTabs()).toEqual([]);
 });
 
 it.each(["preview", "name", "history"])(
@@ -4351,7 +3291,7 @@ it.each(["preview", "name", "history"])(
     expect(
       h.owner.session.unread.inbox().items.find((item) => item.id === row.id),
     ).toEqual(row);
-    fireEvent.click(screen.getByRole("button", { name: "Retry inbox" }));
+    fireEvent.click(screen.getByRole("button", { name: "Retry activity" }));
     await waitFor(() =>
       expect(h.journal()?.localUnread[`msg:${h.mention.id}`]).toBeTypeOf(
         "number",
@@ -4374,10 +3314,10 @@ it("revoke and regrant cannot revive a captured failed Inbox mutation", async ()
     h.restoreRoom();
   });
   await waitFor(() => expect(rows()).toHaveLength(1));
-  fireEvent.click(screen.getByRole("button", { name: "Retry inbox" }));
+  fireEvent.click(screen.getByRole("button", { name: "Retry activity" }));
   expect(
     await screen.findByText(
-      "Inbox action expired. Close and reopen the conversation.",
+      "This action expired. Close and reopen the conversation.",
     ),
   ).toBeInTheDocument();
   expect(h.journal()?.state.frontiers[`msg:${h.mention.id}`]).toBeUndefined();
@@ -4463,7 +3403,7 @@ it("a two-step read retries its rejected thread prefix without losing the saved 
   expect(h.readSteps.map((step) => step.id)).toEqual([root.id, child.id]);
   expect(h.journal()?.state.frontiers[`msg:${root.id}`]).toBe(30);
   expect(h.journal()?.state.frontiers[`thread:${root.id}`]).toBeUndefined();
-  fireEvent.click(screen.getByRole("button", { name: "Retry inbox" }));
+  fireEvent.click(screen.getByRole("button", { name: "Retry activity" }));
   await waitFor(() =>
     expect(h.journal()?.state.frontiers[`thread:${root.id}`]).toBe(31),
   );
@@ -4582,7 +3522,9 @@ it("a Solo chat row previewing unfinished workflow output that is not its eviden
     await act(async () => release());
   }
   await waitFor(() =>
-    expect(timeline()).toHaveTextContent("Preview unavailable. Retry inbox."),
+    expect(timeline()).toHaveTextContent(
+      "Preview unavailable. Retry activity.",
+    ),
   );
   expect(timeline()).not.toHaveTextContent("OLD BODY");
 });
@@ -4639,10 +3581,10 @@ it("shows only the exact unfinished row's placeholder through held edits and ret
         name: /^Open /,
         current: "page",
       }),
-    ).toHaveAccessibleDescription("Preview unavailable. Retry inbox."),
+    ).toHaveAccessibleDescription("Preview unavailable. Retry activity."),
   );
   h.failAux(false);
-  fireEvent.click(screen.getByRole("button", { name: "Retry inbox" }));
+  fireEvent.click(screen.getByRole("button", { name: "Retry activity" }));
   await waitFor(() =>
     expect(h.owner.session.inboxFeed.snapshot()).toMatchObject({
       status: "ready",
@@ -4823,7 +3765,7 @@ it("retries the remaining captured prefix after a harmless new reply while the s
   expect(h.journal()?.state.frontiers[`thread:${root.id}`]).toBeUndefined();
   h.addEvent(arriving);
   act(() => h.emit([arriving]));
-  fireEvent.click(screen.getByRole("button", { name: "Retry inbox" }));
+  fireEvent.click(screen.getByRole("button", { name: "Retry activity" }));
   await waitFor(() =>
     expect(h.journal()?.state.frontiers[`thread:${root.id}`]).toBe(31),
   );
@@ -4868,7 +3810,7 @@ it("preserves a failed captured read across verified root regrouping", async () 
           item.id === `room:${root.id}` && item.messageIds.includes(orphan.id),
       ),
   ).toBe(true);
-  fireEvent.click(screen.getByRole("button", { name: "Retry inbox" }));
+  fireEvent.click(screen.getByRole("button", { name: "Retry activity" }));
   await waitFor(() =>
     expect(h.journal()?.state.frontiers[`msg:${orphan.id}`]).toBe(30),
   );
@@ -4906,7 +3848,7 @@ it("DM read Retry retains the original cutoff and survives re-click of the selec
     );
     h.addEvent(later);
     act(() => h.emit([later]));
-    fireEvent.click(screen.getByRole("button", { name: "Retry inbox" }));
+    fireEvent.click(screen.getByRole("button", { name: "Retry activity" }));
     await waitFor(() => {
       const journal = h.journal();
       if (!journal) throw Error("Expected saved read journal");
@@ -4936,24 +3878,26 @@ it("Retry with a ready roster waits for both evidence reads before retrying sync
   h.failAux(false);
   const release = h.holdAux();
   try {
-    fireEvent.click(screen.getByRole("button", { name: "Retry inbox" }));
+    fireEvent.click(screen.getByRole("button", { name: "Retry activity" }));
     await waitFor(() =>
       expect(h.owner.session.inboxFeed.snapshot().incomplete).toContain(
         h.mention.id,
       ),
     );
     expect(h.retrySync).not.toHaveBeenCalled();
-    expect(
-      screen.getByRole("list", { name: "Inbox conversations" }),
-    ).toHaveAttribute("aria-busy", "true");
+    expect(screen.getByRole("list", { name: "Activity" })).toHaveAttribute(
+      "aria-busy",
+      "true",
+    );
   } finally {
     await act(async () => release());
   }
   await waitFor(() => expect(h.retrySync).toHaveBeenCalledOnce());
   await waitFor(() =>
-    expect(
-      screen.getByRole("list", { name: "Inbox conversations" }),
-    ).toHaveAttribute("aria-busy", "false"),
+    expect(screen.getByRole("list", { name: "Activity" })).toHaveAttribute(
+      "aria-busy",
+      "false",
+    ),
   );
 });
 
@@ -4970,11 +3914,9 @@ it("opens a thread row in a side tab beside Inbox, at its exact message", async 
     name: "Conversation in Design",
   });
   // The list stays Inbox's own tab; the conversation opens beside it.
-  expect(tabs("Inbox tabs")).toEqual(["Inbox"]);
+  expect(tabs("Activity tabs")).toEqual(["Activity"]);
   expect(sideTabs()).toEqual(["Thread · Design"]);
-  expect(
-    screen.getByRole("list", { name: "Inbox conversations" }),
-  ).toBeInTheDocument();
+  expect(screen.getByRole("list", { name: "Activity" })).toBeInTheDocument();
   expect(
     within(tab).getByRole("region", { name: "Thread messages" }),
   ).toBeInTheDocument();
@@ -5003,9 +3945,10 @@ it("replaces the tab the previous row opened", async () => {
     ).toBeInTheDocument(),
   );
   await waitFor(() =>
-    expect(
-      screen.getByRole("list", { name: "Inbox conversations" }),
-    ).toHaveAttribute("aria-busy", "false"),
+    expect(screen.getByRole("list", { name: "Activity" })).toHaveAttribute(
+      "aria-busy",
+      "false",
+    ),
   );
   fireEvent.click(row("Please review"));
   await waitFor(() =>
@@ -5040,31 +3983,6 @@ it("opens a DM row's whole conversation in a tab", async () => {
   expect(h.open).not.toHaveBeenCalled();
 });
 
-it("archives the conversation opened last from the Archive shortcut", async () => {
-  const h = fixture();
-  render(h.view);
-  await waitFor(() => expect(rows()).toHaveLength(2));
-  const row = (text: string) => {
-    const found = rows().find((item) => item.textContent?.includes(text));
-    if (!found) throw Error(`Missing ${text} row`);
-    return within(found).getByRole("button", { name: /^Open / });
-  };
-  fireEvent.click(row("A thread update"));
-  await waitFor(() => expect(h.archive.current).toBeDefined());
-  fireEvent.click(row("Please review"));
-  await archiveOpened(h);
-  await waitFor(() => expect(rows()).toHaveLength(1));
-  expect(rows()[0]).toHaveTextContent("A thread update");
-  await waitFor(() =>
-    expect(
-      reader().querySelector(`[data-message-id="${h.reply.id}"]`),
-    ).toHaveFocus(),
-  );
-  await chooseFilter("Archived", "Show");
-  expect(rows()).toHaveLength(1);
-  expect(rows()[0]).toHaveTextContent("Please review this");
-});
-
 it.each([false, true])(
   "opening a conversation's tab preserves channel forced-unread intent (left channel: %s)",
   async (leftChannel) => {
@@ -5072,9 +3990,10 @@ it.each([false, true])(
     render(h.view);
     await waitFor(() => expect(rows()).toHaveLength(2));
     await waitFor(() =>
-      expect(
-        screen.getByRole("list", { name: "Inbox conversations" }),
-      ).toHaveAttribute("aria-busy", "false"),
+      expect(screen.getByRole("list", { name: "Activity" })).toHaveAttribute(
+        "aria-busy",
+        "false",
+      ),
     );
     await act(async () => {
       await h.owner.session.unread.enterChannel("room");
@@ -5095,14 +4014,313 @@ it.each([false, true])(
       ).toBeInTheDocument(),
     );
     await waitFor(() =>
-      expect(
-        screen.getByRole("list", { name: "Inbox conversations" }),
-      ).toHaveAttribute("aria-busy", "false"),
+      expect(screen.getByRole("list", { name: "Activity" })).toHaveAttribute(
+        "aria-busy",
+        "false",
+      ),
     );
     expect(h.journal()?.localUnread["message-force:room"]).toBe(force);
     if (!leftChannel)
       expect(
         h.owner.session.unread.attention("room", h.mention.id).forced,
       ).toBe(true);
+  },
+);
+
+it("Undo returns the row unread even after Activity has closed", async () => {
+  const h = fixture();
+  const view = render(<ToastProvider>{h.view}</ToastProvider>);
+  await screen.findByText("Please review this");
+  await chooseFilter("Mentions");
+  await chooseFilter("Unread only", "Attention");
+  const row = rows()[0];
+  if (!row) throw new Error("Missing inbox row");
+  fireEvent.click(within(row).getByRole("button", { name: /^Mark as read / }));
+  const undo = await screen.findByRole("button", {
+    name: "Undo",
+    hidden: true,
+  });
+  await waitFor(() => expect(rows()).toHaveLength(0));
+  const unread = vi.spyOn(h.session.unread, "markUnreadLocal");
+  view.rerender(<ToastProvider>{null}</ToastProvider>);
+  expect(screen.queryByRole("list", { name: "Activity" })).toBeNull();
+  fireEvent.click(undo);
+  await waitFor(() => expect(unread).toHaveBeenCalledTimes(1));
+  await act(async () => {
+    await unread.mock.results[0]?.value;
+  });
+  expect(screen.queryByText("Couldn't mark unread")).toBeNull();
+  view.rerender(<ToastProvider>{h.view}</ToastProvider>);
+  await waitFor(() => expect(rows()).toHaveLength(1));
+  expect(
+    within(rows()[0] as HTMLElement).getByRole("img", { name: "Unread" }),
+  ).toBeInTheDocument();
+});
+
+it("Undo runs while another read is still saving", async () => {
+  const h = fixture();
+  render(h.view, { wrapper: ToastProvider });
+  await waitFor(() => expect(rows()).toHaveLength(2));
+  await chooseFilter("Unread only", "Attention");
+  const mention = rows().find((row) =>
+    row.textContent?.includes("Please review"),
+  );
+  if (!mention) throw new Error("Missing mention row");
+  fireEvent.click(
+    within(mention).getByRole("button", { name: /^Mark as read / }),
+  );
+  const undo = await screen.findByRole("button", {
+    name: "Undo",
+    hidden: true,
+  });
+  await waitFor(() => expect(rows()).toHaveLength(1));
+  const [thread] = rows();
+  if (!thread) throw new Error("Missing thread row");
+  const unread = vi.spyOn(h.session.unread, "markUnreadLocal");
+  const release = h.holdSave();
+  try {
+    fireEvent.click(
+      within(thread).getByRole("button", { name: /^Mark as read / }),
+    );
+    await waitFor(() => expect(h.saveStarted()).toBe(true));
+    fireEvent.click(undo);
+    expect(unread).toHaveBeenCalledTimes(1);
+  } finally {
+    await act(async () => release());
+  }
+  await waitFor(() =>
+    expect(
+      rows().some((row) => row.textContent?.includes("Please review")),
+    ).toBe(true),
+  );
+  expect(screen.queryByText("Couldn't mark unread")).toBeNull();
+});
+
+it("a failed Undo says it couldn't mark the row unread", async () => {
+  const h = fixture();
+  render(h.view, { wrapper: ToastProvider });
+  await screen.findByText("Please review this");
+  await chooseFilter("Mentions");
+  await chooseFilter("Unread only", "Attention");
+  const row = rows()[0];
+  if (!row) throw new Error("Missing inbox row");
+  fireEvent.click(within(row).getByRole("button", { name: /^Mark as read / }));
+  const undo = await screen.findByRole("button", {
+    name: "Undo",
+    hidden: true,
+  });
+  vi.spyOn(h.session.unread, "markUnreadLocal").mockRejectedValue(
+    Error("disk full"),
+  );
+  fireEvent.click(undo);
+  expect(await screen.findByText("Couldn't mark unread")).toBeInTheDocument();
+  expect(rows()).toHaveLength(0);
+});
+
+it("decides on Undo when the read lands, so turning Unread off first shows no toast", async () => {
+  const h = fixture();
+  render(h.view, { wrapper: ToastProvider });
+  await screen.findByText("Please review this");
+  await chooseFilter("Mentions");
+  await chooseFilter("Unread only", "Attention");
+  const row = rows()[0];
+  if (!row) throw new Error("Missing inbox row");
+  const release = h.holdSave();
+  try {
+    fireEvent.click(
+      within(row).getByRole("button", { name: /^Mark as read / }),
+    );
+    await waitFor(() => expect(h.saveStarted()).toBe(true));
+    await chooseFilter("All", "Attention");
+  } finally {
+    await act(async () => release());
+  }
+  await waitFor(() =>
+    expect(h.journal()?.state.frontiers[`msg:${h.mention.id}`]).toBe(21),
+  );
+  await waitFor(() =>
+    expect(within(row).queryByRole("img", { name: "Unread" })).toBeNull(),
+  );
+  expect(rows()).toEqual([row]);
+  expect(screen.queryByText("Marked as read")).not.toBeInTheDocument();
+  expect(
+    screen.queryByRole("button", { name: "Undo", hidden: true }),
+  ).not.toBeInTheDocument();
+});
+
+it("a failed Mark as read under Unread keeps focus on its own row", async () => {
+  const h = fixture();
+  render(h.view, { wrapper: ToastProvider });
+  await waitFor(() => expect(rows()).toHaveLength(2));
+  await chooseFilter("Unread only", "Attention");
+  const [first, second] = rows();
+  if (!first || !second) throw new Error("Missing inbox rows");
+  h.failSave();
+  const check = within(first).getByRole("button", { name: /^Mark as read / });
+  check.focus();
+  fireEvent.click(check);
+  expect(await screen.findByRole("alert")).toHaveTextContent("disk full");
+  expect(rows()).toEqual([first, second]);
+  await waitFor(() =>
+    expect([
+      within(first).getByRole("button", { name: /^Open / }),
+      screen.getByRole("button", { name: "Retry activity" }),
+    ]).toContain(document.activeElement),
+  );
+  expect(document.activeElement).not.toBe(document.body);
+  expect(screen.queryByText("Marked as read")).not.toBeInTheDocument();
+});
+
+it("shows All caught up only while the unread list is complete", async () => {
+  const h = fixture();
+  render(h.view);
+  await waitFor(() => expect(rows()).toHaveLength(2));
+  await act(async () => {
+    await h.owner.session.unread.markChannelRead("room");
+  });
+  const real = h.session.unread.inbox;
+  const retained = new WeakMap<object, ReturnType<typeof real>>();
+  let stale = false;
+  vi.spyOn(h.session.unread, "inbox").mockImplementation(() => {
+    const snapshot = real();
+    if (!stale) return snapshot;
+    const held = retained.get(snapshot) ?? {
+      ...snapshot,
+      freshness: "stale",
+    };
+    retained.set(snapshot, held);
+    return held;
+  });
+  await chooseFilter("Unread only", "Attention");
+  await screen.findByText("All caught up");
+  // Retained (stale) evidence may hide unread activity: no all-clear then.
+  stale = true;
+  await chooseFilter("All", "Attention");
+  await chooseFilter("Unread only", "Attention");
+  await screen.findByText("Showing retained activity.");
+  expect(screen.queryByText("All caught up")).not.toBeInTheDocument();
+});
+
+it("shows no All caught up while recent activity is still loading", async () => {
+  const h = fixture();
+  writeView(h.owner.session.scope, "inbox:filters", {
+    activity: "all",
+    sender: "everyone",
+    attention: "unread",
+  });
+  const release = h.holdUnread();
+  try {
+    render(h.view);
+    await screen.findByText("Checking recent activity…");
+    expect(screen.queryByText("All caught up")).not.toBeInTheDocument();
+  } finally {
+    await act(async () => release());
+  }
+});
+
+it("a failed send keeps its draft and its row", async () => {
+  const h = fixture({ withWriter: true });
+  render(h.view);
+  await waitFor(() => expect(rows()).toHaveLength(2));
+  const row = rows().find((entry) =>
+    entry.textContent?.includes("A thread update"),
+  );
+  if (!row) throw Error("Missing thread row");
+  fireEvent.click(within(row).getByRole("button", { name: /^Open / }));
+  const editor = (await screen.findByRole("textbox")) as ComposerInputElement;
+  vi.spyOn(h.session.messages, "reply").mockImplementation(() => {
+    throw Error("Send rejected");
+  });
+  act(() => {
+    editor.insertText("Retain failed response");
+  });
+  fireEvent.click(screen.getByRole("button", { name: "Send message" }));
+  await screen.findByText("Send rejected");
+  expect(rows()).toHaveLength(2);
+  expect(rows()).toContain(row);
+  expect(screen.getByRole("textbox")).toBe(editor);
+  expect(editor).toHaveValue("Retain failed response");
+});
+
+it("moves through the Activity type tabs with arrows, Home and End, then tabs out to From", async () => {
+  const h = fixture();
+  render(h.view);
+  await waitFor(() => expect(rows()).toHaveLength(2));
+  const user = userEvent.setup();
+  const list = screen.getByRole("tablist", { name: "Activity type" });
+  const tab = () => within(list).getAllByRole("tab");
+  const focusable = () => tab().filter((item) => item.tabIndex === 0);
+  expect(focusable()).toHaveLength(1);
+  expect(focusable()[0]).toHaveAttribute("aria-selected", "true");
+  const [all, , , last] = tab();
+  if (!all || !last) throw new Error("Missing Activity type tabs");
+  act(() => all.focus());
+  await user.keyboard("{ArrowRight}");
+  expect(tab()[1]).toHaveFocus();
+  await user.keyboard("{ArrowLeft}");
+  expect(all).toHaveFocus();
+  await user.keyboard("{End}");
+  expect(last).toHaveFocus();
+  await user.keyboard("{Home}");
+  expect(all).toHaveFocus();
+  expect(focusable()).toEqual([all]);
+  await user.tab();
+  expect(fromTrigger()).toHaveFocus();
+});
+
+it.each([
+  ["button", "saves"],
+  ["menu", "saves"],
+  ["button", "fails"],
+  ["menu", "fails"],
+] as const)(
+  "a pending Mark as read via %s that %s leaves focus in the composer the user moved to",
+  async (path, outcome) => {
+    const h = fixture({ withWriter: true });
+    render(h.view);
+    await waitFor(() => expect(rows()).toHaveLength(2));
+    const thread = rows().find((row) =>
+      row.textContent?.includes("A thread update"),
+    );
+    const mention = rows().find((row) =>
+      row.textContent?.includes("Please review"),
+    );
+    if (!thread || !mention) throw new Error("Missing fixture rows");
+    fireEvent.click(within(thread).getByRole("button", { name: /^Open / }));
+    const editor = await screen.findByRole("textbox");
+    await waitFor(() =>
+      expect(
+        reader().querySelector(`[data-message-id="${h.reply.id}"]`),
+      ).toHaveFocus(),
+    );
+    const list = screen.getByRole("list", { name: "Activity" });
+    await waitFor(() => expect(list).toHaveAttribute("aria-busy", "false"));
+    if (outcome === "fails") h.failSave();
+    const release = h.holdSave();
+    try {
+      if (path === "button") {
+        const check = within(mention).getByRole("button", {
+          name: /^Mark as read /,
+        });
+        check.focus();
+        fireEvent.click(check);
+      } else {
+        const open = within(mention).getByRole("button", { name: /^Open / });
+        open.focus();
+        fireEvent.contextMenu(open, { clientX: 20, clientY: 20 });
+        fireEvent.click(
+          await screen.findByRole("menuitem", { name: "Mark as read" }),
+        );
+      }
+      await waitFor(() => expect(h.saveStarted()).toBe(true));
+      editor.focus();
+      expect(editor).toHaveFocus();
+    } finally {
+      await act(async () => release());
+    }
+    if (outcome === "fails")
+      expect(await screen.findByRole("alert")).toHaveTextContent("disk full");
+    await waitFor(() => expect(list).toHaveAttribute("aria-busy", "false"));
+    expect(editor).toHaveFocus();
   },
 );

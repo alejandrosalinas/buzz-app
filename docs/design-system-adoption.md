@@ -94,7 +94,7 @@ below are labelled separately. No product fixes are included in this documentati
 | Surface | Example and the specific pattern it demonstrates |
 | --- | --- |
 | Conversation workspace | [ChannelsPage](../src/bundled/channels/ChannelsPage.tsx): pane identity and icon actions, timeline scroll ownership, persistent composer |
-| Collection with detail | [InboxPage](../src/bundled/inbox/InboxPage.tsx): filters in the body and list/detail ownership; the Drafts header action is a gap below |
+| Collection with detail | [InboxPage](../src/bundled/inbox/InboxPage.tsx): filters in the body and list/detail ownership |
 | Solo chats | [ChannelsPage](../src/bundled/channels/ChannelsPage.tsx) Solo treatment ([SoloHeading](../src/bundled/channels/SoloHeading.tsx)): flat timeline/composer in the shared conversation page and panel workspace |
 | Immediate settings | [NotificationSettings](../src/app/NotificationSettings.tsx), [AppearanceSettings](../src/app/AppearanceSettings.tsx): shared preference rows, grouped controls, and contextual permission feedback |
 | Explicit-save settings | [ProfileSettings](../src/app/ProfileSettings.tsx): scoped description, labelled fields, preserved draft/save behavior. [IdentitySettings](../src/app/IdentitySettings.tsx) owns separate identity details |
@@ -110,7 +110,6 @@ interaction or authorize a redesign of the feature's behavior.
 | Before | After | Why |
 | --- | --- | --- |
 | [Repository views](../src/bundled/repos/RepoPage.tsx) begin with feature-authored large headings; loading replaces the heading too. Observed in the browser. | Adopt the shared pane composition, with filters, scoped notices, and labelled task actions in the body. Keep identity stable across loading and results. | A destination should remain recognizable while its content changes. |
-| [Inbox](../src/bundled/inbox/InboxPage.tsx) uses a text Drafts action. Browser observed. | Shared label/navigation treatment and small icon-only header actions; retain accessible names and existing action behavior. | Using the frame alone does not establish correct composition. |
 | [Builderlab Login](../src/bundled/builderlab/login/Login.tsx) uses its own heading/gaps; [PairingSettings](../src/bundled/pairing/PairingSettings.tsx) uses a different hand-built heading. Builderlab observed; Pairing source-reviewed. | Use the Settings content Header and appropriate form/preference/management grouping. Preserve integration-specific instructions and steps. | Settings registration does not render consistent content hierarchy for the plugin. |
 | [PanelSubview](../src/features/panels/PanelSubview.tsx) focuses its Back control on entry. Adding an IconButton title opens a Tooltip that consumes the first Escape before Back; reproduced in the existing focus/return component test during an isolated trial. | Preserve accessible names and the existing one-Escape Back contract until the shared Tooltip policy supports both. Current controls omit the new hint. | A mandatory hint recipe can conflict with an established keyboard contract; token guards do not detect this. |
 

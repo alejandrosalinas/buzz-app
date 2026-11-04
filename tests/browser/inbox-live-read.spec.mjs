@@ -14,16 +14,16 @@ test.use({
 
 // Opening a row leaves focus on the list; the open conversation beside it is
 // still what the reader sees, so a reply that lands in view is read.
-test("a live reply in the open Inbox conversation is read while focus stays on its row", async ({
+test("a live reply in the open Activity conversation is read while focus stays on its row", async ({
   page,
   app,
 }) => {
   await page.goto(app.origin);
-  await openPage(page, "Inbox");
-  const inbox = page.getByRole("region", { name: "Inbox", exact: true });
+  await openPage(page, "Activity");
+  const inbox = page.getByRole("region", { name: "Activity", exact: true });
   await expect(inbox.getByText("Checking recent activity…")).toHaveCount(0);
   const row = inbox
-    .getByRole("list", { name: "Inbox conversations" })
+    .getByRole("list", { name: "Activity", exact: true })
     .getByRole("listitem")
     .filter({ hasText: "Window room" });
   const open = row.getByRole("button", { name: /^Open / });

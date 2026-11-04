@@ -1,25 +1,17 @@
-import { useId, type Ref } from "react";
+import type { ReactNode, Ref } from "react";
 import styles from "./Inbox.module.css";
 import { Button } from "../../shared/design-system/ui/Button";
-import { IconButton } from "../../shared/design-system/ui/IconButton";
+import { Switch } from "../../shared/design-system/ui/Switch";
+import { Tabs } from "../../shared/design-system/ui/Tabs";
 import {
   MenuRoot,
   MenuTrigger,
   MenuPopup,
-  MenuGroup,
-  MenuGroupLabel,
-  MenuCheckboxItem,
   MenuRadioGroup,
   MenuRadioItem,
-  MenuSeparator,
 } from "../../shared/design-system/ui/Menu";
-import {
-  CaretDownIcon,
-  NotificationIcon,
-  NotificationFilledIcon,
-} from "../../shared/design-system/icons";
+import { CaretDownIcon } from "../../shared/design-system/icons";
 
-export type ShowFilter = "inbox" | "archived";
 export type ActivityFilter = "all" | "threads" | "mentions" | "dms";
 export type SenderFilter = "everyone" | "humans" | "agents";
 const views = [
@@ -27,156 +19,90 @@ const views = [
   { value: "threads", label: "Threads" },
   { value: "mentions", label: "Mentions" },
   { value: "dms", label: "DMs" },
-  { value: "drafts", label: "Drafts" },
 ] as const;
+const senders = [
+  { value: "everyone", label: "Anyone" },
+  { value: "humans", label: "People" },
+  { value: "agents", label: "Agents" },
+] as const satisfies readonly { value: SenderFilter; label: string }[];
 
+/**
+ * Type tabs, From and Unread as one left-aligned group, like Slack's Activity,
+ * so Unread stays in view on a wide page. From's visible label stays short so
+ * the bar fits one row in a narrow list; its name says the choice, and a fill
+ * shows when it narrows the list.
+ */
 export function InboxFilters({
   view,
-  show,
   sender,
   unreadOnly,
   triggerRef,
   onViewChange,
-  onShowChange,
   onSenderChange,
   onUnreadChange,
+  status,
 }: {
-  view: ActivityFilter | "drafts";
-  show: ShowFilter;
+  view: ActivityFilter;
   sender: SenderFilter;
   unreadOnly: boolean;
   triggerRef: Ref<HTMLButtonElement>;
-  onViewChange(view: ActivityFilter | "drafts"): void;
-  onShowChange(show: ShowFilter): void;
+  onViewChange(view: ActivityFilter): void;
   onSenderChange(sender: SenderFilter): void;
   onUnreadChange(checked: boolean): void;
+  /** Refresh status, sharing the last line with Unread so it never adds one. */
+  status?: ReactNode;
 }) {
-  const selectionId = useId();
-  const drafts = view === "drafts";
-  const label = views.find((item) => item.value === view)?.label;
-  const summary = drafts
-    ? label
-    : [
-        view === "all" && show === "archived" ? undefined : label,
-        show === "archived" ? "Archived" : undefined,
-        sender === "everyone"
-          ? undefined
-          : sender === "humans"
-            ? "People"
-            : "Agents",
-      ]
-        .filter(Boolean)
-        .join(" · ");
+  const from = senders.find((entry) => entry.value === sender) ?? senders[0];
+  const fromLabel = `From ${from.label.toLowerCase()}`;
   return (
-    <>
+    <div className={styles.filters}>
+      <div className={styles.typeTabs}>
+        <Tabs
+          label="Activity type"
+          variant="panel"
+          size="sm"
+          value={view}
+          items={views}
+          onValueChange={onViewChange}
+        />
+      </div>
       <MenuRoot>
         <MenuTrigger
           ref={triggerRef}
-          aria-label="Inbox filters"
-          aria-describedby={selectionId}
           render={
-            <Button size="sm" variant="ghost" style={{ maxWidth: "100%" }}>
-              <span id={selectionId} className={styles.filterSummary}>
-                {summary}
-              </span>
+            <Button
+              size="sm"
+              variant={sender === "everyone" ? "ghost" : "subtle"}
+              aria-label={fromLabel}
+              title={fromLabel}
+            >
+              From
               <CaretDownIcon size="1rem" />
             </Button>
           }
         />
         <MenuPopup
-          aria-label="Inbox filters"
+          aria-label="From"
           style={{ maxHeight: "var(--available-height)" }}
         >
-          <MenuGroup>
-            <MenuGroupLabel emphasis="quiet">Type</MenuGroupLabel>
-            <MenuRadioGroup value={view} onValueChange={onViewChange}>
-              {views
-                .filter((item) => item.value !== "drafts")
-                .map((item) => (
-                  <MenuRadioItem
-                    key={item.value}
-                    value={item.value}
-                    selection="highlight"
-                    closeOnClick
-                  >
-                    {item.label}
-                  </MenuRadioItem>
-                ))}
-            </MenuRadioGroup>
-          </MenuGroup>
-          <MenuSeparator />
-          <MenuGroup>
-            <MenuGroupLabel emphasis="quiet">From</MenuGroupLabel>
-            <MenuCheckboxItem
-              checked={sender !== "agents"}
-              disabled={drafts || sender === "humans"}
-              closeOnClick={false}
-              onCheckedChange={(checked) => {
-                if (!drafts && (checked || sender === "everyone"))
-                  onSenderChange(checked ? "everyone" : "agents");
-              }}
-            >
-              People
-            </MenuCheckboxItem>
-            <MenuCheckboxItem
-              checked={sender !== "humans"}
-              disabled={drafts || sender === "agents"}
-              closeOnClick={false}
-              onCheckedChange={(checked) => {
-                if (!drafts && (checked || sender === "everyone"))
-                  onSenderChange(checked ? "everyone" : "humans");
-              }}
-            >
-              Agents
-            </MenuCheckboxItem>
-          </MenuGroup>
-          <MenuSeparator />
-          <MenuGroup>
-            <MenuGroupLabel emphasis="quiet">Status</MenuGroupLabel>
-            <MenuRadioGroup value={show} onValueChange={onShowChange}>
-              <MenuRadioItem
-                value="inbox"
-                selection="highlight"
-                disabled={drafts}
-                closeOnClick
-              >
-                Inbox
+          <MenuRadioGroup
+            value={sender}
+            onValueChange={(value) => onSenderChange(value as SenderFilter)}
+          >
+            {senders.map(({ value, label }) => (
+              <MenuRadioItem key={value} value={value} closeOnClick>
+                {label}
               </MenuRadioItem>
-              <MenuRadioItem
-                value="archived"
-                selection="highlight"
-                disabled={drafts}
-                closeOnClick
-              >
-                Archived
-              </MenuRadioItem>
-            </MenuRadioGroup>
-          </MenuGroup>
-          <MenuSeparator />
-          <MenuRadioGroup value={view} onValueChange={onViewChange}>
-            <MenuRadioItem value="drafts" selection="highlight" closeOnClick>
-              Drafts
-            </MenuRadioItem>
+            ))}
           </MenuRadioGroup>
         </MenuPopup>
       </MenuRoot>
-      {!drafts && (
-        <IconButton
-          size="sm"
-          variant="bare"
-          aria-label="Unread only"
-          aria-pressed={unreadOnly}
-          title="Show unread only"
-          onClick={() => onUnreadChange(!unreadOnly)}
-          icon={
-            unreadOnly ? (
-              <NotificationFilledIcon size="1.25rem" />
-            ) : (
-              <NotificationIcon size="1.25rem" />
-            )
-          }
-        />
-      )}
-    </>
+      <Switch
+        label="Unread"
+        checked={unreadOnly}
+        onCheckedChange={onUnreadChange}
+      />
+      {status}
+    </div>
   );
 }

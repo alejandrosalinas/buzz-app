@@ -1,6 +1,5 @@
 import type { PluginModule } from "../../plugins/api";
-import { isApplePlatform } from "../../features/shortcuts/format";
-import { InboxPage, type ArchiveShortcut } from "./InboxPage";
+import { InboxPage } from "./InboxPage";
 import { InboxPreview } from "./InboxPreview";
 import { inboxRouteTarget, isInboxRoute, type InboxRoute } from "./route";
 export const inject = [
@@ -14,20 +13,7 @@ export const inject = [
 export const apply: PluginModule["apply"] = (ctx) => {
   const relay = ctx.relay;
   const navigator = ctx.navigation;
-  const archive: ArchiveShortcut = {};
-  ctx.shortcuts.register({
-    id: "archive-conversation",
-    title: "Archive or restore conversation",
-    // Solo's Archive chat chord: Apple Mail's Archive, and Ctrl+Shift+E elsewhere.
-    binding: isApplePlatform(globalThis.navigator?.platform ?? "")
-      ? { key: "a", mod: true, ctrl: true }
-      : { key: "e", mod: true, shift: true },
-    order: 10,
-    allowInEditable: true,
-    when: () => !!archive.current,
-    run: () => archive.current?.(),
-  });
-  // Slack's chords for jumping to a filtered Inbox, including from the composer.
+  // Slack's chords for jumping to a filtered Activity view, including from the composer.
   const open = (
     id: string,
     title: string,
@@ -45,31 +31,28 @@ export const apply: PluginModule["apply"] = (ctx) => {
         void navigator.open(inboxRouteTarget(params));
       },
     });
-  open("open-unread", "Open unread in Inbox", "a", 20, {
+  open("open-unread", "Open unread in Activity", "a", 20, {
     activity: "all",
     attention: "unread",
   });
-  open("open-threads", "Open threads in Inbox", "t", 30, {
+  open("open-threads", "Open threads in Activity", "t", 30, {
     activity: "threads",
   });
-  open("open-mentions", "Open mentions in Inbox", "m", 40, {
+  open("open-mentions", "Open mentions in Activity", "m", 40, {
     activity: "mentions",
   });
-  open("open-dms", "Open DMs in Inbox", "k", 50, { activity: "dms" });
+  open("open-dms", "Open DMs in Activity", "k", 50, { activity: "dms" });
   ctx.pages.register({
     id: "inbox",
-    title: "Inbox",
+    title: "Activity",
     layout: "workspace",
     primary: true,
     route: { version: 1, validate: isInboxRoute },
     component: ({ navigation }) => (
       <InboxPage
-        host={ctx}
         relay={relay}
         navigator={navigator}
-        extensions={ctx.conversation}
         tabs={ctx.conversation.ui.Tabs}
-        archive={archive}
         navigation={navigation}
       />
     ),

@@ -91,7 +91,7 @@ vi.mock("../bundled", async () => ({
       enabledByDefault: true,
     },
     {
-      manifest: { id: "buzz.inbox", name: "Inbox", apiVersion: 1 },
+      manifest: { id: "buzz.inbox", name: "Activity", apiVersion: 1 },
       module: await import("../bundled/inbox"),
     },
     {
@@ -895,7 +895,7 @@ it("lists active primary pages in their sidebar and header placements", async ()
       within(pages)
         .getAllByRole("button")
         .map((row) => row.textContent),
-    ).toEqual(["Inbox", "Bestie"]),
+    ).toEqual(["Activity", "Bestie"]),
   );
 
   expect(
@@ -944,7 +944,7 @@ it("lists active primary pages in their sidebar and header placements", async ()
       within(screen.getByRole("navigation", { name: "Pages" }))
         .getAllByRole("button")
         .map((row) => row.textContent),
-    ).toEqual(["Inbox", "Bestie"]),
+    ).toEqual(["Activity", "Bestie"]),
   );
 
   expect(screen.queryByRole("tab", { name: "Agents" })).not.toBeInTheDocument();

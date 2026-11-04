@@ -193,7 +193,7 @@ test("shared navigation preserves drafts and history across Solo and header page
   // The real sidebar changes the route, not the containing Messages area.
   const inbox = page
     .getByRole("navigation", { name: "Pages" })
-    .getByRole("button", { name: "Inbox", exact: true });
+    .getByRole("button", { name: "Activity", exact: true });
   for (const mode of ["light", "dark"]) {
     await page.emulateMedia({ colorScheme: mode });
     for (const activation of ["pointer", "Enter", "Space"]) {

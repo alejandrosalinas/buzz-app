@@ -3,7 +3,7 @@ import { open } from "./timeline.mjs";
 
 // Browser-only contract: a real pointer resting on the sidebar row opens the
 // card, which sits just past the row, and its row navigates without opening
-// Inbox. Shell gating and the card's states stay in RTL tests.
+// Activity. Shell gating and the card's states stay in RTL tests.
 test.use({
   productionBroker: true,
   readState: true,
@@ -13,15 +13,15 @@ test.use({
   historyCounts: { alpha: 2, beta: 1 },
 });
 
-test("hovering the sidebar Inbox row previews recent conversations and opens one directly", async ({
+test("hovering the sidebar Activity row previews recent conversations and opens one directly", async ({
   page,
   app,
 }, testInfo) => {
   await open(page, app);
   const pages = page.getByRole("navigation", { name: "Pages", exact: true });
-  const inboxRow = pages.getByRole("button", { name: "Inbox", exact: true });
-  const card = page.getByRole("dialog", { name: "Inbox", exact: true });
-  const rows = card.getByRole("list", { name: "Recent Inbox conversations" });
+  const inboxRow = pages.getByRole("button", { name: "Activity", exact: true });
+  const card = page.getByRole("dialog", { name: "Activity", exact: true });
+  const rows = card.getByRole("list", { name: "Recent activity" });
   // Beside the row, inside the window, in both themes, at an intermediate
   // width and with enlarged text.
   for (const [mode, width, fontSize] of [
@@ -88,13 +88,13 @@ test("hovering the sidebar Inbox row previews recent conversations and opens one
     document.documentElement.style.fontSize = "";
   });
 
-  // Unread only belongs to the card; the Inbox page keeps its own filters.
+  // Unread only belongs to the card; the Activity page keeps its own filters.
   await inboxRow.hover();
   const unreadOnly = card.getByRole("switch", { name: "Unread only" });
   await unreadOnly.click();
   await expect(unreadOnly).toBeChecked();
 
-  // A row opens its conversation directly and closes the card; Inbox stays unselected.
+  // A row opens its conversation directly and closes the card; Activity stays unselected.
   await rows
     .getByRole("button", { name: /^Open / })
     .filter({ hasText: "Unread reply 1" })
@@ -105,16 +105,16 @@ test("hovering the sidebar Inbox row previews recent conversations and opens one
   ).toBeVisible();
   await expect(inboxRow).not.toHaveAttribute("aria-current", "page");
   await expect(
-    page.getByRole("region", { name: "Inbox", exact: true }),
+    page.getByRole("region", { name: "Activity", exact: true }),
   ).toHaveCount(0);
 
-  // While Inbox is the open page, its row offers no preview.
+  // While Activity is the open page, its row offers no preview.
   await inboxRow.click();
   await expect(inboxRow).toHaveAttribute("aria-current", "page");
   await expect(inboxRow).not.toHaveAttribute("aria-haspopup");
   await expect(
     page
-      .getByRole("region", { name: "Inbox", exact: true })
-      .getByRole("button", { name: "Unread only", exact: true }),
-  ).toHaveAttribute("aria-pressed", "false");
+      .getByRole("region", { name: "Activity", exact: true })
+      .getByRole("switch", { name: "Unread", exact: true }),
+  ).not.toBeChecked();
 });

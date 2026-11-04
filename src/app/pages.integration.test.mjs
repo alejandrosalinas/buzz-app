@@ -137,12 +137,12 @@ test("the app runtime exposes ready bundled pages and removes them on disable", 
     const inbox = services.pages
       .snapshot()
       .find((page) => page.pluginId === "buzz.inbox");
-    assert.equal(inbox.title, "Inbox");
+    assert.equal(inbox.title, "Activity");
     assert.equal(inbox.layout, "workspace");
     assert.equal(inbox.primary, true);
     assert.match(
       renderToStaticMarkup(createElement(inbox.component)),
-      /Choose a community to see your inbox/,
+      /Choose a community to see your activity/,
     );
     const unread = services.relay.snapshot().session.unread;
     await services.plugins.change("disable", "buzz.inbox");

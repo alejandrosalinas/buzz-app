@@ -1,7 +1,7 @@
 import { formatPublicKey } from "../../shared/identity/public-key";
 import { sortParticipantNames } from "../../features/identity-names/participant-order";
 
-/** One label recipe for Inbox rows, details and Drafts; callers own profile reads. */
+/** One label recipe for Activity rows and details; callers own profile reads. */
 export function dmLabel(
   participants: readonly string[] | undefined,
   profiles: ReadonlyMap<string, { name?: string | undefined }>,

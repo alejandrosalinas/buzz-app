@@ -19,17 +19,17 @@ test("Inbox rows open their conversation in one side tab beside the list", async
 }) => {
   await page.setViewportSize({ width: 1280, height: 900 });
   await open(page, app);
-  await openPage(page, "Inbox");
-  const inbox = page.getByRole("region", { name: "Inbox", exact: true });
+  await openPage(page, "Activity");
+  const inbox = page.getByRole("region", { name: "Activity", exact: true });
   await expect(inbox.getByText("Checking recent activity…")).toHaveCount(0);
-  const main = inbox.getByRole("tablist", { name: "Inbox tabs" });
+  const main = inbox.getByRole("tablist", { name: "Activity tabs" });
   const side = inbox.getByRole("tablist", { name: "Panel tabs" });
-  const list = inbox.getByRole("list", { name: "Inbox conversations" });
+  const list = inbox.getByRole("list", { name: "Activity", exact: true });
   const rows = list.getByRole("listitem");
   const expectList = async () => {
-    await expect(main.getByRole("tab")).toHaveText(["Inbox"]);
+    await expect(main.getByRole("tab")).toHaveText(["Activity"]);
     await expect(
-      main.getByRole("tab", { name: "Inbox", exact: true }),
+      main.getByRole("tab", { name: "Activity", exact: true }),
     ).toHaveAttribute("aria-selected", "true");
     await expect(list).toBeVisible();
     await expect(rows).toHaveCount(3);
@@ -133,14 +133,14 @@ test("an Inbox tab's menu opens its thread in its channel", async ({
 }) => {
   await page.setViewportSize({ width: 1280, height: 900 });
   await open(page, app);
-  await openPage(page, "Inbox");
-  const inbox = page.getByRole("region", { name: "Inbox", exact: true });
+  await openPage(page, "Activity");
+  const inbox = page.getByRole("region", { name: "Activity", exact: true });
   await expect(inbox.getByText("Checking recent activity…")).toHaveCount(0);
   const root = app.histories
     .get("primary/alpha")
     .find((event) => event.content === "Thread root 1");
   await inbox
-    .getByRole("list", { name: "Inbox conversations" })
+    .getByRole("list", { name: "Activity", exact: true })
     .getByRole("listitem")
     .filter({ hasText: "Unread reply 1" })
     .getByRole("button", { name: /^Open / })

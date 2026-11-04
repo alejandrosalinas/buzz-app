@@ -15,7 +15,7 @@ test("the same signed mention opens its profile in Inbox and Channels", async ({
   app,
 }) => {
   await page.goto(app.origin);
-  await openPage(page, "Inbox");
+  await openPage(page, "Activity");
   const root = app.histories
     .get("primary/alpha")
     .find((event) => event.content === "Thread root 0");
@@ -29,10 +29,10 @@ test("the same signed mention opens its profile in Inbox and Channels", async ({
     undefined,
     [["p", app.viewer]],
   );
-  const inbox = page.getByRole("region", { name: "Inbox", exact: true });
+  const inbox = page.getByRole("region", { name: "Activity", exact: true });
   // The thread's preview follows whichever reply loaded last.
   await inbox
-    .getByRole("list", { name: "Inbox conversations" })
+    .getByRole("list", { name: "Activity", exact: true })
     .getByRole("button", { name: "Open Alice Fixture in #Alpha", exact: true })
     .click();
   const detail = inbox.getByRole("region", {
