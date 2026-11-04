@@ -75,9 +75,10 @@ export function StatusEmoji({
   const source = own ?? usable(custom?.url);
   // Unhinted slots, such as every message byline, never load the name table.
   const name = useEmojiName(hint ? value : "");
-  // Over the emoji, its hint replaces an enclosing native title, such as the
-  // ticker's. Base UI keeps hover wiring on the trigger element it first
-  // registered, so swapping between an image and a glyph mounts a fresh hint.
+  // Over the emoji, a name replaces an enclosing native title, such as the
+  // ticker's; without one, that title still shows. Base UI keeps hover wiring
+  // on the trigger element it first registered, so swapping between an image
+  // and a glyph mounts a fresh hint.
   const named = (element: ReactElement<HTMLAttributes<HTMLElement>>) =>
     hint ? (
       <Tooltip
@@ -86,7 +87,7 @@ export function StatusEmoji({
         {...(name ? {} : { open: false })}
         disableHoverablePopup
       >
-        {cloneElement(element, { title: "" })}
+        {name ? cloneElement(element, { title: "" }) : element}
       </Tooltip>
     ) : (
       element

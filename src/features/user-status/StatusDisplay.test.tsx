@@ -13,7 +13,18 @@ import { afterEach, expect, it, vi } from "vitest";
 import { createRelaySession } from "../relay/session";
 import { flush, keypair, scriptedTransport, signed } from "../relay/testing";
 import type { UserStatus } from "../relay/user-status";
+import { HELPFUL_HINT_REST_MS } from "../../shared/design-system/ui/hoverIntent";
 import { StatusDisplay } from "./StatusDisplay";
+
+// The caption ticker measures its slot.
+vi.stubGlobal(
+  "ResizeObserver",
+  class {
+    observe() {}
+    unobserve() {}
+    disconnect() {}
+  },
+);
 
 const viewer = keypair(),
   other = keypair(),
@@ -40,6 +51,9 @@ function harness(status: UserStatus) {
       <section aria-label="Compact">
         <StatusDisplay compact status={status} session={session} />
       </section>
+      <section aria-label="Caption">
+        <StatusDisplay size="caption" status={status} session={session} />
+      </section>
     </>
   );
   const { rerender } = render(view(status));
@@ -48,6 +62,7 @@ function harness(status: UserStatus) {
   return {
     update: (next: UserStatus) => rerender(view(next)),
     full: within(screen.getByRole("region", { name: "Full" })),
+    caption: within(screen.getByRole("region", { name: "Caption" })),
     compact: screen.getByRole("img", { name: `${status.emoji} Buzzin'` }),
     catalogRead,
     async respondCatalog(tags: string[][]) {
@@ -117,6 +132,8 @@ it("names a Unicode status emoji on hover, as reactions do", async () => {
   const h = harness(status("🏠"));
   expect(await hint(h.full.getByText("🏠"))).toHaveTextContent(/^:house:$/);
   await waitFor(() => expect(screen.queryByRole("tooltip")).toBeNull());
+  // Over the caption ticker's emoji, the name replaces its full-status title.
+  expect(h.caption.getByText("🏠")).toHaveAttribute("title", "");
   // The compact slot's hint already shows the whole status, so it stays as is.
   expect(await tooltip(h.compact)).toHaveTextContent(/^🏠Buzzin'$/);
   expect(h.compact).toHaveAccessibleName("🏠 Buzzin'");
@@ -129,21 +146,39 @@ it("names a Unicode status emoji on hover, as reactions do", async () => {
   ).toHaveTextContent(/^:bee:$/);
 });
 
-it("gives free text in the emoji slot no name", async () => {
-  const h = harness(status("🐝 working from the office"));
+it("gives free text in the emoji slot no name, keeping the ticker's title", async () => {
+  const h = harness(status("🏠"));
   // Completion barrier: the hint's name table has loaded.
   await act(() => import("../messages/reaction-name"));
-  const glyph = h.full.getByText("🐝 working from the office");
+  const rest = () =>
+    act(() => vi.advanceTimersByTimeAsync(HELPFUL_HINT_REST_MS));
+  const hover = async (emoji: HTMLElement) => {
+    fireEvent.mouseEnter(emoji);
+    fireEvent.mouseMove(emoji);
+    await rest();
+  };
   vi.useFakeTimers();
   try {
-    fireEvent.mouseEnter(glyph);
-    fireEvent.mouseMove(glyph);
-    // Past the hint's rest delay, hover has still opened nothing.
-    act(() => vi.advanceTimersByTime(1_000));
+    // Control: past the rest delay, the same hover names an emoji.
+    const house = h.full.getByText("🏠");
+    await hover(house);
+    expect(screen.getByRole("tooltip")).toHaveTextContent(/^:house:$/);
+    fireEvent.mouseLeave(house);
+    await rest();
+    expect(screen.queryByRole("tooltip")).toBeNull();
+    h.update(status("🐝 working from the office"));
+    await hover(h.full.getByText("🐝 working from the office"));
     expect(screen.queryByRole("tooltip")).toBeNull();
   } finally {
     vi.useRealTimers();
   }
+  // With no name to show, the ticker's full-status title still covers the text.
+  const caption = h.caption.getByText("🐝 working from the office");
+  expect(caption).not.toHaveAttribute("title");
+  expect(caption.closest("[title]")).toHaveAttribute(
+    "title",
+    "🐝 working from the office Buzzin'",
+  );
   expect(await tooltip(h.compact)).toHaveTextContent(
     /^🐝 working from the officeBuzzin'$/,
   );
