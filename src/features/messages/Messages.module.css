@@ -907,6 +907,10 @@ html[data-keyboard-navigation] .attachmentImage:focus-visible {
   width: min(100%, var(--timeline-measure));
   margin-inline: auto;
   transition: opacity var(--duration-state) var(--easing-state);
+  /* A stacking context inside the scroller: each scroll update then reaches
+     the rows' layers from here, not from the panel around the scroller. The
+     jump control and composer stay outside it and keep their order. */
+  isolation: isolate;
 }
 .threadHistory[data-positioning] > [data-thread-rows] {
   opacity: 0;
