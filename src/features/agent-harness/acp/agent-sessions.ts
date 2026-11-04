@@ -170,9 +170,11 @@ export class AgentSessions {
   active(key: string) {
     return this.opening.has(key) || !!this.live.get(key)?.session.working;
   }
-  /** The harness session serving a conversation or one-off turn. */
-  sessionId(key: string) {
-    return (this.live.get(key) ?? this.once.get(key))?.session.id;
+  /** The harness session serving a conversation or one-off turn, and the
+   * process it lives in. */
+  serving(key: string) {
+    const live = this.live.get(key) ?? this.once.get(key);
+    return live && { sessionId: live.session.id, process: live.process };
   }
   /** Conversations with a session, whether each is working, and when each
    * last took in a message or ended a turn. */

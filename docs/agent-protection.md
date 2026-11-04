@@ -244,10 +244,13 @@ the protected engines on demand, without compiling them during Buzz development.
 
 Protected Goose's native provider decorator gates model input,
 including tool results, and its central tool dispatcher gates arguments together
-with the native conversation. Providers with internal tool loops, command-line agent
+with the native conversation, which Buzz exports from the worker hosting that
+session. Providers with internal tool loops, command-line agent
 providers such as `codex` and `cursor-agent`, toolshim, unreviewed native command
 hooks, recipe shell callbacks and unsupported extension launches are refused.
-Protected agents have dedicated contained workers. Goose reviews read the owner's
+Protected agents have dedicated contained workers. When an agent's provider is
+replaced, its next worker starts only after every replaced worker has exited, and
+retiring the agent waits for them too. Goose reviews read the owner's
 Goose connection settings. The security plugin lists `config.yaml`, `secrets.yaml`,
 `custom_providers` and `config.tmp`, which Goose saves `config.yaml` through, plus the
 `.tmp` beside the target when `config.yaml` is a link, so they are read-only for

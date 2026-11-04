@@ -358,6 +358,126 @@ it("starts a replacement provider's Goose worker once the previous one has exite
   }
 });
 
+/** `protection(…)` whose worker, once killed, runs until the test calls its
+ * `exit`, as a worker in its kill grace does. */
+const holdingKill = (key: string, f: () => ReturnType<typeof setup>) =>
+  ({
+    ...protection(key, f),
+    spawn: async (options) => {
+      const process = await f().fake.spawn("goose", options);
+      const goose = f().fake.geese.at(-1);
+      return {
+        ...process,
+        kill: async () => {
+          if (goose) goose.killed = true;
+        },
+      };
+    },
+  }) satisfies AgentProtection;
+
+/** Replaces the provider twice while the first worker is in its kill grace,
+ * with a turn waiting for a worker after each. */
+async function replacedTwice(f: ReturnType<typeof setup>) {
+  await f.deliver(message("1", "First"));
+  await vi.waitFor(() => expect(f.fake.geese[0]?.turns).toHaveLength(1));
+  Object.assign(f.agent, { protection: protection("policy-2", () => f) });
+  const second = f.deliver(message("2", "Second"));
+  await vi.waitFor(() => expect(f.fake.geese[0]?.killed).toBe(true));
+  const third = vi.fn<AgentProtection["assertAvailable"]>();
+  Object.assign(f.agent, {
+    protection: { ...protection("policy-3", () => f), assertAvailable: third },
+  });
+  const turns = Promise.all([second, f.deliver(message("3", "Third"))]);
+  await vi.waitFor(() => expect(third).toHaveBeenCalled());
+  await flush(100);
+  return turns;
+}
+
+it("starts one worker for providers replaced in turn, once every replaced one has exited", async () => {
+  const f = setup({ protection: holdingKill("policy-1", () => f) });
+  try {
+    const turns = await replacedTwice(f);
+    expect(f.fake.geese).toHaveLength(1);
+    f.fake.geese[0]?.exit(null);
+    await turns;
+    // Both open in it, in either order.
+    await vi.waitFor(() =>
+      expect(
+        f.fake.geese[1]?.turns
+          .map((turn) => turn.text.match(/Request: "(\w+)"/)?.[1])
+          .sort(),
+      ).toEqual(["Second", "Third"]),
+    );
+    expect(f.fake.geese).toHaveLength(2);
+  } finally {
+    f.runtime.dispose();
+  }
+});
+
+it("retires an agent once every replaced worker has exited, leaving none running", async () => {
+  const f = setup({ protection: holdingKill("policy-1", () => f) });
+  try {
+    const turns = await replacedTwice(f);
+    let retired = false;
+    const retiring = f.runtime.retire(f.agent.key).then(() => {
+      retired = true;
+    });
+    await flush(100);
+    expect(retired).toBe(false);
+    f.fake.geese[0]?.exit(null);
+    await retiring;
+    await turns;
+    // None outlives it, the one replaced before it started included.
+    expect(f.fake.geese.filter((goose) => !goose.killed)).toEqual([]);
+  } finally {
+    f.runtime.dispose();
+  }
+});
+
+it("reads a protected tool's native conversation from the worker in its kill grace without starting its replacement", async () => {
+  const check = vi.fn<AgentProtection["check"]>().mockResolvedValue();
+  const f = setup({
+    hold: true,
+    protection: { ...holdingKill("policy-1", () => f), check },
+  });
+  try {
+    await f.deliver(message("1", "Post my notes"));
+    await vi.waitFor(() => expect(f.fake.geese[0]?.turns).toHaveLength(1));
+    const old = f.fake.geese[0];
+    const sessionId = old?.turns[0]?.sessionId;
+    if (!old || !sessionId) throw new Error("Goose turn did not start");
+    Object.assign(f.agent, {
+      protection: { ...protection("policy-2", () => f), check },
+    });
+    const second = f.deliver(message("2", "Second"));
+    await vi.waitFor(() => expect(old.killed).toBe(true));
+    const reply = await old.mcp(sessionId, "tools/call", {
+      name: "send",
+      arguments: { audience: "everyone", path: "notes.md" },
+    });
+    expect(reply.result).not.toMatchObject({ isError: true });
+    expect(check).toHaveBeenCalledWith(
+      expect.objectContaining({
+        kind: "tool",
+        content: expect.objectContaining({
+          conversation: expect.objectContaining({ id: sessionId }),
+        }),
+      }),
+      expect.anything(),
+    );
+    expect(f.fake.geese).toHaveLength(1);
+    old.exit(null);
+    await vi.waitFor(() =>
+      expect(f.fake.geese[1]?.turns.map((turn) => turn.text)).toEqual([
+        expect.stringContaining("Second"),
+      ]),
+    );
+    await second;
+  } finally {
+    f.runtime.dispose();
+  }
+});
+
 it("stops a protected Goose worker and allows a retry when retiring its sessions fails", async () => {
   const f = setup({ protection: protection("policy-1", () => f) });
   try {

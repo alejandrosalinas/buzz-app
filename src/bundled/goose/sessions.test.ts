@@ -129,7 +129,7 @@ const host = (cap: number) => {
 };
 
 describe("AgentSessions", () => {
-  it("maps conversation and one-off keys to their native session IDs", async () => {
+  it("maps conversation and one-off keys to their native sessions and the process each lives in", async () => {
     const { fake, sessions, process } = setup({}, true);
     const delivery = sessions.deliver("thread", "one", 1);
     const once = sessions.runOnce("watch", () => "two");
@@ -140,18 +140,25 @@ describe("AgentSessions", () => {
       const standalone = turns.find((turn) => turn.text === "two");
       expect(normal?.sessionId).toBeDefined();
       expect(standalone?.sessionId).toBeDefined();
-      expect(sessions.sessionId("thread")).toBe(normal?.sessionId);
-      expect(sessions.sessionId("watch #1")).toBe(standalone?.sessionId);
-      expect(sessions.sessionId("missing")).toBeUndefined();
+      const running = await process.get();
+      expect(sessions.serving("thread")).toEqual({
+        sessionId: normal?.sessionId,
+        process: running,
+      });
+      expect(sessions.serving("watch #1")).toEqual({
+        sessionId: standalone?.sessionId,
+        process: running,
+      });
+      expect(sessions.serving("missing")).toBeUndefined();
       for (const turn of turns) turn.finish();
       await Promise.all([delivery, once]);
-      expect(sessions.sessionId("watch #1")).toBeUndefined();
+      expect(sessions.serving("watch #1")).toBeUndefined();
     } finally {
       sessions.dispose();
       await process.shutdown();
       await Promise.all([delivery, once]);
     }
-    expect(sessions.sessionId("thread")).toBeUndefined();
+    expect(sessions.serving("thread")).toBeUndefined();
   });
 
   it("serves each conversation from its own session in one process", async () => {
