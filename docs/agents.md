@@ -338,7 +338,8 @@ thread-scoped sessions take only notes addressed to their root. Notes are
 consumed once when the harness is ready to deliver the turn, and restored to
 the same conversation ahead of newer notes if delivery definitely never began.
 They remain in memory only, and the call returns false unless this copy runs
-the agent.
+the agent. Pi agents don't take notes yet: the call still returns true for one,
+but its turns never include the note.
 
 A type marks its primary configuration tab with `role: "settings"`. In the
 Agents build view and profile panel, the host keeps that tab at a stable
