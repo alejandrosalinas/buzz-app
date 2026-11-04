@@ -9,7 +9,7 @@ import {
   waitFor,
   within,
 } from "@testing-library/react";
-import { afterEach, expect, it } from "vitest";
+import { afterEach, expect, it, vi } from "vitest";
 import { createRelaySession } from "../relay/session";
 import { flush, keypair, scriptedTransport, signed } from "../relay/testing";
 import type { UserStatus } from "../relay/user-status";
@@ -101,7 +101,7 @@ it("renders a status's own image in every mode without reading the catalog", asy
   await waitFor(() => expect(screen.queryByRole("tooltip")).toBeNull());
   const tip = await tooltip(h.compact);
   expect(tip.querySelector("img")).toHaveAttribute("src", beeUrl);
-  expect(tip).toHaveTextContent(/^:bee:Buzzin'$/);
+  expect(tip).toHaveTextContent(/^Buzzin'$/);
   expect(h.catalogRead()).toBeUndefined();
   // A failed image falls back to the catalog, then degrades like an unresolved code.
   if (decorative) fireEvent.error(decorative);
@@ -117,8 +117,8 @@ it("names a Unicode status emoji on hover, as reactions do", async () => {
   const h = harness(status("🏠"));
   expect(await hint(h.full.getByText("🏠"))).toHaveTextContent(/^:house:$/);
   await waitFor(() => expect(screen.queryByRole("tooltip")).toBeNull());
-  // The compact slot's status hint names the emoji beside it.
-  expect(await tooltip(h.compact)).toHaveTextContent(/^🏠:house:Buzzin'$/);
+  // The compact slot's hint already shows the whole status, so it stays as is.
+  expect(await tooltip(h.compact)).toHaveTextContent(/^🏠Buzzin'$/);
   expect(h.compact).toHaveAccessibleName("🏠 Buzzin'");
   // A status that changes between a glyph and an image keeps its hint.
   act(() => h.compact.blur());
@@ -133,6 +133,17 @@ it("gives free text in the emoji slot no name", async () => {
   const h = harness(status("🐝 working from the office"));
   // Completion barrier: the hint's name table has loaded.
   await act(() => import("../messages/reaction-name"));
+  const glyph = h.full.getByText("🐝 working from the office");
+  vi.useFakeTimers();
+  try {
+    fireEvent.mouseEnter(glyph);
+    fireEvent.mouseMove(glyph);
+    // Past the hint's rest delay, hover has still opened nothing.
+    act(() => vi.advanceTimersByTime(1_000));
+    expect(screen.queryByRole("tooltip")).toBeNull();
+  } finally {
+    vi.useRealTimers();
+  }
   expect(await tooltip(h.compact)).toHaveTextContent(
     /^🐝 working from the officeBuzzin'$/,
   );

@@ -39,7 +39,7 @@ export function StatusEmoji({
   session,
   decorative = false,
   fallback,
-  name: naming,
+  hint = false,
 }: {
   value: string;
   /** The status event's own image URL; the catalog is the fallback. */
@@ -48,8 +48,8 @@ export function StatusEmoji({
   decorative?: boolean;
   /** Icon-sized slots show this glyph for an empty or unresolved value. */
   fallback?: string;
-  /** Show the `:name:` in the emoji's own hover hint, or after it inside a host's hint. */
-  name?: "hint" | "inline";
+  /** Name the emoji on hover where the full status is already displayed. */
+  hint?: boolean;
 }) {
   const catalog = useSyncExternalStore(
     session.emoji.subscribe,
@@ -73,18 +73,13 @@ export function StatusEmoji({
       )
     : undefined;
   const source = own ?? usable(custom?.url);
-  // Unnamed slots, such as every message byline, never load the name table.
-  const name = useEmojiName(naming ? value : "");
+  // Unhinted slots, such as every message byline, never load the name table.
+  const name = useEmojiName(hint ? value : "");
   // Over the emoji, its hint replaces an enclosing native title, such as the
   // ticker's. Base UI keeps hover wiring on the trigger element it first
   // registered, so swapping between an image and a glyph mounts a fresh hint.
   const named = (element: ReactElement<HTMLAttributes<HTMLElement>>) =>
-    naming === "inline" ? (
-      <>
-        {element}
-        {name && <span>{name}</span>}
-      </>
-    ) : naming === "hint" ? (
+    hint ? (
       <Tooltip
         key={source ? "image" : "glyph"}
         content={name}
