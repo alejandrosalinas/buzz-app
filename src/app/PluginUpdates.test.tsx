@@ -127,9 +127,16 @@ function fixture() {
   };
 }
 
-it("applies a fresh preview for an update without more access", async () => {
+it("shows progress while applying a fresh preview without more access", async () => {
   const f = fixture();
   f.freshCandidate.revision = "newer";
+  let finish!: (success: boolean) => void;
+  f.installImport.mockImplementationOnce(
+    () =>
+      new Promise((resolve) => {
+        finish = resolve;
+      }),
+  );
   f.mount();
   fireEvent.click(
     await screen.findByRole("button", { name: "Update and reload" }),
@@ -140,6 +147,24 @@ it("applies a fresh preview for an update without more access", async () => {
       ".",
     ),
   );
+  try {
+    const dialog = screen.getByRole("dialog", { name: "Updating Notes" });
+    expect(within(dialog).getByRole("status")).toHaveTextContent(
+      "Updating plugin",
+    );
+    expect(
+      within(dialog).queryByRole("button", { name: "Update", exact: true }),
+    ).toBeNull();
+    expect(
+      within(dialog).queryByRole("region", { name: "Computer access" }),
+    ).toBeNull();
+    expect(screen.queryByRole("region", { name: "Plugin updates" })).toBeNull();
+  } finally {
+    await act(async () => {
+      finish(true);
+    });
+  }
+  await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
   expect(f.imports.git).toHaveBeenCalledOnce();
   expect(f.manager.change).not.toHaveBeenCalled();
 });

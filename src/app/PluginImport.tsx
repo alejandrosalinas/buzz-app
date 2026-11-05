@@ -819,6 +819,20 @@ export function PluginImport({
   useEffect(() => {
     if (preview && !loading && !error && !upToDate) applyFreshUpdate();
   }, [preview, loading, error, upToDate]);
+  const automaticUpdate =
+    !!updateAction?.apply &&
+    !error &&
+    !pinError &&
+    !conflict &&
+    !upToDate &&
+    (!preview ||
+      (!!candidate &&
+        !!currentPlugin &&
+        !pluginAccessIncreases(candidate.manifest, currentPlugin.manifest) &&
+        (candidate.publisher ?? null) === (currentPlugin.publisher ?? null) &&
+        !importRollbackWarning(candidate, currentPlugin) &&
+        (automaticToken.current !== preview.token ||
+          lifetime.current.installing)));
   if (!imports) return null;
   const addButton = (
     <Button
@@ -884,7 +898,7 @@ export function PluginImport({
     <>
       {!updateId &&
         (actionTarget ? createPortal(addButton, actionTarget) : addButton)}
-      {updateId && (
+      {updateId && !updateAction && (
         <section aria-label="Plugin updates" className="text-body-sm">
           <h3 className={`${styles.sourceHeading} text-caption`}>
             {savedSource && "repository" in savedSource
@@ -942,7 +956,9 @@ export function PluginImport({
           if (!next) void close();
         }}
         title={
-          showUnchanged ? (
+          automaticUpdate ? (
+            `Updating ${currentPlugin?.manifest.name ?? "plugin"}`
+          ) : showUnchanged ? (
             "Unchanged declarations"
           ) : error || !preview ? (
             updateId ? (
@@ -983,7 +999,11 @@ export function PluginImport({
                     : "Try another folder or repository."
                 : "Load built plugins containing manifest.json and plugin.js. Buzz doesn’t build source code or run install scripts."
         }
-        size={error || (reviewing && updating) ? "compact" : "wide"}
+        size={
+          automaticUpdate || error || (reviewing && updating)
+            ? "compact"
+            : "wide"
+        }
         leadingActions={
           !error &&
           !showUnchanged &&
@@ -1009,7 +1029,7 @@ export function PluginImport({
           ) : undefined
         }
         actions={
-          error ? (
+          automaticUpdate ? undefined : error ? (
             <Button
               ref={errorBack}
               type="button"
@@ -1124,7 +1144,8 @@ export function PluginImport({
             unchangedOnly
           />
         )}
-        <div hidden={!!error || showUnchanged}>
+        {automaticUpdate && <p role="status">Updating plugin…</p>}
+        <div hidden={automaticUpdate || !!error || showUnchanged}>
           <div hidden={!!preview || (!!updateId && !!savedSource)}>
             {(!updateId || !savedSource) && (
               <div className={styles.columns}>
