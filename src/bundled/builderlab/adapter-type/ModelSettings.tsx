@@ -69,6 +69,8 @@ export function ModelSettings({
   >();
   const reducedMotion = useReducedMotion();
   const signedIn = login.status === "signed-in";
+  const waitingToRetry =
+    retrySignIn === "switching" || retrySignIn === "waiting";
   useEffect(() => {
     // Native sign-out completes asynchronously; only its published state
     // starts the browser account-switch wait.
@@ -313,7 +315,7 @@ export function ModelSettings({
             retry={
               retrySignIn
                 ? {
-                    waiting: retrySignIn === "waiting",
+                    waiting: waitingToRetry,
                     cancel: () => setRetrySignIn("ready"),
                   }
                 : undefined
@@ -334,7 +336,7 @@ export function ModelSettings({
                     }
                   />
                 )}
-                {login.status === "signed-out" && retrySignIn !== "waiting" && (
+                {login.status === "signed-out" && !waitingToRetry && (
                   <p className="m-0 pb-3 text-body-sm text-secondary">
                     Sign in to edit settings. You can still message this agent.
                   </p>
