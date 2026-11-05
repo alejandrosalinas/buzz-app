@@ -780,6 +780,10 @@
   --bubble-neutral: #e9e9ea;
   --bubble-received: #f3f3f4;
   --neutral-navigation-text: #404040; /* Tailwind neutral-700. */
+  /* Designer-requested light status text: the brightest green and red, 35% of
+     the way from step 11 to step 12, that keep AA on every light surface. */
+  --green-text: #1e6a49;
+  --red-text: #a9252c;
   --neutral-navigation-unread: #262626; /* Tailwind neutral-800. */
   --neutral-navigation-quiet: #f7f7f7; /* Designer-requested gentle sidenav states. */
   --neutral-1: #ffffff; /* bg-panel, bg-float, bg-chrome-selected */
@@ -1128,10 +1132,10 @@
   --text-quiet-control: var(--neutral-8);
   --text-inverse: var(--neutral-1);
   --text-unavailable: var(--neutral-7);
-  --text-danger: var(--red-12);
+  --text-danger: var(--red-text);
   --text-call-leave: var(--red-10);
   --text-warning: var(--amber-12);
-  --text-success: var(--green-12);
+  --text-success: var(--green-text);
   --icon-status-progress: var(--amber-10);
   --icon-status-complete: var(--green-10);
   --icon-subtle: var(--text-subtle);
