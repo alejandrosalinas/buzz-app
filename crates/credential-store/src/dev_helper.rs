@@ -1,7 +1,7 @@
 use crate::{Error, Result};
 use std::ffi::OsStr;
 use std::io::Read;
-use std::os::fd::OwnedFd;
+use std::os::fd::{AsFd, OwnedFd};
 use std::os::unix::net::UnixStream;
 use std::path::Path;
 use std::process::{Command, Stdio};
@@ -124,6 +124,7 @@ fn store(
     value: &[u8],
     limit: usize,
 ) -> Result<Zeroizing<Vec<u8>>> {
+    use nix::poll::{poll, PollFd, PollFlags, PollTimeout};
     use std::io::Write;
     use std::net::Shutdown;
 
@@ -178,9 +179,18 @@ fn store(
             let remaining = deadline
                 .checked_duration_since(Instant::now())
                 .ok_or(Error::Unavailable)?;
-            channel
-                .set_read_timeout(Some(remaining))
-                .map_err(|_| Error::Unavailable)?;
+            let ready = {
+                let mut descriptors = [PollFd::new(channel.as_fd(), PollFlags::POLLIN)];
+                poll(
+                    &mut descriptors,
+                    PollTimeout::try_from(remaining).map_err(|_| Error::Unavailable)?,
+                )
+            };
+            match ready {
+                Err(nix::errno::Errno::EINTR) => continue,
+                Ok(0) | Err(_) => return Err(Error::Unavailable),
+                Ok(_) => {}
+            }
             let count = channel.read(&mut *buffer).map_err(|_| Error::Unavailable)?;
             if count == 0 {
                 break;
