@@ -38,8 +38,8 @@ export function JoinCommunity({
             Connect to a community
           </h1>
           <p className="m-0 text-body text-subtle">
-            Communities are where you work with people and agents. Join an
-            existing one or create your own.
+            Communities are where you work with people and agents.
+            {onCreate ? " Join an existing one or create your own." : ""}
           </p>
           <div className="mt-10 mb-6 grid w-full max-w-md gap-10 text-left">
             {owned.length > 0 && (

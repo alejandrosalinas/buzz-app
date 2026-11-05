@@ -2648,6 +2648,9 @@ it("Connect to a community offers Create a community for an account the public B
     creatingWith({ communityList, communityAvailable, createCommunity }),
   );
   expect(communityList).toHaveBeenCalledTimes(1);
+  expect(
+    screen.getByText(/Join an existing one or create your own\./),
+  ).toBeVisible();
   await user.click(
     screen.getByRole("button", { name: "Or create a community" }),
   );
@@ -2854,6 +2857,11 @@ it("a refused create stays on Create a community with the card's copy until the 
   expect(await screen.findByRole("alert")).toHaveTextContent(
     "That Buzz address is already taken.",
   );
+  // The refusal replaces "available", and Create waits for another name.
+  expect(screen.queryByText("That address is available.")).toBeNull();
+  expect(
+    screen.getByRole("button", { name: "Create community" }),
+  ).toBeDisabled();
   // The refusal was for that name, not the next one.
   await user.type(field, "s");
   expect(screen.queryByRole("alert")).toBeNull();
@@ -2890,6 +2898,8 @@ it.each<[string, Partial<FirstRunAccount>]>([
     expect(
       screen.queryByRole("button", { name: "Or create a community" }),
     ).toBeNull();
+    // Nor does the copy promise one.
+    expect(screen.queryByText(/create your own/)).toBeNull();
     identity.dispose();
   },
 );

@@ -69,13 +69,18 @@ export function useCommunityAddress(
   };
 }
 
-/** The address field with its fixed suffix, and the availability check's status or failure. */
+/**
+ * The address field with its fixed suffix, and the availability check's
+ * status or failure; a create's `refusal` of this address replaces both.
+ */
 export function CommunityAddressField({
   address,
   busy,
+  refusal,
 }: {
   address: CommunityAddress;
   busy: boolean;
+  refusal?: string | undefined;
 }) {
   const suffixId = useId();
   const { name, enabled, valid, available, failed } = address;
@@ -116,7 +121,11 @@ export function CommunityAddressField({
           </span>
         </div>
       </Field>
-      {valid && enabled && failed ? (
+      {refusal ? (
+        <p role="alert" className="m-0 break-words text-body-sm text-danger">
+          {refusal}
+        </p>
+      ) : valid && enabled && failed ? (
         <div role="alert" className="text-body-sm">
           <p className="error m-0 break-words">{failed}</p>
           <div className="mt-2">
