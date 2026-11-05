@@ -17,6 +17,7 @@ import type { FederatedIdentity } from "../federated-identity/service";
 import type { Host, HostResponse } from "../host/service";
 import { BackupError, backUpWith } from "./backup";
 import type { BackupFailureKind } from "./backup-failure";
+import { type AccountDetails, InvalidAccountDetails } from "./account-details";
 import type { FirstRunAccountSeed } from "./first-run-seed";
 import {
   type Identity,
@@ -87,6 +88,12 @@ export type FirstRunAccount = Readonly<{
    * kgoose's JSON reply, which the outbox would count as saved.
    */
   saveCommunity(url: string): Promise<void>;
+  /**
+   * Saves the account's setup details, as the web console's account setup
+   * does; saving replaces earlier details, so resubmitting is safe. Rejects
+   * with `InvalidAccountDetails` for fields kgoose refused.
+   */
+  saveDetails(details: AccountDetails): Promise<void>;
   /**
    * Binds `pubkey`, the key on this device, to the account: kgoose's challenge,
    * the native kind-24243 signer, then verify. Sends nothing more once the
@@ -632,6 +639,32 @@ function kgooseAccount(
         { community_url: relayAddress(url) },
       );
     },
+    // Answers no reply shape: a 2xx is saved whatever its body, and a refusal
+    // names its fields in `invalid_fields`.
+    async saveDetails(details) {
+      const path = "/v1/identity/save-account-details";
+      const response = await post(path, details).catch((error: unknown) => {
+        throw transient(asError(error));
+      });
+      if (response.status >= 200 && response.status < 300) return;
+      if (response.status === 401) throw new Error(SIGNED_OUT);
+      if (response.status === 429)
+        throw new Error(
+          "Too many attempts. Wait a few minutes, then try again.",
+        );
+      if (response.status === 400) {
+        let fields: unknown;
+        try {
+          fields = JSON.parse(response.body)?.invalid_fields;
+        } catch {}
+        throw new InvalidAccountDetails(
+          Array.isArray(fields)
+            ? fields.filter((field) => typeof field === "string")
+            : [],
+        );
+      }
+      throw transient(failure("account details", response), response.status);
+    },
     backUp: (pubkey) => backUpWith(identity, pubkey, session),
     // Backup routes answer plain text, not the card's reply shape, so only
     // the status and a 2xx body are read.
@@ -750,6 +783,7 @@ export function seededAccount(
     createCommunity: () =>
       Promise.reject(new Error("The development seed creates no communities.")),
     saveCommunity: () => Promise.resolve(),
+    saveDetails: () => Promise.resolve(),
     bind: () => Promise.resolve(),
     unbind: () =>
       seed.unlink

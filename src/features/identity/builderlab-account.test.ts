@@ -4,6 +4,7 @@ import type { Credential } from "../../bundled/builderlab/oauth/browser";
 import type { HostRequest } from "../host/service";
 import { BackupError, type BackupStatus, createBackupStatus } from "./backup";
 import { BACKUP_FAILURES } from "./backup-failure";
+import { InvalidAccountDetails } from "./account-details";
 import { federatedFixture } from "../federated-identity/testing";
 import {
   backupOfferedFor,
@@ -547,6 +548,80 @@ describe("saveCommunity", () => {
       ).saveCommunity("https://relay.example.com:8443"),
     ).resolves.toBeUndefined();
     expect(invoke).not.toHaveBeenCalled();
+  });
+});
+
+describe("saveDetails", () => {
+  const details = {
+    first_name: "Ada",
+    last_name: "Lovelace",
+    date_of_birth: "1990-12-10",
+    country_code: "GB",
+  };
+  const save = (reply: ReturnType<typeof answer> | string) => {
+    const { request, sent } = kgoose(reply);
+    return {
+      sent,
+      saved: builderlabAccount(credential, request, untouched)
+        .saveDetails(details)
+        .catch((error: unknown) => error),
+    };
+  };
+
+  it("POSTs the web console's save route with the session credential, and takes any 2xx as saved", async () => {
+    const { sent, saved } = save(answer(200, ""));
+    expect(await saved).toBeUndefined();
+    expect(sent).toEqual([
+      {
+        url: "https://t.example/api/goose/v1/identity/save-account-details",
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "X-BB-Session-Credential": "private-token",
+          Origin: "https://t.example",
+        },
+        body: JSON.stringify(details),
+      },
+    ]);
+  });
+
+  it("names the fields kgoose refused", async () => {
+    const failed = await save(
+      answer(400, {
+        error: "invalid_details",
+        invalid_fields: ["date_of_birth", 7],
+      }),
+    ).saved;
+    expect(failed).toBeInstanceOf(InvalidAccountDetails);
+    expect((failed as InvalidAccountDetails).fields).toEqual(["date_of_birth"]);
+  });
+
+  it.each([
+    ["a lapsed session", lapsed, signedOut, false],
+    [
+      "a rate limit",
+      answer(429, ""),
+      "Too many attempts. Wait a few minutes, then try again.",
+      false,
+    ],
+    [
+      "a server error",
+      answer(503, ""),
+      "Builderlab account details failed (HTTP 503).",
+      true,
+    ],
+    [
+      "a transport failure",
+      "Host request failed: connection reset",
+      "Host request failed: connection reset",
+      true,
+    ],
+  ])("rejects %s", async (_label, reply, message, retryable) => {
+    const failed = await save(reply).saved;
+    expect((failed as Error).message).toBe(message);
+    expect((failed as { retryable?: unknown }).retryable === true).toBe(
+      retryable,
+    );
   });
 });
 
