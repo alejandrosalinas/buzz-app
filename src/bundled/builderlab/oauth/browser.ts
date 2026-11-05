@@ -70,6 +70,8 @@ export async function browserCredential(
   host: Host,
   signal: AbortSignal,
   bridge: BrowserBridge = nativeBridge,
+  /** Opens the create-account page rather than sign-in. */
+  signup = false,
 ): Promise<Credential> {
   signal.throwIfAborted();
   const target = oauthTarget();
@@ -89,9 +91,10 @@ export async function browserCredential(
     signal.throwIfAborted();
     login.search = new URLSearchParams({
       type: "cli",
-      product: "builderlab",
+      product: "buzz",
       code_challenge: base64url(new Uint8Array(digest)),
       code_challenge_method: "S256",
+      ...(signup ? { screen_hint: "signup" } : {}),
     }).toString();
     const attempt = await bridge.begin({
       authorizationUrl: login.href,

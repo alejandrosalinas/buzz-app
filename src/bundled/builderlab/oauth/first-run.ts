@@ -50,6 +50,8 @@ export type FirstRunIdentity = Pick<
 export async function firstRunCredential(
   signal: AbortSignal,
   federated?: FirstRunIdentity,
+  /** Open the create-account page; an FI build's native sign-in has one page. */
+  signup = false,
 ): Promise<Credential> {
   const result = await invoke<StorageResult>("plugin_catalog").catch(() => {
     throw new Error("Could not complete Builderlab sign-in. Try again.");
@@ -68,7 +70,7 @@ export async function firstRunCredential(
     );
   return federated
     ? federatedCredential(federated, signal)
-    : browserCredential(bundledHost, signal);
+    : browserCredential(bundledHost, signal, undefined, signup);
 }
 
 // Native rejects with a bare failure code, such as a refused renewal's.

@@ -57,7 +57,7 @@
 }
 
 .tagline {
-  margin: 0;
+  margin: var(--space-4) 0 0;
   font-family: var(--font-sans);
   font-size: var(--text-body-lg);
   font-weight: var(--text-body-lg--font-weight);

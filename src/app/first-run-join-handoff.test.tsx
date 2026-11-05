@@ -225,7 +225,7 @@ function relayAnswer(args: unknown) {
 const notice = () => screen.queryByText("This destination couldn’t open");
 const joinDialog = () =>
   screen.queryByRole("dialog", { name: "Join a community" });
-/** Landing address → Connect from the choice → Set me up → the restore lifts the gate. */
+/** Landing address → Connect from the choice → setup runs on its own → the restore lifts the gate. */
 async function firstRunWithAddress(
   user: ReturnType<typeof userEvent.setup>,
   address = "relay-b.example",
@@ -249,7 +249,6 @@ async function firstRunWithAddress(
   await user.click(
     await screen.findByRole("button", { name: "Sign in with Builderlab" }),
   );
-  await user.click(await screen.findByRole("button", { name: "Set me up" }));
   const dialog = await screen.findByRole("dialog", {
     name: "Join a community",
   });

@@ -1,8 +1,8 @@
 # Packaged human identity and relay access
 
 Native macOS, Windows and Linux without the live development broker open on a
-welcome screen when no human key exists on this device: **Buzz** — "Your people,
-your agents, your projects — all in one place." — with **Sign in with Builderlab**
+welcome screen when no human key exists on this device: **Buzz**, "Your people,
+your agents, one place.", with **Sign in with Builderlab**
 (the label the Buzz mobile client uses; first-run copy never names the sign-in
 provider) and a live **Community URL** field with **Continue** beside it (the
 same field and normalisation as Join a community below). Sign in runs the

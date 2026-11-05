@@ -463,6 +463,7 @@ export const COMPONENTS: readonly ComponentDefinition[] = [
       "attention (proposed): light dashed danger outline with slow marching ants",
       "glass",
       "glass-ghost (proposed): quiet artwork control with glass hover/open states",
+      "glass-clear (proposed): barely-there glass secondary action over bright brand surfaces",
       "inverted",
       "link",
       "plain: unfilled text disclosure without an underline",

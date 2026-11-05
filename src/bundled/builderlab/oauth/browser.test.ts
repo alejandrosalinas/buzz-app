@@ -66,7 +66,7 @@ it("acquires a verified credential with the RFC 7636 S256 proof", async () => {
   expect(login.pathname).toBe("/api/goose/v1/auth/login");
   expect(Object.fromEntries(login.searchParams)).toEqual({
     type: "cli",
-    product: "builderlab",
+    product: "buzz",
     code_challenge: "E9Melhoa2OwvFrEMTJguCHaoeK1t8URWbuGJSstw-cM",
     code_challenge_method: "S256",
   });
@@ -95,6 +95,20 @@ it("acquires a verified credential with the RFC 7636 S256 proof", async () => {
   await expect
     .poll(() => vi.mocked(bridge.cancel).mock.calls)
     .toEqual([[attemptId]]);
+});
+
+it("opens the create-account page only when asked to sign up", async () => {
+  const hint = async (signup?: boolean) => {
+    const { host, bridge, controller } = fixture();
+    await browserCredential(host, controller.signal, bridge, signup);
+    const options = vi.mocked(bridge.begin).mock.calls[0]?.[0];
+    return new URL(options?.authorizationUrl ?? "").searchParams.get(
+      "screen_hint",
+    );
+  };
+  expect(await hint(true)).toBe("signup");
+  expect(await hint()).toBeNull();
+  expect(await hint(false)).toBeNull();
 });
 
 it("keeps verified login usable when native focus return fails", async () => {

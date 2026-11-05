@@ -14,6 +14,7 @@ type ButtonVariant =
   | "attention"
   | "glass"
   | "glass-ghost"
+  | "glass-clear"
   | "inverted"
   | "link"
   | "plain"

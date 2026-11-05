@@ -18,7 +18,9 @@ the interface unless an available tool actually supports that action.
 ## Identity and getting connected
 
 - Buzz uses a key-based identity. On first launch, the welcome screen offers
-  **Sign in with Builderlab**. **Other options** reveals a **Community URL** field
+  **Create account** and **Sign in**, which open the Builderlab account page;
+  once this computer was set up through Builderlab, **Sign in** comes first.
+  **Other options** reveals a **Community URL** field
   for an address or invite link; desktop does not offer QR scanning.
   With no communities yet, **Join** advances through full-page access and profile
   steps. Before joining, **Back** returns to the entered link; after admission,
@@ -28,10 +30,13 @@ the interface unless an available tool actually supports that action.
   On Mac, the welcome entrance plays once per app storage profile; Reduce Motion
   skips it, and pressing a key finishes it immediately.
   The key-import field masks your key. Use the eye inside the field to reveal
-  or hide it. Check the signed-in email before choosing **Set me up**, which
-  creates a key.
-  Setup then creates a new key or takes an existing private key, and may link
-  it to the signed-in account. Builderlab setup backs the key up automatically;
+  or hide it.
+  After Builderlab sign-in, an account with no linked key is set up
+  automatically: Buzz creates a key (or uses the one already on this device)
+  and links it to the signed-in account. A device set up through Builderlab asks
+  you to sign in again on relaunch; **Continue without signing in** opens Buzz
+  without it. An existing private key can be entered from **Welcome back**.
+  Builderlab setup backs the key up automatically;
   if backup fails temporarily, retry to complete setup. If backup is not supported
   by the build or account, choose **Continue without backup** to finish setup.
   Independent-community key imports
