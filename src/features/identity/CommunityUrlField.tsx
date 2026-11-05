@@ -55,7 +55,7 @@ export function CommunityUrlField({
   };
   return (
     <div className="flex flex-col gap-1">
-      <div className={`flex flex-col ${stacked ? "gap-4" : "gap-12"}`}>
+      <div className={`flex flex-col ${stacked ? "gap-8" : "gap-12"}`}>
         <div className="min-w-0 w-full">
           <Field
             label="Community address or invite link"

@@ -41,7 +41,7 @@ export function JoinCommunity({
             Communities are where you work with people and agents. Join an
             existing one or create your own.
           </p>
-          <div className="mt-8 mb-4 grid w-full max-w-md gap-8 text-left">
+          <div className="mt-10 mb-6 grid w-full max-w-md gap-10 text-left">
             {owned.length > 0 && (
               // min-w-0 keeps a long hostname truncating rather than widening the grid.
               <div className="flex min-w-0 flex-col gap-2">
@@ -69,7 +69,7 @@ export function JoinCommunity({
                 </ul>
               </div>
             )}
-            <div className="grid gap-2">
+            <div className="grid gap-3">
               <CommunityUrlField
                 url={url}
                 onUrlChange={onUrlChange}
