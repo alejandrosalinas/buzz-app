@@ -202,9 +202,10 @@
       background: var(--bg-glass-primary);
     }
   }
-  .buzz-button[data-variant="glass-clear"]:is(:active, [aria-expanded="true"]):not(
-    [data-disabled]
-  ) {
+  .buzz-button[data-variant="glass-clear"]:is(
+    :active,
+    [aria-expanded="true"]
+  ):not([data-disabled]) {
     background: var(--bg-glass-primary-hover);
   }
   @media (prefers-reduced-transparency: reduce), (forced-colors: active) {
