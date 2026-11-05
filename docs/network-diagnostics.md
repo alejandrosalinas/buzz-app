@@ -30,8 +30,9 @@ option cancels it. Closing Settings does not change capture or cancel the
 countdown. The choice and duration last for the current app session; restarting
 Buzz starts at Info with automatic reset off. Silent pauses both metrics and logs. Resuming from
 Silent, re-enabling the plugin or clearing history resets the measurement period;
-an operation begun before that boundary cannot contribute a completion or latency
-sample afterward. Connection gauges still show existing sockets.
+aggregate completion counters and latency samples exclude operations begun before
+that boundary. Raw lifecycle records describe events observed while capture is
+enabled; a native phase duration can span an earlier capture period. Connection gauges still show existing sockets.
 Passive latency samples begin at dispatch, so time spent waiting for
 authentication or admission is excluded. They use the existing traffic at Info
 and above; Debug/Trace is not required and no extra request or probe is sent.

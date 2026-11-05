@@ -600,6 +600,9 @@ mod tests {
     /// refusal ends the attempt after it is captured.
     #[tokio::test]
     async fn upgrade_attaches_for_required_discovery() {
+        let _capture = crate::network_diagnostics::CAPTURE_TEST.lock().await;
+        crate::network_diagnostics::network_diagnostics_configure(Level::Debug, Some(true), None)
+            .unwrap();
         let community = community(true).await;
         let server = community.serve(vec![reply("403 Forbidden", "{}")]);
         let connection = uuid::Uuid::new_v4().to_string();
@@ -643,6 +646,8 @@ mod tests {
             .find_map(|line| line.split_once("Bearer ").map(|(_, token)| token.trim()))
             .unwrap();
         assert!(!diagnostics.to_string().contains(token));
+        crate::network_diagnostics::network_diagnostics_configure(Level::Info, Some(false), None)
+            .unwrap();
     }
 
     /// Ordinary discovery leaves the socket public: no native upgrade, so no

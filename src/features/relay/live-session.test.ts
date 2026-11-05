@@ -28,6 +28,7 @@ import {
 it("attributes a reconnect notice to a failed preference read while the socket stays connected", async () => {
   vi.useFakeTimers();
   networkRecorder.clear();
+  networkRecorder.setEnabled(true);
   networkRecorder.configure("info");
   let live!: LiveCallbacks;
   let release!: (events: RelayEvent[]) => void;
@@ -104,6 +105,7 @@ it("attributes a reconnect notice to a failed preference read while the socket s
   } finally {
     release([]);
     owner.dispose();
+    networkRecorder.setEnabled(false);
     networkRecorder.clear();
     vi.useRealTimers();
   }
