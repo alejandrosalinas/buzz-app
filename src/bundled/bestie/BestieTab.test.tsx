@@ -1051,6 +1051,63 @@ it("keeps a hosted former Bestie's tab while a newer read is under way, whatever
   stop?.();
 });
 
+it("counts an older read's answer once a newer read is abandoned, from the moment it aborts", async () => {
+  const { relay } = community(bea.pubkey);
+  const { remote, agents } = hostedBestie("Be brief.");
+  const tab = formerBestieTab(relay, agents);
+  const stop = tab.subscribe?.(() => {});
+  await vi.waitFor(() => expect(tab.when?.(bea)).toBe(false));
+  const remembering = withFeature("Be brief.", memory, true);
+  // The older read answers first, while the newer one is under way...
+  const background = startHostedRead(remote.pubkey);
+  const closing = new AbortController();
+  const opened = startHostedRead(remote.pubkey, closing.signal);
+  background.read(remembering);
+  expect(tab.when?.(remote)).toBe(false);
+  // ...and counts once the newer read is abandoned, without waiting for it.
+  closing.abort();
+  expect(tab.when?.(remote)).toBe(true);
+  // What the abandoned read answers later changes nothing.
+  opened.read("Be brief.");
+  expect(tab.when?.(remote)).toBe(true);
+  // Abandoned before the older read answers, the older read counts as it ends.
+  const later = startHostedRead(remote.pubkey);
+  const aborted = new AbortController();
+  startHostedRead(remote.pubkey, aborted.signal);
+  aborted.abort();
+  later.read("Be brief.");
+  expect(tab.when?.(remote)).toBe(false);
+  stop?.();
+});
+
+it("shows a hosted former Bestie's tab from a background read that answers after the tab closed mid-read", async () => {
+  const { relay } = community(bea.pubkey);
+  const { remote, agents, get } = hostedBestie(
+    withFeature("Be brief.", memory, true),
+  );
+  const tab = formerBestieTab(relay, agents);
+  const stop = tab.subscribe?.(() => {});
+  await vi.waitFor(() => expect(tab.when?.(bea)).toBe(false));
+  let answer = (_text: string) => {};
+  get.mockImplementationOnce(
+    () =>
+      new Promise<string>((resolve) => {
+        answer = resolve;
+      }),
+  );
+  const stopReading = readInBackground(relay, agents, remote);
+  // The tab's own read never answers, as a provider ignoring the abort.
+  get.mockImplementationOnce(() => new Promise<string>(() => {}));
+  const Tab = tab.component;
+  const { unmount } = render(<Tab agent={remote} />);
+  await vi.waitFor(() => expect(get).toHaveBeenCalledTimes(2));
+  unmount();
+  answer(withFeature("Be brief.", memory, true));
+  await vi.waitFor(() => expect(tab.when?.(remote)).toBe(true));
+  stopReading();
+  stop?.();
+});
+
 it("shows a Former Bestie tab for a hosted agent its provider holds no instructions for, while it is in a private channel", async () => {
   const { relay } = community(bea.pubkey);
   const remote = {

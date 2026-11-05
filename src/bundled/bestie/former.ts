@@ -43,48 +43,82 @@ type HostedRead = Readonly<{
 const hostedRead = new Map<string, HostedRead>();
 /** The reads started for each hosted agent that haven't ended yet. */
 const hostedPending = new Map<string, Set<number>>();
+/** The latest answer an agent's reads gave while a later read was under
+ * way. It counts if every later read is abandoned, so abandoning one never
+ * loses what an earlier read found. */
+const hostedHeld = new Map<
+  string,
+  Readonly<{ order: number; read?: string }>
+>();
 const hostedListeners = new Set<() => void>();
 let hostedReads = 0;
 
+/** Records what the read started `order`th found, unless a later read is
+ * already recorded. `read` is absent for a failed read. */
+function recordHosted(pubkey: string, order: number, read?: string) {
+  const last = hostedRead.get(pubkey);
+  if (last && last.order > order) return;
+  const failed = read === undefined;
+  const instructions = failed ? last?.instructions : read;
+  hostedRead.set(pubkey, {
+    order,
+    failed,
+    ...(instructions !== undefined && { instructions }),
+  });
+  if (!last || last.instructions !== instructions || last.failed !== failed)
+    for (const listener of [...hostedListeners]) listener();
+}
+
 /** Starts recording one read of a hosted agent's instructions. Call it before
- * asking the provider, then `read` or `failed` with what it answered, or
- * `cancel` if it was abandoned. Only the latest read started counts: one
- * started earlier changes nothing when it ends, even before the later one
- * ends, so a slow background read never replaces what a later read or save
- * leaves, and what shows stays until that later read ends. A failure keeps
- * the instructions read before it but marks them uncertain until a later read
+ * asking the provider, then `read` or `failed` with what it answered. Only the
+ * latest read started counts: an earlier one ending first is held, and counts
+ * only if every later one is abandoned. So a slow background read never
+ * replaces what a later read or save leaves, and what shows stays until that
+ * later read ends. A read is abandoned the moment `signal` aborts, or by
+ * `cancel`, and nothing it answers afterwards counts. A failure keeps the
+ * instructions read before it but marks them uncertain until a later read
  * succeeds. */
-export function startHostedRead(pubkey: string) {
+export function startHostedRead(pubkey: string, signal?: AbortSignal) {
   const order = ++hostedReads;
   const pending = hostedPending.get(pubkey) ?? new Set<number>();
   pending.add(order);
   hostedPending.set(pubkey, pending);
-  const end = () => {
+  const later = (than: number) => [...pending].some((other) => other > than);
+  function end() {
+    signal?.removeEventListener("abort", cancel);
     pending.delete(order);
     if (!pending.size && hostedPending.get(pubkey) === pending)
       hostedPending.delete(pubkey);
-  };
-  const record = (read?: string) => {
+  }
+  function settle(read?: string) {
     if (!pending.has(order)) return;
-    const newer = [...pending].some((other) => other > order);
     end();
-    const last = hostedRead.get(pubkey);
-    if (newer || (last && last.order > order)) return;
-    const failed = read === undefined;
-    const instructions = failed ? last?.instructions : read;
-    hostedRead.set(pubkey, {
-      order,
-      failed,
-      ...(instructions !== undefined && { instructions }),
-    });
-    if (!last || last.instructions !== instructions || last.failed !== failed)
-      for (const listener of [...hostedListeners]) listener();
-  };
+    const held = hostedHeld.get(pubkey);
+    if (later(order)) {
+      if (!held || held.order < order)
+        hostedHeld.set(pubkey, {
+          order,
+          ...(read !== undefined && { read }),
+        });
+      return;
+    }
+    if (held && held.order < order) hostedHeld.delete(pubkey);
+    recordHosted(pubkey, order, read);
+  }
+  function cancel() {
+    if (!pending.has(order)) return;
+    end();
+    const held = hostedHeld.get(pubkey);
+    if (!held || later(held.order)) return;
+    hostedHeld.delete(pubkey);
+    recordHosted(pubkey, held.order, held.read);
+  }
+  if (signal?.aborted) cancel();
+  else signal?.addEventListener("abort", cancel, { once: true });
   return {
-    read: (instructions: string) => record(instructions),
-    failed: () => record(),
-    /** An abandoned read: an earlier one still under way may count again. */
-    cancel: end,
+    read: (instructions: string) => settle(instructions),
+    failed: () => settle(),
+    cancel,
   };
 }
 
@@ -100,6 +134,7 @@ export function subscribeHostedInstructions(listener: () => void) {
 export function forgetHostedInstructions() {
   hostedRead.clear();
   hostedPending.clear();
+  hostedHeld.clear();
 }
 
 /** Reads the instructions of each hosted agent this device saw as Bestie,
@@ -132,14 +167,12 @@ export function readFormerHosted(
       const hosted = agents.hostedInstructions?.(agent.pubkey);
       if (!hosted) continue;
       tried.add(agent.pubkey);
-      const recording = startHostedRead(agent.pubkey);
+      // Abandoned as soon as the plugin stops.
+      const recording = startHostedRead(agent.pubkey, signal);
       hosted.get(signal).then(
-        (instructions) => {
-          if (signal.aborted) recording.cancel();
-          else recording.read(instructions);
-        },
+        (instructions) => recording.read(instructions),
         (error: unknown) => {
-          if (signal.aborted) return recording.cancel();
+          if (signal.aborted) return;
           // Its Former Bestie tab then shows, and reads again with a Retry.
           recording.failed();
           console.warn("A former Bestie's instructions weren't read", error);

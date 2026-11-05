@@ -126,13 +126,14 @@ function useHostedInstructions(agents: FeatureAgents, agent: Agent) {
     const hosted = agents.hostedInstructions?.(agent.pubkey);
     if (!hosted) return;
     const order = ++latest.current;
-    const recording = startHostedRead(agent.pubkey);
+    // Abandoned as soon as the tab closes, before its provider answers.
+    const recording = startHostedRead(agent.pubkey, signal);
     try {
       const next = await hosted.get(signal);
       recording.read(next);
       if (order === latest.current) setText({ text: next });
     } catch (cause) {
-      if (signal?.aborted) return recording.cancel();
+      if (signal?.aborted) return;
       recording.failed();
       if (order === latest.current)
         setText({
