@@ -7,7 +7,7 @@ import { OnboardingScreen } from "./OnboardingScreen";
 /**
  * First-run landing after setup. The community URL is the live action; a
  * linked account's owned communities are offered as rows that take the same
- * path with their address, and, with `onCreate`, Create a community is offered under Continue.
+ * path with their address, and, with `onCreate`, Or create a community sits under Continue.
  */
 export function JoinCommunity({
   url,
@@ -41,7 +41,7 @@ export function JoinCommunity({
             Communities are where you work with people and agents. Join an
             existing one or create your own.
           </p>
-          <div className="mt-4 grid w-full max-w-md gap-8 text-left">
+          <div className="mt-8 mb-4 grid w-full max-w-md gap-8 text-left">
             {owned.length > 0 && (
               // min-w-0 keeps a long hostname truncating rather than widening the grid.
               <div className="flex min-w-0 flex-col gap-2">
@@ -69,7 +69,7 @@ export function JoinCommunity({
                 </ul>
               </div>
             )}
-            <div className="flex flex-col gap-4">
+            <div className="grid gap-2">
               <CommunityUrlField
                 url={url}
                 onUrlChange={onUrlChange}
@@ -77,17 +77,14 @@ export function JoinCommunity({
                 stacked
               />
               {onCreate && (
-                <p className="m-0 text-center text-body-sm text-subtle">
-                  Want your own?{" "}
-                  <Button
-                    variant="link"
-                    size="inline"
-                    data-return-focus="create"
-                    onClick={onCreate}
-                  >
-                    Create a community
-                  </Button>
-                </p>
+                <Button
+                  size="lg"
+                  variant="ghost"
+                  data-return-focus="create"
+                  onClick={onCreate}
+                >
+                  Or create a community
+                </Button>
               )}
             </div>
           </div>

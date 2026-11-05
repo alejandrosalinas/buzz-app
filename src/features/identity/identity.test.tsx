@@ -2553,7 +2553,9 @@ it("Connect to a community offers Create a community for an account the public B
     creatingWith({ communityList, communityAvailable, createCommunity }),
   );
   expect(communityList).toHaveBeenCalledTimes(1);
-  await user.click(screen.getByRole("button", { name: "Create a community" }));
+  await user.click(
+    screen.getByRole("button", { name: "Or create a community" }),
+  );
   expect(
     screen.getByRole("heading", { name: "Create a community" }),
   ).toHaveFocus();
@@ -2600,7 +2602,9 @@ it("Cancel on Finding community after a create returns to Connect to a community
         Promise.resolve("https://north-star.communities.buzz.xyz"),
     }),
   );
-  await user.click(screen.getByRole("button", { name: "Create a community" }));
+  await user.click(
+    screen.getByRole("button", { name: "Or create a community" }),
+  );
   await user.type(
     screen.getByRole("textbox", { name: "Community address" }),
     "north-star",
@@ -2641,7 +2645,7 @@ it("a created community is joined once found, without Join Community, and contin
   );
   await user.click(await screen.findByRole("button", { name: SIGN_IN }));
   await user.click(
-    await screen.findByRole("button", { name: "Create a community" }),
+    await screen.findByRole("button", { name: "Or create a community" }),
   );
   await waitFor(() => expect(communities.snapshot().status).toBe("ready"));
   await user.type(
@@ -2696,7 +2700,7 @@ it("after a created community's automatic join fails, Back looks it up again thr
   );
   await user.click(await screen.findByRole("button", { name: SIGN_IN }));
   await user.click(
-    await screen.findByRole("button", { name: "Create a community" }),
+    await screen.findByRole("button", { name: "Or create a community" }),
   );
   await waitFor(() => expect(communities.snapshot().status).toBe("ready"));
   await user.type(
@@ -2745,7 +2749,9 @@ it("a refused create stays on Create a community with the card's copy until the 
         Promise.reject(new Error("That Buzz address is already taken.")),
     }),
   );
-  await user.click(screen.getByRole("button", { name: "Create a community" }));
+  await user.click(
+    screen.getByRole("button", { name: "Or create a community" }),
+  );
   const field = screen.getByRole("textbox", { name: "Community address" });
   await user.type(field, "north-star");
   await screen.findByText("That address is available.", {}, { timeout: 3_000 });
@@ -2762,7 +2768,7 @@ it("a refused create stays on Create a community with the card's copy until the 
     screen.getByRole("heading", { name: "Connect to a community" }),
   ).toBeVisible();
   expect(
-    screen.getByRole("button", { name: "Create a community" }),
+    screen.getByRole("button", { name: "Or create a community" }),
   ).toHaveFocus();
   expect(relayCalls).toEqual([]);
   identity.dispose();
@@ -2787,7 +2793,7 @@ it.each<[string, Partial<FirstRunAccount>]>([
   async (_, answers) => {
     const { identity } = await connectPage(creatingWith(answers));
     expect(
-      screen.queryByRole("button", { name: "Create a community" }),
+      screen.queryByRole("button", { name: "Or create a community" }),
     ).toBeNull();
     identity.dispose();
   },
@@ -2802,7 +2808,7 @@ it("a build at another Builderlab never asks whether its account may create, and
     "https://builderlab.example",
   );
   expect(
-    screen.queryByRole("button", { name: "Create a community" }),
+    screen.queryByRole("button", { name: "Or create a community" }),
   ).toBeNull();
   expect(communityList).not.toHaveBeenCalled();
   identity.dispose();
@@ -6025,7 +6031,7 @@ it("a linked account at the public Builderlab is offered Create a community from
     await screen.findByRole("heading", { name: "Connect to a community" }),
   ).toBeVisible();
   expect(
-    screen.getByRole("button", { name: "Create a community" }),
+    screen.getByRole("button", { name: "Or create a community" }),
   ).toBeVisible();
   // The account check proved the binding; the lane's key is that one.
   expect(linkedKey).toHaveBeenCalledTimes(1);
