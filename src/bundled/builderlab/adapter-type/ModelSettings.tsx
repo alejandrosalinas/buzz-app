@@ -64,10 +64,18 @@ export function ModelSettings({
     | { pending: boolean; error: unknown; retry(): void };
 }) {
   const login = useSyncExternalStore(session.subscribe, session.snapshot);
-  const [retrySignIn, setRetrySignIn] = useState<"waiting" | "ready">();
+  const [retrySignIn, setRetrySignIn] = useState<
+    "switching" | "waiting" | "ready"
+  >();
   const reducedMotion = useReducedMotion();
   const signedIn = login.status === "signed-in";
   useEffect(() => {
+    // Native sign-out completes asynchronously; only its published state
+    // starts the browser account-switch wait.
+    if (retrySignIn === "switching") {
+      if (login.status === "signed-out") setRetrySignIn("waiting");
+      return;
+    }
     if (signedIn) {
       setRetrySignIn(undefined);
       return;
@@ -75,7 +83,7 @@ export function ModelSettings({
     if (retrySignIn !== "waiting") return;
     const timer = setTimeout(() => setRetrySignIn("ready"), 3000);
     return () => clearTimeout(timer);
-  }, [signedIn, retrySignIn]);
+  }, [login.status, signedIn, retrySignIn]);
   const agent = "agent" in settings ? settings.agent : undefined;
   const subject = "subject" in settings ? settings.subject : undefined;
   const mismatch =
@@ -256,7 +264,7 @@ export function ModelSettings({
       <AccountRecoverySheet
         session={session}
         active={accountProblem}
-        onSwitchAccount={() => setRetrySignIn("waiting")}
+        onSwitchAccount={() => setRetrySignIn("switching")}
         email={email}
         mismatch={mismatch}
         detail={accessError ? message(accessError) : undefined}

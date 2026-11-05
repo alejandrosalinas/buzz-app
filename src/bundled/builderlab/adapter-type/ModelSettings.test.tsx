@@ -21,6 +21,8 @@ import { createOAuthSession } from "../oauth/session";
 import { ModelSettings } from "./ModelSettings";
 import { deferred } from "../test-helpers";
 import { ToastProvider } from "../../../shared/design-system/ui/Toast";
+import { federatedFixture } from "../../../features/federated-identity/testing";
+import { createNativeSession } from "../session";
 
 beforeEach(() =>
   vi.stubEnv("VITE_BUZZ_BUILDERLAB_URL", "https://builderlab.example"),
@@ -29,6 +31,89 @@ afterEach(() => {
   cleanup();
   vi.unstubAllEnvs();
 });
+
+it.each(["deadline", "cancel"] as const)(
+  "waits for native sign-out before the account-switch spinner and Retry (%s)",
+  async (finish) => {
+    vi.stubEnv("VITE_BUZZ_FEDERATED_IDENTITY", "1");
+    const identity = federatedFixture();
+    let allowed = false;
+    identity.request.mockImplementation(async ({ path }) => ({
+      status: 200,
+      headers: {},
+      body: JSON.stringify(
+        path.endsWith("/me")
+          ? {
+              subject: "user",
+              email: "a@example.com",
+              capabilities: { can_use_remote_agents: allowed },
+            }
+          : { models: [] },
+      ),
+    }));
+    identity.publish({ status: "signed-in", revision: "user:1" });
+    const session = createNativeSession(identity.service);
+    const signedOut = deferred<void>();
+    const signOut = vi.mocked(identity.service.signOut).getMockImplementation();
+    if (!signOut) throw new Error("Missing native sign-out fixture");
+    vi.mocked(identity.service.signOut).mockImplementationOnce(async () => {
+      await signedOut.promise;
+      await signOut();
+    });
+    try {
+      render(
+        <ModelSettings
+          client={createAgentClient(session, null)}
+          session={session}
+          settings={{
+            subject: "user",
+            agent: {
+              id: "agent",
+              name: "Helper",
+              pubkey: "ab".repeat(32),
+              status: "Active",
+              modelSelectionStatus: "valid",
+            },
+          }}
+        />,
+      );
+      const recovery = await screen.findByRole("button", {
+        name: "Use another account",
+      });
+      vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+      fireEvent.click(recovery);
+      expect(identity.service.signOut).toHaveBeenCalledOnce();
+      await act(() => vi.advanceTimersByTimeAsync(5000));
+      expect(session.snapshot().status).toBe("signed-in");
+      expect(screen.queryByRole("button", { name: "Retry" })).toBeNull();
+      await act(async () => signedOut.resolve());
+      expect(session.snapshot().status).toBe("signed-out");
+      const spinner = screen.getByRole("button", { name: "Cancel sign-in" });
+      expect(spinner).toHaveAttribute("aria-busy", "true");
+      await act(() => vi.advanceTimersByTimeAsync(2999));
+      expect(screen.queryByRole("button", { name: "Retry" })).toBeNull();
+      if (finish === "cancel") fireEvent.click(spinner);
+      else await act(() => vi.advanceTimersByTimeAsync(1));
+      const retry = screen.getByRole("button", { name: "Retry" });
+      expect(retry).toBeEnabled();
+      expect(identity.service.signIn).not.toHaveBeenCalled();
+      vi.useRealTimers();
+      allowed = true;
+      fireEvent.click(retry);
+      await waitFor(() => expect(session.snapshot().status).toBe("signed-in"));
+      expect(identity.service.signIn).toHaveBeenCalledOnce();
+      expect(screen.queryByRole("button", { name: "Retry" })).toBeNull();
+      act(() => identity.publish({ status: "signed-out" }));
+      expect(
+        screen.getByRole("button", { name: "Sign in to Builderlab" }),
+      ).toBeEnabled();
+    } finally {
+      await act(async () => signedOut.resolve());
+      session.dispose();
+      vi.useRealTimers();
+    }
+  },
+);
 async function fixture(
   selection: Partial<RemoteAgent> = {},
   catalog?: readonly RemoteAgentModel[],
