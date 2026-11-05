@@ -115,6 +115,49 @@ it("retires a notice on opt-out and checks immediately on opt-in", async () => {
   updates.dispose();
 });
 
+it.each([false, true])(
+  "rechecks opt-out after Git authorization; shared request needed: %s",
+  async (shared) => {
+    const f = fixture();
+    const configuration = f.get();
+    if (configuration.status !== "ready") throw new Error("Expected catalog");
+    if (shared) {
+      f.set({
+        ...configuration,
+        catalog: {
+          ...configuration.catalog,
+          plugins: [
+            f.plugin,
+            {
+              ...f.plugin,
+              manifest: { ...f.plugin.manifest, id: "example.other" },
+            },
+          ],
+        },
+      });
+    }
+    let finish!: (value: null) => void;
+    f.authorize.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          finish = resolve;
+        }),
+    );
+    const updates = createPluginUpdates(f.manager, f.authorize);
+    const pending = updates.check();
+    expect(f.authorize).toHaveBeenCalledTimes(1);
+    f.plugin.updateChecks = false;
+    f.set(f.get());
+    finish(null);
+    await pending;
+    expect(f.checkGit).toHaveBeenCalledTimes(shared ? 1 : 0);
+    expect(
+      updates.snapshot().some((update) => update.id === f.plugin.manifest.id),
+    ).toBe(false);
+    updates.dispose();
+  },
+);
+
 it("discovers without acquiring a preview or installing; Later lasts for the candidate and run", async () => {
   vi.useFakeTimers();
   const f = fixture();

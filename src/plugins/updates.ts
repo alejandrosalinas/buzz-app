@@ -136,6 +136,19 @@ export function createPluginUpdates(
         if (!result) {
           result = (async () => {
             const signed = await authorizeGit(source.repository);
+            const live = plugins.snapshot().configuration;
+            if (
+              closed ||
+              live.status !== "ready" ||
+              !live.catalog.plugins.some((plugin) => {
+                const current = pluginUpdateSource(plugins, plugin.manifest.id);
+                return (
+                  current?.repository === source.repository &&
+                  current.reference === source.reference
+                );
+              })
+            )
+              return null;
             return (
               plugins.imports?.checkGit(
                 signed?.repository ?? source.repository,
