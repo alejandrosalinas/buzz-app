@@ -9,7 +9,11 @@ import { readView, writeView } from "../../shared/view-state";
 import { setDefaultAgent } from "../../features/solo/default-agent";
 import { onBestieMade } from "../agents/BestieChoice";
 import { bestieTab, formerBestieTab } from "./BestieTab";
-import { forgetHostedInstructions, readFormerHosted } from "./former";
+import {
+  forgetHostedInstructions,
+  readFormerHosted,
+  startHostedRead,
+} from "./former";
 import { validateObject } from "../../features/agents/attention";
 import { checkinHourly, memory, withFeature } from "./features";
 
@@ -1018,6 +1022,32 @@ it("keeps a hosted former Bestie's tab when an older background read ends after 
   expect(tab.when?.(remote)).toBe(true);
   expect(screen.getByRole("switch", { name: "Remembers you" })).toBeChecked();
   stopReading();
+  stop?.();
+});
+
+it("keeps a hosted former Bestie's tab while a newer read is under way, whatever an older one answers", async () => {
+  const { relay } = community(bea.pubkey);
+  const { remote, agents } = hostedBestie("Be brief.");
+  const tab = formerBestieTab(relay, agents);
+  const stop = tab.subscribe?.(() => {});
+  await vi.waitFor(() => expect(tab.when?.(bea)).toBe(false));
+  // A failed read shows the tab, which reads again when it opens.
+  startHostedRead(remote.pubkey).failed();
+  expect(tab.when?.(remote)).toBe(true);
+  const background = startHostedRead(remote.pubkey);
+  const opened = startHostedRead(remote.pubkey);
+  // The older read's "off" doesn't hide the tab and abort the newer read.
+  background.read("Be brief.");
+  expect(tab.when?.(remote)).toBe(true);
+  // The newer read decides.
+  opened.read("Be brief.");
+  expect(tab.when?.(remote)).toBe(false);
+  // A newer read abandoned lets the older one still under way count.
+  startHostedRead(remote.pubkey).failed();
+  const older = startHostedRead(remote.pubkey);
+  startHostedRead(remote.pubkey).cancel();
+  older.read("Be brief.");
+  expect(tab.when?.(remote)).toBe(false);
   stop?.();
 });
 

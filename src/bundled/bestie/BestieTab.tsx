@@ -131,7 +131,7 @@ function useHostedInstructions(agents: FeatureAgents, agent: Agent) {
       recording.read(next);
       if (order === latest.current) setText({ text: next });
     } catch (cause) {
-      if (signal?.aborted) return;
+      if (signal?.aborted) return recording.cancel();
       recording.failed();
       if (order === latest.current)
         setText({
