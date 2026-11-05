@@ -990,9 +990,12 @@ it.for([
         }),
       ).toBeVisible();
       const name = within(createDialog).getByRole("textbox", { name: "Name" });
-      let create = within(createDialog).getByRole("button", {
-        name: "Create agent",
-      });
+      // The introduction retains the hidden form. Query only its action
+      // footer so role/name lookups do not walk those unrelated controls.
+      const footer = createDialog.querySelector("footer");
+      if (!footer) throw new Error("Missing creation actions");
+      const actions = within(footer);
+      let create = actions.getByRole("button", { name: "Create agent" });
       expect(create).toBeDisabled();
       // Fixed setup values; this journey exercises provisioning and recovery,
       // rather than the individual keystrokes already covered by the form.
@@ -1152,9 +1155,7 @@ it.for([
         });
         expect(introduction).toHaveTextContent("Builderlab");
         phase = "submit first attempt";
-        await user.click(
-          within(introduction).getByRole("button", { name: "Let’s go" }),
-        );
+        await user.click(actions.getByRole("button", { name: "Let’s go" }));
         await waitFor(() =>
           expect(
             requestsTo("update-agent").filter(
@@ -1167,11 +1168,9 @@ it.for([
           screen.getByRole("dialog", { name: "Meet your remote agent" }),
         ).toBe(introduction);
         expect(
-          within(introduction).getByRole("button", { name: "Let’s go" }),
+          actions.getByRole("button", { name: "Let’s go" }),
         ).toHaveAttribute("aria-busy", "true");
-        expect(
-          within(introduction).getByRole("button", { name: "Back" }),
-        ).toBeDisabled();
+        expect(actions.getByRole("button", { name: "Back" })).toBeDisabled();
         for (const control of controls) expect(control).toBeDisabled();
         phase = "reject first attempt";
         instructionsSave.reject(new Error("offline"));
@@ -1179,12 +1178,8 @@ it.for([
           await within(createDialog).findByRole("alert"),
         ).toHaveTextContent("Could not reach Builderlab");
         phase = "return to retained draft";
-        await user.click(
-          within(introduction).getByRole("button", { name: "Back" }),
-        );
-        create = within(createDialog).getByRole("button", {
-          name: "Create agent",
-        });
+        await user.click(actions.getByRole("button", { name: "Back" }));
+        create = actions.getByRole("button", { name: "Create agent" });
         for (const control of controls) expect(control).toBeEnabled();
         expect(create).toBeEnabled();
         expect(agents.find(browserKey)?.unfinished).toBe(true);
@@ -1202,7 +1197,9 @@ it.for([
       }
       phase = "retry creation";
       await user.click(create);
-      await user.click(await screen.findByRole("button", { name: "Let’s go" }));
+      await user.click(
+        await actions.findByRole("button", { name: "Let’s go" }),
+      );
       phase = "await created agent";
       await waitFor(() =>
         expect(agents.find(browserKey)).toMatchObject({
