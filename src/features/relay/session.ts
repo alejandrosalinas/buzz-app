@@ -1338,17 +1338,37 @@ export function createRelaySession(
       }
     }
   }
+  /** Who a message in the channel addresses without a mention: a one-to-one
+   * DM's other member. */
+  function dmPartners(channelId: string): readonly string[] {
+    const channel = channels.queries
+      .list()
+      .channels.find((item) => item.id === channelId);
+    return channel?.channelType === "dm" &&
+      channel.members?.length === 2 &&
+      transport?.viewer &&
+      channel.members.includes(transport.viewer)
+      ? channel.members.filter((key) => key !== transport.viewer)
+      : [];
+  }
   function validateMentions(channelId: string, pubkeys: readonly string[]) {
     if (!pubkeys.length) return;
     const channel = channels.queries
       .list()
       .channels.find((item) => item.id === channelId);
+    // A one-to-one DM's partner is addressed by every message there, so a
+    // plain message must still queue while the live stream reconnects.
+    // Publication still reads the roster fresh (preflightMentions).
+    const partners = dmPartners(channelId);
+    const addressesPartnerOnly = pubkeys.every((key) => partners.includes(key));
     if (
       closed ||
       !channels.canWrite(channelId) ||
       !channel?.members ||
       channel.archived ||
-      (transport?.subscribe && liveSnapshot.status !== "connected")
+      (transport?.subscribe &&
+        liveSnapshot.status !== "connected" &&
+        !addressesPartnerOnly)
     )
       throw new Error("Refresh channel membership before mentioning anyone");
     if (pubkeys.some((key) => !channel.members?.includes(key)))
@@ -2448,17 +2468,7 @@ export function createRelaySession(
           : undefined,
         transport?.archiveAuthority,
         profiles.queries,
-        (channelId) => {
-          const channel = channels.queries
-            .list()
-            .channels.find((item) => item.id === channelId);
-          return channel?.channelType === "dm" &&
-            channel.members?.length === 2 &&
-            transport?.viewer &&
-            channel.members.includes(transport.viewer)
-            ? channel.members.filter((key) => key !== transport.viewer)
-            : [];
-        },
+        dmPartners,
         (id) => [
           ...new Map(
             [
