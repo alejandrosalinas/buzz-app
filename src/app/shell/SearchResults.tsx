@@ -898,6 +898,12 @@ export function SearchResults({
       });
     }
   }
+  // Several passes below rank the same names; rank each once per render.
+  const ranks = new Map<string, MatchRank | undefined>();
+  const rankName = (label: string) => {
+    if (!ranks.has(label)) ranks.set(label, matchRank(label, needle));
+    return ranks.get(label);
+  };
   // What the viewer chose before for this typed text. Only candidates that
   // match count, so a stale choice cannot add a row.
   const picked = usage.pick(
@@ -906,7 +912,7 @@ export function SearchResults({
       ...channels
         .filter(
           ({ id }) =>
-            parsed.text && matchRank(names.get(id) ?? "", needle) !== undefined,
+            parsed.text && rankName(names.get(id) ?? "") !== undefined,
         )
         .map(({ id }) => `channel:${id}`),
       ...publicChannels.channels.map(({ id }) => `channel:${id}`),
@@ -919,7 +925,7 @@ export function SearchResults({
   // The shared search order, with archived channels half a step behind live
   // ones in the same place.
   const rankOf = (label: string, key: string, archived?: boolean) => {
-    const rank = matchRank(label, needle) ?? MatchRank.inOrder + 1;
+    const rank = rankName(label) ?? MatchRank.inOrder + 1;
     return searchOrder(usage, picked, { key, rank }) + (archived ? 0.5 : 0);
   };
   /** Whether a search order is an exact name, live (-2) or archived (-1.5). */
@@ -940,7 +946,7 @@ export function SearchResults({
       (channel) =>
         parsed.text &&
         !sidebarHidden(channel) &&
-        matchRank(names.get(channel.id) ?? "", needle) !== undefined,
+        rankName(names.get(channel.id) ?? "") !== undefined,
     ),
     channelRank,
   );
