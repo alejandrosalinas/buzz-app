@@ -1,4 +1,8 @@
 import { useEffect, useId, useState } from "react";
+import {
+  CheckCircleIcon,
+  XCircleIcon,
+} from "../../../shared/design-system/icons/index";
 import { Button } from "../../../shared/design-system/ui/Button";
 import { Field } from "../../../shared/design-system/ui/Field";
 import { Input } from "../../../shared/design-system/ui/Input";
@@ -82,11 +86,14 @@ export function CommunityAddressField({
         labelVisibility="hidden"
         invalid={Boolean(name) && !valid}
         error={
-          name && !valid
-            ? "Use lowercase letters, numbers, and single hyphens."
-            : available === false
-              ? "That address is already taken."
-              : undefined
+          name && !valid ? (
+            "Use lowercase letters, numbers, and single hyphens."
+          ) : available === false ? (
+            <span className="inline-flex items-center gap-1.5">
+              <XCircleIcon size={16} aria-hidden="true" />
+              That address is already taken.
+            </span>
+          ) : undefined
         }
       >
         <div className="flex max-w-xl flex-wrap items-center gap-2">
@@ -119,15 +126,18 @@ export function CommunityAddressField({
       ) : (
         <p
           role="status"
-          className={`text-body-sm ${valid && enabled && available ? "text-success" : "text-muted"}`}
+          className={`flex items-center gap-1.5 text-body-sm ${valid && enabled && available ? "text-success" : "text-muted"}`}
         >
-          {valid && enabled
-            ? available === null
-              ? "Checking availability…"
-              : available
-                ? "That address is available."
-                : ""
-            : ""}
+          {valid && enabled ? (
+            available === null ? (
+              "Checking availability…"
+            ) : available ? (
+              <>
+                <CheckCircleIcon size={16} aria-hidden="true" />
+                That address is available.
+              </>
+            ) : null
+          ) : null}
         </p>
       )}
     </>
