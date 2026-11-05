@@ -36,14 +36,30 @@ function clearSlide(node: HTMLElement) {
   if (node.style.zIndex) node.style.zIndex = "";
 }
 
+type Props = Record<string, unknown>;
+const sameProps = (a: Props, b: Props) => {
+  const keys = Object.keys(a);
+  return (
+    keys.length === Object.keys(b).length &&
+    keys.every((key) => Object.is(a[key], b[key]))
+  );
+};
+
+// The inventory builds fresh row elements on every render, so rows compare by
+// type, key and props. Rows must render only from props, context and hooks.
+const sameElement = (a: ReactElement, b: ReactElement | undefined) =>
+  !!b &&
+  a.type === b.type &&
+  a.key === b.key &&
+  sameProps(a.props as Props, b.props as Props);
+
+type ChannelSidebarRowsProps = { children: ReactElement[]; open: boolean };
+
 /** Keep local movement short; fade distant jumps between their endpoints. */
-export function ChannelSidebarRows({
+export const ChannelSidebarRows = memo(function ChannelSidebarRows({
   children,
   open,
-}: {
-  children: ReactElement[];
-  open: boolean;
-}) {
+}: ChannelSidebarRowsProps) {
   const { active } = useDndContext();
   const reducedMotion = useSyncExternalStore(
     subscribeReducedMotion,
@@ -149,21 +165,40 @@ export function ChannelSidebarRows({
       </AnimatePresence>
     </div>
   );
+}, sameRows);
+
+function sameRows(
+  previous: ChannelSidebarRowsProps,
+  next: ChannelSidebarRowsProps,
+) {
+  return (
+    previous.open === next.open &&
+    previous.children.length === next.children.length &&
+    previous.children.every((row, index) =>
+      sameElement(row, next.children[index]),
+    )
+  );
+}
+
+type ChannelRowProps = {
+  children: ReactElement;
+  animated: boolean;
+  slide: boolean;
+  index: number;
+  positions: RowPositions;
+  hiding: boolean;
+  onHidden: (id: string) => void;
+};
+
+function sameRow(
+  { children: a, ...previous }: ChannelRowProps,
+  { children: b, ...next }: ChannelRowProps,
+) {
+  return sameElement(a, b) && sameProps(previous, next);
 }
 
 const ChannelRow = memo(
-  forwardRef<
-    HTMLDivElement,
-    {
-      children: ReactElement;
-      animated: boolean;
-      slide: boolean;
-      index: number;
-      positions: RowPositions;
-      hiding: boolean;
-      onHidden: (id: string) => void;
-    }
-  >(function ChannelRow(
+  forwardRef<HTMLDivElement, ChannelRowProps>(function ChannelRow(
     { children, animated, slide, index, positions, hiding, onHidden },
     forwardedRef,
   ) {
@@ -239,4 +274,5 @@ const ChannelRow = memo(
       </motion.div>
     );
   }),
+  sameRow,
 );

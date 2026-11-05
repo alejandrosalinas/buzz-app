@@ -209,3 +209,25 @@ it("follows reduced-motion changes while mounted and removes its subscription", 
   view.unmount();
   expect(remove).toHaveBeenCalledWith("change", expect.any(Function));
 });
+
+it("re-renders only rows whose element props changed", () => {
+  const renders = vi.fn();
+  function Row({ id, unread }: { id: string; unread: number }) {
+    renders(id);
+    return <button type="button">{`${id} ${unread}`}</button>;
+  }
+  const list = (unread: Record<string, number>) => (
+    <ChannelSidebarRows open>
+      {Object.entries(unread).map(([id, count]) => (
+        <Row key={id} id={id} unread={count} />
+      ))}
+    </ChannelSidebarRows>
+  );
+  const view = render(list({ alpha: 0, beta: 0 }));
+  renders.mockClear();
+  view.rerender(list({ alpha: 0, beta: 0 }));
+  expect(renders).not.toHaveBeenCalled();
+  view.rerender(list({ alpha: 0, beta: 1 }));
+  expect(renders.mock.calls).toEqual([["beta"]]);
+  expect(screen.getByRole("button", { name: "beta 1" })).toBeInTheDocument();
+});
