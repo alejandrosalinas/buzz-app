@@ -1045,6 +1045,35 @@ it("keeps a hosted former Bestie's tab after a failed read, until a read shows n
   stop?.();
 });
 
+it("keeps a hosted former Bestie's tab when memory saved on but reading it back failed", async () => {
+  const user = userEvent.setup();
+  const { relay } = community(bea.pubkey);
+  const { remote, agents, get, set } = hostedBestie("Be brief.");
+  const tab = formerBestieTab(relay, agents);
+  const stop = tab.subscribe?.(() => {});
+  await vi.waitFor(() => expect(tab.when?.(bea)).toBe(false));
+  const Tab = tab.component;
+  render(<Tab agent={remote} />);
+  // Its first read finds memory off.
+  const remembers = await screen.findByRole("switch", {
+    name: "Remembers you",
+  });
+  expect(tab.when?.(remote)).toBe(false);
+  // Memory saves on, but reading it back fails.
+  get.mockRejectedValueOnce(new Error("Builderlab is down."));
+  await user.click(remembers);
+  await vi.waitFor(() => expect(set).toHaveBeenCalledTimes(1));
+  expect(await screen.findByText("Builderlab is down.")).toBeVisible();
+  // The earlier off may be out of date, so the tab stays to read again.
+  expect(tab.when?.(remote)).toBe(true);
+  await user.click(screen.getByRole("button", { name: "Retry" }));
+  expect(
+    await screen.findByRole("switch", { name: "Remembers you" }),
+  ).toBeChecked();
+  expect(tab.when?.(remote)).toBe(true);
+  stop?.();
+});
+
 it("shows no Former Bestie tab while the account's choice is unread or unreadable", async () => {
   const { relay, mainAgent } = community(undefined);
   mainAgent.read.mockRejectedValueOnce(new Error("offline"));

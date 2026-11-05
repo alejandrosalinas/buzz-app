@@ -30,11 +30,16 @@ function rememberBestie(scope: string, pubkey: string) {
 }
 
 /** Hosted agents' instructions as last read from their provider, by pubkey,
- * with the order the read started in. Their config isn't on this device, so
- * Former Bestie tells from these whether one still has a Bestie section on.
- * No `instructions` means a read failed before any succeeded: nothing shows
- * that the agent has nothing left on. */
-type HostedRead = Readonly<{ order: number; instructions?: string }>;
+ * with the order the latest recorded read started in. Their config isn't on
+ * this device, so Former Bestie tells from these whether one still has a
+ * Bestie section on. `failed` means that latest read failed: what was read
+ * before it, if anything, may be out of date, as after a save whose read back
+ * failed, so it doesn't show that nothing is left on. */
+type HostedRead = Readonly<{
+  order: number;
+  instructions?: string;
+  failed: boolean;
+}>;
 const hostedRead = new Map<string, HostedRead>();
 const hostedListeners = new Set<() => void>();
 let hostedReads = 0;
@@ -42,19 +47,22 @@ let hostedReads = 0;
 /** Starts recording one read of a hosted agent's instructions. Call it before
  * asking the provider, then `read` or `failed` with what it answered. A read
  * started before the one last recorded changes nothing when it ends, so a
- * slow background read never replaces what a later save left. A failure never
- * replaces instructions already read. */
+ * slow background read never replaces what a later save left. A failure keeps
+ * the instructions read before it but marks them uncertain until a later read
+ * succeeds. */
 export function startHostedRead(pubkey: string) {
   const order = ++hostedReads;
-  const record = (instructions?: string) => {
+  const record = (read?: string) => {
     const last = hostedRead.get(pubkey);
     if (last && last.order > order) return;
-    if (instructions === undefined && last?.instructions !== undefined) return;
+    const failed = read === undefined;
+    const instructions = failed ? last?.instructions : read;
     hostedRead.set(pubkey, {
       order,
+      failed,
       ...(instructions !== undefined && { instructions }),
     });
-    if (!last || last.instructions !== instructions)
+    if (!last || last.instructions !== instructions || last.failed !== failed)
       for (const listener of [...hostedListeners]) listener();
   };
   return {
@@ -136,16 +144,16 @@ export function readFormerHosted(
  * one of the viewer's private channels counts only for an agent this device
  * saw as Bestie: nothing records which channels Bestie's switches added. A
  * hosted agent's instructions are as last read from its provider; one whose
- * read failed counts as on until a read succeeds. */
+ * latest read failed counts as on until a read succeeds. */
 export function formerWithSettings(
   agent: Agent,
   { session, scope }: RelaySnapshot,
 ) {
   const hosted =
     agent.place === "hosted" ? hostedRead.get(agent.pubkey) : undefined;
-  // A failed read doesn't show that nothing is on, so the tab stays to read
-  // again.
-  if (hosted && hosted.instructions === undefined) return true;
+  // After a failed read nothing shows that nothing is on, even over an
+  // earlier off, so the tab stays to read again.
+  if (hosted?.failed) return true;
   const instructions =
     agent.place === "hosted"
       ? (hosted?.instructions ?? "")
