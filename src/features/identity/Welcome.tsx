@@ -380,6 +380,7 @@ export function Welcome({
     reads.current = current;
     let checkedKey: string | undefined;
     let checkedBackups: readonly string[] | undefined;
+    const signedIn = identity.snapshot();
     void setup.start([
       checkAccount(
         current,
@@ -390,6 +391,7 @@ export function Welcome({
         (list) => {
           known.current = list;
         },
+        signedIn.status === "ready" ? signedIn.viewer : undefined,
       ),
       checkBackup(current, (keys) => {
         checkedBackups = keys;

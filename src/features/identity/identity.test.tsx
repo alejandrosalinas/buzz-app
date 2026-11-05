@@ -7356,6 +7356,48 @@ it("a relaunch sign-in whose account is linked to the device key restores the sa
   identity.dispose();
 });
 
+it("a relaunch sign-in whose account is linked to the device key, with no communities anywhere, never asks which key to use", async () => {
+  localStorage.setItem(ROUTE_NOTE, "builderlab");
+  const member = keypair();
+  nativeRelay(member, {});
+  const nativeAnswers = vi.mocked(invoke).getMockImplementation();
+  if (!nativeAnswers) throw new Error("nativeRelay installed no answers");
+  vi.mocked(invoke).mockImplementation((command, args) =>
+    command === "identity_restore"
+      ? Promise.resolve(member.pubkey)
+      : nativeAnswers(command, args),
+  );
+  const identity = createIdentity();
+  const user = userEvent.setup();
+  render(
+    <Welcome
+      identity={identity}
+      communities={communitiesFor(identity)}
+      invites={invites}
+      account={() => ({
+        linkedKey: () => Promise.resolve(member.pubkey),
+        communityList: owning(),
+        knownCommunities: () => Promise.resolve([]),
+        saveCommunity,
+        bind: vi.fn(() => Promise.resolve()),
+        unbind: noUnlink,
+        ...backupAnswers,
+        backUp: vi.fn(() => Promise.resolve()),
+        ...noCreation,
+      })}
+      connect={vi.fn().mockResolvedValue(credential)}
+    >
+      <p>Signed in</p>
+    </Welcome>,
+  );
+  await user.click(await screen.findByRole("button", { name: SIGN_IN }));
+  expect(
+    await screen.findByRole("heading", { name: "Connect to a community" }),
+  ).toBeVisible();
+  expect(screen.queryByText("Continue with this key")).toBeNull();
+  identity.dispose();
+});
+
 it("a relaunch sign-in on a device that keeps communities opens Buzz after the account is checked", async () => {
   localStorage.setItem(ROUTE_NOTE, "builderlab");
   keyOnDevice();

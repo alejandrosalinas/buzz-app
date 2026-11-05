@@ -120,6 +120,7 @@ it("reads the linked key and the saved destinations together, and a failed list 
   const check = async (
     linkedKey: FirstRunAccount["linkedKey"],
     knownCommunities: FirstRunAccount["knownCommunities"],
+    onDevice?: string,
   ) => {
     const onLinked = vi.fn();
     const onKnown = vi.fn();
@@ -129,6 +130,7 @@ it("reads the linked key and the saved destinations together, and a failed list 
         { linkedKey, knownCommunities } as FirstRunAccount,
         onLinked,
         onKnown,
+        onDevice,
       ),
     ]);
     return {
@@ -156,6 +158,14 @@ it("reads the linked key and the saved destinations together, and a failed list 
     linked: [[pubkey]],
     known: [[["wss://a.example"]]],
   });
+  // The linked key already on this device leaves nothing to choose.
+  expect(
+    await check(
+      () => Promise.resolve(pubkey),
+      () => Promise.resolve([]),
+      pubkey,
+    ),
+  ).toEqual({ rest: { status: "done" }, linked: [[pubkey]], known: [[[]]] });
   expect(
     await check(
       () => Promise.resolve(null),

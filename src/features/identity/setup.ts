@@ -105,6 +105,8 @@ export function checkAccount(
   account: FirstRunAccount,
   onLinked: (pubkey: string) => void,
   onKnown: (known: readonly string[] | undefined) => void,
+  /** The key already on this device: when it is the linked one, nothing is left to choose. */
+  onDevice?: string,
 ): SetupStep {
   return {
     label: "Checking your account…",
@@ -116,7 +118,9 @@ export function checkAccount(
       onKnown(known);
       if (!pubkey) return undefined;
       onLinked(pubkey);
-      return { status: "paused", at: "welcome-back" };
+      return pubkey === onDevice
+        ? undefined
+        : { status: "paused", at: "welcome-back" };
     },
   };
 }
