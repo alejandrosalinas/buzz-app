@@ -1,5 +1,5 @@
 import { OnboardingBack } from "./OnboardingBack";
-import { type ReactNode, useState } from "react";
+import { useState } from "react";
 import { enteredRelayOrigin } from "../communities/destination";
 import { parsePastedInvite } from "../communities/invite-link";
 import { Button } from "../../shared/design-system/ui/Button";
@@ -36,7 +36,7 @@ export function CommunityUrlField({
   onSubmit,
   disabled = false,
   onBack,
-  alternative,
+  stacked = false,
 }: {
   url: string;
   onUrlChange: (url: string) => void;
@@ -44,8 +44,8 @@ export function CommunityUrlField({
   onSubmit: (origin: string, code: string) => void;
   disabled?: boolean;
   onBack?: () => void;
-  /** Sits where Back would, across from Continue: another way forward, such as Create a community. */
-  alternative?: ReactNode;
+  /** Continue fills the width right under the field, for a card whose only step this is. */
+  stacked?: boolean;
 }) {
   const [invalid, setInvalid] = useState(false);
   const entered = enteredCommunity(url);
@@ -55,7 +55,7 @@ export function CommunityUrlField({
   };
   return (
     <div className="flex flex-col gap-1">
-      <div className="flex flex-col gap-12">
+      <div className={`flex flex-col ${stacked ? "gap-4" : "gap-12"}`}>
         <div className="min-w-0 w-full">
           <Field
             label="Community address or invite link"
@@ -84,19 +84,31 @@ export function CommunityUrlField({
             />
           </Field>
         </div>
-        <div className="flex flex-wrap items-center justify-between gap-2">
-          <div>
-            {onBack ? <OnboardingBack onClick={onBack} /> : alternative}
+        {stacked ? (
+          // A grid stretches the button to the field's width.
+          <div className="grid">
+            <Button
+              size="lg"
+              variant="prominent"
+              disabled={disabled}
+              onClick={submit}
+            >
+              Continue
+            </Button>
           </div>
-          <Button
-            size="lg"
-            variant="prominent"
-            disabled={disabled}
-            onClick={submit}
-          >
-            Continue
-          </Button>
-        </div>
+        ) : (
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <div>{onBack && <OnboardingBack onClick={onBack} />}</div>
+            <Button
+              size="lg"
+              variant="prominent"
+              disabled={disabled}
+              onClick={submit}
+            >
+              Continue
+            </Button>
+          </div>
+        )}
       </div>
     </div>
   );

@@ -7,7 +7,7 @@ import { OnboardingScreen } from "./OnboardingScreen";
 /**
  * First-run landing after setup. The community URL is the live action; a
  * linked account's owned communities are offered as rows that take the same
- * path with their address, and, with `onCreate`, Create a community sits across from Continue.
+ * path with their address, and, with `onCreate`, Create a community is offered under Continue.
  */
 export function JoinCommunity({
   url,
@@ -37,6 +37,10 @@ export function JoinCommunity({
           >
             Connect to a community
           </h1>
+          <p className="m-0 text-body text-subtle">
+            Communities are where you work with people and agents. Join an
+            existing one or create your own.
+          </p>
           <div className="mt-4 grid w-full max-w-md gap-8 text-left">
             {owned.length > 0 && (
               // min-w-0 keeps a long hostname truncating rather than widening the grid.
@@ -65,23 +69,27 @@ export function JoinCommunity({
                 </ul>
               </div>
             )}
-            <CommunityUrlField
-              url={url}
-              onUrlChange={onUrlChange}
-              onSubmit={onFind}
-              alternative={
-                onCreate && (
+            <div className="flex flex-col gap-4">
+              <CommunityUrlField
+                url={url}
+                onUrlChange={onUrlChange}
+                onSubmit={onFind}
+                stacked
+              />
+              {onCreate && (
+                <p className="m-0 text-center text-body-sm text-subtle">
+                  Want your own?{" "}
                   <Button
-                    size="lg"
-                    variant="ghost"
+                    variant="link"
+                    size="inline"
                     data-return-focus="create"
                     onClick={onCreate}
                   >
                     Create a community
                   </Button>
-                )
-              }
-            />
+                </p>
+              )}
+            </div>
           </div>
         </>
       }
