@@ -131,6 +131,41 @@ that agent in Buzz; they do not notify the external app through this connection.
   such as “Pinky and 182 others were added.” Hover or activate “182 others” to see
   the full, scrollable list of names. Messages and huddle entries split groups.
 
+- If **Reconnecting to relay…** persists, install the optional **Network diagnostics**
+  plugin from the Block plugin marketplace using **Settings → Manage plugins**,
+  then enable it and open **Settings → Buzz → Network diagnostics**.
+  The notice can cover background reads as well as a dropped connection. Info
+  collects connection counts, handshake latency, reconnections, heartbeat
+  timeouts, application RTT, frame throughput and failure rates. The metric window
+  can show the last minute, five minutes or current capture. Regular traffic also
+  supplies separate publication acknowledgement, native HTTP response, subscription
+  first-response and catch-up timings, without sending extra requests. Handshake
+  samples require a connection attempt in the capture/window; probe RTT requires
+  an answered idle probe. Debug adds read outcomes, cancellation initiators,
+  stage timings, operation IDs, and socket delivery metadata. Errors retain safe
+  categories and bounded cause chains; unrecognized error text is redacted.
+  Retry records show timer lateness; a detected scheduling gap alone does not
+  establish that the computer slept. Trace adds protocol details. Debug and Trace
+  stay selected by default, including when Settings closes. Optionally check
+  **Return to Info automatically** and set **Capture duration (minutes)** to a
+  positive whole number (initially 15). Changing the level or duration restarts
+  the countdown; unchecking cancels it. These choices last for the app session.
+  Disabling the plugin stops collection, diagnostic IPC and file writes. Silent
+  pauses capture; resuming or clearing history starts a new measurement period.
+  Detailed capture expiry keeps Info metrics running. Capture levels reset when Buzz restarts.
+  Desktop capture starts a local session file on first activation in each app launch,
+  without an entry-count limit. Disabled periods have no diagnostic history. The session-file path
+  is shown in diagnostics. For help with Debug or Trace logs, start a Solo session,
+  give the agent that path, and describe the problem and when it happened.
+  Older files remain until you delete them; **Clear
+  history** clears only the current session. **Export JSON** works while
+  disconnected and streams the full current session to Downloads. The plugin installs on desktop. Browser development can exercise the host
+  capability with a bounded in-memory history of frontend evidence only; it does
+  not capture the Node broker's network history. Nothing is uploaded automatically. Exports
+  omit message bodies and credentials but include relay addresses and connection
+  metadata. See [reading network diagnostics](network-diagnostics.md) for event
+  correlation and interpretation.
+
 - **Solo** organizes your chats with agents. Choose **New chat**, select or tag
   an agent, and send a message. Solo conversations continue at the chat's top
   level rather than requiring a new thread for each reply. Where available, use

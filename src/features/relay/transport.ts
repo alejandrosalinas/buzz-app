@@ -1,4 +1,8 @@
 import type { ArtifactIncrementalReader } from "./artifact-incremental-reader.ts";
+import {
+  networkContext,
+  networkCancellation,
+} from "../developer/network-context";
 import type { VerifiedProfileAuthority } from "./verified-profile";
 import type { ReminderHost } from "./reminders";
 import {
@@ -57,6 +61,7 @@ import {
 } from "./http-admission";
 import { yieldToHost } from "./yield";
 import { clientMetrics } from "../developer/client-metrics";
+import { networkRecorder } from "../developer/network-diagnostics";
 import { createRelayProfiler, type RelayProfiler } from "./profiling";
 import {
   subscribeRelayTraffic,
@@ -323,10 +328,12 @@ async function measureQuery<T>(
   session: string,
   priority: "foreground" | "background",
   read: (sized: (text: string) => string) => Promise<T>,
+  signal?: AbortSignal,
 ): Promise<T> {
   const started = performance.now();
   let bytes = 0;
   let ok = false;
+  let failure: unknown;
   try {
     const result = await read((text) => {
       bytes = text.length;
@@ -334,7 +341,23 @@ async function measureQuery<T>(
     });
     ok = true;
     return result;
+  } catch (error) {
+    failure = error;
+    throw error;
   } finally {
+    if (networkRecorder.collecting())
+      networkRecorder.record({
+        level: ok ? "debug" : "warn",
+        event: "read",
+        relay: session.startsWith("http") ? session : undefined,
+        ms: performance.now() - started,
+        reason: ok ? undefined : failure,
+        status: failure instanceof ReadError ? failure.status : undefined,
+        detail: priority,
+        ...networkContext(signal),
+        outcome: ok ? "completed" : signal?.aborted ? "cancelled" : "failed",
+        cancellation: networkCancellation(signal),
+      });
     clientMetrics.query(session, {
       ms: performance.now() - started,
       bytes,
@@ -930,31 +953,36 @@ export async function connectBrokerTransport(
             requestId: string,
             priority: "foreground" | "background",
           ) {
-            return measureQuery(endpoint, priority, async (sized) => {
-              const response = await fetch(`${endpoint}/query`, {
-                method: "POST",
-                credentials: "same-origin",
-                headers: {
-                  "Content-Type": "application/json",
-                  "X-Buzz-Read-Priority": priority,
-                },
-                body: JSON.stringify(
-                  readSnapshotFilter(session.viewer as string),
-                ),
-                signal,
-              });
-              if (!response.ok)
-                throw new Error(
-                  `Read-state snapshot failed (${response.status})`,
+            return measureQuery(
+              endpoint,
+              priority,
+              async (sized) => {
+                const response = await fetch(`${endpoint}/query`, {
+                  method: "POST",
+                  credentials: "same-origin",
+                  headers: {
+                    "Content-Type": "application/json",
+                    "X-Buzz-Read-Priority": priority,
+                  },
+                  body: JSON.stringify(
+                    readSnapshotFilter(session.viewer as string),
+                  ),
+                  signal,
+                });
+                if (!response.ok)
+                  throw new Error(
+                    `Read-state snapshot failed (${response.status})`,
+                  );
+                recordServerTiming(response, profiling, requestId);
+                return parseReadSnapshot(
+                  JSON.parse(sized(await readSnapshotText(response))),
+                  session.viewer as string,
+                  session.readStateCommunity as string,
+                  signal,
                 );
-              recordServerTiming(response, profiling, requestId);
-              return parseReadSnapshot(
-                JSON.parse(sized(await readSnapshotText(response))),
-                session.viewer as string,
-                session.readStateCommunity as string,
-                signal,
-              );
-            });
+              },
+              signal,
+            );
           },
         }
       : {}),
@@ -1241,52 +1269,62 @@ export async function connectBrokerTransport(
     ...(session.channelActivity
       ? {
           async channelActivity(channelIds, signal) {
-            return measureQuery(endpoint, "background", async (sized) => {
-              const result = await fetch(`${endpoint}/channel-activity`, {
-                method: "POST",
-                credentials: "same-origin",
-                headers: {
-                  "Content-Type": "application/json",
-                  "X-Buzz-Read-Priority": "background",
-                },
-                body: JSON.stringify(
-                  channelIds.map((channelId) => ({
-                    kinds: [9, 40002, 40008, 45001, 45003],
-                    "#h": [channelId],
-                    limit: 1,
-                  })),
-                ),
-                signal,
-              });
-              if (!result.ok) throw httpReadError(result.status);
-              return parseEvents(
-                JSON.parse(sized(await result.text())),
-                verify,
-                signal,
-              );
-            });
+            return measureQuery(
+              endpoint,
+              "background",
+              async (sized) => {
+                const result = await fetch(`${endpoint}/channel-activity`, {
+                  method: "POST",
+                  credentials: "same-origin",
+                  headers: {
+                    "Content-Type": "application/json",
+                    "X-Buzz-Read-Priority": "background",
+                  },
+                  body: JSON.stringify(
+                    channelIds.map((channelId) => ({
+                      kinds: [9, 40002, 40008, 45001, 45003],
+                      "#h": [channelId],
+                      limit: 1,
+                    })),
+                  ),
+                  signal,
+                });
+                if (!result.ok) throw httpReadError(result.status);
+                return parseEvents(
+                  JSON.parse(sized(await result.text())),
+                  verify,
+                  signal,
+                );
+              },
+              signal,
+            );
           },
         }
       : {}),
     searchProfiles: (query, limit, page, signal, priority) =>
-      measureQuery(endpoint, priority, async (sized) => {
-        const result = await fetch(`${endpoint}/profile-search`, {
-          method: "POST",
-          credentials: "same-origin",
-          headers: {
-            "Content-Type": "application/json",
-            "X-Buzz-Read-Priority": priority,
-          },
-          body: JSON.stringify({ query, limit, page }),
-          signal,
-        });
-        if (!result.ok) throw await readResponseError(result);
-        return parseEvents(
-          JSON.parse(sized(await result.text())),
-          verify,
-          signal,
-        );
-      }),
+      measureQuery(
+        endpoint,
+        priority,
+        async (sized) => {
+          const result = await fetch(`${endpoint}/profile-search`, {
+            method: "POST",
+            credentials: "same-origin",
+            headers: {
+              "Content-Type": "application/json",
+              "X-Buzz-Read-Priority": priority,
+            },
+            body: JSON.stringify({ query, limit, page }),
+            signal,
+          });
+          if (!result.ok) throw await readResponseError(result);
+          return parseEvents(
+            JSON.parse(sized(await result.text())),
+            verify,
+            signal,
+          );
+        },
+        signal,
+      ),
     media: (url, size) =>
       mediaUrl(
         url,
@@ -1295,31 +1333,36 @@ export async function connectBrokerTransport(
         size,
       ),
     query: (filters, signal, requestId = "read", priority = "foreground") =>
-      measureQuery(endpoint, priority, async (sized) => {
-        const result = await fetch(`${endpoint}/query`, {
-          method: "POST",
-          credentials: "same-origin",
-          headers: {
-            "Content-Type": "application/json",
-            "X-Buzz-Read-Priority": priority,
-          },
-          body: JSON.stringify(filters),
-          signal: signal ?? null,
-        });
-        if (!result.ok) {
-          const failure = await readApiFailure(result);
-          throw new ReadError(
-            failure.denied ? "denied" : "unavailable",
-            failure.error,
-            result.status,
-            failure.retryAfterMs,
+      measureQuery(
+        endpoint,
+        priority,
+        async (sized) => {
+          const result = await fetch(`${endpoint}/query`, {
+            method: "POST",
+            credentials: "same-origin",
+            headers: {
+              "Content-Type": "application/json",
+              "X-Buzz-Read-Priority": priority,
+            },
+            body: JSON.stringify(filters),
+            signal: signal ?? null,
+          });
+          if (!result.ok) {
+            const failure = await readApiFailure(result);
+            throw new ReadError(
+              failure.denied ? "denied" : "unavailable",
+              failure.error,
+              result.status,
+              failure.retryAfterMs,
+            );
+          }
+          recordServerTiming(result, profiling, requestId);
+          return profiling.measureAsync("read.verify", requestId, async () =>
+            parseEvents(JSON.parse(sized(await result.text())), verify, signal),
           );
-        }
-        recordServerTiming(result, profiling, requestId);
-        return profiling.measureAsync("read.verify", requestId, async () =>
-          parseEvents(JSON.parse(sized(await result.text())), verify, signal),
-        );
-      }),
+        },
+        signal,
+      ),
   };
 }
 
@@ -1478,50 +1521,60 @@ export async function connectSignedTransport(
       },
     },
     searchProfiles: (query, limit, page, signal, priority) =>
-      measureQuery(httpOrigin, priority, async (sized) => {
-        const result = await signedPost(
-          signer,
-          `${httpOrigin}/profiles/search`,
-          { query, limit, page },
-          signal,
-          profiling,
-          "profile-search",
-          principal().api,
-          priority,
-        );
-        if (!result.ok) throw await readResponseError(result);
-        return parseEvents(
-          JSON.parse(sized(await result.text())),
-          verify,
-          signal,
-        );
-      }),
-    query: (filters, signal, requestId = "read", priority = "foreground") =>
-      measureQuery(httpOrigin, priority, async (sized) => {
-        const result = await signedPost(
-          signer,
-          `${httpOrigin}/query`,
-          filters,
-          signal,
-          profiling,
-          requestId,
-          principal().api,
-          priority,
-        );
-        if (!result.ok) {
-          const failure = await readApiFailure(result);
-          throw new ReadError(
-            failure.denied ? "denied" : "unavailable",
-            failure.error,
-            result.status,
-            failure.retryAfterMs,
+      measureQuery(
+        httpOrigin,
+        priority,
+        async (sized) => {
+          const result = await signedPost(
+            signer,
+            `${httpOrigin}/profiles/search`,
+            { query, limit, page },
+            signal,
+            profiling,
+            "profile-search",
+            principal().api,
+            priority,
           );
-        }
-        recordServerTiming(result, profiling, requestId);
-        return profiling.measureAsync("read.verify", requestId, async () =>
-          parseEvents(JSON.parse(sized(await result.text())), verify, signal),
-        );
-      }),
+          if (!result.ok) throw await readResponseError(result);
+          return parseEvents(
+            JSON.parse(sized(await result.text())),
+            verify,
+            signal,
+          );
+        },
+        signal,
+      ),
+    query: (filters, signal, requestId = "read", priority = "foreground") =>
+      measureQuery(
+        httpOrigin,
+        priority,
+        async (sized) => {
+          const result = await signedPost(
+            signer,
+            `${httpOrigin}/query`,
+            filters,
+            signal,
+            profiling,
+            requestId,
+            principal().api,
+            priority,
+          );
+          if (!result.ok) {
+            const failure = await readApiFailure(result);
+            throw new ReadError(
+              failure.denied ? "denied" : "unavailable",
+              failure.error,
+              result.status,
+              failure.retryAfterMs,
+            );
+          }
+          recordServerTiming(result, profiling, requestId);
+          return profiling.measureAsync("read.verify", requestId, async () =>
+            parseEvents(JSON.parse(sized(await result.text())), verify, signal),
+          );
+        },
+        signal,
+      ),
   };
 }
 

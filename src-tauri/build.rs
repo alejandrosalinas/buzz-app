@@ -52,6 +52,11 @@ fn main() {
     }
     tauri_build::try_build(
         attributes.app_manifest(tauri_build::AppManifest::new().commands(&[
+            "network_diagnostics_configure",
+            "network_diagnostics_read",
+            "network_diagnostics_clear",
+            "network_diagnostics_append",
+            "network_diagnostics_export",
             "huddle_window_reset_incoming",
             "huddle_window_open",
             "huddle_window_update",

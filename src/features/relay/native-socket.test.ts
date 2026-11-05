@@ -1,4 +1,5 @@
-import { afterEach, expect, it, vi } from "vitest";
+import { networkRecorder } from "../developer/network-diagnostics";
+import { beforeEach, afterEach, expect, it, vi } from "vitest";
 import { invoke } from "@tauri-apps/api/core";
 import { nativeSocket } from "./native-socket";
 import { subscribeRelayTraffic, type LiveCallbacks } from "./live";
@@ -13,7 +14,11 @@ vi.mock("@tauri-apps/api/core", () => ({
   },
   invoke: vi.fn(),
 }));
+beforeEach(() => networkRecorder.setEnabled(true));
+
 afterEach(() => {
+  networkRecorder.configure("info");
+  networkRecorder.clear();
   vi.useRealTimers();
   vi.resetAllMocks();
 });
@@ -291,6 +296,87 @@ it("backs off a renewal before admission like any other close", async () => {
     await vi.advanceTimersByTimeAsync(0);
     channels.at(-1)?.({ type: "renew" });
     expect(h.callbacks.state.mock.lastCall?.[0].status).toBe("retrying");
+  } finally {
+    h.owner.dispose();
+  }
+});
+
+it("joins subscription frames across native send and renderer delivery without logging payloads", async () => {
+  vi.useFakeTimers();
+  networkRecorder.configure("debug");
+  networkRecorder.clear();
+  vi.mocked(invoke).mockImplementation((command) =>
+    Promise.resolve(command === "relay_socket_connect" ? "native" : undefined),
+  );
+  const h = connect();
+  h.owner.update(["a"]);
+  try {
+    await vi.advanceTimersByTimeAsync(0);
+    const channel = channels.at(-1);
+    channel?.({
+      type: "text",
+      data: JSON.stringify(["AUTH", "private-challenge"]),
+    });
+    await vi.advanceTimersByTimeAsync(0);
+    const sends = () =>
+      vi
+        .mocked(invoke)
+        .mock.calls.filter(([command]) => command === "relay_socket_send")
+        .map(
+          ([, args]) =>
+            args as {
+              id: string;
+              data: string;
+              diagnostic: { operationId: string };
+              frameSequence: number;
+            },
+        );
+    const auth = sends().find((args) => JSON.parse(args.data)[0] === "AUTH");
+    expect(auth).toBeDefined();
+    channel?.({
+      type: "text",
+      data: JSON.stringify(["OK", JSON.parse(auth?.data ?? "[]")[1].id, true]),
+    });
+    await vi.advanceTimersByTimeAsync(750);
+    const req = sends().find((args) => JSON.parse(args.data)[0] === "REQ");
+    expect(req).toMatchObject({
+      diagnostic: { operationId: expect.stringMatching(/^subscription:/) },
+      frameSequence: expect.any(Number),
+    });
+    const wire = JSON.parse(req?.data ?? "[]")[1];
+    channel?.({
+      type: "text",
+      data: JSON.stringify(["EOSE", wire]),
+      nativeAt: Date.now() - 25,
+      frameSequence: 42,
+    });
+    await vi.advanceTimersByTimeAsync(0);
+    channel?.({
+      type: "text",
+      data: JSON.stringify(["EOSE", "foreign-subscription-secret"]),
+      nativeAt: Date.now(),
+      frameSequence: 43,
+    });
+    await vi.advanceTimersByTimeAsync(0);
+    const events = networkRecorder.snapshot().events;
+    expect(events).toContainEqual(
+      expect.objectContaining({
+        event: "socket.delivered",
+        connection: req?.id,
+        frameSequence: 42,
+        ms: 25,
+      }),
+    );
+    expect(events).toContainEqual(
+      expect.objectContaining({
+        event: "ws.frame",
+        operationId: req?.diagnostic.operationId,
+        subscriptionId: wire,
+        frameSequence: 42,
+      }),
+    );
+    expect(JSON.stringify(events)).not.toContain("private-challenge");
+    expect(JSON.stringify(events)).not.toContain("subscription-secret");
   } finally {
     h.owner.dispose();
   }

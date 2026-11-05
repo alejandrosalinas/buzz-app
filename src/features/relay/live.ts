@@ -5,6 +5,8 @@ import {
   type VerifiedProfileSink,
 } from "./verified-profile.ts";
 import { getLogger } from "../developer/logging.ts";
+import { networkMetrics, utf8Bytes } from "../developer/network-metrics.ts";
+import { networkRecorder } from "../developer/network-diagnostics.ts";
 import { logSocketFrame, relayLabel } from "../developer/traffic.ts";
 
 import {
@@ -150,6 +152,11 @@ export function createLiveAdmission() {
     presenceIdle: () =>
       !presenceBusy && performance.now() >= presenceNext && !pending.size,
     pause(seconds: number) {
+      networkRecorder.record({
+        level: "trace",
+        event: "admission.cooldown",
+        delayMs: (seconds + 1) * 1000,
+      });
       // Redis reports whole seconds; include a second rather than retry before expiry.
       cooldown = Math.max(cooldown, performance.now() + (seconds + 1) * 1000);
     },
@@ -316,7 +323,12 @@ type ReplayPage = {
   oldest: number;
   got: Map<string, number>;
 };
+type SubscriptionTiming = {
+  first?: (() => void) | undefined;
+  eose?: (() => void) | undefined;
+};
 type Route = {
+  operationId: string;
   id: string;
   channelId?: string;
   channelIds?: readonly string[];
@@ -350,6 +362,7 @@ type Route = {
   refusals?: number;
   retryAt?: number;
   deadline?: ReturnType<typeof setTimeout>;
+  timing?: SubscriptionTiming | undefined;
 };
 export const CHANNEL_KINDS = [
   9, 40002, 40008, 45001, 45003, 40099, 40100, 40003, 5, 9005, 7, 39000, 39002,
@@ -359,11 +372,13 @@ export const CHANNEL_KINDS = [
 export interface LiveSocket {
   readonly readyState: number;
   readonly connectionTimeoutMs?: number;
+  readonly diagnosticId?: string;
+  readonly nativeTransport?: boolean;
   onopen: ((event: Event) => unknown) | null;
   onmessage: ((event: MessageEvent) => unknown) | null;
   onerror: ((event: Event) => unknown) | null;
   onclose: ((event: CloseEvent) => unknown) | null;
-  send(data: string): void;
+  send(data: string, diagnostic?: { operationId: string }): void;
   close(): void;
 }
 /** One authenticated socket, bounded joined-channel batches, singleton previews and two globals.
@@ -391,6 +406,62 @@ export function subscribeRelayTraffic(
     channelBatchSize > REPLAY_BATCH_SIZE ? setupConcurrency : 0;
   const log = getLogger("relay-ws");
   const peer = relayLabel(url);
+  const metrics = networkMetrics.relay(url);
+  const startSubscriptionTiming = () =>
+    networkMetrics.enabled()
+      ? {
+          first: metrics.timer("subscriptionFirst"),
+          eose: metrics.timer("subscriptionEose"),
+        }
+      : undefined;
+  const subscriptionResponse = (
+    owner: { timing?: SubscriptionTiming | undefined },
+    eose = false,
+  ) => {
+    if (!owner.timing) return;
+    owner.timing.first?.();
+    delete owner.timing.first;
+    if (eose) {
+      owner.timing.eose?.();
+      delete owner.timing;
+    }
+  };
+  let connectionMetric: ReturnType<typeof metrics.connection> | undefined;
+  let openedAt: number | undefined;
+  let attemptPending = false;
+  let probeAt: number | undefined;
+  let probeCapture: number | undefined;
+  let attemptCapture: number | undefined;
+  const diagnosticId = crypto.randomUUID();
+  let attemptDiagnosticId: string | undefined;
+  const report = (
+    event: string,
+    fields: {
+      reason?: string | undefined;
+      delayMs?: number | undefined;
+      ms?: number | undefined;
+      status?: number | undefined;
+      count?: number | undefined;
+      operationId?: string | undefined;
+    } = {},
+  ) =>
+    networkRecorder.collecting() &&
+    networkRecorder.record({
+      level:
+        event === "socket.refused"
+          ? "error"
+          : fields.reason
+            ? "warn"
+            : event === "socket.route-established"
+              ? "debug"
+              : "info",
+      event,
+      relay: url,
+      connection: diagnosticConnection(),
+      operationId: `live:${diagnosticId}`,
+      ...fields,
+    });
+  const diagnosticConnection = () => attemptDiagnosticId ?? diagnosticId;
   let closed = false;
   let socket: LiveSocket | undefined;
   let retryTimer: ReturnType<typeof setTimeout> | undefined;
@@ -467,9 +538,11 @@ export function subscribeRelayTraffic(
       }),
     );
   type SyncWire = {
+    operationId: string;
     filter: ArtifactSyncFilter | VerifiedProfileFilter;
     sink: ArtifactSyncSink;
     wire?: string;
+    timing?: SubscriptionTiming | undefined;
   };
   const syncs = new Set<SyncWire>();
   // Artifact and verified-profile syncs share the wire budget but are admitted
@@ -555,19 +628,53 @@ export function subscribeRelayTraffic(
       }),
     );
   };
-  const send = (value: unknown) => {
+  const frameContext = (value: unknown, localOperation?: string) => {
+    const data = Array.isArray(value) ? value : [];
+    const subscriptionId =
+      ["REQ", "CLOSE", "CLOSED", "EOSE", "EVENT", "COUNT"].includes(data[0]) &&
+      typeof data[1] === "string" &&
+      /^[a-zA-Z0-9_-]{1,128}$/.test(data[1])
+        ? data[1]
+        : undefined;
+    const owner = subscriptionId
+      ? (wires.get(subscriptionId) ?? syncWires.get(subscriptionId))
+      : undefined;
+    if (owner && !owner.operationId)
+      owner.operationId = `subscription:${crypto.randomUUID()}`;
+    return {
+      parentId: `live:${diagnosticId}`,
+      operationId: owner?.operationId ?? `socket:${diagnosticConnection()}`,
+      subscriptionId:
+        owner || subscriptionId === probe || localOperation
+          ? subscriptionId
+          : undefined,
+    };
+  };
+  const send = (value: unknown, operationId?: string) => {
     if (!closed && socket?.readyState === 1) {
       const raw = JSON.stringify(value);
-      socket.send(raw);
-      logSocketFrame(peer, "→", raw, value);
+      const context = networkRecorder.enabled("debug")
+        ? {
+            ...frameContext(value, operationId),
+            ...(operationId ? { operationId } : {}),
+          }
+        : undefined;
+      socket.send(
+        raw,
+        context ? { operationId: context.operationId } : undefined,
+      );
+      if (networkMetrics.enabled() && !socket.nativeTransport)
+        metrics.frame(true, utf8Bytes(raw));
+      logSocketFrame(peer, "→", raw, value, diagnosticConnection(), context);
     }
   };
-  const requests = createSocketPublications(() => queueMicrotask(pump));
+  const requests = createSocketPublications(() => queueMicrotask(pump), url);
   function closeWire(route: Route) {
     clearTimeout(route.deadline);
+    delete route.timing;
     if (route.wire) {
       wires.delete(route.wire); // Fence before CLOSE, including reentrant callbacks.
-      send(["CLOSE", route.wire]);
+      send(["CLOSE", route.wire], route.operationId);
       delete route.wire;
     }
     if (route.previous) closeWire(route.previous);
@@ -610,6 +717,7 @@ export function subscribeRelayTraffic(
     if (replayChannels?.length) next.replayChannels = replayChannels;
     delete next.wire;
     delete next.deadline;
+    delete next.timing;
     delete next.retryRenewal;
     // A narrowed replacement is live-only, so it has no replay to rely on.
     if (route.carried) broken = true;
@@ -647,15 +755,23 @@ export function subscribeRelayTraffic(
     // routes then only time out. A minute of silence asks for an empty answer;
     // no answer at all means the socket is dead, so replace it. A probe is a
     // request too: during a relay cooldown it waits for a later silent minute.
+    if (!heard && admission.delay()) metrics.count("probeDeferred");
     if (!heard && !admission.delay()) {
+      if (probeAt !== undefined && networkMetrics.current(probeCapture))
+        metrics.count("probeCancelled");
+      metrics.count("probeSent");
+      probeCapture = networkMetrics.epoch();
+      probeAt = networkMetrics.enabled() ? performance.now() : undefined;
+      report("socket.probe");
       if (probe) send(["CLOSE", probe]);
       probe = `probe-${++serial}`;
       send(["REQ", probe, { kinds: [44100], "#p": [viewer], limit: 0 }]);
       clearTimeout(deadline);
-      deadline = setTimeout(
-        () => unresponsive?.("Live connection stopped answering"),
-        setupTimeoutMs,
-      );
+      deadline = setTimeout(() => {
+        if (networkMetrics.current(probeCapture)) metrics.count("probeTimeout");
+        probeAt = undefined;
+        unresponsive?.("Live connection stopped answering");
+      }, setupTimeoutMs);
     }
     heard = false;
     // A minute authenticated restores prompt recovery for the next rollout;
@@ -802,6 +918,9 @@ export function subscribeRelayTraffic(
     }
     const add = (id: string, ids: readonly string[] = [], batch = false) => {
       const route: Route = {
+        operationId: networkRecorder.enabled("debug")
+          ? `subscription:${crypto.randomUUID()}`
+          : "",
         id,
         ...(batch ? { channelIds: ids } : ids[0] ? { channelId: ids[0] } : {}),
         status: "pending",
@@ -890,6 +1009,11 @@ export function subscribeRelayTraffic(
     delete route.retryAt;
   }
   function fail(route: Route, reason: string, transient = false) {
+    report("socket.route-failed", {
+      reason,
+      count: scope(route).length,
+      operationId: route.operationId,
+    });
     const denial = reason === "restricted: not a channel member";
     const previous = route.previous;
     // A failure can retain the old source only while its full scope remains allowed.
@@ -1031,6 +1155,7 @@ export function subscribeRelayTraffic(
       }
       sync.wire = `sync-${++serial}`;
       syncWires.set(sync.wire, sync);
+      sync.timing = startSubscriptionTiming();
       send(["REQ", sync.wire, sync.filter]);
     }
     let active = [...routes.values()].filter(
@@ -1070,6 +1195,9 @@ export function subscribeRelayTraffic(
         if (!ids.length) break;
         const id = `replay:${++serial}`;
         routes.set(id, {
+          operationId: networkRecorder.enabled("debug")
+            ? `subscription:${crypto.randomUUID()}`
+            : "",
           id,
           channelIds: ids,
           history: true,
@@ -1152,6 +1280,7 @@ export function subscribeRelayTraffic(
                   // to a filter that asks for them with #t.
                   { kinds: [44100, 44101], "#p": [viewer], "#t": ["system"] },
                 ];
+      route.timing = startSubscriptionTiming();
       send([
         "REQ",
         wire,
@@ -1257,12 +1386,24 @@ export function subscribeRelayTraffic(
     syncWires.clear();
     for (const sync of lost)
       endSync(sync, "disconnected: live connection lost");
+    if (attemptPending && networkMetrics.current(attemptCapture))
+      metrics.count("connectCancelled");
+    attemptPending = false;
+    connectionMetric?.("closed");
+    connectionMetric = undefined;
+    if (probeAt !== undefined && networkMetrics.current(probeCapture))
+      metrics.count("probeCancelled");
+    probeAt = undefined;
     if (socket) log.info(`${peer} disconnect`);
     socket?.close();
     socket = undefined;
   }
-  function connect(renewal = false) {
+  function connect(
+    renewal = false,
+    trigger: "initial" | "failure" | "renewal" | "manual" = "failure",
+  ) {
     if (closed) return;
+    attemptDiagnosticId = undefined;
     // A renewal before the last one's carried routes completed their replay
     // cannot prove continuity for them: it is an ordinary reconnect.
     if ([...routes.values()].some((route) => route.carried)) renewal = false;
@@ -1290,11 +1431,15 @@ export function subscribeRelayTraffic(
     const used = new Set([...routes.values()].flatMap(cursorKeys));
     for (const key of cursors.keys()) if (!used.has(key)) cursors.delete(key);
     const current = generation;
+    attemptDiagnosticId = `${diagnosticId}:${current}`;
     const valid = () => !closed && current === generation;
     heard = false;
     probe = undefined;
     const reconnect = (reason: string, closeCode?: number) => {
       if (!valid()) return;
+      if (!attemptPending || networkMetrics.current(attemptCapture))
+        metrics.count(attemptPending ? "connectFailed" : "disconnects");
+      attemptPending = false;
       log.warn(`${peer} ${reason}`);
       clearSocket();
       renewing = false;
@@ -1308,6 +1453,7 @@ export function subscribeRelayTraffic(
       // Transient outages must recover without manual retry. Jitter spreads
       // reconnects while retaining a minimum delay under sustained failure.
       const delay = liveReconnectDelay(closeCode, reconnectDelay, random);
+      report("socket.retry", { reason, delayMs: delay, status: closeCode });
       reconnectDelay = Math.min(MAX_RECONNECT_DELAY, reconnectDelay * 2);
       retryTimer = setTimeout(() => connect(), delay);
     };
@@ -1316,6 +1462,9 @@ export function subscribeRelayTraffic(
     // slow timer retries it; a signer/viewer mismatch cannot clear and never does.
     const terminal = (reason: string, retryable = true) => {
       if (!valid()) return;
+      if (!attemptPending || networkMetrics.current(attemptCapture))
+        metrics.count(attemptPending ? "connectFailed" : "disconnects");
+      attemptPending = false;
       log.error(`${peer} ${reason}`);
       clearSocket();
       renewing = false;
@@ -1324,17 +1473,32 @@ export function subscribeRelayTraffic(
       connection = "error";
       connectionError = reason;
       notify();
+      report("socket.refused", {
+        reason,
+        delayMs: retryable ? liveSlowRetryDelay(authFailures + 1) : undefined,
+      });
       if (retryable)
         retryTimer = setTimeout(
           () => connect(),
           liveSlowRetryDelay(++authFailures),
         );
     };
+    metrics.count("connects");
+    attemptPending = true;
+    attemptCapture = networkMetrics.epoch();
+    if (trigger === "failure") metrics.count("reconnects");
+    if (trigger === "renewal") metrics.count("renewals");
+    if (trigger === "manual") metrics.count("manual");
+    connectionMetric = metrics.connection();
+    openedAt = undefined;
     let ws: LiveSocket;
+    const started = performance.now();
     try {
       log.info(`${peer} connecting`);
       ws = socketFactory(url);
       socket = ws;
+      attemptDiagnosticId = ws.diagnosticId ?? attemptDiagnosticId;
+      report("socket.connect");
     } catch {
       reconnect("Live connection unavailable");
       return;
@@ -1347,6 +1511,11 @@ export function subscribeRelayTraffic(
     );
     ws.onopen = () => {
       if (!valid()) return;
+      openedAt = performance.now();
+      connectionMetric?.("open");
+      if (networkMetrics.current(attemptCapture))
+        metrics.duration("opening", openedAt - started);
+      report("socket.open", { ms: openedAt - started });
       log.info(`${peer} connected`);
       if (ws.connectionTimeoutMs !== undefined) {
         clearTimeout(deadline);
@@ -1426,31 +1595,58 @@ export function subscribeRelayTraffic(
         clearTimeout(deadline);
       }
       if (typeof event.data !== "string" || event.data.length > 1024 * 1024) {
-        logSocketFrame(peer, "←", event.data);
+        logSocketFrame(
+          peer,
+          "←",
+          event.data,
+          undefined,
+          diagnosticConnection(),
+        );
         return;
       }
+      if (networkMetrics.enabled() && !ws.nativeTransport)
+        metrics.frame(false, utf8Bytes(event.data));
       let data: unknown;
       try {
         data = JSON.parse(event.data);
       } catch {
-        logSocketFrame(peer, "←", event.data);
+        logSocketFrame(
+          peer,
+          "←",
+          event.data,
+          undefined,
+          diagnosticConnection(),
+        );
         return;
       }
-      logSocketFrame(peer, "←", event.data, data);
+      logSocketFrame(peer, "←", event.data, data, diagnosticConnection(), {
+        ...(networkRecorder.enabled("debug") ? frameContext(data) : {}),
+        ...(
+          event as MessageEvent & {
+            diagnostic?: { nativeAt: number; frameSequence: number };
+          }
+        ).diagnostic,
+      });
       if (!Array.isArray(data)) return;
       if (
         probe &&
         data[1] === probe &&
         (data[0] === "EOSE" || data[0] === "CLOSED")
       ) {
-        if (data[0] === "EOSE") send(["CLOSE", probe]);
-        else if (
+        if (data[0] === "EOSE") {
+          if (networkMetrics.current(probeCapture))
+            metrics.count("probeAnswered");
+          if (probeAt !== undefined && networkMetrics.current(probeCapture))
+            metrics.duration("rtt", performance.now() - probeAt);
+          send(["CLOSE", probe]);
+        } else if (
           typeof data[2] === "string" &&
           data[2].startsWith("rate-limited:")
         ) {
           const hint = /retry in (\d+)s$/.exec(data[2]);
           admission.pause(hint ? Math.min(Number(hint[1]), 86400) : 5);
         }
+        probeAt = undefined;
         probe = undefined;
         return;
       }
@@ -1489,6 +1685,16 @@ export function subscribeRelayTraffic(
         }
         clearTimeout(deadline);
         authenticated = true;
+        connectionMetric?.("authenticated");
+        if (networkMetrics.current(attemptCapture)) metrics.count("connectOk");
+        attemptPending = false;
+        if (networkMetrics.current(attemptCapture))
+          metrics.duration("ready", performance.now() - started);
+        if (openedAt !== undefined && networkMetrics.current(attemptCapture))
+          metrics.duration("authentication", performance.now() - openedAt);
+        if (trigger === "failure" && networkMetrics.current(attemptCapture))
+          metrics.count("restored");
+        report("socket.authenticated", { ms: performance.now() - started });
         heardAt = provenAt = tickedAt = Date.now();
         authFailures = 0;
         policyRecovery = true;
@@ -1573,9 +1779,12 @@ export function subscribeRelayTraffic(
             endSync(sync, "error: relay supplied an invalid event");
             return;
           }
+          subscriptionResponse(sync);
           sync.sink.event(checked);
-        } else if (data[0] === "EOSE") sync.sink.eose();
-        else if (data[0] === "CLOSED") {
+        } else if (data[0] === "EOSE") {
+          subscriptionResponse(sync, true);
+          sync.sink.eose();
+        } else if (data[0] === "CLOSED") {
           // `disconnected:` is reserved for local socket loss.
           const reason =
             typeof data[2] === "string" && !data[2].startsWith("disconnected:")
@@ -1668,16 +1877,21 @@ export function subscribeRelayTraffic(
           if (
             incoming.kind === 20001 &&
             presenceAuthors.includes(incoming.pubkey)
-          )
+          ) {
+            subscriptionResponse(route);
             callbacks.presence?.(incoming);
+          }
         } else if (route.id === "observer") {
           if (
             observer !== null &&
             incoming.kind === OBSERVER_KIND &&
             incoming.created_at >= route.since
-          )
+          ) {
+            subscriptionResponse(route);
             callbacks.telemetry?.(incoming, observer);
+          }
         } else if (incoming.kind !== OBSERVER_KIND) {
+          subscriptionResponse(route);
           callbacks.receive(
             [incoming],
             Object.freeze({
@@ -1698,6 +1912,7 @@ export function subscribeRelayTraffic(
             grant(destination);
         }
       } else if (data[0] === "EOSE" && route.status === "pending") {
+        subscriptionResponse(route, true);
         if (route.history) {
           const { page } = route;
           if (page && route.count >= LIVE_REPLAY_LIMIT) {
@@ -1724,6 +1939,9 @@ export function subscribeRelayTraffic(
             else if (rest.length) {
               const id = `replay:${++serial}`;
               routes.set(id, {
+                operationId: networkRecorder.enabled("debug")
+                  ? `subscription:${crypto.randomUUID()}`
+                  : "",
                 id,
                 channelIds: rest,
                 history: true,
@@ -1747,6 +1965,10 @@ export function subscribeRelayTraffic(
           pump();
           return;
         }
+        report("socket.route-established", {
+          count: scope(route).length,
+          operationId: route.operationId,
+        });
         clearTimeout(route.deadline);
         if (route.previous) closeWire(route.previous);
         delete route.previous;
@@ -1812,8 +2034,9 @@ export function subscribeRelayTraffic(
       // once and quietly; routes resume from their cursors. One that never
       // authenticated takes the ordinary backoff, so it cannot spin.
       if (authenticated && (event as { renew?: true } | undefined)?.renew) {
+        report("socket.renew");
         log.info(`${peer} renewing federated authorization`);
-        return connect(true);
+        return connect(true, "renewal");
       }
       const reason = event?.code
         ? `Live connection closed (${event.code}${event.reason ? `: ${event.reason}` : ""})`
@@ -1824,10 +2047,16 @@ export function subscribeRelayTraffic(
       reconnect(reason);
     };
   }
-  connect();
+  connect(false, "initial");
   return {
     syncArtifacts(filter, sink) {
-      const sync: SyncWire = { filter, sink };
+      const sync: SyncWire = {
+        operationId: networkRecorder.enabled("debug")
+          ? `subscription:${crypto.randomUUID()}`
+          : "",
+        filter,
+        sink,
+      };
       if (closed) {
         queueMicrotask(() =>
           sink.closed("unsupported: relay session disposed"),
@@ -1846,14 +2075,20 @@ export function subscribeRelayTraffic(
         if (!syncs.delete(sync)) return;
         if (sync.wire) {
           syncWires.delete(sync.wire);
-          send(["CLOSE", sync.wire]);
+          send(["CLOSE", sync.wire], sync.operationId);
         }
         syncInterests();
       };
     },
     syncVerifiedProfiles(filter, sink) {
       const checked = verifiedProfileFilter(filter.authors[0], filter["#d"]);
-      const sync: SyncWire = { filter: checked, sink };
+      const sync: SyncWire = {
+        operationId: networkRecorder.enabled("debug")
+          ? `subscription:${crypto.randomUUID()}`
+          : "",
+        filter: checked,
+        sink,
+      };
       if (closed) {
         queueMicrotask(() =>
           sink.closed("unsupported: relay session disposed"),
@@ -1874,7 +2109,7 @@ export function subscribeRelayTraffic(
         if (!syncs.delete(sync)) return;
         if (sync.wire) {
           syncWires.delete(sync.wire);
-          send(["CLOSE", sync.wire]);
+          send(["CLOSE", sync.wire], sync.operationId);
         }
         syncInterests();
       };
@@ -2018,7 +2253,7 @@ export function subscribeRelayTraffic(
         }
         pump();
         notify();
-      } else connect();
+      } else connect(false, "manual");
     },
     dispose() {
       if (closed) return;

@@ -1,4 +1,6 @@
+import { abortNetwork } from "../developer/network-context";
 import type { LocalAgentSource } from "../agents/local-activity";
+import { networkRecorder } from "../developer/network-diagnostics";
 import { readView } from "../../shared/view-state";
 import type { LocalAgents } from "../agents/local";
 import type { IdentityNames } from "../identity-names/service";
@@ -103,7 +105,7 @@ export function provideRelay(
   const reset = () => {
     generation++;
     connecting = false;
-    controller?.abort();
+    if (controller) abortNetwork(controller, "superseded", "relay-session");
     clearTimeout(deadline);
     store.dispose();
     store = createRelaySession(null, { identityNames });
@@ -226,7 +228,7 @@ export function provideRelay(
       const timer = setTimeout(() => {
         if (disposed || current !== generation || signal !== controller?.signal)
           return;
-        controller.abort();
+        abortNetwork(controller, "deadline", "relay-connect");
         connecting = false;
         transientFailure = true;
         publish({
@@ -391,21 +393,41 @@ export function provideRelay(
   ctx.effect(() => {
     // Network, focus and wake are hints that the relay may answer again.
     // Failed background reads retry now; healthy sessions do no extra work.
-    const online = () => {
+    const online = (event?: Event | "wake") => {
+      networkRecorder.record({
+        level: "info",
+        event: "signal",
+        relay: snapshot.origin,
+        detail: event === "wake" ? "wake" : (event?.type ?? "online"),
+      });
       if (snapshot.cached) service.retry();
-      else store.session.recovery?.retryNow();
+      else
+        store.session.recovery?.retryNow(
+          undefined,
+          event === "wake"
+            ? "wake-gap"
+            : event?.type === "focus"
+              ? "focus"
+              : "online",
+        );
     };
     const visible = () => {
       if (document.visibilityState !== "visible") return;
+      networkRecorder.record({
+        level: "info",
+        event: "signal",
+        relay: snapshot.origin,
+        detail: "visible",
+      });
       if (snapshot.cached) service.retry();
-      else store.session.recovery?.retryNow();
+      else store.session.recovery?.retryNow(undefined, "visible");
     };
     // Timers stop while the machine sleeps. A large gap between ticks means
     // it woke up, which a desktop window does not always report as focus.
     let tick = Date.now();
     const wake = setInterval(() => {
       const now = Date.now();
-      if (now - tick > WAKE_GAP_MS) online();
+      if (now - tick > WAKE_GAP_MS) online("wake");
       tick = now;
     }, WAKE_TICK_MS);
     if (typeof window !== "undefined") {

@@ -210,3 +210,18 @@ export type {
   Context as AddedToolContext,
 } from "../buzz-mcp/client";
 export type { Reply as AddedToolReply } from "../buzz-mcp/tools";
+
+export type {
+  NetworkDiagnostics,
+  NetworkDiagnosticsSnapshot,
+} from "../features/developer/network-service";
+export type {
+  CaptureReset as NetworkCaptureReset,
+  NetworkEvent,
+  NetworkError,
+} from "../features/developer/network-diagnostics";
+export type {
+  RelayMetrics as NetworkRelayMetrics,
+  MetricWindow as NetworkMetricWindow,
+} from "../features/developer/network-metrics";
+export type { LogLevel as NetworkLogLevel } from "../features/developer/logging";

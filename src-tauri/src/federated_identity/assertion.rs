@@ -161,6 +161,12 @@ pub(super) type DiscoveryCache = std::collections::HashMap<String, Arc<Discovery
 /// No credential goes on discovery. The exact relay supplies only the requirement,
 /// never the configured adapter destination.
 pub(crate) async fn discovery(relay: &str) -> Result<bool, String> {
+    let mut diagnostic = crate::network_diagnostics::Phase::new(
+        "community.discovery",
+        relay,
+        None,
+        crate::network_diagnostics::Level::Info,
+    );
     let relay = canonical_relay(relay)?;
     let url = format!("https://{}/info", &relay[6..]);
     let client = protocol::client().map_err(str::to_owned)?;
@@ -168,7 +174,9 @@ pub(crate) async fn discovery(relay: &str) -> Result<bool, String> {
         protocol::json(|| client.get(&url).header("Accept", "application/nostr+json"))
             .await
             .map_err(|_| "Federated community discovery failed".to_owned())?;
-    evaluate_discovery(&document).map_err(str::to_owned)
+    let result = evaluate_discovery(&document).map_err(str::to_owned);
+    diagnostic.ok = result.is_ok();
+    result
 }
 fn evaluate_discovery(document: &serde_json::Value) -> Result<bool, &'static str> {
     if !document.is_object() {
@@ -631,6 +639,12 @@ impl FederatedIdentity {
         token: &str,
         session_expiry: u64,
     ) -> Result<Assertion, Failure> {
+        let mut diagnostic = crate::network_diagnostics::Phase::new(
+            "federated.assertion",
+            relay,
+            None,
+            crate::network_diagnostics::Level::Info,
+        );
         if viewer.len() != 64
             || !viewer
                 .bytes()
@@ -719,6 +733,7 @@ impl FederatedIdentity {
         )?;
         let (expires_at, lifetime) = monotonic_expiry(issued.expires_at, wall_now, monotonic_now)
             .ok_or("invalid-assertion")?;
+        diagnostic.ok = true;
         Ok(Assertion {
             header: Zeroizing::new(format!("Bearer {}", assertion.as_str())),
             expires_at,

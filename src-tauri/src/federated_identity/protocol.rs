@@ -47,7 +47,10 @@ impl From<&'static str> for Failure {
     }
 }
 
-async fn body(mut response: reqwest::Response) -> Result<Zeroizing<Vec<u8>>, Failure> {
+async fn body(
+    mut response: reqwest::Response,
+    diagnostic: &mut crate::network_diagnostics::Phase,
+) -> Result<Zeroizing<Vec<u8>>, Failure> {
     const LIMIT: usize = 64 * 1024;
     if response
         .headers()
@@ -62,11 +65,11 @@ async fn body(mut response: reqwest::Response) -> Result<Zeroizing<Vec<u8>>, Fai
         return Err("response-too-large".into());
     }
     let mut body = Zeroizing::new(Vec::new());
-    while let Some(chunk) = response
-        .chunk()
-        .await
-        .map_err(|_| Failure::from("network-unavailable"))?
-    {
+    while let Some(chunk) = response.chunk().await.map_err(|error| {
+        diagnostic.http_error(&error);
+        diagnostic.reason = Some("body-interrupted");
+        Failure::from("network-unavailable")
+    })? {
         if chunk.len() > LIMIT - body.len() {
             return Err("response-too-large".into());
         }
@@ -83,11 +86,22 @@ pub(crate) async fn json<T: DeserializeOwned>(
     let terminal_headers = std::sync::atomic::AtomicBool::new(false);
     tokio::time::timeout(DEADLINE, async {
         for attempt in 0..3u64 {
+            let mut diagnostic = crate::network_diagnostics::Phase::new(
+                "federated.http",
+                "",
+                None,
+                crate::network_diagnostics::Level::Debug,
+            );
             let response = request().send().await;
             let retry = match response {
-                Err(_) => Some(None),
+                Err(error) => {
+                    diagnostic.reason = Some(crate::network_diagnostics::http_failure(&error));
+                    diagnostic.http_error(&error);
+                    Some(None)
+                }
                 Ok(response) => {
                     let status = response.status();
+                    diagnostic.status = Some(status.as_u16());
                     if status.as_u16() == 429 || status.is_server_error() {
                         let delay = response
                             .headers()
@@ -100,7 +114,7 @@ pub(crate) async fn json<T: DeserializeOwned>(
                             .store(!status.is_success(), std::sync::atomic::Ordering::Relaxed);
                         #[cfg(test)]
                         let _ = HEADERS_RECEIVED.try_with(|received| received.notify_one());
-                        let bytes = match body(response).await {
+                        let bytes = match body(response, &mut diagnostic).await {
                             Ok(bytes) => bytes,
                             Err(failure)
                                 if status.is_success()
@@ -117,8 +131,10 @@ pub(crate) async fn json<T: DeserializeOwned>(
                             Err(failure) => return Err(failure),
                         };
                         if status.is_success() {
-                            return serde_json::from_slice(&bytes)
-                                .map_err(|_| "invalid-response".into());
+                            let result = serde_json::from_slice(&bytes)
+                                .map_err(|_| Failure::from("invalid-response"));
+                            diagnostic.ok = result.is_ok();
+                            return result;
                         }
                         let value: serde_json::Value =
                             serde_json::from_slice(&bytes).unwrap_or_default();
@@ -140,6 +156,7 @@ pub(crate) async fn json<T: DeserializeOwned>(
                             _ if session_denied => "reauthentication-required",
                             _ => "adapter-refused",
                         };
+                        diagnostic.reason = Some(code);
                         return Err(Failure {
                             code,
                             session_denied,

@@ -1,3 +1,4 @@
+import { provideNetworkDiagnostics } from "../features/developer/network-service";
 import { ArtifactStorageService } from "../features/artifact-storage/service";
 import { provideArtifactStoreSync } from "../features/relay/artifact-store-sync";
 import { createAdminAccess } from "../bundled/admin-access";
@@ -71,6 +72,7 @@ export function createServices() {
   const ctx = new Context();
   const externalApps = createExternalApps();
   ctx.provide("externalApps", externalApps);
+  provideNetworkDiagnostics(ctx);
   new HostService(ctx);
   const federatedIdentity = new FederatedIdentityService(ctx);
   // An FI build's Welcome calls the session as the Builderlab plugin's

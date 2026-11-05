@@ -1,4 +1,8 @@
 import type { LocalAgentSource } from "../agents/local-activity";
+import {
+  networkRecorder,
+  type NetworkSource,
+} from "../developer/network-diagnostics";
 // FOUNDATION: One relay session owns reads, local intent, delivery and shared views.
 import { createSoloPreferences, soloGroups } from "./solo-preferences";
 import { npubEncode } from "nostr-tools/nip19";
@@ -2132,12 +2136,14 @@ export function createRelaySession(
       ),
   );
   const recoverable = (
+    name: NetworkSource,
     subscribe: (listener: () => void) => () => void,
     status: () => RecoveryStatus,
     retry: () => void,
     reauthorize?: () => void,
   ): RecoverySource =>
     Object.freeze({
+      name,
       subscribe,
       status,
       retry,
@@ -2147,44 +2153,79 @@ export function createRelaySession(
   // The live source also owns the channel roster and suspended public
   // previews (live.retry retries both).
   const liveRecovery = recoverable(
+    "live",
     live.subscribe,
     () => liveRecoveryStatus(live.snapshot()),
     live.retry,
   );
   const recovery = transport
-    ? createRecovery([
-        liveRecovery,
-        recoverable(
-          channelKit.capability.subscribe,
-          () => loadState(channelKit.capability.snapshot()),
-          () => void channelKit.capability.refresh(),
-          // A ready catalog may be revalidating under the old credentials.
-          () => void channelKit.capability.refresh({ after: true }),
-        ),
-        recoverable(
-          soloPreferences.queries.subscribe,
-          () => loadState(soloPreferences.queries.snapshot()),
-          () => void soloPreferences.queries.refresh(),
-        ),
-        recoverable(
-          sidebarPreferences.queries.subscribe,
-          () => loadState(sidebarPreferences.queries.snapshot()),
-          () => void sidebarPreferences.queries.refresh(),
-        ),
-        // Visibility owns its quiet retries and exhausts without `transient`,
-        // so this source only reports `busy`; its retry is not reached.
-        recoverable(
-          lifecycle.capability.subscribe,
-          () => loadState(lifecycle.capability.snapshot()),
-          () => void lifecycle.capability.refreshVisibility(),
-        ),
-      ])
+    ? createRecovery(
+        [
+          liveRecovery,
+          recoverable(
+            "catalog",
+            channelKit.capability.subscribe,
+            () => loadState(channelKit.capability.snapshot()),
+            () => void channelKit.capability.refresh(),
+            // A ready catalog may be revalidating under the old credentials.
+            () => void channelKit.capability.refresh({ after: true }),
+          ),
+          recoverable(
+            "solo-preferences",
+            soloPreferences.queries.subscribe,
+            () => loadState(soloPreferences.queries.snapshot()),
+            () => void soloPreferences.queries.refresh(),
+          ),
+          recoverable(
+            "sidebar-preferences",
+            sidebarPreferences.queries.subscribe,
+            () => loadState(sidebarPreferences.queries.snapshot()),
+            () => void sidebarPreferences.queries.refresh(),
+          ),
+          // Visibility owns its quiet retries and exhausts without `transient`,
+          // so this source only reports `busy`; its retry is not reached.
+          recoverable(
+            "visibility",
+            lifecycle.capability.subscribe,
+            () => loadState(lifecycle.capability.snapshot()),
+            () => void lifecycle.capability.refreshVisibility(),
+          ),
+        ],
+        undefined,
+        { relay: transport.scope ?? "", connection: crypto.randomUUID() },
+      )
     : undefined;
   // A live stream that connects again proves the relay answers: retry the
   // other failed reads now instead of waiting out their delay.
   let liveWasConnected = liveView.status === "connected";
+  let reportedLive = "";
   const stopLiveRecovery = live.subscribe(() => {
-    const connected = live.snapshot().status === "connected";
+    const view = live.snapshot();
+    const detail = JSON.stringify({
+      connection: view.status,
+      roster: view.roster.state,
+      headsFailed: view.heads.filter((head) => head.state === "error").length,
+      headsPending: view.heads.filter((head) => head.state === "pending")
+        .length,
+      routesFailed: view.routes.filter((route) => route.status === "error")
+        .length,
+      routesPending: view.routes.filter((route) => route.status === "pending")
+        .length,
+    });
+    if (detail !== reportedLive) {
+      reportedLive = detail;
+      networkRecorder.record({
+        level: "info",
+        event: "live.coverage",
+        relay: transport?.scope,
+        detail,
+        reason:
+          view.error ??
+          view.roster.error ??
+          view.heads.find((head) => head.state === "error")?.error,
+      });
+    }
+    const connected = view.status === "connected";
     // The live layer owns its own reconnect recovery; retry the rest.
     if (connected && !liveWasConnected) recovery?.retryNow(liveRecovery);
     liveWasConnected = connected;

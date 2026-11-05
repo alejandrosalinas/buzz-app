@@ -33,7 +33,7 @@ test("generated author package in a path with spaces exposes shared message fact
       join(dir, "consumer.ts"),
       `
 import { createElement } from "react";
-import type { Context, Delivery, HarnessConversation, McpHandler, StandaloneTurn, TurnResult, DecisionResult, Host, HostRequestOnceOptions, AddedTool, AddedToolContext, AddedToolReply, BuzzClient, Media, HostByteUpload, HostByteRequest, HostByteResponse, HostSavedBytes, PluginManifest, NamingPolicy, PagePreviewProps, PageSidebarProps, SidebarSectionContribution, SidebarSections, SidebarRowContribution, SidebarRows, UnreadCapability } from "@buzz/author";
+import type { Context, Delivery, HarnessConversation, McpHandler, StandaloneTurn, TurnResult, DecisionResult, Host, HostRequestOnceOptions, AddedTool, AddedToolContext, AddedToolReply, BuzzClient, Media, HostByteUpload, HostByteRequest, HostByteResponse, HostSavedBytes, NetworkDiagnostics, NetworkDiagnosticsSnapshot, NetworkCaptureReset, NetworkLogLevel, PluginManifest, NamingPolicy, PagePreviewProps, PageSidebarProps, SidebarSectionContribution, SidebarSections, SidebarRowContribution, SidebarRows, UnreadCapability } from "@buzz/author";
 export const manifest: PluginManifest = {
   id: "example.plugin", name: "Example", apiVersion: 1,
   host: {
@@ -50,6 +50,23 @@ const ExamplePreview = ({ close }: PagePreviewProps) =>
   createElement("button", { type: "button", onClick: close }, "Open");
 export const inject = ["agents", "decisions", "host", "identityNames", "pages", "relay"];
 export function apply(ctx: Context) {
+  const diagnostics: NetworkDiagnostics | undefined = ctx.reflect.get("networkDiagnostics");
+  if (diagnostics?.version === 1) {
+    const reset: NetworkCaptureReset = { enabled: false, minutes: 15 };
+    const level: NetworkLogLevel = "debug";
+    const snapshot: NetworkDiagnosticsSnapshot = diagnostics.snapshot();
+    void [snapshot.events, snapshot.metrics?.relays, snapshot.archive?.path];
+    ctx.effect(() => {
+      void diagnostics.setEnabled(true);
+      return () => diagnostics.setEnabled(false);
+    });
+    void diagnostics.setLevel(level);
+    void diagnostics.setAutoReset(reset);
+    // @ts-expect-error Unsupported capture levels must not reach the host.
+    diagnostics.setLevel("verbose");
+    // @ts-expect-error The capability version is host-owned.
+    diagnostics.version = 2;
+  }
   const unread: UnreadCapability = ctx.relay.snapshot().session.unread;
   const conversations: ReturnType<UnreadCapability["inbox"]> = unread.inbox();
   for (const item of conversations.items) {

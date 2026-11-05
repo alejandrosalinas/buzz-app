@@ -1,5 +1,6 @@
 import { Channel, invoke } from "@tauri-apps/api/core";
 import type { LiveSocket } from "./live";
+import { networkRecorder } from "../developer/network-diagnostics.ts";
 
 /** No reconnect policy here. live.ts owns connection generations and NIP-42. */
 export class NativeSocket implements LiveSocket {
@@ -12,15 +13,25 @@ export class NativeSocket implements LiveSocket {
   onerror: LiveSocket["onerror"] = null;
   onclose: LiveSocket["onclose"] = null;
   private readonly id = crypto.randomUUID();
+  get diagnosticId() {
+    return this.id;
+  }
+  nativeTransport = false;
   private browser?: WebSocket;
   private closed = false;
+  private sent = 0;
   constructor(private readonly url: string) {
     void this.connect();
   }
   private async connect() {
     try {
       const onEvent = new Channel<
-        | { type: "text"; data: string }
+        | {
+            type: "text";
+            data: string;
+            nativeAt?: number | null;
+            frameSequence?: number | null;
+          }
         | { type: "closed"; code: number | null; reason: string | null }
         // A refusal after the upgrade, ending the socket like its 401 would.
         | { type: "refused"; reason: string }
@@ -28,9 +39,34 @@ export class NativeSocket implements LiveSocket {
         | { type: "renew" }
       >((event) => {
         if (this.closed) return;
-        if (event.type === "text")
-          this.onmessage?.(new MessageEvent("message", { data: event.data }));
-        else if (event.type === "refused") this.refuse(event.reason);
+        if (event.type === "text") {
+          if (!networkRecorder.enabled("debug")) {
+            this.onmessage?.(new MessageEvent("message", { data: event.data }));
+            return;
+          }
+          const diagnostic = {
+            nativeAt: event.nativeAt ?? undefined,
+            frameSequence: event.frameSequence ?? undefined,
+          };
+          if (networkRecorder.enabled("debug"))
+            networkRecorder.record({
+              level: "debug",
+              event: "socket.delivered",
+              relay: this.url,
+              connection: this.id,
+              operationId: `socket:${this.id}`,
+              ...diagnostic,
+              ms:
+                event.nativeAt == null
+                  ? undefined
+                  : Math.max(0, Date.now() - event.nativeAt),
+            });
+          this.onmessage?.(
+            Object.assign(new MessageEvent("message", { data: event.data }), {
+              diagnostic,
+            }),
+          );
+        } else if (event.type === "refused") this.refuse(event.reason);
         else if (event.type === "renew")
           this.finish(undefined, undefined, true);
         else this.finish(event.code ?? undefined, event.reason ?? undefined);
@@ -62,6 +98,7 @@ export class NativeSocket implements LiveSocket {
         };
         ws.onclose = (event) => this.finish(event?.code, event?.reason);
       } else {
+        this.nativeTransport = true;
         this.readyState = 1;
         this.onopen?.(new Event("open"));
         await invoke("relay_socket_start", { id: this.id });
@@ -105,13 +142,29 @@ export class NativeSocket implements LiveSocket {
     this.onerror?.(event);
     this.finish();
   }
-  send(data: string) {
+  send(data: string, diagnostic?: { operationId: string }) {
     if (this.readyState !== 1) throw new Error("Socket is not open");
     if (this.browser) this.browser.send(data);
     else
-      void invoke("relay_socket_send", { id: this.id, data }).catch(() =>
-        this.finish(),
-      );
+      void invoke("relay_socket_send", {
+        id: this.id,
+        data,
+        diagnostic: networkRecorder.enabled("debug")
+          ? (diagnostic ?? { operationId: `socket:${this.id}` })
+          : null,
+        frameSequence: networkRecorder.enabled("debug") ? ++this.sent : null,
+      }).catch((reason) => {
+        if (networkRecorder.collecting())
+          networkRecorder.record({
+            level: "warn",
+            event: "socket.enqueue-failed",
+            relay: this.url,
+            connection: this.id,
+            ...diagnostic,
+            reason,
+          });
+        this.finish();
+      });
   }
   private finish(code?: number, reason?: string, renew = false) {
     if (this.closed) return;

@@ -65,6 +65,7 @@ mod microphone;
 #[cfg(target_os = "macos")]
 mod mouse_nav;
 
+mod network_diagnostics;
 mod notifications;
 mod os_idle;
 mod repositories_folder;
@@ -623,6 +624,11 @@ async fn update_restart<R: tauri::Runtime>(app: tauri::AppHandle<R>) -> Result<(
 fn commands<R: tauri::Runtime>() -> impl Fn(tauri::ipc::Invoke<R>) -> bool + Send + Sync + 'static {
     tauri::generate_handler![
         window_state::onboarding_preserve_window,
+        network_diagnostics::network_diagnostics_configure,
+        network_diagnostics::network_diagnostics_read,
+        network_diagnostics::network_diagnostics_clear,
+        network_diagnostics::network_diagnostics_append,
+        network_diagnostics::network_diagnostics_export,
         huddle_window_reset_incoming,
         huddle_window_open,
         huddle_window_update,
@@ -899,6 +905,7 @@ pub fn run() {
                 }
             }
             relay::set_user_agent(&app.package_info().version);
+            network_diagnostics::initialize(app.handle());
             app.state::<federated_identity::FederatedIdentity>()
                 .watch(app.handle().clone());
             if let Some(window) = app.get_webview_window("main") {
@@ -1140,6 +1147,7 @@ pub fn run() {
             }
             if matches!(event, tauri::RunEvent::Exit) {
                 shut_down(app);
+                network_diagnostics::flush_on_exit();
                 #[cfg(target_os = "macos")]
                 relaunch::on_exit(app);
             }

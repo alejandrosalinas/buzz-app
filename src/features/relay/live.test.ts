@@ -1,10 +1,21 @@
+import { networkMetrics } from "../developer/network-metrics";
+import { networkRecorder } from "../developer/network-diagnostics";
 import { getLogger, setLogLevel } from "../developer/logging";
 import {
   verifyEvent,
   type EventTemplate,
   type VerifiedEvent,
 } from "nostr-tools";
-import { assert, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
+import {
+  assert,
+  beforeEach,
+  afterEach,
+  beforeAll,
+  describe,
+  expect,
+  it,
+  vi,
+} from "vitest";
 import {
   createLiveAdmission,
   LIVE_BATCH_REFRESH_INTERVAL,
@@ -93,7 +104,13 @@ vi.mock("nostr-tools", async (original) => {
   const actual = await original<typeof import("nostr-tools")>();
   return { ...actual, verifyEvent: vi.fn(actual.verifyEvent) };
 });
-afterEach(() => vi.useRealTimers());
+beforeEach(() => networkRecorder.setEnabled(true));
+
+afterEach(() => {
+  vi.useRealTimers();
+  networkMetrics.setEnabled(false);
+  networkMetrics.reset();
+});
 it("keeps the browser authentication deadline measured from construction", async () => {
   vi.useFakeTimers();
   const h = setup([]);
@@ -2436,7 +2453,17 @@ it.each([
     const h = setup(["a"], undefined, undefined, () => 0.9);
     try {
       await h.first.auth();
+      const connection = networkRecorder
+        .snapshot()
+        .events.filter((event) => event.event === "socket.connect")
+        .at(-1)?.connection;
       h.first.close(code);
+      expect(
+        networkRecorder
+          .snapshot()
+          .events.filter((event) => event.event === "socket.retry")
+          .at(-1)?.connection,
+      ).toBe(connection);
       await vi.advanceTimersByTimeAsync(delay - 1);
       expect(h.sockets).toHaveLength(1);
       await vi.advanceTimersByTimeAsync(1);
@@ -3354,6 +3381,7 @@ it("keeps misrouted activity out of accessible conversations; session rejects am
 
 it("gates publication on AUTH, shares admission with live routes, and accepts only matching OK", async () => {
   vi.useFakeTimers();
+  networkMetrics.setEnabled(true);
   const h = setup();
   try {
     const event = message(h.key, "a", "outgoing", 1700000000);
@@ -3375,9 +3403,25 @@ it("gates publication on AUTH, shares admission with live routes, and accepts on
     expect(done).not.toHaveBeenCalled();
     expect(h.first.requests()).toHaveLength(4);
     expect(performance.now()).toBe(100);
+    await vi.advanceTimersByTimeAsync(25);
     await h.first.receive(["OK", event.id, true, "private-result"]);
     await result;
     expect(done).toHaveBeenCalledWith("private-result");
+    expect(
+      networkMetrics.snapshot().relays[0]?.session.latency.publicationAck,
+    ).toMatchObject({ count: 1, mean: 25 });
+    expect(networkMetrics.snapshot().relays[0]?.session.counts).toMatchObject({
+      publishOk: 1,
+      publishFailed: 0,
+      publishCancelled: 0,
+      txFrames: h.first.sent.length,
+      txBytes: h.first.sent.reduce(
+        (bytes, frame) =>
+          bytes + new TextEncoder().encode(JSON.stringify(frame)).length,
+        0,
+      ),
+      rxFrames: 5,
+    });
     expect(h.callbacks.receive).not.toHaveBeenCalled();
   } finally {
     h.owner.dispose();
@@ -3393,6 +3437,7 @@ it.each([
   ["unknown failure", true],
 ])("preserves publication uncertainty for %s", async (reason, sent) => {
   vi.useFakeTimers();
+  networkMetrics.setEnabled(true);
   const h = setup([]);
   try {
     const event = message(h.key, "a", "command", 1700000000);
@@ -3403,6 +3448,14 @@ it.each([
     await h.first.auth();
     await h.first.receive(["OK", event.id, false, reason]);
     expect(await result).toMatchObject({ sent });
+    expect(
+      networkMetrics.snapshot().relays[0]?.session.latency.publicationAck.count,
+    ).toBe(1);
+    expect(networkMetrics.snapshot().relays[0]?.session.counts).toMatchObject({
+      publishOk: 0,
+      publishFailed: 1,
+      publishCancelled: 0,
+    });
   } finally {
     h.owner.dispose();
   }
@@ -3413,6 +3466,8 @@ it.each(["abort", "dispose", "disconnect"])(
   async (action) => {
     vi.useFakeTimers();
     for (const dispatched of [false, true]) {
+      networkMetrics.setEnabled(true);
+      networkMetrics.reset();
       const h = setup([]);
       try {
         const event = message(h.key, "a", "outgoing", 1700000000);
@@ -3424,6 +3479,17 @@ it.each(["abort", "dispose", "disconnect"])(
         else if (action === "dispose") h.owner.dispose();
         else h.first.close();
         expect(await result).toMatchObject({ sent: dispatched });
+        expect(
+          networkMetrics.snapshot().relays[0]?.session.latency.publicationAck
+            .count,
+        ).toBe(0);
+        expect(
+          networkMetrics.snapshot().relays[0]?.session.counts,
+        ).toMatchObject({
+          publishOk: 0,
+          publishFailed: action === "abort" ? 0 : 1,
+          publishCancelled: action === "abort" ? 1 : 0,
+        });
         if (action === "disconnect") {
           await vi.advanceTimersByTimeAsync(500);
           const next = h.sockets[1];
@@ -3519,6 +3585,7 @@ it.each([
   "rejects malformed/bounded receipt (%j) without acceptance",
   async (...frame) => {
     vi.useFakeTimers();
+    networkMetrics.setEnabled(true);
     const h = setup([]);
     try {
       assert.exists(h.owner.publish);
@@ -3532,11 +3599,189 @@ it.each([
         sent: true,
         message: "Invalid publication receipt",
       });
+      expect(
+        networkMetrics.snapshot().relays[0]?.session.latency.publicationAck
+          .count,
+      ).toBe(0);
     } finally {
       h.owner.dispose();
     }
   },
 );
+
+it.each(["event", "empty"] as const)(
+  "samples subscription first response and EOSE once from regular traffic (%s)",
+  async (response) => {
+    vi.useFakeTimers();
+    networkMetrics.setEnabled(true);
+    const h = setup(["a"]);
+    try {
+      await h.first.auth();
+      const request = h.first.requests().find((r) => scopeOf(r).includes("a"));
+      assert.exists(request);
+      const event = message(h.key, "a", "incoming", 1700000000);
+      await h.first.receive(["EOSE", "unowned"]);
+      await h.first.receive(["EVENT", request[1], { invalid: true }]);
+      expect(
+        networkMetrics.snapshot().relays[0]?.session.latency.subscriptionFirst
+          .count,
+      ).toBe(0);
+      await vi.advanceTimersByTimeAsync(20);
+      if (response === "event")
+        await h.first.receive(["EVENT", request[1], event]);
+      await vi.advanceTimersByTimeAsync(30);
+      await h.first.receive(["EOSE", request[1]]);
+      await h.first.receive(["EVENT", request[1], event]);
+      await h.first.receive(["EOSE", request[1]]);
+      expect(
+        networkMetrics.snapshot().relays[0]?.session.latency,
+      ).toMatchObject({
+        subscriptionFirst: { count: 1, mean: response === "event" ? 20 : 50 },
+        subscriptionEose: { count: 1, mean: 50 },
+        rtt: { count: 0 },
+      });
+    } finally {
+      h.owner.dispose();
+    }
+  },
+);
+
+it.each(["clear", "resume", "enable", "remove", "disconnect"] as const)(
+  "does not sample obsolete subscription replies after %s",
+  async (transition) => {
+    vi.useFakeTimers();
+    networkMetrics.setEnabled(transition !== "enable");
+    const h = setup(["a"]);
+    try {
+      await h.first.auth();
+      const request = h.first.requests().find((r) => scopeOf(r).includes("a"));
+      assert.exists(request);
+      if (transition === "clear") networkMetrics.reset();
+      if (transition === "resume") networkMetrics.setEnabled(false);
+      if (transition === "resume" || transition === "enable")
+        networkMetrics.setEnabled(true);
+      if (transition === "remove") h.owner.update([]);
+      if (transition === "disconnect") h.first.close();
+      await vi.advanceTimersByTimeAsync(20);
+      await h.first.receive([
+        "EVENT",
+        request[1],
+        message(h.key, "a", "late", 1700000000),
+      ]);
+      await h.first.receive(["EOSE", request[1]]);
+      expect(
+        networkMetrics.snapshot().relays[0]?.session.latency,
+      ).toMatchObject({
+        subscriptionFirst: { count: 0 },
+        subscriptionEose: { count: 0 },
+      });
+    } finally {
+      h.owner.dispose();
+    }
+  },
+);
+
+it.each(["clear", "resume", "enable"] as const)(
+  "does not sample a publication dispatched before the current capture (%s)",
+  async (transition) => {
+    vi.useFakeTimers();
+    networkMetrics.setEnabled(transition !== "enable");
+    const h = setup([]);
+    const event = message(h.key, "a", "outgoing", 1700000000);
+    assert.exists(h.owner.publish);
+    const request = h.owner
+      .publish(event, new AbortController().signal)
+      .catch((error: unknown) => error);
+    try {
+      await h.first.auth();
+      if (transition === "clear") networkMetrics.reset();
+      if (transition === "resume") networkMetrics.setEnabled(false);
+      if (transition === "enable" || transition === "resume")
+        networkMetrics.setEnabled(true);
+      await vi.advanceTimersByTimeAsync(20);
+      await h.first.receive(["OK", event.id, true, ""]);
+      await request;
+      expect(
+        networkMetrics.snapshot().relays[0]?.session.latency.publicationAck
+          .count,
+      ).toBe(0);
+    } finally {
+      h.owner.dispose();
+      await request;
+    }
+  },
+);
+
+it("samples sync subscriptions from dispatch and retires latency after EOSE", async () => {
+  vi.useFakeTimers();
+  networkMetrics.setEnabled(true);
+  const h = setup([]);
+  let stop: (() => void) | undefined;
+  try {
+    await h.first.auth();
+    assert.exists(h.owner.syncArtifacts);
+    stop = h.owner.syncArtifacts(
+      { artifact: "current", "#h": ["a"] },
+      { event: vi.fn(), eose: vi.fn(), closed: vi.fn() },
+    );
+    await vi.advanceTimersByTimeAsync(0);
+    const request = h.first
+      .requests()
+      .find(
+        (r) => (r[2] as unknown as { artifact: string }).artifact === "current",
+      );
+    assert.exists(request);
+    await vi.advanceTimersByTimeAsync(25);
+    await h.first.receive(["EOSE", request[1]]);
+    await h.first.receive(["EOSE", request[1]]);
+    expect(networkMetrics.snapshot().relays[0]?.session.latency).toMatchObject({
+      subscriptionFirst: { count: 1, mean: 25 },
+      subscriptionEose: { count: 1, mean: 25 },
+    });
+  } finally {
+    stop?.();
+    h.owner.dispose();
+  }
+});
+
+it("ignores signed events outside a presence subscription before sampling its first response", async () => {
+  vi.useFakeTimers();
+  networkMetrics.setEnabled(true);
+  const h = setup([]);
+  try {
+    h.owner.watchPresence?.([h.key.pubkey]);
+    await h.first.auth();
+    const request = h.first.requests().find((r) => r[2].kinds.includes(20001));
+    assert.exists(request);
+    await vi.advanceTimersByTimeAsync(10);
+    await h.first.receive([
+      "EVENT",
+      request[1],
+      message(h.key, "a", "wrong kind", 1700000000),
+    ]);
+    await vi.advanceTimersByTimeAsync(10);
+    const template = {
+      kind: 20001,
+      content: "online",
+      tags: [],
+      created_at: 1700000000,
+    };
+    await h.first.receive(["EVENT", request[1], signed(keypair(), template)]);
+    expect(h.callbacks.presence).not.toHaveBeenCalled();
+    expect(
+      networkMetrics.snapshot().relays[0]?.session.latency.subscriptionFirst
+        .count,
+    ).toBe(0);
+    await vi.advanceTimersByTimeAsync(10);
+    await h.first.receive(["EVENT", request[1], signed(h.key, template)]);
+    expect(h.callbacks.presence).toHaveBeenCalledOnce();
+    expect(
+      networkMetrics.snapshot().relays[0]?.session.latency.subscriptionFirst,
+    ).toMatchObject({ count: 1, mean: 30 });
+  } finally {
+    h.owner.dispose();
+  }
+});
 
 it("fills three publication slots at one clock instant and refills on matching OK without a timer", async () => {
   vi.useFakeTimers();
@@ -5464,5 +5709,132 @@ it("ends a renewal's quiet state when an interest change replaces a carried batc
     expect(h.callbacks.established).toHaveBeenCalledWith(["a", "b"]);
   } finally {
     h.owner.dispose();
+  }
+});
+
+it.each(["answered", "timeout"] as const)(
+  "collects Info metrics for connection and existing probe %s without frame records",
+  async (outcome) => {
+    vi.useFakeTimers();
+    networkRecorder.configure("info");
+    networkRecorder.clear();
+    networkMetrics.setEnabled(true);
+    const h = setup([], createLiveAdmission(), undefined, () => 1);
+    try {
+      await vi.advanceTimersByTimeAsync(20);
+      h.first.onopen?.();
+      await h.first.auth();
+      expect(networkMetrics.snapshot().relays[0]).toMatchObject({
+        active: 1,
+        authenticated: 1,
+        session: {
+          counts: { connects: 1, connectOk: 1 },
+          latency: { opening: { mean: 20 } },
+        },
+      });
+      h.first.silent = true;
+      await vi.advanceTimersByTimeAsync(60_000);
+      const probe = h.first.probes().at(-1);
+      expect(probe).toBeDefined();
+      expect(
+        networkMetrics.snapshot().relays[0]?.session.counts.probeSent,
+      ).toBe(1);
+      if (outcome === "answered") {
+        await vi.advanceTimersByTimeAsync(25);
+        await h.first.receive(["EOSE", probe?.[1]]);
+        expect(
+          networkMetrics.snapshot().relays[0]?.session.latency.rtt,
+        ).toMatchObject({ count: 1, mean: 25 });
+      } else {
+        await vi.advanceTimersByTimeAsync(9999);
+        expect(
+          networkMetrics.snapshot().relays[0]?.session.counts.probeTimeout,
+        ).toBe(0);
+        await vi.advanceTimersByTimeAsync(1);
+        expect(networkMetrics.snapshot().relays[0]).toMatchObject({
+          active: 0,
+          session: { counts: { probeTimeout: 1, reconnects: 0 } },
+        });
+        await vi.advanceTimersByTimeAsync(500);
+        expect(
+          networkMetrics.snapshot().relays[0]?.session.counts.reconnects,
+        ).toBe(1);
+      }
+      expect(
+        networkRecorder
+          .snapshot()
+          .events.some((event) => event.event === "ws.frame"),
+      ).toBe(false);
+    } finally {
+      h.owner.dispose();
+      networkMetrics.setEnabled(false);
+      networkMetrics.reset();
+    }
+  },
+);
+
+it.each(
+  (["enable", "clear", "resume"] as const).flatMap((transition) =>
+    (["answered", "timeout"] as const).map(
+      (outcome) => [transition, outcome] as const,
+    ),
+  ),
+)(
+  "does not attribute a pre-capture probe to a new capture after %s (%s)",
+  async (transition, outcome) => {
+    vi.useFakeTimers();
+    networkMetrics.setEnabled(transition !== "enable");
+    const h = setup([]);
+    try {
+      await h.first.auth();
+      h.first.silent = true;
+      await vi.advanceTimersByTimeAsync(60_000);
+      const probe = h.first.probes().at(-1);
+      assert.exists(probe);
+      if (transition === "clear") networkMetrics.reset();
+      else {
+        networkMetrics.setEnabled(false);
+        networkMetrics.setEnabled(true);
+      }
+      if (outcome === "answered") await h.first.receive(["EOSE", probe[1]]);
+      else await vi.advanceTimersByTimeAsync(10_000);
+      expect(networkMetrics.snapshot().relays[0]).toMatchObject({
+        session: {
+          counts: {
+            probeSent: 0,
+            probeAnswered: 0,
+            probeTimeout: 0,
+            probeCancelled: 0,
+          },
+          latency: { rtt: { count: 0 } },
+        },
+      });
+    } finally {
+      h.owner.dispose();
+      networkMetrics.setEnabled(false);
+      networkMetrics.reset();
+    }
+  },
+);
+
+it("shows authentication state without counting a handshake started before capture", async () => {
+  networkMetrics.setEnabled(false);
+  const h = setup([]);
+  try {
+    h.first.onopen?.();
+    networkMetrics.setEnabled(true);
+    await h.first.auth();
+    expect(networkMetrics.snapshot().relays[0]).toMatchObject({
+      active: 1,
+      authenticated: 1,
+      session: {
+        counts: { connects: 0, connectOk: 0 },
+        latency: { ready: { count: 0 }, authentication: { count: 0 } },
+      },
+    });
+  } finally {
+    h.owner.dispose();
+    networkMetrics.setEnabled(false);
+    networkMetrics.reset();
   }
 });

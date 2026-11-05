@@ -1,3 +1,9 @@
+import { networkRecorder } from "../developer/network-diagnostics.ts";
+import {
+  bindNetworkContext,
+  networkContext,
+  networkSignals,
+} from "../developer/network-context.ts";
 import { isTransientFailure, readErrorKind, ReadError } from "./errors.ts";
 import { RECOVERY_DELAYS_MS } from "./recovery.ts";
 
@@ -21,10 +27,30 @@ export async function retryRead<T>(
   retryable: (error: unknown) => boolean = isRetryableRead,
 ): Promise<T> {
   const began = performance.now();
+  const operationId = networkRecorder.enabled("debug")
+    ? `retry:${crypto.randomUUID()}`
+    : "";
+  const parentId = networkContext(signal)?.operationId;
+  const owner = networkContext(signal)?.owner;
+  const attemptSignal = networkSignals([signal]);
+  bindNetworkContext(attemptSignal, {
+    operationId,
+    parentId,
+    owner,
+  });
   for (let attempt = 0; ; attempt++) {
     signal.throwIfAborted();
     try {
-      const value = await read(signal);
+      if (networkRecorder.enabled("debug"))
+        networkRecorder.record({
+          level: "debug",
+          event: "read.attempt",
+          operationId,
+          parentId,
+          attempt,
+          owner,
+        });
+      const value = await read(attemptSignal);
       signal.throwIfAborted();
       return value;
     } catch (error) {
@@ -41,6 +67,17 @@ export async function retryRead<T>(
         performance.now() - began + delay > QUIET_MS
       )
         throw error;
+      if (networkRecorder.enabled("debug"))
+        networkRecorder.record({
+          level: "debug",
+          event: "read.retry",
+          operationId,
+          parentId,
+          owner,
+          attempt: attempt + 1,
+          delayMs: delay,
+          reason: error,
+        });
       await new Promise<void>((resolve, reject) => {
         const abort = () => {
           clearTimeout(timer);

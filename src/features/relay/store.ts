@@ -1,3 +1,5 @@
+import { networkRecorder } from "../developer/network-diagnostics";
+import { abortNetwork, bindNetworkContext } from "../developer/network-context";
 import { retryRead } from "./read-retry";
 import { channelRowKind, rowProfileIds, messagePreview } from "./membership";
 import type { Outbox } from "./outbox";
@@ -868,6 +870,11 @@ export function createChannelStore(
     const startedAt = now();
     const accessVersion = accessVersions.get(channelId) ?? 0;
     const controller = new AbortController();
+    if (networkRecorder.enabled("debug"))
+      bindNetworkContext(controller.signal, {
+        operationId: `head:${crypto.randomUUID()}`,
+        owner: "channel-head",
+      });
     controllers.add(controller);
     let head: Head;
     try {
@@ -1645,6 +1652,14 @@ export function createChannelStore(
     }
     let generation = epoch;
     let controller = new AbortController();
+    const rosterOperation = networkRecorder.enabled("debug")
+      ? `roster:${crypto.randomUUID()}`
+      : "";
+    if (networkRecorder.enabled("debug"))
+      bindNetworkContext(controller.signal, {
+        operationId: rosterOperation,
+        owner: "roster",
+      });
     controllers.add(controller);
     const started = discovery.rosterVersions();
     const overflowRevision = discovery.overflowRevision;
@@ -1855,6 +1870,11 @@ export function createChannelStore(
       // Metadata gets a fresh cancellation owner, never another completeness set.
       controllers.delete(controller);
       controller = new AbortController();
+      if (networkRecorder.enabled("debug"))
+        bindNetworkContext(controller.signal, {
+          operationId: rosterOperation,
+          owner: "channel-metadata",
+        });
       controllers.add(controller);
       for (let offset = 0; offset < wanted.length; offset += DISCOVERY_LIMIT) {
         const metadata = await transport.read(
@@ -2933,7 +2953,8 @@ export function createChannelStore(
     warmPreferred = [];
     media.dispose();
     media = createMediaPreparation();
-    for (const controller of controllers) controller.abort();
+    for (const controller of controllers)
+      abortNetwork(controller, "superseded", "channel-store");
     for (const state of [...windows.values()]) evict(state);
     heads.clear();
     tails.clear();
@@ -3795,7 +3816,8 @@ export function createChannelStore(
       }
     media.dispose();
     media = createMediaPreparation();
-    for (const controller of controllers) controller.abort();
+    for (const controller of controllers)
+      abortNetwork(controller, "superseded", "channel-store");
     for (const [id, head] of heads.entries()) {
       if (!transport || !authorized(id)) {
         heads.delete(id);
@@ -3872,10 +3894,12 @@ export function createChannelStore(
     epoch++;
     creationReads.clear();
     media.dispose();
-    for (const controller of controllers) controller.abort();
+    for (const controller of controllers)
+      abortNetwork(controller, "session-disposed", "channel-store");
     for (const state of windows.values()) {
       state.generation++;
-      state.controller?.abort();
+      state.controller &&
+        abortNetwork(state.controller, "session-disposed", "channel-store");
     }
     windows.clear();
     heads.clear();
@@ -3979,7 +4003,8 @@ export function createChannelStore(
       const settle = (last: Page) => {
         // An older read in flight continues from the cursor this replaces;
         // its rows would merge below the hole and move the floor past it.
-        if (retained.snapshot.loadingOlder) retained.controller?.abort();
+        if (retained.snapshot.loadingOlder && retained.controller)
+          abortNetwork(retained.controller, "superseded", "live-catch-up");
         retained.events = retained.events.filter(
           (event) => !kept.has(event.id),
         );

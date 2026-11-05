@@ -239,14 +239,25 @@ async fn native_http_signs_exact_bytes_and_never_follows_redirects() {
     // HTTP is test-transport-only; the IPC boundary always requires HTTPS.
     let (url, task) = fixture_server("HTTP/1.1 302 Found\r\nLocation: https://other.test/\r\nContent-Length: 2\r\nConnection: close\r\n\r\n{}".into());
     let body = r#"[{"kinds":[0],"limit":5}]"#;
-    let result = send(
-        &IdentityHost::fixture(),
-        None,
-        url.clone(),
-        "POST",
-        Some(body.into()),
-        true,
-        MAX_RESPONSE,
+    use crate::network_diagnostics::{
+        in_context, network_diagnostics_configure, network_diagnostics_read, Context, Level,
+    };
+    let _capture = crate::network_diagnostics::CAPTURE_TEST.lock().await;
+    network_diagnostics_configure(Level::Debug, Some(true), None).unwrap();
+    let operation_id = format!("read:{}:1", uuid::Uuid::new_v4());
+    let result = in_context(
+        Some(Context {
+            operation_id: operation_id.clone(),
+        }),
+        send(
+            &IdentityHost::fixture(),
+            None,
+            url.clone(),
+            "POST",
+            Some(body.into()),
+            true,
+            MAX_RESPONSE,
+        ),
     )
     .await
     .unwrap();
@@ -280,6 +291,26 @@ async fn native_http_signs_exact_bytes_and_never_follows_redirects() {
         .as_u64()
         .is_some_and(|at| now.abs_diff(at) <= 5));
     verify(&event);
+    let diagnostics = network_diagnostics_read(None);
+    let phases = diagnostics["events"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|event| event["operationId"] == operation_id)
+        .collect::<Vec<_>>();
+    for phase in ["http.authorization", "http.sign", "http.body"] {
+        assert!(phases
+            .iter()
+            .any(|event| event["phase"] == phase && event["outcome"] == "started"));
+        assert!(phases
+            .iter()
+            .any(|event| event["phase"] == phase && event["outcome"] == "completed"));
+    }
+    assert!(phases
+        .iter()
+        .any(|event| event["phase"] == "http.query" && event["status"] == 302));
+    assert!(!diagnostics.to_string().contains(encoded));
+    network_diagnostics_configure(Level::Info, Some(false), None).unwrap();
 }
 
 #[tokio::test]
@@ -2015,6 +2046,10 @@ fn file_downloads_need_a_safe_name_and_bounded_raw_bytes() {
         "Ada.agent.png%20",
         "%FF",
         "report.pdf",
+        "report.json",
+        "other.diagnostics.json",
+        "buzz-network-report.txt",
+        "..%2Fbuzz-network-report.diagnostics.json",
     ] {
         assert_eq!(
             save(name, InvokeBody::Raw(vec![1])),

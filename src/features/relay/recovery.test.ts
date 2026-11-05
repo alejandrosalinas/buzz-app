@@ -1,3 +1,4 @@
+import { networkRecorder } from "../developer/network-diagnostics";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import {
   createRecovery,
@@ -26,8 +27,15 @@ function source(initial: RecoveryStatus = "settled") {
     set,
   };
 }
-beforeEach(() => vi.useFakeTimers());
-afterEach(() => vi.useRealTimers());
+beforeEach(() => {
+  networkRecorder.setEnabled(true);
+  vi.useFakeTimers();
+});
+afterEach(() => {
+  networkRecorder.configure("info");
+  networkRecorder.clear();
+  vi.useRealTimers();
+});
 
 it("retries a failed read forever with a capped delay", () => {
   const read = source();
@@ -203,4 +211,69 @@ it("reopens once, only after credentials change since the request was sent", () 
   for (const listener of [...listeners]) listener();
   expect(retry).toHaveBeenCalledOnce();
   expect(listeners.size).toBe(0);
+});
+
+it("records late retry callbacks and their trigger within one recovery episode", () => {
+  networkRecorder.clear();
+  const pending = new Map<object, { callback: () => void; delay: number }>();
+  const timers = {
+    setTimeout(callback: () => void, delay: number) {
+      const handle = {};
+      pending.set(handle, { callback, delay });
+      return handle;
+    },
+    clearTimeout(handle: unknown) {
+      pending.delete(handle as object);
+    },
+  };
+  const read = source();
+  const recovery = createRecovery([read], timers, {
+    relay: "https://relay.test",
+    connection: "test-session",
+  });
+  try {
+    read.set("failed");
+    const scheduled = networkRecorder
+      .snapshot()
+      .events.find((event) => event.event === "recovery.retry-scheduled");
+    expect(scheduled?.operationId).toMatch(/^recovery:/);
+    expect(scheduled?.dueAt).toBe(Date.now() + 1000);
+    const retry = [...pending.values()].find((timer) => timer.delay === 1000);
+    expect(retry).toBeDefined();
+    vi.advanceTimersByTime(26_000);
+    retry?.callback();
+    expect(read.retry).toHaveBeenCalledTimes(1);
+    expect(networkRecorder.snapshot().events).toContainEqual(
+      expect.objectContaining({
+        event: "recovery.retry-fired",
+        operationId: scheduled?.operationId,
+        latenessMs: 25_000,
+      }),
+    );
+    recovery.retryNow(undefined, "wake-gap");
+    expect(networkRecorder.snapshot().events).toContainEqual(
+      expect.objectContaining({
+        event: "recovery.retry-now",
+        operationId: scheduled?.operationId,
+        detail: "wake-gap",
+      }),
+    );
+    read.set("settled");
+    expect(networkRecorder.snapshot().events).toContainEqual(
+      expect.objectContaining({
+        event: "recovery",
+        operationId: scheduled?.operationId,
+        outcome: "settled",
+      }),
+    );
+    read.set("failed");
+    expect(
+      networkRecorder
+        .snapshot()
+        .events.filter((event) => event.event === "recovery.retry-scheduled")
+        .at(-1)?.operationId,
+    ).not.toBe(scheduled?.operationId);
+  } finally {
+    recovery.dispose();
+  }
 });

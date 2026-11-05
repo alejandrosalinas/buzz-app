@@ -4,6 +4,14 @@ import {
   createArtifactIncrementalReader,
 } from "./artifact-incremental-reader";
 import {
+  networkContext,
+  networkCancellation,
+  networkSignals,
+  markNetworkCancellation,
+} from "../developer/network-context";
+import { networkMetrics } from "../developer/network-metrics";
+import { networkRecorder } from "../developer/network-diagnostics";
+import {
   verifiedProfileAuthority,
   verifiedProfileDiscovery,
 } from "./verified-profile";
@@ -120,11 +128,24 @@ export async function nativeRelayRequest(
   body?: unknown,
   signal?: AbortSignal,
 ): Promise<Response> {
-  const bounded = AbortSignal.any([
-    ...(signal ? [signal] : []),
-    AbortSignal.timeout(30_000),
-  ]);
+  const deadline = AbortSignal.timeout(30_000);
+  markNetworkCancellation(deadline, {
+    initiator: "deadline",
+    owner: "native-http",
+  });
+  const bounded = networkSignals([...(signal ? [signal] : []), deadline]);
   bounded.throwIfAborted();
+  const diagnostic = networkRecorder.enabled("debug")
+    ? (networkContext(signal) ?? {
+        operationId: `request:${crypto.randomUUID()}`,
+        owner: "native-http",
+      })
+    : undefined;
+  const metrics = networkMetrics.enabled()
+    ? networkMetrics.relay(community)
+    : undefined;
+  const metric = metrics?.operation("request");
+  const responseLatency = metrics?.timer("http");
   const id =
     body !== undefined && CANCELLABLE_READS.has(path)
       ? crypto.randomUUID()
@@ -144,10 +165,40 @@ export async function nativeRelayRequest(
       method: body === undefined ? "GET" : "POST",
       body: body === undefined ? null : JSON.stringify(body),
       ...(id ? { id } : {}),
+      diagnostic: diagnostic ? { operationId: diagnostic.operationId } : null,
+    }).catch((error: unknown) => {
+      metric?.(
+        bounded.aborted
+          ? deadline.aborted && bounded.reason === deadline.reason
+            ? "deadline"
+            : "cancelled"
+          : "failed",
+      );
+      throw error;
     });
-    // The shared admission slot stays held until native work settles: at
-    // once for a cancelled read, otherwise within its timeout.
+    metric?.(
+      bounded.aborted
+        ? deadline.aborted && bounded.reason === deadline.reason
+          ? "deadline"
+          : "cancelled"
+        : result.status >= 200 && result.status < 300
+          ? "ok"
+          : "failed",
+    );
+    // Keep the admission slot until native cancellation or completion acknowledges.
+    if (bounded.aborted)
+      if (networkRecorder.enabled("debug"))
+        networkRecorder.record({
+          level: "debug",
+          event: "native.result-discarded",
+          ...diagnostic,
+          relay: community,
+          status: result.status,
+          cancellation: networkCancellation(bounded),
+          outcome: "discarded",
+        });
     bounded.throwIfAborted();
+    responseLatency?.();
     return nativeResponse(result);
   } finally {
     if (id) bounded.removeEventListener("abort", cancel);

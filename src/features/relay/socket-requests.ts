@@ -1,3 +1,4 @@
+import { networkMetrics } from "../developer/network-metrics.ts";
 import type { VerifiedEvent } from "nostr-tools";
 import { publicationRefusal } from "../developer/traffic.ts";
 import { eventDto } from "./events.ts";
@@ -23,12 +24,17 @@ export class SocketRequestError extends Error {
 type Publication = {
   event: VerifiedEvent;
   sent: boolean;
+  acknowledge?: (() => void) | undefined;
   finish(receipt?: string, error?: Error): void;
 };
 /** Correlation only. The live owner supplies auth, socket, cooldown and recovery;
  * the existing outbox owns retry. Never replay publications on reconnect. */
-export function createSocketPublications(wake: () => void) {
+export function createSocketPublications(
+  wake: () => void,
+  relay = "unknown-relay",
+) {
   const pending = new Map<string, Publication>();
+  const metrics = networkMetrics.relay(relay);
   return {
     async publish(input: VerifiedEvent, signal: AbortSignal): Promise<string> {
       if (signal.aborted)
@@ -50,6 +56,9 @@ export function createSocketPublications(wake: () => void) {
         frame
       )
         throw new SocketRequestError("Publication exceeds frame limit", false);
+      const metric = networkMetrics.enabled()
+        ? metrics.operation("publish")
+        : undefined;
       return new Promise((resolve, reject) => {
         const abort = () =>
           job.finish(
@@ -71,6 +80,13 @@ export function createSocketPublications(wake: () => void) {
           finish(receipt, error) {
             if (pending.get(event.id) !== job) return;
             pending.delete(event.id);
+            metric?.(
+              error?.message === "Publication cancelled"
+                ? "cancelled"
+                : error
+                  ? "failed"
+                  : "ok",
+            );
             clearTimeout(timer);
             signal.removeEventListener("abort", abort);
             if (error) reject(error);
@@ -91,6 +107,7 @@ export function createSocketPublications(wake: () => void) {
     dispatch(job: Publication, send: (frame: unknown[]) => void) {
       if (pending.get(job.event.id) !== job) return;
       job.sent = true; // A throwing send cannot prove no bytes left the process.
+      job.acknowledge = metrics.timer("publicationAck");
       try {
         send(["EVENT", job.event]);
       } catch {
@@ -114,8 +131,11 @@ export function createSocketPublications(wake: () => void) {
           undefined,
           new SocketRequestError("Invalid publication receipt", true),
         );
-      else if (data[2]) job.finish(data[3]);
-      else {
+      else if (data[2]) {
+        job.acknowledge?.();
+        job.finish(data[3]);
+      } else {
+        job.acknowledge?.();
         // Relay internal errors can follow command side effects. Unknown prefixes
         // are conservative too; only documented admission/validation refusals prove rejection.
         const rejected =

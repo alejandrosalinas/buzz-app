@@ -1,3 +1,12 @@
+import { networkMetrics } from "../developer/network-metrics";
+import { networkRecorder } from "../developer/network-diagnostics";
+import {
+  bindNetworkContext,
+  networkContext,
+  networkCancellation,
+  markNetworkCancellation,
+  type NetworkCancellation,
+} from "../developer/network-context";
 import { isSidebarPreferencesBatch } from "./sidebar-preferences";
 import { isWorkflowDefinitionBatch } from "../workflows/queries";
 import { verifyThreadWindows } from "./thread-window";
@@ -40,6 +49,9 @@ type Consumer = {
 };
 type Job = {
   id: string;
+  metric?:
+    | ((outcome: "ok" | "failed" | "cancelled" | "deadline") => void)
+    | undefined;
   queued: (outcome?: "ok" | "error") => void;
   fetched?: ((outcome?: "ok" | "error") => void) | undefined;
   key: string;
@@ -49,6 +61,10 @@ type Job = {
   consumers: Set<Consumer>;
   timer: ReturnType<typeof setTimeout>;
   running: boolean;
+  began: number;
+  dueAt: number;
+  parentId?: string | undefined;
+  owner?: string | undefined;
   snapshot: boolean;
   library: boolean;
   /** Set for a name-only profile search; `filters` then hold the equivalent
@@ -82,6 +98,8 @@ export function createRelayReader(
   )
     throw new Error("Invalid relay read budget");
   let sequence = 0;
+  let consumers = 0;
+  const readerId = crypto.randomUUID();
   const jobs = new Map<string, Job>();
   let closed = false;
   let recovering = false;
@@ -101,10 +119,28 @@ export function createRelayReader(
   };
   const resume = () => {
     cancelResume();
+    if (suspended)
+      if (networkRecorder.enabled("debug"))
+        networkRecorder.record({
+          level: "debug",
+          event: "read.admission-resumed",
+          operationId: `reader:${readerId}`,
+          owner: "navigation",
+          count: jobs.size,
+        });
     suspended = false;
     pump();
   };
   const hidden = () => {
+    if (!suspended)
+      if (networkRecorder.enabled("debug"))
+        networkRecorder.record({
+          level: "debug",
+          event: "read.admission-paused",
+          operationId: `reader:${readerId}`,
+          owner: "navigation",
+          count: jobs.size,
+        });
     suspended = true;
     cancelResume();
   };
@@ -129,8 +165,58 @@ export function createRelayReader(
     }
     finish(job, undefined, error);
   }
-  function finish(job: Job, events?: ReadValue, error?: unknown) {
+  function finish(
+    job: Job,
+    events?: ReadValue,
+    error?: unknown,
+    cancellation?: NetworkCancellation,
+  ) {
     if (jobs.get(job.key) !== job) return;
+    job.metric?.(
+      cancellation?.initiator === "deadline"
+        ? "deadline"
+        : cancellation
+          ? "cancelled"
+          : error
+            ? "failed"
+            : "ok",
+    );
+    const elapsed = performance.now() - job.began;
+    if (networkRecorder.collecting())
+      networkRecorder.record({
+        level:
+          error && !cancellation
+            ? "warn"
+            : cancellation?.initiator === "deadline"
+              ? "warn"
+              : "debug",
+        event: "read.finished",
+        operationId: job.id,
+        parentId: job.parentId,
+        owner: job.owner,
+        relay: transport?.scope,
+        phase: job.running ? "dispatched" : "queued",
+        outcome:
+          cancellation?.initiator === "deadline"
+            ? "deadline-exceeded"
+            : cancellation
+              ? "cancelled"
+              : error
+                ? "failed"
+                : "completed",
+        reason: error,
+        cancellation,
+        ms: elapsed,
+        deadlineMs: timeoutMs,
+        dueAt: job.dueAt,
+        ...(cancellation?.initiator === "deadline"
+          ? { latenessMs: Math.max(0, elapsed - timeoutMs) }
+          : {}),
+      });
+    markNetworkCancellation(
+      job.controller.signal,
+      cancellation ?? { initiator: "completed", owner: "reader.cleanup" },
+    );
     job.queued(error ? "error" : "ok");
     job.fetched?.(error ? "error" : "ok");
     jobs.delete(job.key);
@@ -308,14 +394,34 @@ export function createRelayReader(
         return Promise.reject(
           new ReadError("unavailable", "Too many pending relay reads"),
         );
-      const id = `read:${++sequence}`;
+      const id = `read:${readerId}:${++sequence}`;
+      const parent = networkContext(signal);
+      const controller = new AbortController();
+      bindNetworkContext(controller.signal, {
+        operationId: id,
+        parentId: parent?.operationId,
+        owner:
+          parent?.owner ??
+          (snapshot ? "read-state" : profiles ? "profiles" : "reader"),
+      });
       job = {
         id,
+        metric: networkMetrics.enabled()
+          ? networkMetrics
+              .relay(transport.scope ?? "unknown-relay")
+              .operation("read")
+          : undefined,
         queued: profiling.start("read.queue", id),
         key,
         filters: requestFilters,
         priority,
-        controller: new AbortController(),
+        controller,
+        began: performance.now(),
+        dueAt: Date.now() + timeoutMs,
+        parentId: parent?.operationId,
+        owner:
+          parent?.owner ??
+          (snapshot ? "read-state" : profiles ? "profiles" : "reader"),
         consumers: new Set(),
         running: false,
         snapshot,
@@ -327,14 +433,39 @@ export function createRelayReader(
               owned,
               undefined,
               new ReadError("unavailable", "Relay read timed out"),
+              { initiator: "deadline", owner: "reader" },
             ),
           timeoutMs,
         ),
       };
       jobs.set(key, job);
+      if (networkRecorder.enabled("debug"))
+        networkRecorder.record({
+          level: "debug",
+          event: "read.started",
+          operationId: id,
+          parentId: parent?.operationId,
+          owner: job.owner,
+          relay: transport.scope,
+          deadlineMs: timeoutMs,
+          dueAt: job.dueAt,
+        });
     } else if (!job.running && priority === "foreground")
       job.priority = priority;
     const owned = job;
+    const consumerId = networkRecorder.enabled("debug")
+      ? `${readerId}:consumer:${++consumers}`
+      : undefined;
+    if (networkRecorder.enabled("debug"))
+      networkRecorder.record({
+        level: "debug",
+        event: "read.consumer-attached",
+        operationId: owned.id,
+        parentId: networkContext(signal)?.operationId,
+        owner: networkContext(signal)?.owner,
+        consumerId,
+        count: owned.consumers.size + 1,
+      });
     return new Promise<ReadValue>((resolve, reject) => {
       const release = () => signal?.removeEventListener("abort", abort);
       const consumer: Consumer = {
@@ -349,8 +480,29 @@ export function createRelayReader(
       };
       const abort = () => {
         owned.consumers.delete(consumer);
+        const cancellation = networkCancellation(signal) ?? {
+          initiator: "caller" as const,
+          owner: "unattributed",
+        };
+        if (networkRecorder.enabled("debug"))
+          networkRecorder.record({
+            level: "debug",
+            event: "read.consumer-cancelled",
+            operationId: owned.id,
+            consumerId,
+            cancellation,
+            count: owned.consumers.size,
+          });
         consumer.reject(cancelled());
-        if (!owned.consumers.size) finish(owned, undefined, cancelled());
+        if (!owned.consumers.size)
+          finish(
+            owned,
+            undefined,
+            cancelled(),
+            cancellation.initiator === "caller"
+              ? { initiator: "no-consumers", owner: "reader" }
+              : cancellation,
+          );
       };
       owned.consumers.add(consumer);
       signal?.addEventListener("abort", abort, { once: true });
@@ -409,7 +561,10 @@ export function createRelayReader(
       closed = true;
       for (const job of [...jobs.values()])
         if (!job.library && matches(job.filters))
-          finish(job, undefined, cancelled());
+          finish(job, undefined, cancelled(), {
+            initiator: "superseded",
+            owner: "reader.invalidate",
+          });
       closed = previous;
       pump();
     },
@@ -419,7 +574,11 @@ export function createRelayReader(
       page?.removeEventListener("beforeunload", leaving);
       page?.removeEventListener("pagehide", hidden);
       page?.removeEventListener("pageshow", resume);
-      for (const job of [...jobs.values()]) finish(job, undefined, cancelled());
+      for (const job of [...jobs.values()])
+        finish(job, undefined, cancelled(), {
+          initiator: "session-disposed",
+          owner: "reader",
+        });
     },
   };
 }

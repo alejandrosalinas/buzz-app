@@ -1,4 +1,5 @@
 import { getLogger } from "./logging.ts";
+import { networkRecorder } from "./network-diagnostics.ts";
 
 /** Traffic logs are allowlists, never truncated payload dumps. */
 export function relayLabel(url: string): string {
@@ -102,8 +103,16 @@ export function logSocketFrame(
   direction: "→" | "←",
   raw: unknown,
   frame?: unknown,
+  connection?: string,
+  diagnostic?: {
+    operationId?: string | undefined;
+    parentId?: string | undefined;
+    subscriptionId?: string | undefined;
+    nativeAt?: number;
+    frameSequence?: number;
+  },
 ) {
-  if (log.level < 4) return;
+  if (log.level < 4 && !networkRecorder.enabled("debug")) return;
   const size =
     typeof raw === "string"
       ? raw.length > 1024 * 1024
@@ -130,6 +139,24 @@ export function logSocketFrame(
       ? `${raw.length} code units; oversized`
       : `${size ?? "?"} B`;
   log.debug(`${peer} ${direction} ${type}${detail} (${length})`);
+  networkRecorder.record({
+    level: "debug",
+    event: "ws.frame",
+    ...diagnostic,
+    relay: peer,
+    connection,
+    bytes: size,
+    detail: `${direction} ${type}${detail}`,
+  });
+  if (networkRecorder.enabled("trace") && type === "REQ")
+    networkRecorder.record({
+      level: "trace",
+      event: "ws.filters",
+      ...diagnostic,
+      relay: peer,
+      connection,
+      detail: filterSummary(data.slice(2)),
+    });
   if (log.level >= 5 && type === "REQ")
     log.debug(`${peer} filters ${filterSummary(data.slice(2))}`);
 }

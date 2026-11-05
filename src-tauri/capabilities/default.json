@@ -3,6 +3,11 @@
   "identifier": "main-window",
   "description": "Allow the main application commands, title bar controls and external HTTP(S) links.",
   "permissions": [
+    "allow-network-diagnostics-configure",
+    "allow-network-diagnostics-read",
+    "allow-network-diagnostics-clear",
+    "allow-network-diagnostics-append",
+    "allow-network-diagnostics-export",
     "allow-huddle-window-reset-incoming",
     "allow-huddle-window-open",
     "allow-huddle-window-update",

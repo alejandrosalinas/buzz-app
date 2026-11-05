@@ -72,6 +72,11 @@ fn native_command_permissions_isolate_webviews() {
         .unwrap();
 
     let application_commands = [
+        "network_diagnostics_configure",
+        "network_diagnostics_read",
+        "network_diagnostics_clear",
+        "network_diagnostics_append",
+        "network_diagnostics_export",
         "federated_identity_snapshot",
         "federated_identity_sign_in",
         "federated_identity_cancel_sign_in",

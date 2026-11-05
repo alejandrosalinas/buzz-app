@@ -1,3 +1,6 @@
+import { networkRecorder } from "../developer/network-diagnostics";
+import { networkMetrics } from "../developer/network-metrics";
+import { abortNetwork, bindNetworkContext } from "../developer/network-context";
 import {
   ARTIFACT_INCREMENTAL_LIMITS,
   ArtifactIncrementalError,
@@ -72,6 +75,7 @@ function deferred<T>() {
   return { promise, resolve };
 }
 beforeEach(() => {
+  networkRecorder.setEnabled(true);
   vi.useFakeTimers({ toFake: ["Date"] });
   vi.setSystemTime(1700000010000);
   requests.length = 0;
@@ -284,6 +288,94 @@ afterEach(() => {
   vi.unstubAllGlobals();
   vi.clearAllMocks();
 });
+
+it.each([
+  ["deadline", "response"],
+  ["deadline", "rejection"],
+  ["caller", "response"],
+  ["caller", "rejection"],
+] as const)(
+  "counts %s separately from cancellation after IPC %s",
+  async (initiator, result) => {
+    const deadline = new AbortController(),
+      caller = new AbortController();
+    const timeout = vi
+      .spyOn(AbortSignal, "timeout")
+      .mockReturnValue(deadline.signal);
+    const gate = deferred<void>();
+    respond = async () => {
+      await gate.promise;
+      if (result === "rejection") throw new Error("native transport failure");
+      return { body: [] };
+    };
+    networkMetrics.setEnabled(true);
+    networkMetrics.reset();
+    const request = nativeRelayRequest(
+      community,
+      "/query",
+      [],
+      caller.signal,
+    ).catch((error: unknown) => error);
+    try {
+      await vi.waitFor(() => expect(requests).toHaveLength(1));
+      (initiator === "deadline" ? deadline : caller).abort();
+      expect(networkMetrics.snapshot().relays[0]?.inFlight).toBe(1);
+      gate.resolve();
+      await request;
+      expect(networkMetrics.snapshot().relays[0]).toMatchObject({
+        inFlight: 0,
+        session: {
+          latency: { http: { count: 0 } },
+          counts: {
+            requestOk: 0,
+            requestFailed: initiator === "deadline" ? 1 : 0,
+            requestCancelled: initiator === "caller" ? 1 : 0,
+          },
+        },
+      });
+    } finally {
+      gate.resolve();
+      await request;
+      timeout.mockRestore();
+      networkMetrics.setEnabled(false);
+      networkMetrics.reset();
+    }
+  },
+);
+
+it.each(["ok", "refused", "clear", "enable", "resume"] as const)(
+  "samples native HTTP response latency only for a current captured response (%s)",
+  async (outcome) => {
+    vi.useFakeTimers();
+    const gate = deferred<void>();
+    respond = async () => {
+      await gate.promise;
+      return { status: outcome === "refused" ? 503 : 200, body: [] };
+    };
+    networkMetrics.setEnabled(outcome !== "enable");
+    networkMetrics.reset();
+    const request = nativeRelayRequest(community, "/query", []);
+    try {
+      expect(requests).toHaveLength(1);
+      if (outcome === "clear") networkMetrics.reset();
+      if (outcome === "resume") networkMetrics.setEnabled(false);
+      if (outcome === "enable" || outcome === "resume")
+        networkMetrics.setEnabled(true);
+      await vi.advanceTimersByTimeAsync(50);
+      gate.resolve();
+      await request;
+      const sample = networkMetrics.snapshot().relays[0]?.session.latency.http;
+      if (outcome === "ok" || outcome === "refused")
+        expect(sample).toMatchObject({ count: 1, mean: 50 });
+      else expect(sample?.count ?? 0).toBe(0);
+    } finally {
+      gate.resolve();
+      await request;
+      networkMetrics.setEnabled(false);
+      networkMetrics.reset();
+    }
+  },
+);
 
 it("discovers the relay, verifies reads and publishes through the same native identity and destination", async () => {
   const incoming = message(viewer, "channel", "hello", 1700000000);
@@ -564,9 +656,15 @@ it("authenticates live traffic with the native signer and verifies incoming chan
 });
 
 it("cancellation fences a late native response and prevents undispatched work", async () => {
+  networkRecorder.configure("debug");
+  networkRecorder.clear();
   const gate = deferred<{ body: unknown }>();
   respond = () => gate.promise;
   const controller = new AbortController();
+  bindNetworkContext(controller.signal, {
+    operationId: "read:causal-test",
+    owner: "channel-head",
+  });
   const request = nativeRelayRequest(
     community,
     "/query",
@@ -574,7 +672,10 @@ it("cancellation fences a late native response and prevents undispatched work", 
     controller.signal,
   );
   await vi.waitFor(() => expect(requests).toHaveLength(1));
-  controller.abort();
+  expect(requests[0]).toMatchObject({
+    diagnostic: { operationId: "read:causal-test" },
+  });
+  abortNetwork(controller, "superseded", "channel-head");
   try {
     await expect(
       nativeRelayRequest(community, "/query", [], controller.signal),
@@ -584,6 +685,16 @@ it("cancellation fences a late native response and prevents undispatched work", 
     gate.resolve({ body: [] });
   }
   await expect(request).rejects.toMatchObject({ name: "AbortError" });
+  expect(networkRecorder.snapshot().events).toContainEqual(
+    expect.objectContaining({
+      event: "native.result-discarded",
+      operationId: "read:causal-test",
+      status: 200,
+      cancellation: { initiator: "superseded", owner: "channel-head" },
+    }),
+  );
+  networkRecorder.configure("info");
+  networkRecorder.clear();
 });
 
 it("cancelled native reads retain the six-request admission bound until IPC settles", async () => {
@@ -842,7 +953,12 @@ it("exposes workflow history over the purpose-bound native route and workflow wr
     transport.workflows.runs(id, undefined, controller.signal),
   ).rejects.toThrow();
   expect(requests).toEqual([
-    { community, path: "/", method: "GET", body: null },
+    expect.objectContaining({
+      community,
+      path: "/",
+      method: "GET",
+      body: null,
+    }),
   ]);
 });
 
