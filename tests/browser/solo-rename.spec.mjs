@@ -23,6 +23,20 @@ const input = (page) =>
 const composer = (page) =>
   page.getByRole("textbox", { name: "Message your agents", exact: true });
 
+async function settledError(page) {
+  const alert = sidebar(page).getByRole("alert");
+  await expect(alert).toBeVisible();
+  // The Field error grows above Reload. Visibility alone admits a click while
+  // its hit target is still moving; wait for the actual opening to finish.
+  await alert.evaluate((element) =>
+    Promise.all(
+      element.parentElement
+        .getAnimations({ subtree: true })
+        .map((animation) => animation.finished),
+    ),
+  );
+}
+
 // These exercise native focus loss, actual drawer hit targets and signed live
 // metadata. DOM-only tests cannot establish these browser/host contracts.
 async function holdDetails(page) {
@@ -131,7 +145,7 @@ test("failed Enter-save and explicit reload retain keyboard control", async ({
   });
   await input(page).fill("Keep this draft");
   await input(page).press("Enter");
-  await expect(sidebar(page).getByRole("alert")).toBeVisible();
+  await settledError(page);
   const recovery = await sidebar(page)
     .getByRole("button", { name: "Reload chat details" })
     .boundingBox();
@@ -160,15 +174,16 @@ test("failed Enter-save and explicit reload retain keyboard control", async ({
   await input(page).fill("Keep this draft");
   refused = false;
   await input(page).press("Enter");
-  await expect(sidebar(page).getByRole("alert")).toBeVisible();
+  await settledError(page);
   const held = await holdDetails(page);
   try {
     await sidebar(page)
       .getByRole("button", { name: "Reload chat details" })
       .click();
+    // Prove Reload activated before awaiting the held network operation.
+    await expect(input(page)).toHaveAttribute("readonly");
     await held.requested;
     await expect(input(page)).toBeFocused();
-    await expect(input(page)).toHaveAttribute("readonly");
     await input(page).press("Enter");
     await expect(input(page)).toHaveValue("Keep this draft");
     await composer(page).focus();
