@@ -8,6 +8,8 @@ export type PluginManifest = Readonly<{
   name: string;
   apiVersion: 1;
   description?: string;
+  /** Support Git update notices. The user's saved choice overrides this default. */
+  updates?: Readonly<{ defaultEnabled: boolean }>;
   /** Author-supplied browsing metadata. It never grants host capabilities. */
   discovery?: Readonly<{
     /** Stable category slug. Hosts may group unrecognized values under Other. */

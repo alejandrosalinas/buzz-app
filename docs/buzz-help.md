@@ -439,8 +439,12 @@ confirmation.
   A saved plugin sort can briefly wait for its plugin at startup, within the
   sidebar's 1.5-second loading budget. If unavailable, it falls back to A–Z
   without forgetting the saved choice.
-- On desktop, Buzz checks saved Git plugin sources at startup and once per hour
-  while the app is visible. Checks do not install or reload plugins. A notice
+- On desktop, plugins can support update checks and set them on or off by default.
+  Use **Check for updates automatically** in the plugin's actions menu to change
+  this choice. Buzz saves your choice across updates and restarts. Plugins without
+  update support keep their existing manual import flow. Buzz checks eligible Git
+  sources at startup and once per hour while the app is visible. Checks do not
+  install or reload plugins. A notice
   offers **Update and reload**, or **Review permissions** when access increases.
   Save unfinished forms and stop active plugin workers before you update.
   **Later** hides the notice for this candidate until the next app run. The

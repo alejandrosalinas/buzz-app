@@ -23,7 +23,13 @@ export function pluginUpdateSource(plugins: PluginManager, id: string) {
     (p) => p.manifest.id === id,
   );
   const saved = plugin?.updateSource;
-  if (plugin?.source !== "external" || !saved || !("repository" in saved))
+  if (
+    plugin?.source !== "external" ||
+    !plugin.manifest.updates ||
+    !(plugin.updateChecks ?? plugin.manifest.updates.defaultEnabled) ||
+    !saved ||
+    !("repository" in saved)
+  )
     return;
   const managed = managedBy(configuration.managed, id)?.entry;
   return managed
@@ -58,6 +64,7 @@ export function createPluginUpdates(
   let closed = false;
   let pending = false;
   let lastCheck: number | undefined;
+  let lastSources = "";
   const dismissed = new Set<string>();
   const listeners = new Set<() => void>();
   const key = (update: PluginUpdate) =>
@@ -106,9 +113,21 @@ export function createPluginUpdates(
       const { configuration } = plugins.snapshot();
       if (configuration.status !== "ready") return;
       const now = Date.now();
-      if (!force && lastCheck !== undefined && now - lastCheck < 3_600_000)
+      const sources = JSON.stringify(
+        configuration.catalog.plugins.map((plugin) => [
+          plugin.manifest.id,
+          pluginUpdateSource(plugins, plugin.manifest.id),
+        ]),
+      );
+      if (
+        !force &&
+        sources === lastSources &&
+        lastCheck !== undefined &&
+        now - lastCheck < 3_600_000
+      )
         return;
       lastCheck = now;
+      lastSources = sources;
       pending = true;
       const repositories = new Map<string, Promise<ImportPreview | null>>();
       const discover = (source: GitUpdateSource) => {

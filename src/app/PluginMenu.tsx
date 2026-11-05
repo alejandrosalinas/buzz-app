@@ -7,6 +7,7 @@ import {
   MenuTrigger,
   MenuPopup,
   MenuItem,
+  MenuCheckboxItem,
 } from "../shared/design-system/ui/Menu";
 import { IconButton } from "../shared/design-system/ui/IconButton";
 import { Button } from "../shared/design-system/ui/Button";
@@ -63,6 +64,24 @@ export function PluginMenu({
           }
         >
           <MenuItem onClick={() => setShowAccess(true)}>Review access</MenuItem>
+          {plugin.manifest.updates &&
+            plugin.updateSource &&
+            "repository" in plugin.updateSource && (
+              <MenuCheckboxItem
+                checked={
+                  plugin.updateChecks ?? plugin.manifest.updates.defaultEnabled
+                }
+                disabled={busy}
+                onCheckedChange={(checked) =>
+                  void plugins.change(
+                    checked ? "enable-update-checks" : "disable-update-checks",
+                    plugin.manifest.id,
+                  )
+                }
+              >
+                Check for updates automatically
+              </MenuCheckboxItem>
+            )}
           {toggle && (
             <MenuItem disabled={toggle.disabled} onClick={toggle.run}>
               {toggle.label}

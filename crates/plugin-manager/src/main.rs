@@ -236,6 +236,7 @@ fn init(directory: &Path, id: &str, name: &str) -> Result<()> {
         api_version: 1,
         description: None,
         discovery: None,
+        updates: None,
         host: None,
     };
     manifest.validate()?;

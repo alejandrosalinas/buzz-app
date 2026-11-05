@@ -36,9 +36,16 @@ pub struct Manifest {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub description: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub updates: Option<UpdatePolicy>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub discovery: Option<Discovery>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub host: Option<HostGrants>,
+}
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct UpdatePolicy {
+    pub default_enabled: bool,
 }
 /// Display-only metadata is deliberately forward-compatible. Unknown fields are
 /// ignored so adding a discovery hint does not make a plugin unloadable.
@@ -554,6 +561,8 @@ struct Installed {
     previous_source: Option<InstallSource>,
     enabled: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    update_checks: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     readme_revision: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     icon_png_revision: Option<String>,
@@ -746,6 +755,7 @@ pub struct PluginInfo {
     pub manifest: Manifest,
     pub source: &'static str,
     pub enabled: bool,
+    pub update_checks: Option<bool>,
     pub revision: String,
     pub previous: Option<String>,
     pub has_signature: bool,
@@ -971,6 +981,7 @@ impl Manager {
                     manifest,
                     source: "bundled",
                     enabled,
+                    update_checks: None,
                     revision: "bundled".into(),
                     previous: None,
                     has_signature: false,
@@ -1011,6 +1022,7 @@ impl Manager {
                 manifest: p.manifest,
                 source: "external",
                 enabled: p.enabled,
+                update_checks: p.update_checks,
                 revision: p.current,
                 previous: p.previous,
                 has_signature,
@@ -1069,6 +1081,7 @@ impl Manager {
                 }
             });
             let enabled = old.is_some_and(|p| p.enabled);
+            let update_checks = old.and_then(|p| p.update_checks);
             let previous_signature = old.and_then(|p| {
                 if p.current == revision {
                     p.previous_signature.clone()
@@ -1088,6 +1101,7 @@ impl Manager {
                     previous_signature,
                     previous_source,
                     enabled,
+                    update_checks,
                     readme_revision,
                     icon_png_revision,
                     icon_jpg_revision,
@@ -1129,6 +1143,14 @@ impl Manager {
                         p.enabled = true;
                     }
                     "disable" => p.enabled = false,
+                    "enable-update-checks" | "disable-update-checks" => {
+                        if p.manifest.updates.is_none()
+                            || !matches!(p.current_source, Some(InstallSource::Git(_)))
+                        {
+                            return Err("This plugin does not support Git update checks".into());
+                        }
+                        p.update_checks = Some(action == "enable-update-checks");
+                    }
                     "remove" => {
                         registry.installed.remove(id);
                     }
@@ -1946,6 +1968,86 @@ mod tests {
         ] {
             assert!(publisher(&bytes, &sign(invalid)).is_err());
         }
+    }
+
+    #[test]
+    fn update_check_choices_survive_reinstall_update_rollback_and_restart() {
+        let temp = tempfile::tempdir().unwrap();
+        let open = || Manager::open(Some(temp.path().into()), "test", false).unwrap();
+        let manager = open();
+        let source = Some(super::InstallSource::Git(super::GitSource {
+            repository: "https://example.com/plugins.git".into(),
+            reference: "main".into(),
+            path: ".".into(),
+            commit: None,
+        }));
+        let release = |policy: Option<bool>| {
+            let mut manifest = serde_json::json!({
+                "id": "example.updates", "name": "Updates", "apiVersion": 1
+            });
+            if let Some(default_enabled) = policy {
+                manifest["updates"] = serde_json::json!({"defaultEnabled": default_enabled});
+            }
+            Release {
+                bytes: artifact_from_text(
+                    &manifest.to_string(),
+                    "export function apply() {}".into(),
+                )
+                .unwrap(),
+                signature: None,
+            }
+        };
+        let installed = |manager: &Manager| {
+            manager
+                .catalog()
+                .unwrap()
+                .plugins
+                .into_iter()
+                .find(|plugin| plugin.manifest.id == "example.updates")
+                .unwrap()
+        };
+        manager
+            .install_artifact(&release(None), source.clone())
+            .unwrap();
+        assert_eq!(installed(&manager).update_checks, None);
+        assert!(manager
+            .change("enable-update-checks", "example.updates")
+            .is_err());
+        for default_enabled in [false, true] {
+            manager
+                .install_artifact(&release(Some(default_enabled)), source.clone())
+                .unwrap();
+            assert_eq!(
+                installed(&manager)
+                    .manifest
+                    .updates
+                    .unwrap()
+                    .default_enabled,
+                default_enabled
+            );
+            for (action, expected) in [
+                ("enable-update-checks", true),
+                ("disable-update-checks", false),
+            ] {
+                manager.change(action, "example.updates").unwrap();
+                manager
+                    .install_artifact(&release(Some(default_enabled)), source.clone())
+                    .unwrap();
+                assert_eq!(installed(&open()).update_checks, Some(expected));
+                manager
+                    .install_artifact(&release(Some(!default_enabled)), source.clone())
+                    .unwrap();
+                assert_eq!(installed(&open()).update_checks, Some(expected));
+                manager.change("rollback", "example.updates").unwrap();
+                assert_eq!(installed(&open()).update_checks, Some(expected));
+                assert!(!installed(&manager).enabled);
+            }
+        }
+        manager.change("remove", "example.updates").unwrap();
+        manager
+            .install_artifact(&release(Some(true)), source)
+            .unwrap();
+        assert_eq!(installed(&open()).update_checks, None);
     }
 
     #[test]

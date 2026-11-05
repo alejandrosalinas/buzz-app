@@ -11,6 +11,7 @@ import {
 } from "@testing-library/react";
 import { afterEach, expect, it, vi } from "vitest";
 import { PluginUpdates, PluginUpdatesMenu } from "./PluginUpdates";
+import { PluginMenu } from "./PluginMenu";
 import { ToastProvider } from "../shared/design-system/ui/Toast";
 import {
   MenuRoot,
@@ -31,7 +32,12 @@ function fixture() {
     path: ".",
   };
   const plugin: PluginInfo = {
-    manifest: { id: "example.notes", name: "Notes", apiVersion: 1 },
+    manifest: {
+      id: "example.notes",
+      name: "Notes",
+      apiVersion: 1,
+      updates: { defaultEnabled: true },
+    },
     source: "external",
     enabled: true,
     revision: "old",
@@ -126,6 +132,56 @@ function fixture() {
     mount,
   };
 }
+
+it.each([true, false])(
+  "lets the user override the plugin's default check policy (%s)",
+  async (defaultEnabled) => {
+    const f = fixture();
+    f.plugin.manifest = { ...f.plugin.manifest, updates: { defaultEnabled } };
+    render(<PluginMenu plugin={f.plugin} plugins={f.manager} busy={false} />);
+    fireEvent.click(
+      screen.getByRole("button", { name: "More plugin actions" }),
+    );
+    const choice = await screen.findByRole("menuitemcheckbox", {
+      name: "Check for updates automatically",
+    });
+    expect(choice).toHaveAttribute("aria-checked", String(defaultEnabled));
+    fireEvent.click(choice);
+    expect(f.manager.change).toHaveBeenCalledWith(
+      defaultEnabled ? "disable-update-checks" : "enable-update-checks",
+      f.plugin.manifest.id,
+    );
+  },
+);
+
+it("removes a pending update action when the user turns off checks", async () => {
+  const f = fixture();
+  let finish!: (preview: ImportPreview) => void;
+  f.imports.git.mockImplementationOnce(
+    () =>
+      new Promise((resolve) => {
+        finish = resolve;
+      }),
+  );
+  f.mount();
+  fireEvent.click(
+    await screen.findByRole("button", { name: "Update and reload" }),
+  );
+  await waitFor(() => expect(f.imports.git).toHaveBeenCalled());
+  act(() => {
+    f.plugin.updateChecks = false;
+    f.emit({});
+  });
+  await act(async () => {
+    finish(f.fresh);
+  });
+  await waitFor(() =>
+    expect(
+      screen.queryByRole("button", { name: "Update and reload" }),
+    ).not.toBeInTheDocument(),
+  );
+  expect(f.installImport).not.toHaveBeenCalled();
+});
 
 it("shows progress while applying a fresh preview without more access", async () => {
   const f = fixture();

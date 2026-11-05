@@ -12,7 +12,12 @@ function fixture() {
     path: ".",
   };
   const plugin: PluginInfo = {
-    manifest: { id: "example.notes", name: "Notes", apiVersion: 1 },
+    manifest: {
+      id: "example.notes",
+      name: "Notes",
+      apiVersion: 1,
+      updates: { defaultEnabled: true },
+    },
     source: "external",
     enabled: true,
     revision: "old",
@@ -68,6 +73,45 @@ function fixture() {
     get: () => configuration,
   };
 }
+
+it.each([
+  [undefined, undefined, false],
+  [undefined, true, false],
+  [{ defaultEnabled: false }, undefined, false],
+  [{ defaultEnabled: false }, true, true],
+  [{ defaultEnabled: true }, undefined, true],
+  [{ defaultEnabled: true }, false, false],
+] as const)(
+  "checks only when the installed plugin and user policy allow it (%j, %j)",
+  async (policy, choice, expected) => {
+    const f = fixture();
+    f.plugin.manifest = { ...f.plugin.manifest, updates: policy };
+    f.plugin.updateChecks = choice;
+    const updates = createPluginUpdates(f.manager, f.authorize);
+    await updates.check();
+    expect(f.checkGit).toHaveBeenCalledTimes(expected ? 1 : 0);
+    expect(f.authorize).toHaveBeenCalledTimes(expected ? 1 : 0);
+    expect(updates.snapshot()).toHaveLength(expected ? 1 : 0);
+    updates.dispose();
+  },
+);
+
+it("retires a notice on opt-out and checks immediately on opt-in", async () => {
+  const f = fixture();
+  f.plugin.updateChecks = false;
+  const updates = createPluginUpdates(f.manager, f.authorize);
+  await updates.check();
+  f.plugin.updateChecks = true;
+  f.set(f.get());
+  await updates.check();
+  expect(updates.snapshot()).toHaveLength(1);
+  f.plugin.updateChecks = false;
+  f.set(f.get());
+  expect(updates.snapshot()).toEqual([]);
+  await updates.check(true);
+  expect(f.checkGit).toHaveBeenCalledTimes(1);
+  updates.dispose();
+});
 
 it("discovers without acquiring a preview or installing; Later lasts for the candidate and run", async () => {
   vi.useFakeTimers();

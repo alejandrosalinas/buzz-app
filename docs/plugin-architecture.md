@@ -194,8 +194,20 @@ folders; see [managed plugin sources](managed-plugins.md).
 
 ## Git plugin updates
 
-The desktop shell checks saved Git sources at startup and once per hour while
-Buzz is visible. `imports.checkGit` reads metadata without taking the import
+A plugin declares support in its installed `manifest.json`:
+
+```json
+"updates": { "defaultEnabled": true }
+```
+
+`true` enables background checks by default. `false` requires the user to enable
+them. An absent `updates` declaration excludes the plugin from this mechanism.
+The user can change **Check for updates automatically** in the plugin's actions
+menu. Buzz saves the choice per installed plugin and preserves it across updates,
+rollback, and restart. A saved choice overrides the plugin default.
+
+The desktop shell checks eligible saved Git sources at startup and once per hour
+while Buzz is visible. `imports.checkGit` reads metadata without taking the import
 preview slot. Checks do not install, reload, or stop a plugin. Folder sources
 keep their existing update flow.
 
