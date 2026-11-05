@@ -176,9 +176,13 @@
 }
 @layer base {
   /* Theme owners rebind aliases before inheritance. Explicit surface recipes
-     live in later layers, so a scoped dark popup still owns floating controls. */
+     live in later layers, so a scoped dark popup still owns floating controls.
+     Scoped light owners count too: a light surface inside dark mode would
+     otherwise inherit hover and pressed fills already resolved as dark. */
   :root,
-  .dark {
+  .dark,
+  .light,
+  [data-color-mode="light"] {
     @apply interaction-panel;
   }
 }
