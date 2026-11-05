@@ -355,7 +355,7 @@ test("notice body opens its destination while nested actions keep their targets"
 }) => {
   await page.goto(`${viewer}#/design/components/toast`);
   const recovery = page.getByRole("dialog", {
-    name: "Changes weren’t saved",
+    name: "Plugin update available",
     exact: true,
   });
   const destination = page.getByRole("dialog", {
@@ -370,14 +370,14 @@ test("notice body opens its destination while nested actions keep their targets"
     const theme = page.getByRole("button", { name: `Use ${mode} mode` });
     if (await theme.count()) await theme.click();
     await page
-      .getByRole("button", { name: "Show recovery", exact: true })
+      .getByRole("button", { name: "Show linked notice", exact: true })
       .click();
     await expect(recovery).toBeVisible();
     const body = recovery.getByRole("button", { name: "Open related dialog" });
     await body.hover();
     await expect(body).toHaveCSS("cursor", "pointer");
     const title = await recovery
-      .getByText("Changes weren’t saved", { exact: true })
+      .getByText("Plugin update available", { exact: true })
       .boundingBox();
     if (!title) throw new Error("Missing notice title");
     await page.mouse.click(
@@ -389,15 +389,13 @@ test("notice body opens its destination while nested actions keep their targets"
       .getByRole("button", { name: "Close", exact: true })
       .click();
     await page
-      .getByRole("button", { name: "Show recovery", exact: true })
+      .getByRole("button", { name: "Show linked notice", exact: true })
       .click();
-    await recovery
-      .getByRole("button", { name: "Retry saving", exact: true })
-      .click();
+    await recovery.getByRole("button", { name: "Update", exact: true }).click();
     await expect(recovery).toHaveCount(0);
     await expect(destination).toHaveCount(0);
     await page
-      .getByRole("button", { name: "Show recovery", exact: true })
+      .getByRole("button", { name: "Show linked notice", exact: true })
       .click();
     await body.focus();
     await page.keyboard.press("Enter");

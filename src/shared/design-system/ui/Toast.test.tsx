@@ -100,7 +100,7 @@ it("keeps notice navigation separate from its explicit actions", async () => {
     await screen.findByRole("button", { name: "Manage update checks" }),
   );
   expect(open).toHaveBeenCalledTimes(1);
-  fireEvent.click(screen.getByRole("button", { name: "Update", exact: true }));
+  fireEvent.click(screen.getByRole("button", { name: "Update" }));
   expect(update).toHaveBeenCalledTimes(1);
   expect(open).toHaveBeenCalledTimes(1);
   fireEvent.click(screen.getByRole("button", { name: "Dismiss notification" }));

@@ -677,20 +677,41 @@ it("keeps a return path for addressed plugin settings and retires it on Close", 
     pluginId: "buzz.pairing",
     scope: null,
   } as const;
+  const list = {
+    version: 1,
+    kind: "settings",
+    section: "plugins",
+    scope: null,
+  } as const;
+  void current.navigation.open(list);
+  await screen.findByRole("dialog", { name: "Settings" });
+  await waitFor(() =>
+    expect(current.navigation.snapshot().status).toBe("opened"),
+  );
   void current.navigation.open(target);
   expect(
     await screen.findByRole("complementary", { name: "Pair mobile details" }),
   ).toBeVisible();
   current.navigation.back();
   await waitFor(() =>
+    expect(current.navigation.snapshot().entry.target).toEqual(list),
+  );
+  await waitFor(() =>
     expect(
-      screen.queryByRole("dialog", { name: "Settings" }),
+      screen.queryByRole("complementary", { name: "Pair mobile details" }),
     ).not.toBeInTheDocument(),
   );
   current.navigation.forward();
   expect(
     await screen.findByRole("complementary", { name: "Pair mobile details" }),
   ).toBeVisible();
+  const appearance = { ...list, section: "appearance" };
+  void current.navigation.open(appearance);
+  await waitFor(() =>
+    expect(current.navigation.snapshot().status).toBe("opened"),
+  );
+  void current.navigation.open(target);
+  await screen.findByRole("complementary", { name: "Pair mobile details" });
   fireEvent.click(screen.getByRole("button", { name: "Close plugin details" }));
   await waitFor(() =>
     expect(current.navigation.snapshot().entry.target).toEqual({
@@ -700,7 +721,14 @@ it("keeps a return path for addressed plugin settings and retires it on Close", 
       scope: null,
     }),
   );
-  expect(current.navigation.snapshot().canGoForward).toBe(false);
+  current.navigation.back();
+  await waitFor(() =>
+    expect(current.navigation.snapshot().entry.target).toEqual(appearance),
+  );
+  current.navigation.back();
+  await waitFor(() =>
+    expect(current.navigation.snapshot().entry.target).toEqual(list),
+  );
   expect(
     screen.queryByRole("complementary", { name: "Pair mobile details" }),
   ).not.toBeInTheDocument();

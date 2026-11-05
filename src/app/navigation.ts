@@ -480,7 +480,13 @@ export function useAppNavigation(
       const current = request?.target;
       if (!request || current?.kind !== "settings" || !current.pluginId) return;
       const { pluginId: _pluginId, ...settings } = current;
-      navigation.dismiss([request.entryId], settings);
+      const parent = targetKey(settings);
+      navigation.dismiss((target) => {
+        if (target.kind !== "settings" || target.pluginId !== current.pluginId)
+          return false;
+        const { pluginId: _pluginId, ...settings } = target;
+        return targetKey(settings) === parent;
+      }, settings);
     },
     leaveSettings() {
       const current = navigation.snapshot().entry.target;

@@ -45,7 +45,12 @@ export function PluginMenu({
   if (plugin.source !== "external") return null;
   return (
     <>
-      <MenuRoot defaultOpen={openUpdateSettings}>
+      <MenuRoot
+        defaultOpen={openUpdateSettings}
+        onOpenChangeComplete={(open) => {
+          if (open && openUpdateSettings) updateChoice.current?.focus();
+        }}
+      >
         <MenuTrigger
           render={
             <IconButton
@@ -60,7 +65,6 @@ export function PluginMenu({
         <MenuPopup
           align="end"
           aria-label="Plugin actions"
-          initialFocus={openUpdateSettings ? updateChoice : undefined}
           finalFocus={
             confirmDelete || confirmRollback || showAccess
               ? false

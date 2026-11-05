@@ -853,13 +853,20 @@ export function Settings({
     );
   }, [catalog?.plugins, pluginFilter, pluginQuery]);
   const [selectedPluginId, setSelectedPluginId] = useState<string>();
+  const addressedPlugin = useRef(false);
   const requestedPluginId =
     navigation?.target.kind === "settings"
       ? navigation.target.pluginId
       : undefined;
   useEffect(() => {
-    if (selected === "plugins" && navigation?.entryId && requestedPluginId)
+    if (selected !== "plugins" || !navigation?.entryId) return;
+    if (requestedPluginId) {
       setSelectedPluginId(requestedPluginId);
+      addressedPlugin.current = true;
+    } else if (addressedPlugin.current) {
+      setSelectedPluginId(undefined);
+      addressedPlugin.current = false;
+    }
   }, [requestedPluginId, navigation?.entryId, selected]);
   const [reviewPluginId, setReviewPluginId] = useState<string>();
   const [updateChecks, setUpdateChecks] = useState<
