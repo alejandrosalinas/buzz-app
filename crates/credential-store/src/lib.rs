@@ -452,7 +452,20 @@ pub fn compare_session(
     if current.as_deref().map(|v| v.as_slice()) != expected {
         return Err(Error::Changed);
     }
-    session_write(service, account, replacement)
+    let result = session_write(service, account, replacement);
+    #[cfg(all(target_os = "macos", debug_assertions))]
+    if result == Err(Error::Unavailable) && std::env::var_os("BUZZ_DEV_CREDENTIAL_HELPER").is_some()
+    {
+        let stored = match read_session(service, account) {
+            Ok(value) => Some(value),
+            Err(Error::Absent) => None,
+            Err(_) => return result,
+        };
+        if stored.as_deref().map(|value| value.as_slice()) == replacement {
+            return Ok(());
+        }
+    }
+    result
 }
 
 #[cfg(all(not(test), any(target_os = "windows", target_os = "linux")))]

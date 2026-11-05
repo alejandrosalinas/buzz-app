@@ -162,6 +162,25 @@ esac
     delete_session(service, &account).unwrap();
     assert_eq!(read_session(service, &account), Err(Error::Absent));
 
+    fs::write(
+        &helper,
+        format!(
+            r##"#!/bin/sh
+[ "$#" = 4 ] && [ "$1" = --session-store ] || exit 12
+case "$2" in
+  read) [ -f "$0.record" ] || exit 10; /bin/cat "$0.record" ;;
+  replace) /bin/cat <&1 > "$0.record"; exit 1 ;;
+  delete) /bin/rm -f "$0.record"; exit 1 ;;
+esac
+"##
+        ),
+    )
+    .unwrap();
+    compare_session(service, &account, None, Some(b"committed")).unwrap();
+    assert_eq!(&*read_session(service, &account).unwrap(), b"committed");
+    compare_session(service, &account, Some(b"committed"), None).unwrap();
+    assert_eq!(read_session(service, &account), Err(Error::Absent));
+
     fs::write(&helper, "#!/bin/sh\nprintf unexpected\n").unwrap();
     assert_eq!(delete_session(service, &account), Err(Error::Corrupt));
     fs::write(&helper, "#!/bin/sh\n/usr/bin/head -c 1048577 /dev/zero\n").unwrap();
