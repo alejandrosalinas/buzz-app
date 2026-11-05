@@ -55,12 +55,12 @@ changed elsewhere since, it saves nothing, says so and shows the newer copy.
 **Check-ins** stay unavailable for it, as hosted agents have no
 Attention timers; a hosted agent whose provider holds no instructions shows
 both rows as unavailable. A remote Bestie doesn't start with Remembers you
-on. **Remove as Bestie** asks,
+on. Once it is no longer Bestie, its provider is read once per connection if
+this device saw it as Bestie, and it shows **Former Bestie** while its memory
+section is on or it is in one of your private channels. **Remove as Bestie** asks,
 then saves no Bestie to your account: the agent stays, its check-ins stop, and
 its memory section and private channels stay, which its Former Bestie tab can
-turn off. A hosted agent gets no Former Bestie tab: its memory section stays in
-the instructions its provider holds, and you remove it from its private
-channels yourself.
+turn off.
 
 **Remembers you** adds memory rules to the agent's instructions, in a section
 marked `<!-- buzz:bestie/memory v1 -->` … `<!-- /buzz:bestie/memory -->`, and
@@ -123,9 +123,9 @@ this one when it next reads your account, once per connection. Turning the
 Bestie plugin off stops a removal under way before its next save. Its memory
 section and channels stay. An agent this device makes Bestie starts with
 Remembers you on; a choice synced from elsewhere changes nothing, so memory
-turned off stays off. A former Bestie running here keeps a **Former Bestie**
-tab while it has a Bestie section, or, if this device saw it as Bestie, while
-it is in one of your private channels. The tab has the same switches, **Remove from all** for
+turned off stays off. A former Bestie running here or hosted keeps a
+**Former Bestie** tab while it has a Bestie section, or, if this device saw it
+as Bestie, while it is in one of your private channels. The tab has the same switches, **Remove from all** for
 its channels, and **Make my Bestie again**.
 
 ### Choosing a Bestie

@@ -9,12 +9,14 @@ import { readView, writeView } from "../../shared/view-state";
 import { setDefaultAgent } from "../../features/solo/default-agent";
 import { onBestieMade } from "../agents/BestieChoice";
 import { bestieTab, formerBestieTab } from "./BestieTab";
+import { forgetHostedInstructions, readFormerHosted } from "./former";
 import { validateObject } from "../../features/agents/attention";
 import { checkinHourly, memory, withFeature } from "./features";
 
 afterEach(() => {
   cleanup();
   localStorage.clear();
+  forgetHostedInstructions();
 });
 
 const OWNER = "f".repeat(64);
@@ -926,6 +928,47 @@ it("removes the Bestie after asking, and shows the agent as a Former Bestie", as
   // With no Bestie known, the agent with memory on is a Former Bestie.
   expect(former.when?.(remembering)).toBe(true);
   expect(former.when?.(bea)).toBe(false);
+  stop?.();
+});
+
+it("shows a hosted former Bestie's Former Bestie tab while its memory is on, read from its provider", async () => {
+  const user = userEvent.setup();
+  const { relay } = community(bea.pubkey);
+  const { remote, agents, get, set, save } = hostedBestie(
+    withFeature("Be brief.", memory, true),
+  );
+  const tab = formerBestieTab(relay, agents);
+  const listener = vi.fn();
+  const stop = tab.subscribe?.(listener);
+  // Its instructions aren't on this device until its provider is read.
+  await vi.waitFor(() => expect(tab.when?.(bea)).toBe(false));
+  expect(tab.when?.(remote)).toBe(false);
+  // This device saw it as Bestie, so its provider is read for the tab.
+  writeView(SCOPE, "bestie:former", [ada.pubkey]);
+  const stopReading = readFormerHosted(relay, {
+    ...agents,
+    snapshot: () => ({ agents: [remote, bea] }),
+    subscribe: () => () => {},
+  } as unknown as Parameters<typeof readFormerHosted>[1]);
+  await vi.waitFor(() => expect(tab.when?.(remote)).toBe(true));
+  expect(get).toHaveBeenCalledTimes(1);
+  expect(listener).toHaveBeenCalled();
+  // On another device, it isn't this device's to change.
+  expect(tab.when?.({ ...remote, place: "elsewhere" } as Agent)).toBe(false);
+
+  const Tab = tab.component;
+  render(<Tab agent={remote} />);
+  const remembers = await screen.findByRole("switch", {
+    name: "Remembers you",
+  });
+  expect(remembers).toBeChecked();
+  await user.click(remembers);
+  await vi.waitFor(() => expect(set).toHaveBeenCalledTimes(1));
+  expect(set.mock.calls[0]?.[0]).toBe("Be brief.");
+  expect(save).not.toHaveBeenCalled();
+  // With nothing left on, the tab goes.
+  await vi.waitFor(() => expect(tab.when?.(remote)).toBe(false));
+  stopReading();
   stop?.();
 });
 

@@ -29,16 +29,101 @@ function rememberBestie(scope: string, pubkey: string) {
     writeView(scope, FORMER, [...seen, pubkey].slice(-20));
 }
 
+/** Hosted agents' instructions as last read from their provider, by pubkey.
+ * Their config isn't on this device, so Former Bestie tells from these whether
+ * one still has a Bestie section on. */
+const hostedRead = new Map<string, string>();
+const hostedListeners = new Set<() => void>();
+
+/** Records a hosted agent's instructions as its provider just returned them. */
+export function rememberHostedInstructions(
+  pubkey: string,
+  instructions: string,
+) {
+  if (hostedRead.get(pubkey) === instructions) return;
+  hostedRead.set(pubkey, instructions);
+  for (const listener of [...hostedListeners]) listener();
+}
+
+/** Calls `listener` when a hosted agent's recorded instructions change. */
+export function subscribeHostedInstructions(listener: () => void) {
+  hostedListeners.add(listener);
+  return () => {
+    hostedListeners.delete(listener);
+  };
+}
+
+/** Forgets every hosted agent's recorded instructions, for tests. */
+export function forgetHostedInstructions() {
+  hostedRead.clear();
+}
+
+/** Reads the instructions of each hosted agent this device saw as Bestie,
+ * once per connection, when its provider holds them. A former one then shows
+ * Former Bestie while its memory is on, before its tabs are opened. */
+export function readFormerHosted(
+  relay: RelayData,
+  agents: FeatureAgents & Pick<Agents, "snapshot" | "subscribe">,
+) {
+  const lifetime = new AbortController();
+  const { signal } = lifetime;
+  const tried = new Set<string>();
+  let session = relay.snapshot().session;
+  const reconcile = () => {
+    if (signal.aborted) return;
+    const { session: next, scope } = relay.snapshot();
+    if (next !== session) {
+      session = next;
+      tried.clear();
+    }
+    if (!scope) return;
+    const seen = seenAsBestie(scope);
+    for (const agent of agents.snapshot().agents) {
+      if (
+        agent.place !== "hosted" ||
+        tried.has(agent.pubkey) ||
+        !seen.includes(agent.pubkey)
+      )
+        continue;
+      const hosted = agents.hostedInstructions?.(agent.pubkey);
+      if (!hosted) continue;
+      tried.add(agent.pubkey);
+      hosted.get(signal).then(
+        (instructions) => {
+          if (!signal.aborted)
+            rememberHostedInstructions(agent.pubkey, instructions);
+        },
+        (error: unknown) => {
+          if (!signal.aborted)
+            console.warn("A former Bestie's instructions weren't read", error);
+        },
+      );
+    }
+  };
+  const stopAgents = agents.subscribe(reconcile);
+  const stopRelay = relay.subscribe(reconcile);
+  reconcile();
+  return () => {
+    lifetime.abort();
+    stopAgents();
+    stopRelay();
+  };
+}
+
 /** Whether `agent`, which isn't Bestie, was one and still has something on
  * that the Former Bestie tab can turn off. A Bestie section in its
  * instructions shows it was Bestie, on any device, and is on. Membership of
  * one of the viewer's private channels counts only for an agent this device
- * saw as Bestie: nothing records which channels Bestie's switches added. */
+ * saw as Bestie: nothing records which channels Bestie's switches added. A
+ * hosted agent's instructions are as last read from its provider. */
 export function formerWithSettings(
   agent: Agent,
   { session, scope }: RelaySnapshot,
 ) {
-  const instructions = instructionsOf(agent);
+  const instructions =
+    agent.place === "hosted"
+      ? (hostedRead.get(agent.pubkey) ?? "")
+      : instructionsOf(agent);
   if (FEATURES.some((feature) => featureState(instructions, feature) !== "off"))
     return true;
   return (

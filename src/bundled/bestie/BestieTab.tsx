@@ -31,7 +31,12 @@ import {
   featureState,
   restoredFeature,
 } from "./features";
-import { formerWithSettings, subscribePrivateMembers } from "./former";
+import {
+  formerWithSettings,
+  rememberHostedInstructions,
+  subscribeHostedInstructions,
+  subscribePrivateMembers,
+} from "./former";
 import { PrivateChannels } from "./PrivateChannels";
 import {
   cannotEdit,
@@ -80,7 +85,9 @@ export function formerBestieTab(
       const current = bestie.snapshot();
       const snapshot = relay.snapshot();
       return (
-        agent.place === "here" &&
+        (agent.place === "here" ||
+          (agent.place === "hosted" &&
+            !!agents.hostedInstructions?.(agent.pubkey))) &&
         (!!current || (bestie.known() && bestie.recorded())) &&
         !!snapshot.session.mainAgent &&
         agent.pubkey !== current &&
@@ -91,9 +98,11 @@ export function formerBestieTab(
     subscribe(listener) {
       const stopBestie = bestie.subscribe(listener);
       const stopMembers = subscribePrivateMembers(relay, listener);
+      const stopHosted = subscribeHostedInstructions(listener);
       return () => {
         stopBestie();
         stopMembers();
+        stopHosted();
       };
     },
     component: ({ agent }) => (
@@ -113,7 +122,9 @@ function useHostedInstructions(agents: FeatureAgents, agent: Agent) {
   const read = async (signal?: AbortSignal) => {
     try {
       const next = await agents.hostedInstructions?.(agent.pubkey)?.get(signal);
-      if (next !== undefined) setText({ text: next });
+      if (next === undefined) return;
+      setText({ text: next });
+      rememberHostedInstructions(agent.pubkey, next);
     } catch (cause) {
       if (!signal?.aborted)
         setText({
@@ -274,7 +285,6 @@ function BestieTab({
       {removing && (
         <RemoveBestie
           name={name}
-          hosted={agent.place === "hosted"}
           remove={() => clearDefaultAgent(session, scope ?? "")}
           onClose={() => setRemoving(false)}
         />
@@ -287,13 +297,10 @@ function BestieTab({
  * goes with it; the agent then shows Former Bestie while a setting is on. */
 function RemoveBestie({
   name,
-  hosted,
   remove,
   onClose,
 }: {
   name: string;
-  /** A hosted agent has no check-ins and no Former Bestie tab. */
-  hosted: boolean;
   remove(): Promise<void>;
   onClose(): void;
 }) {
@@ -303,11 +310,7 @@ function RemoveBestie({
   return (
     <AlertDialog
       title={`Remove ${name} as your Bestie?`}
-      description={
-        hosted
-          ? `${name} stays in Agents, with your chats in your DMs. Its memory rules stay in its instructions, and it stays in its private channels; remove them there.`
-          : `${name} stays in Agents, with your chats in your DMs. Its check-ins stop. Its memory rules and private channels stay; turn them off in its Former Bestie tab.`
-      }
+      description={`${name} stays in Agents, with your chats in your DMs. Its check-ins stop. Its memory rules and private channels stay; turn them off in its Former Bestie tab.`}
       initialFocus={keep}
       pending={pending}
       onClose={onClose}
