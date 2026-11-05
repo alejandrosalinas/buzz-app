@@ -62,6 +62,18 @@ vi.mock("@tauri-apps/api/core", () => ({
 vi.mock("@tauri-apps/api/window", () => ({
   getCurrentWindow: vi.fn(),
 }));
+// Lets a test see Welcome clear the launch mark for a page of its own.
+const launchReady = vi.hoisted(() => vi.fn());
+vi.mock("../../app/launch", async (actual) => {
+  const real = await actual<typeof import("../../app/launch")>();
+  return {
+    ...real,
+    setLaunchReady: (...args: Parameters<typeof real.setLaunchReady>) => {
+      launchReady(...args);
+      real.setLaunchReady(...args);
+    },
+  };
+});
 /** The landing's sign-in for an existing account. */
 const SIGN_IN = "Sign in";
 /** Connect to {host}'s primary, which names the build portal. */
@@ -7251,6 +7263,10 @@ it("a relaunch with a key and no Builderlab note opens straight to the app", asy
 });
 
 it("a relaunch with a key and the Builderlab note shows the landing with Continue without signing in, which opens the app", async () => {
+  // The launch mark covers the window, as it does at a real launch.
+  const mark = document.createElement("div");
+  mark.id = "buzz-launch";
+  document.body.append(mark);
   localStorage.setItem(ROUTE_NOTE, "builderlab");
   keyOnDevice();
   const connect = vi.fn().mockResolvedValue(credential);
@@ -7269,6 +7285,9 @@ it("a relaunch with a key and the Builderlab note shows the landing with Continu
   );
   expect(await screen.findByRole("button", { name: SIGN_IN })).toBeEnabled();
   expect(continueWithoutSigningIn()).toBeEnabled();
+  // Nothing in the app loads behind this landing, so Welcome clears the mark.
+  expect(launchReady).toHaveBeenCalledWith(true);
+  mark.remove();
   expect(screen.queryByRole("button", { name: "Other options" })).toBeNull();
   expect(screen.queryByText("Signed in")).toBeNull();
   expect(connect).not.toHaveBeenCalled();

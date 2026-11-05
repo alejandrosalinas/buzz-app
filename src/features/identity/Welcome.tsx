@@ -8,6 +8,7 @@ import {
   useSyncExternalStore,
   type ReactNode,
 } from "react";
+import { launchVisible, setLaunchReady } from "../../app/launch";
 import { onboardingTransition } from "./onboarding-transition";
 import { npubEncode } from "nostr-tools/nip19";
 import type { Credential } from "../../bundled/builderlab/oauth/browser";
@@ -222,6 +223,15 @@ export function Welcome({
   const viewer = state.status === "ready" ? state.viewer : undefined;
   // A key on this device that still waits on the launch sign-in.
   const relaunch = !!viewer && !confirmed;
+  const inApp =
+    state.status === "ready" && progress.status === "idle" && !relaunch;
+  // The launch mark covers the window until something is ready to show. The
+  // app clears it once it loads; a page here (the launch sign-in included) has
+  // to clear it itself.
+  useEffect(() => {
+    if (state.status !== "loading" && !inApp && launchVisible())
+      setLaunchReady(true);
+  }, [state.status, inApp]);
   // A device with no key this session has nothing to check at launch: the
   // key that arrives next came through this session's own setup.
   useEffect(() => {
@@ -339,7 +349,7 @@ export function Welcome({
     identity,
     page === "landing" && !relaunch && auth.status !== "pending",
   );
-  if (state.status === "ready" && progress.status === "idle" && !relaunch) {
+  if (inApp) {
     // Already in the app: a request has nothing to finish, so drop it.
     requestedSignIn.current = () => {};
     return (
