@@ -7348,7 +7348,7 @@ it("an account that still needs Builderlab's details finishes setting up before 
     target: { value: "1990-05-01" },
   });
   await user.click(screen.getByRole("combobox", { name: "Country or region" }));
-  await user.click(screen.getByRole("option", { name: "Canada" }));
+  await user.click(await screen.findByRole("option", { name: "Canada" }));
   await user.click(screen.getByRole("button", { name: "Continue" }));
   expect(
     await screen.findByRole("heading", { name: "Connect to a community" }),

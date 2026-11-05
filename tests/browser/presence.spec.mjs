@@ -530,7 +530,7 @@ test("avatar choices publish through the existing socket and persist across relo
   await avatar.click();
   await expect(
     page.getByRole("button", { name: "Availability: Online", exact: true }),
-  ).toHaveCSS("color", "rgb(25, 59, 45)");
+  ).toHaveCSS("color", "rgb(30, 106, 73)");
   await page.getByRole("button", { name: /^Availability:/ }).click();
   const attempts = [];
   const recordPresence = async (response) => {
