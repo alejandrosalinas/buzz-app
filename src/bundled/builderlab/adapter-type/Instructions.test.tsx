@@ -313,7 +313,8 @@ it.each([false, true])(
           catalog.resolve({ status: 400, headers: {}, body: "{}" }),
         );
         expect(await screen.findByRole("alert")).toHaveTextContent("HTTP 400");
-        expect(model).toHaveTextContent("Unavailable");
+        expect(model).toHaveTextContent("—");
+        expect(thinking).toHaveTextContent("—");
         expect(model.querySelector(".buzz-select-leading")).toBeNull();
         expect(model).toBeDisabled();
         expect(thinking).toBeDisabled();
@@ -635,11 +636,15 @@ it("retries a failed load and refuses to save a draft through another account", 
   expect(
     screen.getByRole("button", { name: "Change harness from Builderlab" }),
   ).toBeVisible();
-  expect(
-    screen.getByRole("button", { name: "Model: Unavailable" }),
-  ).toBeDisabled();
+  expect(screen.getByRole("button", { name: "Model: —" })).toBeDisabled();
   expect(screen.getByRole("combobox", { name: "Thinking" })).toBeDisabled();
+  expect(screen.getByRole("combobox", { name: "Thinking" })).toHaveTextContent(
+    "—",
+  );
   expect(screen.getByRole("textbox", { name: "Instructions" })).toBeDisabled();
+  expect(
+    screen.getByRole("textbox", { name: "Instructions" }),
+  ).not.toHaveAttribute("placeholder");
   expect(screen.queryByRole("button", { name: "Save" })).toBeNull();
   await user.click(screen.getByRole("button", { name: "Retry" }));
   let field = await loadedInstructions();
@@ -688,9 +693,7 @@ it("settles an aborted catalog read after switching accounts without losing the 
         "false",
       ),
     );
-    expect(
-      screen.getByRole("button", { name: "Model: Unavailable" }),
-    ).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Model: —" })).toBeDisabled();
     expect(screen.queryByRole("button", { name: "Retry models" })).toBeNull();
     const before = h.request.mock.calls.length;
     expect(await screen.findByRole("alert")).toHaveTextContent(

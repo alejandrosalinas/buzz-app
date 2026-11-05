@@ -214,7 +214,7 @@ export function AccountRecoverySheet({
       active={active}
       accessRequired
       title={
-        mismatch ? "Different account needed" : "Builderlab access unavailable"
+        mismatch ? "Different account needed" : "Try another Builderlab account"
       }
       message={
         mismatch
