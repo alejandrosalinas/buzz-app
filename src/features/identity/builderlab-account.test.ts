@@ -1,13 +1,16 @@
 import { invoke } from "@tauri-apps/api/core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { Credential } from "../../bundled/builderlab/oauth/browser";
-import type { HostRequest } from "../host/service";
+import type { Credential } from "../../bundled/builderlab/session";
+import type { HostRequest, HostResponse } from "../host/service";
 import { BackupError, type BackupStatus, createBackupStatus } from "./backup";
 import { BACKUP_FAILURES } from "./backup-failure";
-import { federatedFixture } from "../federated-identity/testing";
+import { oauthTarget } from "../../bundled/builderlab/oauth/browser";
+import {
+  federatedFixture,
+  forwardingSession,
+} from "../federated-identity/testing";
 import {
   backupOfferedFor,
-  builderlabAccount,
   federatedBuilderlabAccount,
   seededAccount,
 } from "./builderlab-account";
@@ -20,7 +23,7 @@ vi.mock("@tauri-apps/api/core", () => ({
 }));
 
 const credential: Credential = {
-  value: "private-token",
+  revision: "revision-1",
   account: {
     subject: "user",
     email: "a@example.com",
@@ -57,7 +60,23 @@ function kgoose(...replies: Array<ReturnType<typeof answer> | Error | string>) {
   });
   return { request, sent };
 }
-type BackupIdentity = Parameters<typeof builderlabAccount>[2];
+type BackupIdentity = Parameters<typeof federatedBuilderlabAccount>[2];
+/** The account over a signed-in session whose forwarder sends each call
+ * through `request`, at the URL native would call for the build. */
+const forwardedAccount = (
+  signedIn: Credential,
+  request: (input: HostRequest) => Promise<HostResponse>,
+  identity: BackupIdentity,
+) =>
+  federatedBuilderlabAccount(
+    signedIn,
+    forwardingSession(
+      signedIn.revision,
+      request,
+      new URL(oauthTarget()).origin,
+    ),
+    identity,
+  );
 /** Only Restore from backup drives native recovery. */
 const noRecovery = {
   subscribe: () => {
@@ -96,14 +115,14 @@ afterEach(() => {
 });
 
 describe("linkedKey", () => {
-  it("POSTs the card's identity route at the build URL with the session credential and reads the bound key", async () => {
+  it("POSTs the card's identity route at the build URL through the NIP-FI forwarder and reads the bound key", async () => {
     const { request, sent } = kgoose(
       answer(200, {
         identity: { npub: "npub1x", pubkey_hex: pubkey },
         correlation_id: correlationId,
       }),
     );
-    const account = builderlabAccount(credential, request, untouched);
+    const account = forwardedAccount(credential, request, untouched);
     expect(await account.linkedKey()).toBe(pubkey);
     expect(sent).toEqual([
       {
@@ -111,7 +130,6 @@ describe("linkedKey", () => {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
-          "X-BB-Session-Credential": "private-token",
           Origin: "https://t.example",
         },
         body: "{}",
@@ -138,7 +156,7 @@ describe("linkedKey", () => {
     ],
   ])("reads %s as not linked", async (_label, reply) => {
     const { request } = kgoose(reply);
-    const account = builderlabAccount(credential, request, untouched);
+    const account = forwardedAccount(credential, request, untouched);
     expect(await account.linkedKey()).toBeNull();
   });
 
@@ -183,14 +201,14 @@ describe("linkedKey", () => {
     ["a transport error", new Error("offline"), /offline/],
   ])("fails on %s instead of answering", async (_label, reply, message) => {
     const { request } = kgoose(reply);
-    const account = builderlabAccount(credential, request, untouched);
+    const account = forwardedAccount(credential, request, untouched);
     await expect(account.linkedKey()).rejects.toThrow(message);
   });
 
   it("warns in development with the route and status, never the body", async () => {
     const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
     const { request } = kgoose(answer(403, "secret body"));
-    const account = builderlabAccount(credential, request, untouched);
+    const account = forwardedAccount(credential, request, untouched);
     await expect(account.linkedKey()).rejects.toThrow(/HTTP 403/);
     expect(warn).toHaveBeenCalledTimes(1);
     expect(warn.mock.calls[0]?.join(" ")).toBe(
@@ -218,7 +236,7 @@ describe("communityList", () => {
         ],
       }),
     );
-    const account = builderlabAccount(credential, request, untouched);
+    const account = forwardedAccount(credential, request, untouched);
     expect((await account.communityList()).owned).toEqual([
       { host: "design.example.com", url: "https://design.example.com" },
       { host: "buzz.example.org:8443", url: "https://buzz.example.org:8443" },
@@ -229,7 +247,7 @@ describe("communityList", () => {
   });
 
   it("answers an unlinked account with no communities and fails on other errors", async () => {
-    const unlinked = builderlabAccount(
+    const unlinked = forwardedAccount(
       credential,
       kgoose(answer(400, { error: { code: "missing_mapping" } })).request,
       untouched,
@@ -239,7 +257,7 @@ describe("communityList", () => {
       canCreate: false,
       quotaLimit: undefined,
     });
-    const failing = builderlabAccount(
+    const failing = forwardedAccount(
       credential,
       kgoose(answer(503, { error: { code: "relay_unavailable" } })).request,
       untouched,
@@ -247,7 +265,7 @@ describe("communityList", () => {
     await expect(failing.communityList()).rejects.toThrow(
       /temporarily unavailable/,
     );
-    const unparseable = builderlabAccount(
+    const unparseable = forwardedAccount(
       credential,
       kgoose(answer(502, "<html>bad gateway</html>")).request,
       untouched,
@@ -261,7 +279,7 @@ describe("communityList", () => {
 describe("hosted community creation", () => {
   const listed = (quota: object) => answer(200, { communities: [], ...quota });
   const create = (reply: ReturnType<typeof answer>) =>
-    builderlabAccount(credential, kgoose(reply).request, untouched);
+    forwardedAccount(credential, kgoose(reply).request, untouched);
 
   it("allows creation within the list's quota, and lets a list with no readable quota through as the card does", async () => {
     expect(
@@ -294,7 +312,7 @@ describe("hosted community creation", () => {
         },
       }),
     );
-    const account = builderlabAccount(credential, request, untouched);
+    const account = forwardedAccount(credential, request, untouched);
     expect(await account.communityAvailable("north-star")).toBe(true);
     expect(await account.createCommunity("north-star")).toBe(
       "https://north-star.communities.buzz.xyz",
@@ -312,7 +330,7 @@ describe("hosted community creation", () => {
   });
 
   it("refuses with the card's copy", async () => {
-    const account = builderlabAccount(
+    const account = forwardedAccount(
       credential,
       kgoose(
         refusal(409, "taken"),
@@ -333,7 +351,7 @@ describe("hosted community creation", () => {
   });
 
   it("words a limit refusal with the list's quota, as the card does", async () => {
-    const account = builderlabAccount(
+    const account = forwardedAccount(
       credential,
       kgoose(refusal(409, "limit_reached"), refusal(409, "limit_reached"))
         .request,
@@ -349,7 +367,7 @@ describe("hosted community creation", () => {
 });
 
 describe("knownCommunities", () => {
-  it("POSTs the plugin's list route at the build URL with the session credential and reads the saved destinations in the device's spelling", async () => {
+  it("POSTs the plugin's list route at the build URL through the NIP-FI forwarder and reads the saved destinations in the device's spelling", async () => {
     const { request, sent } = kgoose(
       answer(200, {
         communities: [
@@ -362,7 +380,7 @@ describe("knownCommunities", () => {
         ],
       }),
     );
-    const account = builderlabAccount(credential, request, untouched);
+    const account = forwardedAccount(credential, request, untouched);
     expect(await account.knownCommunities()).toEqual([
       "wss://design.example.com",
       "wss://buzz.example.org:8443",
@@ -373,7 +391,6 @@ describe("knownCommunities", () => {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
-          "X-BB-Session-Credential": "private-token",
           Origin: "https://t.example",
         },
         body: "{}",
@@ -385,11 +402,7 @@ describe("knownCommunities", () => {
   it("reads an omitted list as empty", async () => {
     const { request } = kgoose(answer(200, {}));
     expect(
-      await builderlabAccount(
-        credential,
-        request,
-        untouched,
-      ).knownCommunities(),
+      await forwardedAccount(credential, request, untouched).knownCommunities(),
     ).toEqual([]);
   });
 
@@ -407,7 +420,7 @@ describe("knownCommunities", () => {
       64 * 1024,
     );
     expect(
-      await builderlabAccount(
+      await forwardedAccount(
         credential,
         kgoose(reply).request,
         untouched,
@@ -457,7 +470,7 @@ describe("knownCommunities", () => {
   ])("rejects %s", async (_label, reply, message, retryable) => {
     vi.spyOn(console, "warn").mockImplementation(() => {});
     const { request, sent } = kgoose(reply);
-    const failed: unknown = await builderlabAccount(
+    const failed: unknown = await forwardedAccount(
       credential,
       request,
       untouched,
@@ -480,15 +493,14 @@ describe("saveCommunity", () => {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
-      "X-BB-Session-Credential": "private-token",
       Origin: origin,
     },
     body: JSON.stringify({ community_url: "wss://relay.example.com:8443" }),
   });
 
-  it("POSTs the plugin's add route at the build URL with the session credential and the address in the device's spelling", async () => {
+  it("POSTs the plugin's add route at the build URL through the NIP-FI forwarder and the address in the device's spelling", async () => {
     const { request, sent } = kgoose(answer(200, {}));
-    await builderlabAccount(credential, request, untouched).saveCommunity(
+    await forwardedAccount(credential, request, untouched).saveCommunity(
       "https://relay.example.com:8443",
     );
     expect(sent).toEqual([add("https://t.example")]);
@@ -517,7 +529,7 @@ describe("saveCommunity", () => {
   ])("rejects %s", async (_label, reply, message, retryable) => {
     vi.spyOn(console, "warn").mockImplementation(() => {});
     const { request, sent } = kgoose(reply);
-    const failed: unknown = await builderlabAccount(
+    const failed: unknown = await forwardedAccount(
       credential,
       request,
       untouched,
@@ -577,7 +589,6 @@ describe("bind", () => {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
-      "X-BB-Session-Credential": "private-token",
       Origin: origin,
     },
   });
@@ -590,7 +601,7 @@ describe("bind", () => {
       answer(200, { ...challenge, created_at: "2026-01-01T00:00:00Z" }),
       bound(pubkey),
     );
-    const account = builderlabAccount(credential, request, untouched);
+    const account = forwardedAccount(credential, request, untouched);
     await account.bind(pubkey);
     const api = "https://t.example/api/goose/v1/buzz/nostr-identities";
     expect(sent).toEqual([
@@ -617,7 +628,7 @@ describe("bind", () => {
 
   it("sends nothing more when the account already holds this key", async () => {
     const { request, sent } = kgoose(bound(pubkey));
-    await builderlabAccount(credential, request, untouched).bind(pubkey);
+    await forwardedAccount(credential, request, untouched).bind(pubkey);
     expect(sent.map(({ url }) => url)).toEqual([
       "https://t.example/api/goose/v1/buzz/nostr-identities/current",
     ]);
@@ -672,7 +683,7 @@ describe("bind", () => {
       vi.spyOn(console, "warn").mockImplementation(() => {});
       vi.mocked(invoke).mockResolvedValue(event);
       const { request, sent } = kgoose(unbound, ...replies);
-      const account = builderlabAccount(credential, request, untouched);
+      const account = forwardedAccount(credential, request, untouched);
       const failed = await account.bind(pubkey).catch((error: Error) => error);
       // Never kgoose's own message or its correlation ID.
       expect(failed).toBeInstanceOf(Error);
@@ -758,7 +769,7 @@ describe("bind", () => {
         answer(200, challenge),
         refusal(status, code),
       );
-      const failed: unknown = await builderlabAccount(
+      const failed: unknown = await forwardedAccount(
         credential,
         request,
         untouched,
@@ -790,7 +801,7 @@ describe("bind", () => {
       ],
     ] as const) {
       warn.mockClear();
-      const failed: unknown = await builderlabAccount(
+      const failed: unknown = await forwardedAccount(
         credential,
         kgoose(unbound, answer(200, challenge), refusal(status, code)).request,
         untouched,
@@ -815,7 +826,7 @@ describe("bind", () => {
     async (_label, replies) => {
       vi.spyOn(console, "warn").mockImplementation(() => {});
       vi.mocked(invoke).mockResolvedValue(event);
-      const failed: unknown = await builderlabAccount(
+      const failed: unknown = await forwardedAccount(
         credential,
         kgoose(...replies).request,
         untouched,
@@ -831,7 +842,7 @@ describe("bind", () => {
   it("surfaces the native signer's refusal and never verifies", async () => {
     vi.mocked(invoke).mockRejectedValue("Invalid Nostr identity challenge");
     const { request, sent } = kgoose(unbound, answer(200, challenge));
-    const account = builderlabAccount(credential, request, untouched);
+    const account = forwardedAccount(credential, request, untouched);
     await expect(account.bind(pubkey)).rejects.toThrow(
       "Invalid Nostr identity challenge",
     );
@@ -845,7 +856,7 @@ describe("bind", () => {
   ])("never verifies a signature by %s", async (_label, signed) => {
     vi.mocked(invoke).mockResolvedValue(signed);
     const { request, sent } = kgoose(unbound, answer(200, challenge));
-    const failed: unknown = await builderlabAccount(
+    const failed: unknown = await forwardedAccount(
       credential,
       request,
       untouched,
@@ -871,7 +882,7 @@ describe("bind", () => {
       unbound,
       answer(200, { ...challenge, origin: "https://app.builderlab.xyz" }),
     );
-    const failed: unknown = await builderlabAccount(
+    const failed: unknown = await forwardedAccount(
       credential,
       request,
       untouched,
@@ -905,7 +916,7 @@ describe("bind", () => {
     async (_label, replies, retryable) => {
       vi.spyOn(console, "warn").mockImplementation(() => {});
       vi.mocked(invoke).mockResolvedValue(event);
-      const failed: unknown = await builderlabAccount(
+      const failed: unknown = await forwardedAccount(
         credential,
         kgoose(unbound, ...replies).request,
         untouched,
@@ -941,15 +952,14 @@ describe("unbind", () => {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
-      "X-BB-Session-Credential": "private-token",
       Origin: origin,
     },
     body: "{}",
   });
 
-  it("reads the bound key, then deletes the old key's binding at the build URL with the session credential and Origin", async () => {
+  it("reads the bound key, then deletes the old key's binding at the build URL through the NIP-FI forwarder and Origin", async () => {
     const { request, sent } = kgoose(bound(old), bound(old));
-    await builderlabAccount(credential, request, untouched).unbind(old, pubkey);
+    await forwardedAccount(credential, request, untouched).unbind(old, pubkey);
     const api = "https://t.example/api/goose/v1/buzz/nostr-identities";
     expect(sent).toEqual([
       { url: `${api}/current`, ...at("https://t.example") },
@@ -963,7 +973,7 @@ describe("unbind", () => {
     ["the new key, after a re-run", bound(pubkey)],
   ])("sends nothing more when the account holds %s", async (_label, reply) => {
     const { request, sent } = kgoose(reply);
-    await builderlabAccount(credential, request, untouched).unbind(old, pubkey);
+    await forwardedAccount(credential, request, untouched).unbind(old, pubkey);
     expect(sent.map(({ url }) => url)).toEqual([
       "https://t.example/api/goose/v1/buzz/nostr-identities/current",
     ]);
@@ -971,7 +981,7 @@ describe("unbind", () => {
 
   it("fails without a delete when the account holds a third key", async () => {
     const { request, sent } = kgoose(bound("12".repeat(32)));
-    const failed: unknown = await builderlabAccount(
+    const failed: unknown = await forwardedAccount(
       credential,
       request,
       untouched,
@@ -1006,7 +1016,7 @@ describe("unbind", () => {
     async (_deleted, _now, reply, now) => {
       const { request, sent } = kgoose(bound(old), reply, now);
       await expect(
-        builderlabAccount(credential, request, untouched).unbind(old, pubkey),
+        forwardedAccount(credential, request, untouched).unbind(old, pubkey),
       ).resolves.toBeUndefined();
       expect(sent.map(({ url }) => url.split("/").at(-1))).toEqual([
         "current",
@@ -1036,7 +1046,7 @@ describe("unbind", () => {
   )(
     "fails for good when the delete answers %s and the account still holds %s",
     async (_deleted, _now, reply, now, message) => {
-      const failed: unknown = await builderlabAccount(
+      const failed: unknown = await forwardedAccount(
         credential,
         kgoose(bound(old), reply, now).request,
         untouched,
@@ -1051,7 +1061,7 @@ describe("unbind", () => {
 
   it("fails like the account check when the read after a delete fails", async () => {
     vi.spyOn(console, "warn").mockImplementation(() => {});
-    const failed: unknown = await builderlabAccount(
+    const failed: unknown = await forwardedAccount(
       credential,
       kgoose(bound(old), unbound, new Error("offline")).request,
       untouched,
@@ -1110,7 +1120,7 @@ describe("unbind", () => {
     async (_label, reply, message, retryable) => {
       vi.spyOn(console, "warn").mockImplementation(() => {});
       const { request, sent } = kgoose(bound(old), reply);
-      const failed: unknown = await builderlabAccount(
+      const failed: unknown = await forwardedAccount(
         credential,
         request,
         untouched,
@@ -1155,45 +1165,9 @@ describe("backup", () => {
     return { identity, send, setBackupChoice, watchers };
   }
 
-  it("hands the session credential to the native uploader and waits for its pass", async () => {
-    vi.stubEnv("VITE_BUZZ_BUILDERLAB_URL", "https://builderlab.example/");
-    const native = host(status(1, 0));
-    vi.mocked(invoke).mockImplementation(async (_command, args) =>
-      (args as { credential: string | null }).credential ? 1 : null,
-    );
-    const account = builderlabAccount(
-      credential,
-      kgoose().request,
-      native.identity,
-    );
-    const done = account.backUp(pubkey);
-    await vi.waitFor(() => expect(invoke).toHaveBeenCalledTimes(1));
-    native.watchers[0]?.onmessage(status(2, 1, true, "complete"));
-    await done;
-    expect(native.setBackupChoice.mock.calls).toEqual([[pubkey, true]]);
-    expect(vi.mocked(invoke).mock.calls).toEqual([
-      [
-        "nsec_backup_session",
-        {
-          source: "builderlab",
-          generation: expect.any(Number),
-          credential: "private-token",
-        },
-      ],
-      [
-        "nsec_backup_session",
-        {
-          source: "builderlab",
-          generation: expect.any(Number),
-          credential: null,
-        },
-      ],
-    ]);
-  });
-
   it("refuses with unavailable where backup is not offered, handing the uploader nothing", async () => {
     const native = host(status(1, 0, false));
-    const failed = await builderlabAccount(
+    const failed = await forwardedAccount(
       credential,
       kgoose().request,
       native.identity,
@@ -1211,7 +1185,7 @@ describe("backup", () => {
     native.send.mockRejectedValueOnce(
       "Backup status belongs to the main window",
     );
-    const failed = await builderlabAccount(
+    const failed = await forwardedAccount(
       credential,
       kgoose().request,
       native.identity,
@@ -1248,12 +1222,12 @@ describe("backup", () => {
       const native = host(status(1, 0));
       const { request, sent } = kgoose(...replies);
       return {
-        account: builderlabAccount(credential, request, native.identity),
+        account: forwardedAccount(credential, request, native.identity),
         sent,
       };
     };
 
-    it("POSTs status with the session credential and lists the backed-up keys", async () => {
+    it("POSTs status through the NIP-FI forwarder and lists the backed-up keys", async () => {
       const { account, sent } = offeredWith(
         answer(200, {
           current_nostr_pubkey: pubkey,
@@ -1267,7 +1241,6 @@ describe("backup", () => {
           method: "POST",
           headers: {
             "Content-Type": "application/json",
-            "X-BB-Session-Credential": "private-token",
             Origin: "https://builderlab.example",
           },
           body: "{}",
@@ -1289,7 +1262,7 @@ describe("backup", () => {
 
     it("is unavailable without a request where backup is not offered", async () => {
       const { request } = kgoose();
-      const account = builderlabAccount(
+      const account = forwardedAccount(
         credential,
         request,
         host(status(1, 0, false)).identity,
@@ -1351,7 +1324,7 @@ describe("federatedBuilderlabAccount", () => {
     await fi.service.signIn();
     return {
       ...fi,
-      credential: { ...credential, value: fi.service.snapshot().revision },
+      credential: { ...credential, revision: fi.service.snapshot().revision },
     };
   };
 
@@ -1423,7 +1396,7 @@ describe("federatedBuilderlabAccount", () => {
       untouched,
     );
     fi.publish({ status: "unavailable", failure: "storage-unavailable" });
-    expect(fi.service.snapshot().revision).toBe(fi.credential.value);
+    expect(fi.service.snapshot().revision).toBe(fi.credential.revision);
     await expect(account.linkedKey()).rejects.toThrow(signedOut);
     expect(fi.request).not.toHaveBeenCalled();
   });
@@ -1477,9 +1450,7 @@ describe("federatedBuilderlabAccount", () => {
       [
         "nsec_backup_session",
         {
-          source: "builderlab",
-          credential: null,
-          federated: fi.credential.value,
+          federated: fi.credential.revision,
           generation: expect.any(Number),
         },
       ],
@@ -1487,9 +1458,7 @@ describe("federatedBuilderlabAccount", () => {
       [
         "nsec_backup_session",
         {
-          source: "builderlab",
-          credential: null,
-          federated: fi.credential.value,
+          federated: fi.credential.revision,
           generation: expect.any(Number),
         },
       ],

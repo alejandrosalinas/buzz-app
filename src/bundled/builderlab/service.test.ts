@@ -1,11 +1,11 @@
+import { createTestSession } from "./test-helpers";
 import { expect, it, vi } from "vitest";
 import type { AgentClient } from "./agents/client";
-import type { Credential } from "./oauth/browser";
-import { createOAuthSession } from "./oauth/session";
+import type { Credential } from "./session";
 import { hostedAgentSettings } from "./service";
 
-const signedIn = (value: string): Credential => ({
-  value,
+const signedIn = (revision: string): Credential => ({
+  revision,
   account: {
     subject: "user",
     email: "a@example.com",
@@ -19,7 +19,7 @@ it("shares hosted-agent settings without the credential or the Beekeeper client"
     .fn<() => Promise<Credential>>()
     .mockResolvedValueOnce(signedIn("first-token"))
     .mockResolvedValueOnce(signedIn("second-token"));
-  const session = createOAuthSession(acquire);
+  const session = createTestSession(acquire);
   const list = vi.fn(async () => []);
   const service = hostedAgentSettings(session, {
     list,

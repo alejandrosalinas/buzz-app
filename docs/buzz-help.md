@@ -72,6 +72,15 @@ the interface unless an available tool actually supports that action.
   unavailable until you sign in. Sign-in, sign-out and when the current
   sign-in ends also live under
   **Settings → Buzz → Identity → Organization sign-in**.
+- Signed in to more than one organization server? **Organization sign-in**
+  lists each one you're signed in to, with the communities it's used by, and
+  each **Sign out** ends only that server's sign-in. **Sign out of Buzz** still
+  ends them all.
+- If a community doesn't accept the account you signed in with, its prompt
+  names the server and offers **Switch account**: Buzz signs out of that server
+  only and opens its sign-in again, so other servers stay signed in. It also
+  lists the other communities that use the same server. **Not now** closes the
+  prompt and changes nothing.
 - A community invite or address connects someone to a community; creating an
   identity alone does not grant membership. The same identity can be used in
   more than one community.

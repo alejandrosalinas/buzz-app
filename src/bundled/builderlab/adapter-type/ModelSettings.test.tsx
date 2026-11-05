@@ -17,9 +17,8 @@ import {
   type RemoteAgent,
   type RemoteAgentModel,
 } from "../agents/client";
-import { createOAuthSession } from "../oauth/session";
 import { ModelSettings } from "./ModelSettings";
-import { deferred } from "../test-helpers";
+import { deferred, createTestSession } from "../test-helpers";
 import { ToastProvider } from "../../../shared/design-system/ui/Toast";
 
 beforeEach(() =>
@@ -43,9 +42,9 @@ async function fixture(
   };
   let subject = "account";
   let offline = false;
-  const session = createOAuthSession(
+  const session = createTestSession(
     async () => ({
-      value: "credential",
+      revision: "credential",
       account: {
         subject,
         email: "a@example.com",
@@ -532,7 +531,7 @@ it.each(["save", "catalog"])(
   },
 );
 
-it("retires a session-expired save error after explicit reauthentication", async () => {
+it("keeps the session and the draft when Builderlab refuses a save, and saves on retry", async () => {
   const h = await fixture({
     modelId: "model-one",
     reasoningEffort: "high",
@@ -544,22 +543,17 @@ it("retires a session-expired save error after explicit reauthentication", async
   await user.type(field, " Draft");
   h.request.mockResolvedValueOnce({ status: 401, headers: {}, body: "{}" });
   await user.click(screen.getByRole("button", { name: "Save" }));
-  await waitFor(() => expect(h.session.snapshot().status).toBe("signed-out"));
-  expect(field).toBeDisabled();
-  expect(screen.queryByRole("alert")).toBeNull();
-  await act(() => h.session.signIn());
-  await waitFor(() =>
-    expect(screen.getByRole("button", { name: /^Model:/ })).toBeEnabled(),
-  );
-  expect(screen.queryByRole("alert")).toBeNull();
-  expect(screen.queryByRole("button", { name: /Retry|Refresh/ })).toBeNull();
+  expect(await screen.findByRole("alert")).toHaveTextContent("session expired");
+  // A 401 refuses only this call: the native session decides when it ends.
+  expect(h.session.snapshot().status).toBe("signed-in");
   expect(field).toHaveValue("Saved instructions. Draft");
-  expect(screen.getByRole("button", { name: "Save" })).toBeEnabled();
+  await user.click(screen.getByRole("button", { name: "Save" }));
+  await waitFor(() => expect(screen.queryByRole("alert")).toBeNull());
   expect(
     h.request.mock.calls.filter(([request]) =>
       request.url.endsWith("/update-agent"),
     ),
-  ).toHaveLength(1);
+  ).toHaveLength(2);
 });
 
 it("retries a failed catalog request without saving the draft", async () => {

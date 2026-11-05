@@ -115,7 +115,6 @@ it("shares agent and Apps transport without an app-held credential and refuses s
   ).resolves.toEqual([]);
   const owner = h.session.credential();
   const apps = createAppsClient(
-    {} as never,
     h.session,
     "https://compose-ctrl.builderlab.xyz",
     h.apps,
@@ -188,7 +187,7 @@ it("returns accepted deployment IDs without checking readiness under a replaceme
     host: {},
     agents: { addTool: (tool: AddedTool) => tools.set(tool.name, tool) },
   };
-  applyApps(ctx as never, h.session, true, undefined, h.apps);
+  applyApps(ctx as never, h.session, true, h.apps);
   h.events.emit("one", "A");
   await signedIn(h.session);
   const accepted = deferred<void>();

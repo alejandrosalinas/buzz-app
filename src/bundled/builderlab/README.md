@@ -17,7 +17,8 @@ One Builderlab account for communities and agents that Builderlab hosts for you,
 ## Apps pilot
 
 Local agents can create, deploy, inspect readiness, share and open Apps Platform
-apps using the Settings Builderlab sign-in. `apps_contract` reports the selected
+apps using the Builderlab sign-in, the native NIP-FI session: native sends it to
+the control plane, so the renderer never holds it. `apps_contract` reports the selected
 tenant's runtimes and schema location. Creation checks that contract and supports
 `static` and `fetch-js`; it repeats the selected runtime through reservation and
 initialization. The executable profile returns the required asset manifest and
@@ -41,38 +42,38 @@ again. A failed reservation or initialization names the planned app ID; inspect 
 resume that app before creating another one. Automatic reservation recovery and
 hosted tool declarations are separate work.
 
-The macOS app panel uses the Settings account for viewing. Native code exchanges
-its CLI credential on the configured Builderlab API for a restricted viewer
-credential and absolute expiry. Native code installs the HttpOnly/Secure viewer
-cookie before opening the original app URL. The guest never receives the CLI
-credential. App authorization and consent still run at ingress.
+The macOS app panel uses the same sign-in for viewing. Native code exchanges the
+NIP-FI session on the identity origin's API (in live development, the broker's
+sign-in on the broker) for a restricted viewer credential and absolute expiry,
+then installs the HttpOnly/Secure viewer cookie before opening the original app
+URL. The guest never receives the session token. App authorization and consent
+still run at ingress.
 Opening a different tenant's app never forwards the current account's credential.
 
 Each account has its own website storage, kept across sign-ins and restarts, so
-an app's browser login persists while native exchange is unavailable. Signing out or changing accounts closes
-live and retained guests; deliberate sign-out also requests revocation of the server CLI parent.
-Canceling sign-in or disposing the plugin closes its local guests without logging
-out an existing server session. Other platforms do not expose the app panel.
-The server's native viewer feature must be enabled after its schema and auth
-review; older CLI sessions without signed authentication time require a fresh
-Settings login. This client change alone does not enable the server feature. Apps that require
-pre-app consent still use the existing canonical browser authentication gate.
+an app's own website login persists while native exchange is unavailable. Signing
+out or changing accounts closes live and retained guests. Canceling sign-in or
+disposing the plugin closes its local guests without ending the native session.
+Other platforms do not expose the app panel. Apps that require pre-app consent
+still use the existing canonical browser authentication gate.
 
 ## Remote agents
 
 The bundled `block.builderlab` plugin adds Settings → Plugins → Builderlab: one
-sign-in, then hosted communities (`communities/`, see
+sign-in, the native NIP-FI session (or in live development the broker's), then
+hosted communities (`communities/`, see
 [plugin architecture](../../../docs/plugin-architecture.md)) and remote agents.
-With a valid `BUZZ_BUILDERLAB_URL` build input, it also registers
+With a configured Builderlab, it also registers
 `block.builderlab/builderlab` in Agents' new-agent type picker.
 `adapter-type/` connects this hosted type to Beekeeper: provision registers the
 agent, activation submits the owner proof and community supplied by Agents, and
 removal deletes the provider runtime. Agents owns unfinished setup recovery and
 the runtime-tagged community registration; the provider keeps the key and runs
 the agent even while Buzz is closed. On desktop, Create agent and confirmed
-deletion start browser sign-in when needed, then continue the action. Both share
-an existing Settings sign-in attempt; a failed or canceled login leaves the
-action available for retry. Settings still provides sign-in and sign-out.
+deletion start the native sign-in when needed, then continue the action. Both
+share an existing sign-in attempt; a failed or canceled sign-in leaves the
+action available for retry. Sign-out lives in Identity → Organization sign-in,
+because community sign-in shares the session.
 While Create agent waits for the browser, its dialog offers Cancel sign-in, which
 cancels the shared login (as Settings' does) and leaves Create available for
 retry. Deletion's wait has no such control; disabling the plugin or closing Buzz
@@ -81,7 +82,7 @@ Beekeeper accepts an owner proof only from the Buzz key bound to the signed-in
 Builderlab account. After sign-in, and again before each activation, the plugin
 checks `/v1/buzz/nostr-identities/current` and binds an unbound account to this
 device's key through the native kind 24243 signer, which accepts only
-production Builderlab or this build's `BUZZ_BUILDERLAB_URL` origin. An account
+production Builderlab or this build's Builderlab origin. An account
 bound to another key is reported and never unbound.
 The agent's Identity tab reads its current instructions from Builderlab and
 saves changes directly to the provider. Loading and saving use the same login;
@@ -91,7 +92,7 @@ that requirement instead of the previous account's errors and retries. Signed-ou
 panes hide stale settings errors and retries while retaining the draft.
 Empty instructions can be saved to clear them.
 Signed-out agent panes show a pinned sign-in card across every tab, including
-relay-backed Memory and Activity. Opening the pane does not start browser login;
+relay-backed Memory and Activity. Opening the pane does not start sign-in;
 Sign in starts it, and Cancel sign-in cancels the shared account attempt.
 The card reserves its measured height for scrolling and clears once sign-in is
 verified. Slow settings/catalog reads offer a scoped retry after three seconds.
@@ -129,7 +130,7 @@ While the hosted type is registered, the plugin also provides `ctx.builderlab`
 so bundled consumers such as Bestie can set a hosted agent's model and
 instructions with the same login. It offers only sign-in, the signed-in
 account subject, list, the model catalog and those two updates; it never
-exposes the credential or the Beekeeper client.
+exposes the session token or the Beekeeper client.
 
 The adapter retains the provider agent ID, server, verified account subject and
 provisioning replay reference in `buzz.builderlab.adapter-identity.v1:` records.
@@ -141,26 +142,22 @@ is confirmed. On another device, removal resolves the ID from the signed-in
 account's list; an unknown key is refused. Existing Settings-created
 agents are not migrated into this type.
 
-- `session.ts` is the `BuilderlabSession` consumers share. In an FI build it
-  projects the native NIP-FI session: native holds the token in OS secure
-  storage, so sign-in survives restart, and adds it as `Authorization: Bearer`
-  to this plugin's granted routes. Each session revision reads its account from
+- `session.ts` is the `BuilderlabSession` consumers share. It projects the
+  native NIP-FI session: native holds the token in OS secure storage, so
+  sign-in survives restart, and adds it as `Authorization: Bearer` to this
+  plugin's granted routes. Each session revision reads its account from
   `/v1/auth/me`. A 401 refuses only that call; native then asks the adapter's
   `GET /v1/session` once and ends the session only if the adapter refuses it.
   Its sign-out lives in Identity → Organization sign-in, which `login/` links to,
-  because community sign-in shares the session.
-- `oauth/` owns browser handoff, code exchange, account verification, and the
-  legacy plugin-lifetime session. `browserCredential()` returns a verified `Credential`;
-  `session.credential()` provides access to it. The session handles cancellation,
-  sign-out, and disposal.
-  `oauth/first-run.ts` lets the app's first-launch welcome screen run the same
-  sign-in before any plugin session exists, using this plugin's bundled native
-  grant, at the build URL like the Settings card; that credential is separate
-  from the Settings session. In an FI build it is the native NIP-FI sign-in
-  instead, and the app's later calls go through the forwarder as this
-  plugin's bundled installation (`bundledFederatedIdentity`). Either grant
-  exists only while this plugin is enabled, so with it turned off that
-  sign-in refuses before opening the browser.
+  because community sign-in shares the session. In live development it projects
+  the development broker's sign-in instead, through `brokerApi`.
+- `oauth/` names the build's Builderlab API (`oauthTarget`). `oauth/first-run.ts`
+  lets the app's first-launch welcome screen run the same native NIP-FI
+  sign-in before the plugin's JavaScript starts; the app's later calls go
+  through the forwarder as this plugin's bundled installation
+  (`bundledFederatedIdentity`). That grant exists only while this plugin is
+  enabled, so with it turned off that sign-in refuses before opening the
+  browser.
   A successful first-run sign-in continues into the app-owned setup steps
   described in [identity](../../../docs/identity.md): the app reads the key
   bound to the account, the destinations saved to it (this plugin's
@@ -204,21 +201,14 @@ agents are not migrated into this type.
   could never save is dropped and counted, never a halt. See
   [communities](../../../docs/communities.md#known-communities).
 
-The plugin uses the `BUZZ_BUILDERLAB_URL` [build input](../../../docs/configuration.md#builderlab-url-build-input)
-as its server address and appends `/api/goose`.
+The plugin's server is the build's Builderlab: its first
+[sign-in server](../../../docs/configuration.md#federated-identity-build-input),
+the built-in `https://app.builderlab.xyz` unless the build adds another, whose
+native session it uses and which survives a restart. Its only network access is
+the native forwarder's grant for that session: no renderer network or file
+access. Live development signs in through the development broker instead. A
+build with neither has no Builderlab: the plugin registers nothing.
 
-On desktop, the plugin supplies `/v1/auth/login` with `type=cli` and
-`product=builderlab` to the shared native
-[`oauth_callback` module](../../../src-tauri/src/oauth_callback/README.md).
-Native code inserts a loopback `redirect_uri` address, opens the browser, and returns
-callback parameters to the plugin. Native code generates and validates OAuth
-state; the plugin also uses a random callback path.
-
-Each attempt generates a random PKCE verifier held only in memory, sending its
-SHA-256 challenge with `code_challenge_method=S256` during login. The plugin
-posts the callback code and `code_verifier` to `/v1/auth/login/exchange`, then
-verifies the returned session credential with `/v1/auth/me` using the
-`X-BB-Session-Credential` header. These requests use the shared host transport.
 The login snapshot retains `capabilities.can_use_remote_agents`; only explicit
 `true` enables remote agents. Otherwise, Settings and the Agents provider show
 “Coming soon” and no Beekeeper requests are sent. Sign out and back in to refresh
@@ -230,8 +220,8 @@ The plugin also offers Builderlab as a Decisions API provider. It reads
 Builderlab is not listed in Settings > Decisions API and no decision request
 goes to it. While it is registered, it answers unless the user chose another
 provider; when it goes away, TypeSafe answers. Sign out and back in to refresh
-this capability. In an FI build the plugin names the native session by its
-revision, and native `decide` posts to the identity origin's API with that
+this capability. The plugin names the NIP-FI session by its revision, and
+native `decide` posts to the identity origin's API with that
 session as `Authorization: Bearer`, as for the build's other Builderlab calls;
 the token never reaches the webview. A 401 there refuses only that call, and
 native asks the adapter once whether the session still stands.

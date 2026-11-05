@@ -157,7 +157,7 @@ describe("createBrowserPlatform", () => {
       "https://counter--workspace.apps.example/second",
       { x: 0, y: 0, width: 1, height: 1 },
       "account",
-      { credential: "private", storage: "account", signal: lifetime.signal },
+      { federated: "private", storage: "account", signal: lifetime.signal },
     );
     const rejected = expect(attach).rejects.toThrow();
     lifetime.abort();
@@ -177,7 +177,7 @@ describe("createBrowserPlatform", () => {
       url,
       { x: 0, y: 0, width: 1, height: 1 },
       "account",
-      { credential: "private", storage: "account", signal: lifetime.signal },
+      { federated: "private", storage: "account", signal: lifetime.signal },
     );
     expect(sdk.invoke.mock.calls.at(-1)).toEqual([
       "browser_navigate",

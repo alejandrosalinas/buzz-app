@@ -795,16 +795,12 @@ async fn an_fi_401_ends_the_session_when_the_adapter_denies_it() {
 
 #[test]
 fn an_fi_session_asks_builderlab_alone() {
-    assert_eq!(federated_alone(Backend::Builderlab, false, false), Ok(()));
-    for (backend, session, broker) in [
-        (Backend::Typesafe, false, false),
-        (Backend::Builderlab, true, false),
-        (Backend::Builderlab, false, true),
-    ] {
+    assert_eq!(federated_alone(Backend::Builderlab, false), Ok(()));
+    for (backend, broker) in [(Backend::Typesafe, false), (Backend::Builderlab, true)] {
         assert_eq!(
-            federated_alone(backend, session, broker),
+            federated_alone(backend, broker),
             Err("Invalid federated session".into()),
-            "{backend:?} {session} {broker}"
+            "{backend:?} {broker}"
         );
     }
 }

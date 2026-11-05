@@ -38,8 +38,9 @@ A view with a `storage` also keeps its session for ten minutes after it unmounts
 Reloading Buzz's main document ends the website session. An attachment queued before that reload cannot replace a session opened by the new document.
 
 Builderlab's bundled app panel passes a `builderlab` viewer lifetime instead of a
-shared website sign-in. The browser host uses its credential only for a native
-request to the compile-time Builderlab API origin, then installs the restricted
+shared website sign-in. The browser host names the native NIP-FI session (in live
+development, the broker) only for a native request to the build's Builderlab
+API, then installs the restricted
 HttpOnly/Secure viewer cookie on the tenant's fixed Apps domain with the server's
 absolute expiry. This is the same cookie as browser login, so login/consent repair
 replaces it instead of creating a conflicting second cookie.

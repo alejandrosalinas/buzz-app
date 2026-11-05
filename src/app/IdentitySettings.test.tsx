@@ -472,6 +472,167 @@ it("follows the status store as it publishes a higher seq", async () => {
   expect(within(row).queryByRole("switch")).toBeNull();
 });
 
+/** bb-block first, then bb-public, each with its own session. */
+function twoServers() {
+  const block = federatedFixture("block", "will@block.xyz");
+  const pub = federatedFixture("public", "will@example.com");
+  block.publish({
+    authority: {
+      id: "bb-block",
+      identityOrigin: "https://block.builderlab.xyz",
+      apiBasePath: "/api/goose/",
+      signIn: "at-launch",
+      organization: "Block",
+      communityHosts: ["buzz.block.builderlab.xyz"],
+    },
+  });
+  pub.publish({
+    authority: {
+      id: "bb-public",
+      identityOrigin: "https://app.builderlab.xyz",
+      apiBasePath: "/api/goose/",
+      signIn: "on-demand",
+      organization: null,
+      communityHosts: ["*.communities.buzz.xyz", "communities.buzz.xyz"],
+    },
+  });
+  const root: FederatedIdentity = {
+    ...block.service,
+    forServer: (id) => (id === "bb-block" ? block.service : pub.service),
+  };
+  const servers = async () => [
+    block.service.snapshot(),
+    pub.service.snapshot(),
+  ];
+  return { block, pub, root, servers };
+}
+const memberships = [
+  { id: "wss://buzz.block.builderlab.xyz", name: "Block" },
+  { id: "wss://will.communities.buzz.xyz", name: "will" },
+  { id: "wss://kalvin.communities.buzz.xyz", name: "kalvin" },
+  { id: "wss://buzz.pfleger.io", name: "homelab" },
+];
+
+it("lists each signed-in server and signs out of one without touching the other", async () => {
+  const { block, pub, root, servers } = twoServers();
+  block.publish({ status: "signed-in", email: "will@block.xyz" });
+  pub.publish({ status: "signed-in", email: "will@example.com" });
+  render(
+    <IdentitySettings
+      viewer={viewer}
+      federatedIdentity={root}
+      memberships={memberships}
+      servers={servers}
+    />,
+    { wrapper: ToastProvider },
+  );
+  expect(await screen.findByText("Block (block.builderlab.xyz)")).toBeVisible();
+  expect(screen.getByText("app.builderlab.xyz")).toBeVisible();
+  expect(screen.getByText(/Used by: Block$/)).toBeVisible();
+  expect(screen.getByText(/Used by: will, kalvin$/)).toBeVisible();
+  // A self-hosted relay has no sign-in server.
+  expect(screen.queryByText(/homelab/)).not.toBeInTheDocument();
+  await userEvent.click(
+    screen.getByRole("button", { name: "Sign out of app.builderlab.xyz" }),
+  );
+  expect(pub.service.signOut).toHaveBeenCalledOnce();
+  expect(block.service.signOut).not.toHaveBeenCalled();
+  expect(block.service.snapshot().status).toBe("signed-in");
+  expect(screen.queryByText("app.builderlab.xyz")).not.toBeInTheDocument();
+  expect(screen.getByText("Block (block.builderlab.xyz)")).toBeVisible();
+});
+
+it("keeps the first server's sign-in row when no server is signed in", async () => {
+  const { root, servers } = twoServers();
+  render(
+    <IdentitySettings
+      viewer={viewer}
+      federatedIdentity={root}
+      servers={servers}
+    />,
+    { wrapper: ToastProvider },
+  );
+  expect(await screen.findByText("Not signed in")).toBeVisible();
+  expect(screen.getByText(/block\.builderlab\.xyz login/)).toBeVisible();
+  expect(screen.getByRole("button", { name: "Sign in" })).toBeVisible();
+});
+
+it("keeps a per-server sign-out that native couldn't finish visible, named, with Try again", async () => {
+  const { block, pub, root, servers } = twoServers();
+  block.publish({ status: "signed-in", email: "will@block.xyz" });
+  pub.publish({ status: "signed-in", email: "will@example.com" });
+  // Native resolves a storage failure as an unavailable snapshot.
+  vi.mocked(pub.service.signOut).mockImplementation(async () => {
+    pub.publish({ status: "unavailable", failure: "storage-denied" });
+  });
+  render(
+    <IdentitySettings
+      viewer={viewer}
+      federatedIdentity={root}
+      memberships={memberships}
+      servers={servers}
+    />,
+    { wrapper: ToastProvider },
+  );
+  const user = userEvent.setup();
+  await user.click(
+    await screen.findByRole("button", {
+      name: "Sign out of app.builderlab.xyz",
+    }),
+  );
+  expect(await screen.findByRole("alert")).toHaveTextContent(
+    "Couldn’t sign out of app.builderlab.xyz. Sign-in could not access secure storage.",
+  );
+  // Its row is gone, the other server's stays.
+  expect(screen.getByText("Block (block.builderlab.xyz)")).toBeVisible();
+  expect(block.service.snapshot().status).toBe("signed-in");
+  vi.mocked(pub.service.signOut).mockImplementation(async () => {
+    pub.publish({ status: "signed-out", failure: null });
+  });
+  await user.click(screen.getByRole("button", { name: "Try again" }));
+  expect(pub.service.signOut).toHaveBeenCalledTimes(2);
+  expect(screen.queryByRole("alert")).toBeNull();
+  expect(block.service.signOut).not.toHaveBeenCalled();
+});
+
+it("restores an unfinished per-server sign-out's Try again when Settings opens again", async () => {
+  const { block, pub, root, servers } = twoServers();
+  block.publish({ status: "signed-in", email: "will@block.xyz" });
+  pub.publish({ status: "signed-in", email: "will@example.com" });
+  vi.mocked(pub.service.signOut).mockImplementation(async () => {
+    pub.publish({ status: "unavailable", failure: "storage-denied" });
+  });
+  const settings = () => (
+    <IdentitySettings
+      viewer={viewer}
+      federatedIdentity={root}
+      memberships={memberships}
+      servers={servers}
+    />
+  );
+  const first = render(settings(), { wrapper: ToastProvider });
+  const user = userEvent.setup();
+  await user.click(
+    await screen.findByRole("button", {
+      name: "Sign out of app.builderlab.xyz",
+    }),
+  );
+  expect(await screen.findByRole("alert")).toBeVisible();
+  // Closing Settings and opening it again, as a reload does.
+  first.unmount();
+  render(settings(), { wrapper: ToastProvider });
+  expect(await screen.findByRole("alert")).toHaveTextContent(
+    "Couldn’t sign out of app.builderlab.xyz. Sign-in could not access secure storage.",
+  );
+  expect(screen.getByText("Block (block.builderlab.xyz)")).toBeVisible();
+  vi.mocked(pub.service.signOut).mockImplementation(async () => {
+    pub.publish({ status: "signed-out", failure: null });
+  });
+  await user.click(screen.getByRole("button", { name: "Try again" }));
+  expect(pub.service.signOut).toHaveBeenCalledTimes(2);
+  expect(screen.queryByRole("alert")).toBeNull();
+});
+
 it("shows only the account's linked backed-up key with its last activity, read-only", async () => {
   vi.stubEnv("VITE_BUZZ_BUILDERLAB_URL", "https://builderlab.example");
   const other = "cd".repeat(32);

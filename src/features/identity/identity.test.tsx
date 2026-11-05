@@ -32,13 +32,16 @@ import { IdentitySetup } from "./IdentitySetup";
 import { PrivateKey } from "./PrivateKey";
 import { SignOutDialog, WIPE_PHRASE } from "./SignOut";
 import { Welcome } from "./Welcome";
-import { federatedFixture } from "../federated-identity/testing";
+import {
+  federatedFixture,
+  forwardingSession,
+} from "../federated-identity/testing";
 import { ProfileStep } from "./ProfileStep";
 import { OnboardingScreen } from "./OnboardingScreen";
-import type { Credential } from "../../bundled/builderlab/oauth/browser";
+import type { Credential } from "../../bundled/builderlab/session";
 import { BackupError, type BackupStatus } from "./backup";
 import {
-  builderlabAccount,
+  federatedBuilderlabAccount,
   type FirstRunAccount,
   type OwnedCommunity,
 } from "./builderlab-account";
@@ -51,6 +54,8 @@ import {
   profile,
   signed,
 } from "../relay/testing";
+import type { SessionSnapshot } from "../federated-identity/service";
+
 vi.mock("@tauri-apps/api/core", () => ({
   invoke: vi.fn(),
   isTauri: vi.fn(() => true),
@@ -69,7 +74,7 @@ const key = "nsec-fixture-only";
 const owned = keypair();
 const ownedNsec = nsecEncode(owned.secret);
 const credential: Credential = {
-  value: "private-token",
+  revision: "revision-1",
   account: {
     subject: "user",
     email: "a@example.com",
@@ -1675,46 +1680,70 @@ it("a landing URL that cannot be reached fails before sign-in, and Cancel keeps 
   identity.dispose();
 });
 
-it("a landing URL hosted by this build's Builderlab signs in at once, with no connect choice", async () => {
-  vi.stubEnv("VITE_BUZZ_BUILDERLAB_URL", "https://app.builderlab.xyz");
-  const relay = landingRelay("https://design.communities.buzz.xyz");
-  relay.info.resolve();
-  const connect = vi
-    .fn<(signal: AbortSignal) => Promise<Credential>>()
-    .mockImplementation(() => new Promise(() => {}));
-  const identity = createIdentity();
-  const user = userEvent.setup();
-  render(
-    <Welcome
-      identity={identity}
-      communities={noJoin}
-      invites={invites}
-      account={unlinked}
-      connect={connect}
-    >
-      <p>Signed in</p>
-    </Welcome>,
-  );
-  await screen.findByRole("button", { name: SIGN_IN });
-  await user.type(urlField(), "design.communities.buzz.xyz{Enter}");
-  await screen.findByRole("button", { name: "Other options" });
-  expect(connect).toHaveBeenCalledTimes(1);
-  expect(
-    screen.queryByRole("heading", { name: "Connect to your community" }),
-  ).toBeNull();
-  expect(screen.getByRole("button", { name: SIGN_IN })).toBeEnabled();
-  expect(relay.relayCalls).toEqual(relay.lookup);
-  expect(identity.snapshot().status).toBe("missing");
-  identity.dispose();
-});
+/** A build whose first compiled sign-in server is bb-public. */
+const publicServers = async (): Promise<SessionSnapshot[]> => [
+  {
+    status: "signed-out",
+    authority: {
+      id: "bb-public",
+      identityOrigin: "https://app.builderlab.xyz",
+      apiBasePath: "/api/goose/",
+      signIn: "on-demand",
+      organization: null,
+      communityHosts: ["*.communities.buzz.xyz", "communities.buzz.xyz"],
+    },
+    revision: "",
+    email: null,
+    failure: null,
+    expiresAt: null,
+    expiring: false,
+  },
+];
+
+it.each([["bb-public compiled", publicServers]])(
+  "a landing URL hosted by this build's Builderlab (%s) signs in at once, with no connect choice",
+  async (_, servers) => {
+    const relay = landingRelay("https://design.communities.buzz.xyz");
+    relay.info.resolve();
+    const connect = vi
+      .fn<(signal: AbortSignal) => Promise<Credential>>()
+      .mockImplementation(() => new Promise(() => {}));
+    const identity = createIdentity();
+    const user = userEvent.setup();
+    render(
+      <Welcome
+        identity={identity}
+        communities={noJoin}
+        invites={invites}
+        account={unlinked}
+        connect={connect}
+        servers={servers}
+      >
+        <p>Signed in</p>
+      </Welcome>,
+    );
+    await screen.findByRole("button", { name: SIGN_IN });
+    await user.type(urlField(), "design.communities.buzz.xyz{Enter}");
+    await screen.findByRole("button", { name: "Other options" });
+    expect(connect).toHaveBeenCalledTimes(1);
+    expect(
+      screen.queryByRole("heading", { name: "Connect to your community" }),
+    ).toBeNull();
+    expect(screen.getByRole("button", { name: SIGN_IN })).toBeEnabled();
+    expect(relay.relayCalls).toEqual(relay.lookup);
+    expect(identity.snapshot().status).toBe("missing");
+    identity.dispose();
+  },
+);
 
 it.each([
-  ["https://app.builderlab.xyz", "buzz.block.builderlab.xyz"],
-  ["", "design.communities.buzz.xyz"],
+  ["bb-public", publicServers, "buzz.block.builderlab.xyz"],
+  ["no", async () => [], "design.communities.buzz.xyz"],
 ])(
-  "a build whose Builderlab (%j) does not host a landing URL pauses on the ordinary connect choice: %s",
-  async (build, host) => {
-    vi.stubEnv("VITE_BUZZ_BUILDERLAB_URL", build);
+  "a build with %s sign-in server that does not cover a landing URL pauses on the ordinary connect choice: %s",
+  async (_, servers, host) => {
+    // Another Builderlab deployment: the built-in server's hosts don't apply.
+    vi.stubEnv("VITE_BUZZ_BUILDERLAB_URL", "https://block.builderlab.xyz");
     const relay = landingRelay(`https://${host}`);
     const connect = vi.fn();
     const identity = createIdentity();
@@ -1726,6 +1755,7 @@ it.each([
         invites={invites}
         account={unlinked}
         connect={connect}
+        servers={servers}
       >
         <p>Signed in</p>
       </Welcome>,
@@ -1845,7 +1875,7 @@ it("a canceled sign-in that returns after a later sign-in is ignored: setup is n
     throw new Error(`Unexpected command ${command}`);
   });
   const second: Credential = {
-    value: "second-token",
+    revision: "second-token",
     account: { ...credential.account, email: "b@example.com" },
   };
   // The first exchange ignores the abort, as native HTTP does, and returns
@@ -1855,7 +1885,6 @@ it("a canceled sign-in that returns after a later sign-in is ignored: setup is n
     .fn((_signal: AbortSignal) => Promise.resolve(second))
     .mockImplementationOnce(() => stale.promise);
   const account = vi.fn(unlinked);
-  const digest = vi.spyOn(crypto.subtle, "digest");
   const identity = createIdentity();
   const user = userEvent.setup();
   render(
@@ -1884,13 +1913,10 @@ it("a canceled sign-in that returns after a later sign-in is ignored: setup is n
   expect(connect).toHaveBeenCalledTimes(2);
   expect(account).toHaveBeenCalledTimes(1);
   expect(account).toHaveBeenCalledWith(second, identity);
-  const digests = digest.mock.calls.length;
   await act(async () => {
     stale.resolve(credential);
-    // The canceled attempt's last wait is its account digest; the rest is
-    // microtasks, which all run before the next macrotask.
-    await vi.waitFor(() => expect(digest).toHaveBeenCalledTimes(digests + 1));
-    await digest.mock.results[digests]?.value;
+    // The superseded attempt settles in microtasks, which all run before the
+    // next macrotask.
     await new Promise((resolve) => setTimeout(resolve, 0));
   });
   expect(
@@ -2081,7 +2107,7 @@ it("Use a different account on Get started with Buzz signs the session out, retu
     throw new Error(`Unexpected command ${command}`);
   });
   const second: Credential = {
-    value: "second-token",
+    revision: "second-token",
     account: { ...credential.account, email: "b@example.com" },
   };
   const first = deferred<Credential>();
@@ -5033,7 +5059,7 @@ it.each(["same", "different", "canceled"])(
     const refreshedBackup = vi.fn(async () => {});
     const refreshed = {
       ...credential,
-      value: "refreshed-token",
+      revision: "refreshed-token",
       account: {
         ...credential.account,
         subject:
@@ -5049,7 +5075,9 @@ it.each(["same", "different", "canceled"])(
     const account = vi.fn((value: Credential) =>
       unlinkedWith(async () => {}, {
         backUp:
-          value.value === "refreshed-token" ? refreshedBackup : expiredBackup,
+          value.revision === "refreshed-token"
+            ? refreshedBackup
+            : expiredBackup,
       })(value, identity),
     );
     const identity = createIdentity();
@@ -5193,7 +5221,7 @@ it("Automatic backup with the real account waits on the native uploader's pass f
     if (command === "nsec_backup_set_choice")
       return { available: true, pubkey: owned.pubkey, automatic: true };
     if (command === "nsec_backup_session")
-      return (args as { credential: string | null }).credential ? 4 : null;
+      return (args as { federated: string | null }).federated ? 4 : null;
     throw new Error(`Unexpected command ${command}`);
   });
   const answer = (body: object) => ({
@@ -5217,13 +5245,17 @@ it("Automatic backup with the real account waits on the native uploader's pass f
   const identity = createIdentity();
   const user = userEvent.setup();
   await welcomeBackPage(user, identity, (credential, identity) =>
-    builderlabAccount(credential, request, identity),
+    federatedBuilderlabAccount(
+      credential,
+      forwardingSession(credential.revision, request),
+      identity,
+    ),
   );
   await importLinkedKey(user);
   await waitFor(() =>
     expect(invoke).toHaveBeenCalledWith(
       "nsec_backup_session",
-      expect.objectContaining({ credential: "private-token" }),
+      expect.objectContaining({ federated: "revision-1" }),
     ),
   );
   expect(screen.getByRole("status")).toHaveTextContent("Backing up your key…");
@@ -5252,19 +5284,12 @@ it("Automatic backup with the real account waits on the native uploader's pass f
     ["nsec_backup_set_choice", { pubkey: owned.pubkey, automatic: true }],
     [
       "nsec_backup_session",
-      {
-        source: "builderlab",
-        generation: expect.any(Number),
-        credential: "private-token",
-      },
+      { federated: "revision-1", generation: expect.any(Number) },
     ],
+    // The Builderlab plugin hands over the same session, so it stays.
     [
       "nsec_backup_session",
-      {
-        source: "builderlab",
-        generation: expect.any(Number),
-        credential: null,
-      },
+      { federated: "revision-1", generation: expect.any(Number) },
     ],
   ]);
   identity.dispose();
@@ -5465,7 +5490,11 @@ function backedUpAccount(
     ),
   }));
   return (credential, identity) =>
-    builderlabAccount(credential, request, identity);
+    federatedBuilderlabAccount(
+      credential,
+      forwardingSession(credential.revision, request),
+      identity,
+    );
 }
 /** Native recovery's answer, holding a backup of each key. */
 const backupsOf = (...pubkeys: string[]): RecoveryResult => ({
@@ -7194,8 +7223,6 @@ it("an FI build's Sign in with Builderlab signs in through the native session an
     "/api/goose/v1/buzz/known-communities/list",
     "/api/goose/v1/buzz/nostr-identities/current",
   ]);
-  expect(commands()).not.toContain("plugin_host_request");
-  expect(commands()).not.toContain("oauth_callback_begin");
   identity.dispose();
 });
 
@@ -7246,6 +7273,100 @@ it.each(["unavailable", "not_offered"] as const)(
     identity.dispose();
   },
 );
+
+/** A compiled list whose only server hosts none of the landing's communities. */
+const blockServers = async (): Promise<SessionSnapshot[]> =>
+  (await publicServers()).map((server) => ({
+    ...server,
+    authority: server.authority && {
+      ...server.authority,
+      id: "bb-block",
+      identityOrigin: "https://block.builderlab.xyz",
+      communityHosts: ["buzz.block.builderlab.xyz"],
+    },
+  }));
+
+function lookupWelcome() {
+  vi.stubEnv("VITE_BUZZ_BUILDERLAB_URL", "https://app.builderlab.xyz");
+  landingRelay().info.resolve();
+  const answers: ReturnType<typeof deferred<SessionSnapshot[]>>[] = [];
+  const servers = () => {
+    const answer = deferred<SessionSnapshot[]>();
+    answers.push(answer);
+    return answer.promise;
+  };
+  const connect = vi
+    .fn<(signal: AbortSignal) => Promise<Credential>>()
+    .mockImplementation(() => new Promise(() => {}));
+  const identity = createIdentity();
+  const view = render(
+    <Welcome
+      identity={identity}
+      communities={noJoin}
+      invites={invites}
+      account={unlinked}
+      connect={connect}
+      servers={servers}
+    >
+      <p>Signed in</p>
+    </Welcome>,
+  );
+  return { answers, connect, identity, view, user: userEvent.setup() };
+}
+
+it("ignores a hosted-server answer that arrives after Cancel", async () => {
+  const { answers, connect, identity, user } = lookupWelcome();
+  await screen.findByRole("button", { name: SIGN_IN });
+  await user.type(urlField(), "design.communities.buzz.xyz{Enter}");
+  await waitFor(() => expect(answers).toHaveLength(1));
+  await user.click(screen.getByRole("button", { name: "Cancel" }));
+  await act(async () => answers[0]?.resolve(await publicServers()));
+  expect(connect).not.toHaveBeenCalled();
+  expect(screen.getByRole("button", { name: SIGN_IN })).toBeEnabled();
+  identity.dispose();
+});
+
+it("ignores a lookup for an earlier address once another address is looked up", async () => {
+  const { answers, connect, identity, user } = lookupWelcome();
+  await screen.findByRole("button", { name: SIGN_IN });
+  await user.type(urlField(), "design.communities.buzz.xyz{Enter}");
+  await waitFor(() => expect(answers).toHaveLength(1));
+  await user.click(screen.getByRole("button", { name: "Cancel" }));
+  await user.clear(urlField());
+  await user.type(urlField(), "kalvin.communities.buzz.xyz{Enter}");
+  await waitFor(() => expect(answers).toHaveLength(2));
+  // The earlier address's late "hosted" does not sign in…
+  await act(async () => answers[0]?.resolve(await publicServers()));
+  expect(connect).not.toHaveBeenCalled();
+  // …and the new address's genuine "not hosted" still applies.
+  await act(async () => answers[1]?.resolve(await blockServers()));
+  expect(
+    await screen.findByRole("heading", { name: "Connect to your community" }),
+  ).toBeVisible();
+  expect(connect).not.toHaveBeenCalled();
+  identity.dispose();
+});
+
+it("ignores a hosted-server answer that arrives after unmount", async () => {
+  const { answers, connect, identity, user, view } = lookupWelcome();
+  await screen.findByRole("button", { name: SIGN_IN });
+  await user.type(urlField(), "design.communities.buzz.xyz{Enter}");
+  await waitFor(() => expect(answers).toHaveLength(1));
+  view.unmount();
+  await act(async () => answers[0]?.resolve(await publicServers()));
+  expect(connect).not.toHaveBeenCalled();
+  identity.dispose();
+});
+
+it("applies the latest lookup's answer", async () => {
+  const { answers, connect, identity, user } = lookupWelcome();
+  await screen.findByRole("button", { name: SIGN_IN });
+  await user.type(urlField(), "design.communities.buzz.xyz{Enter}");
+  await waitFor(() => expect(answers).toHaveLength(1));
+  await act(async () => answers[0]?.resolve(await publicServers()));
+  await waitFor(() => expect(connect).toHaveBeenCalledTimes(1));
+  identity.dispose();
+});
 
 /** Native backup for a signed-in key with no saved choice: the uploader waits for consent. */
 function awaitingConsent(command: string) {

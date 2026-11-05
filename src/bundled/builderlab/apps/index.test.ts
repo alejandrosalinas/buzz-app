@@ -1,8 +1,8 @@
+import { createTestSession } from "../test-helpers";
 import { afterEach, expect, it, vi } from "vitest";
 import type { AddedTool } from "../../../buzz-mcp/session-tools";
 import type { BuzzClient } from "../../../buzz-mcp/client";
 import type { HostResponse, HostRequest } from "../../../features/host/service";
-import { createOAuthSession } from "../oauth/session";
 import { applyApps } from "./index";
 
 afterEach(() => {
@@ -22,8 +22,8 @@ async function setup(
   canUseRemoteAgents = true,
 ) {
   vi.stubEnv("VITE_BUZZ_BUILDERLAB_URL", url);
-  const session = createOAuthSession(async () => ({
-    value: "session",
+  const session = createTestSession(async () => ({
+    revision: "session",
     account: {
       subject: "auth0|owner",
       email: "",
@@ -60,7 +60,9 @@ async function setup(
     host: { request: respond, upload: respond },
     agents: { addTool: (tool: AddedTool) => tools.set(tool.name, tool) },
   };
-  applyApps(ctx as never, session, true, session);
+  // The calls go through a transport as the broker's do; the NIP-FI
+  // forwarder's own test is below.
+  applyApps(ctx as never, session, true, ctx.host);
   const call = (name: string, args: Record<string, unknown>, context = {}) => {
     const tool = tools.get(name);
     if (!tool) throw new Error(`No tool ${name}`);
@@ -123,6 +125,52 @@ it("adds the app tools only for a tenant with an Apps control plane", async () =
   expect(other.ctx.panels.register).toHaveBeenCalledWith(
     expect.objectContaining({ id: "app", title: "App" }),
   );
+});
+
+it("calls through the NIP-FI forwarder, which adds the session", async () => {
+  const { ctx, respond, session } = await setup();
+  const tools = new Map<string, AddedTool>();
+  ctx.agents.addTool = (tool: AddedTool) => tools.set(tool.name, tool);
+  const request = vi.fn(async ({ path }: { path: string }) =>
+    json(
+      path.endsWith("/contract")
+        ? { minimum_client_version: "0.2.0" }
+        : { apps: [] },
+    ),
+  );
+  applyApps({ ...ctx, federatedIdentity: { request } } as never, session, true);
+  await expect(
+    (tools.get("apps_list") as AddedTool).call({} as BuzzClient, {}, {}),
+  ).resolves.toBe(JSON.stringify({ apps: [] }, null, 2));
+  await (tools.get("apps_deploy") as AddedTool).call(
+    {} as BuzzClient,
+    {},
+    { app_id: "demo", artifact: "/Users/me/a.tar.gz" },
+  );
+  expect(respond).not.toHaveBeenCalled();
+  // Native adds the session; the renderer sends none of its own.
+  const headers = {
+    Accept: "application/json",
+    "X-Hotpod-Agent-Client-Version": "0.2.0",
+  };
+  expect(request).toHaveBeenCalledWith({
+    apps: true,
+    path: "/v1/agent/apps?scope=owned",
+    method: "GET",
+    headers,
+  });
+  expect(request).toHaveBeenCalledWith({
+    apps: true,
+    path: "/v1/agent/apps/demo/deploy",
+    method: "POST",
+    headers,
+    upload: {
+      field: "artifact",
+      path: "/Users/me/a.tar.gz",
+      name: "artifact.tar.gz",
+      contentType: "application/gzip",
+    },
+  });
 });
 
 it("returns once the deployed version serves", async () => {

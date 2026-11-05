@@ -1,0 +1,117 @@
+{
+  "communities": [
+    {
+      "hosts": ["*.communities.buzz.xyz", "communities.buzz.xyz"],
+      "relay": "wss://team.communities.buzz.xyz",
+      "covered": true
+    },
+    {
+      "hosts": ["*.communities.buzz.xyz", "communities.buzz.xyz"],
+      "relay": "https://Team.communities.buzz.xyz",
+      "covered": true
+    },
+    {
+      "hosts": ["*.communities.buzz.xyz", "communities.buzz.xyz"],
+      "relay": "wss://team.communities.buzz.xyz:443",
+      "covered": true
+    },
+    {
+      "hosts": ["*.communities.buzz.xyz", "communities.buzz.xyz"],
+      "relay": "wss://communities.buzz.xyz",
+      "covered": true
+    },
+    {
+      "hosts": ["*.communities.buzz.xyz"],
+      "relay": "wss://communities.buzz.xyz",
+      "covered": false
+    },
+    {
+      "hosts": ["*.communities.buzz.xyz", "communities.buzz.xyz"],
+      "relay": "wss://a.b.communities.buzz.xyz",
+      "covered": false
+    },
+    {
+      "hosts": ["*.communities.buzz.xyz", "communities.buzz.xyz"],
+      "relay": "wss://notcommunities.buzz.xyz",
+      "covered": false
+    },
+    {
+      "hosts": ["*.communities.buzz.xyz", "communities.buzz.xyz"],
+      "relay": "wss://communities.buzz.xyz.evil.com",
+      "covered": false
+    },
+    {
+      "hosts": ["*.communities.buzz.xyz", "communities.buzz.xyz"],
+      "relay": "wss://team.communities.buzz.xyz:8443",
+      "covered": false
+    },
+    {
+      "hosts": ["*.communities.buzz.xyz", "communities.buzz.xyz"],
+      "relay": "wss://communities.buzz.xyz:80",
+      "covered": false
+    },
+    {
+      "hosts": ["*.communities.buzz.xyz", "communities.buzz.xyz"],
+      "relay": "wss://team.communities.buzz.xyz/?",
+      "covered": false
+    },
+    {
+      "hosts": ["*.communities.buzz.xyz", "communities.buzz.xyz"],
+      "relay": "wss://team.communities.buzz.xyz/#",
+      "covered": false
+    },
+    {
+      "hosts": ["*.communities.buzz.xyz", "communities.buzz.xyz"],
+      "relay": "wss://team.communities.buzz.xyz/path",
+      "covered": false
+    },
+    {
+      "hosts": ["*.communities.buzz.xyz", "communities.buzz.xyz"],
+      "relay": "wss://team.communities.buzz.xyz.",
+      "covered": false
+    },
+    {
+      "hosts": ["*.communities.buzz.xyz", "communities.buzz.xyz"],
+      "relay": "ws://team.communities.buzz.xyz",
+      "covered": false
+    },
+    {
+      "hosts": ["*.communities.buzz.xyz", "communities.buzz.xyz"],
+      "relay": "wss://user@team.communities.buzz.xyz",
+      "covered": false
+    },
+    {
+      "hosts": ["*.communities.buzz.xyz", "communities.buzz.xyz"],
+      "relay": "wss://buzz.block.builderlab.xyz",
+      "covered": false
+    },
+    {
+      "hosts": ["buzz.block.builderlab.xyz"],
+      "relay": "wss://buzz.block.builderlab.xyz",
+      "covered": true
+    },
+    {
+      "hosts": ["custom.example:8443"],
+      "relay": "wss://custom.example:8443",
+      "covered": true
+    },
+    {
+      "hosts": ["custom.example:8443"],
+      "relay": "wss://custom.example",
+      "covered": false
+    }
+  ],
+  "builtInBuilderlab": [
+    { "url": "https://app.builderlab.xyz", "builtIn": true },
+    { "url": "https://app.builderlab.xyz/", "builtIn": true },
+    { "url": "https://APP.builderlab.xyz", "builtIn": true },
+    { "url": "https://app.builderlab.xyz:443", "builtIn": true },
+    { "url": "https://app.builderlab.xyz/?", "builtIn": false },
+    { "url": "https://app.builderlab.xyz/#", "builtIn": false },
+    { "url": "https://app.builderlab.xyz/?team=1", "builtIn": false },
+    { "url": "https://app.builderlab.xyz/staging", "builtIn": false },
+    { "url": "http://app.builderlab.xyz", "builtIn": false },
+    { "url": "https://block.builderlab.xyz", "builtIn": false },
+    { "url": "not a url", "builtIn": false }
+  ]
+}

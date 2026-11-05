@@ -71,7 +71,7 @@ it("offers explicit sign-in when the live socket refuses a protected community",
 });
 
 it.each([
-  ["binding-mismatch", "Settings → Builderlab hosting"],
+  ["binding-mismatch", "identity link"],
   ["authorization-denied", "administrator"],
 ])("shows %s recovery from the live socket", async (refusal, text) => {
   await refusedLive(refusal);

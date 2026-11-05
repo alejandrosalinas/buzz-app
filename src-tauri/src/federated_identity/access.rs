@@ -25,7 +25,8 @@ impl Registrations {
     }
 }
 #[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
+#[cfg_attr(test, derive(Default))]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub(crate) struct Request {
     path: String,
     #[serde(default = "method")]
@@ -33,7 +34,28 @@ pub(crate) struct Request {
     #[serde(default)]
     headers: BTreeMap<String, String>,
     body: Option<String>,
+    /// To the server's Apps Platform control plane instead of its API, as
+    /// `bl apps` calls it: the bundled Builderlab plugin's Apps tools only.
+    #[serde(default)]
+    apps: bool,
+    timeout_ms: Option<u64>,
+    /// An Apps deploy: this archive, POSTed as a multipart form.
+    upload: Option<Upload>,
 }
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub(crate) struct Upload {
+    /// The form field it is sent as.
+    field: String,
+    /// An absolute path to a regular `.tar.gz` file under the home directory.
+    path: String,
+    /// The file name the form gives it.
+    name: String,
+    content_type: String,
+}
+/// The plugin whose Apps tools may reach the Apps Platform. Its id is
+/// reserved, so no installed plugin can claim it.
+const APPS_PLUGIN: (&str, &str) = ("block.builderlab", "bundled");
 fn method() -> String {
     "GET".into()
 }
@@ -143,7 +165,11 @@ pub(crate) async fn federated_identity_request(
     if grant.authority != config.id {
         return Err("Plugin authority mismatch".into());
     }
-    let destination = validate(config, &grant, &request)?;
+    let destination = if request.apps {
+        apps_destination(config, (&id, &revision), &request)?
+    } else {
+        validate(config, &grant, &request)?
+    };
     if !live() {
         return Err("Plugin registration retired".into());
     }
@@ -156,7 +182,10 @@ pub(crate) async fn federated_identity_request(
     // A refusal here (including 401) belongs to this call only. Only the
     // adapter's session and assertion routes decide that the session ended,
     // so a 401 asks the session route once.
-    let response = forward(destination, &token, request).await?;
+    let home = std::env::var_os("HOME").map(std::path::PathBuf::from);
+    let response = forward(destination, &token, request, home.as_deref()).await?;
+    // Only the adapter's session route ends the session; an Apps refusal is
+    // checked there too.
     if response.status == 401 {
         host.recheck(&session).await;
     }
@@ -166,9 +195,11 @@ async fn forward(
     destination: url::Url,
     token: &str,
     request: Request,
+    home: Option<&std::path::Path>,
 ) -> Result<crate::host_request::HostResponse, String> {
     let method =
         reqwest::Method::from_bytes(request.method.as_bytes()).map_err(|_| "Invalid API method")?;
+    let deadline = crate::host_request::request_deadline(request.timeout_ms)?;
     let mut headers = reqwest::header::HeaderMap::new();
     for (name, value) in &request.headers {
         headers.insert(
@@ -177,18 +208,85 @@ async fn forward(
             reqwest::header::HeaderValue::from_str(value).map_err(|_| "Invalid API header")?,
         );
     }
-    let mut bearer = reqwest::header::HeaderValue::from_str(&format!("Bearer {token}"))
+    // The Apps gateway takes the same session under its own scheme and
+    // exchanges it for the control plane's token.
+    let scheme = if request.apps { "BBIdentity" } else { "Bearer" };
+    let mut bearer = reqwest::header::HeaderValue::from_str(&format!("{scheme} {token}"))
         .map_err(|_| "Invalid session")?;
     bearer.set_sensitive(true);
     headers.insert(reqwest::header::AUTHORIZATION, bearer);
-    crate::host_request::send_request(
-        destination,
-        method,
-        headers,
-        request.body,
-        crate::host_request::DEADLINE,
-    )
-    .await
+    let Some(upload) = request.upload else {
+        return crate::host_request::send_request(
+            destination,
+            method,
+            headers,
+            request.body,
+            deadline,
+        )
+        .await;
+    };
+    let path = crate::host_request::archive_path(&upload.path, home)?;
+    let operation = async {
+        let bytes = tokio::fs::read(&path)
+            .await
+            .map_err(|_| "Could not read the upload file")?;
+        if bytes.len() as u64 > crate::host_request::MAX_UPLOAD_BYTES {
+            return Err("The upload file is too large".into());
+        }
+        let (content_type, body) = crate::host_request::multipart(
+            &BTreeMap::new(),
+            &upload.field,
+            &upload.name,
+            &upload.content_type,
+            &bytes,
+        )?;
+        headers.insert(
+            reqwest::header::CONTENT_TYPE,
+            reqwest::header::HeaderValue::from_str(&content_type).map_err(|_| "Invalid upload")?,
+        );
+        let post = crate::host_request::client(false)?
+            .post(destination)
+            .headers(headers)
+            .body(body)
+            .timeout(crate::host_request::UPLOAD_DEADLINE);
+        crate::host_request::read_response(post).await
+    };
+    tokio::time::timeout(crate::host_request::UPLOAD_DEADLINE, operation)
+        .await
+        .map_err(|_| "Upload timed out")?
+}
+/// An Apps call's destination: from the bundled Builderlab plugin only, under
+/// `/v1/agent/` on the Apps control plane of the server whose session it is.
+fn apps_destination(
+    config: &super::config::Config,
+    plugin: (&str, &str),
+    request: &Request,
+) -> Result<url::Url, String> {
+    if plugin != APPS_PLUGIN {
+        return Err("Authenticated operation is not granted".into());
+    }
+    let base = buzzodz_plugins::apps_control_plane(&config.identity_origin)
+        .ok_or("This server has no Apps Platform")?;
+    let path = &request.path;
+    let (route, query) = path.split_once('?').unwrap_or((path, ""));
+    if path.len() > 2048
+        || !route.starts_with("/v1/agent/")
+        || !super::config::canonical_path(route)
+        || query.contains(['#', '%'])
+        || query.chars().any(|c| c.is_whitespace() || c.is_control())
+        || request.body.is_some() && request.upload.is_some()
+        || request.upload.is_some() && request.method != "POST"
+    {
+        return Err("Authenticated operation is not granted".into());
+    }
+    let destination = url::Url::parse(base)
+        .and_then(|base| base.join(path))
+        .map_err(|_| "Invalid API destination")?;
+    if destination.origin().ascii_serialization() != base || destination.path() != route {
+        return Err("Invalid API destination".into());
+    }
+    check_headers(request)?;
+    Ok(destination)
 }
 fn validate(
     config: &super::config::Config,
@@ -213,6 +311,9 @@ fn validate(
     if destination.origin().ascii_serialization() != config.identity_origin {
         return Err("Invalid API destination".into());
     }
+    if request.upload.is_some() {
+        return Err("Authenticated operation is not granted".into());
+    }
     for route in [
         "/v1/login/start",
         "/v1/login/exchange",
@@ -223,6 +324,11 @@ fn validate(
             return Err("Adapter endpoints are reserved".into());
         }
     }
+    check_headers(request)?;
+    Ok(destination)
+}
+/// Bounds a request and refuses the headers only native may set.
+fn check_headers(request: &Request) -> Result<(), String> {
     if request
         .body
         .as_ref()
@@ -261,7 +367,7 @@ fn validate(
         }
         reqwest::header::HeaderValue::from_str(value).map_err(|_| "Invalid API header")?;
     }
-    Ok(destination)
+    Ok(())
 }
 
 #[cfg(test)]
@@ -322,6 +428,7 @@ mod tests {
                     method: "GET".into(),
                     headers,
                     body: None,
+                    ..Request::default()
                 },
             )
         };
@@ -444,6 +551,7 @@ mod tests {
                 method: "GET".into(),
                 headers: BTreeMap::new(),
                 body: None,
+                ..Request::default()
             },
         )
         .await
@@ -480,7 +588,9 @@ mod tests {
                 method: "POST".into(),
                 headers: BTreeMap::from([("content-type".into(), "application/json".into())]),
                 body: Some("{}".into()),
+                ..Request::default()
             },
+            None,
         )
         .await
         .unwrap();
@@ -488,7 +598,156 @@ mod tests {
         assert_eq!(serde_json::to_value(&response).unwrap()["status"], 401);
         let sent = server.join().unwrap();
         assert!(sent.starts_with("post /api/v1/buzz/communities/list "));
-        assert!(sent.contains("authorization: bearer fixture-session-token"));
+        let token = "fixture-session-token";
+        assert!(sent.contains(&format!("authorization: bearer {token}")));
         assert!(!sent.contains("cookie") && !sent.contains("x-bb-"));
+    }
+
+    fn apps_request(path: &str) -> Request {
+        Request {
+            path: path.into(),
+            method: "GET".into(),
+            apps: true,
+            ..Request::default()
+        }
+    }
+    #[test]
+    fn apps_calls_reach_only_the_servers_control_plane_from_builderlab() {
+        let config = super::super::config::Config::parse(r#"{"version":1,"id":"bb-public","identityOrigin":"https://app.builderlab.xyz","adapterBase":"https://app.builderlab.xyz/api/goose","apiBasePath":"/api/goose/","communityHosts":["*.communities.buzz.xyz"]}"#).unwrap();
+        let destination = |plugin, request: &Request| apps_destination(&config, plugin, request);
+        assert_eq!(
+            destination(
+                APPS_PLUGIN,
+                &apps_request("/v1/agent/apps/a1/ready?version_id=v1")
+            )
+            .unwrap()
+            .as_str(),
+            "https://compose-ctrl.builderlab.xyz/v1/agent/apps/a1/ready?version_id=v1"
+        );
+        // Another plugin, even one granted this authority, never sends the
+        // session to the Apps Platform.
+        for plugin in [("example.fi", "rev"), ("block.builderlab", "rev")] {
+            assert!(destination(plugin, &apps_request("/v1/agent/contract")).is_err());
+        }
+        for path in [
+            "/v1/auth/me",
+            "/v1/agent/../auth/me",
+            "/v1/agent//contract",
+            "/v1/agent/%2e%2e/x",
+            "//evil.example/v1/agent/contract",
+            "/v1/agent/contract#x",
+            "/v1/agent/contract?a=%2F",
+        ] {
+            assert!(
+                destination(APPS_PLUGIN, &apps_request(path)).is_err(),
+                "{path}"
+            );
+        }
+        let mut reserved = apps_request("/v1/agent/contract");
+        reserved.headers = BTreeMap::from([("Authorization".into(), "BBIdentity x".into())]);
+        assert!(destination(APPS_PLUGIN, &reserved)
+            .unwrap_err()
+            .contains("reserved"));
+        let upload = || Upload {
+            field: "artifact".into(),
+            path: "/tmp/a.tar.gz".into(),
+            name: "artifact.tar.gz".into(),
+            content_type: "application/gzip".into(),
+        };
+        let mut get = apps_request("/v1/agent/apps/a1/deploy");
+        get.upload = Some(upload());
+        assert!(destination(APPS_PLUGIN, &get).is_err());
+        // Uploads are Apps deploys only, never an API route.
+        let mut api = apps_request("/api/goose/v1/auth/me");
+        (api.apps, api.method, api.upload) = (false, "POST".into(), Some(upload()));
+        let grant = buzzodz_plugins::FederatedIdentityGrant {
+            authority: "bb-public".into(),
+            operations: vec![buzzodz_plugins::AuthenticatedOperation {
+                method: "POST".into(),
+                path: "/api/goose/v1/auth/me".into(),
+            }],
+        };
+        assert!(validate(&config, &grant, &api).is_err());
+        // A server with no Apps Platform has nowhere to send them.
+        let other =
+            super::super::tests::host(std::sync::Arc::new(super::super::tests::Memory::default()));
+        assert!(apps_destination(
+            other.0.config.as_ref().unwrap(),
+            APPS_PLUGIN,
+            &apps_request("/v1/agent/contract")
+        )
+        .unwrap_err()
+        .contains("no Apps"));
+    }
+    #[tokio::test]
+    async fn apps_calls_send_the_session_as_bbidentity_and_upload_the_archive() {
+        use std::io::{Read, Write};
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = std::thread::spawn(move || {
+            let (mut socket, _) = listener.accept().unwrap();
+            let mut seen = Vec::new();
+            let mut buffer = [0u8; 4096];
+            while !String::from_utf8_lossy(&seen).contains("--\r\n") {
+                let count = socket.read(&mut buffer).unwrap();
+                if count == 0 {
+                    break;
+                }
+                seen.extend_from_slice(&buffer[..count]);
+            }
+            socket
+                .write_all(b"HTTP/1.1 202 Accepted\r\ncontent-length: 2\r\n\r\n{}")
+                .unwrap();
+            String::from_utf8_lossy(&seen).into_owned()
+        });
+        let home = tempfile::tempdir().unwrap();
+        let home = home.path().canonicalize().unwrap();
+        let archive = home.join("artifact.tar.gz");
+        std::fs::write(&archive, b"archive-bytes").unwrap();
+        let mut request = apps_request("/v1/agent/apps/a1/deploy");
+        request.method = "POST".into();
+        request.headers =
+            BTreeMap::from([("X-Hotpod-Agent-Client-Version".into(), "0.2.0".into())]);
+        request.upload = Some(Upload {
+            field: "artifact".into(),
+            path: archive.to_str().unwrap().into(),
+            name: "artifact.tar.gz".into(),
+            content_type: "application/gzip".into(),
+        });
+        let response = forward(
+            url::Url::parse(&format!("http://{address}/v1/agent/apps/a1/deploy")).unwrap(),
+            "fixture-session-token",
+            request,
+            Some(&home),
+        )
+        .await
+        .unwrap();
+        assert_eq!(response.status, 202);
+        let sent = server.join().unwrap();
+        let lower = sent.to_lowercase();
+        assert!(lower.starts_with("post /v1/agent/apps/a1/deploy "));
+        assert!(lower.contains("authorization: bbidentity fixture-session-token"));
+        assert!(lower.contains("x-hotpod-agent-client-version: 0.2.0"));
+        assert!(lower.contains("content-type: multipart/form-data; boundary="));
+        assert!(sent.contains("name=\"artifact\"; filename=\"artifact.tar.gz\""));
+        assert!(sent.contains("archive-bytes"));
+        // An archive outside home is never read.
+        let mut outside = apps_request("/v1/agent/apps/a1/deploy");
+        outside.method = "POST".into();
+        outside.upload = Some(Upload {
+            field: "artifact".into(),
+            path: archive.to_str().unwrap().into(),
+            name: "artifact.tar.gz".into(),
+            content_type: "application/gzip".into(),
+        });
+        let elsewhere = tempfile::tempdir().unwrap();
+        assert!(forward(
+            url::Url::parse(&format!("http://{address}/v1/agent/apps/a1/deploy")).unwrap(),
+            "fixture-session-token",
+            outside,
+            Some(elsewhere.path()),
+        )
+        .await
+        .is_err());
     }
 }

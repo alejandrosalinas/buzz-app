@@ -7,6 +7,8 @@ const CONTROL_PLANES: Readonly<Record<string, string>> = {
   "https://app.builderlabstaging.xyz":
     "https://compose-ctrl.builderlabstaging.xyz",
   "https://block.builderlab.xyz": "https://compose-ctrl.block.builderlab.xyz",
+  "https://block.builderlabstaging.xyz":
+    "https://compose-ctrl.block.builderlabstaging.xyz",
 };
 
 /** The control plane for the configured Builderlab URL, if it has one. */

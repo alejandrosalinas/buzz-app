@@ -932,12 +932,12 @@ stays in the existing Join a community dialog; the card only copies the new rela
 account backend follows the same split as `HostService`: live development with a
 pinned viewer uses the broker's `/api/builderlab/*` routes (`browser-host/builderlab.mjs`),
 which keep their own session credential and signing key in Node. Desktop builds use
-`native.ts`, the same routes with the plugin's shared session credential, host HTTP to
-the configured `BUZZ_BUILDERLAB_URL` grant, and `identity_sign_builderlab_binding`, which
-validates the challenge and signs only the fixed kind 24243 binding. They read the
-account after sign-in's automatic identity link settles. The desktop credential lives in
-plugin memory for the plugin's lifetime and is never persisted, so restarting the app
-signs out. Builds without a configured Builderlab URL show the unavailable notice.
+`native.ts`, the same routes through the native forwarder with the NIP-FI session,
+and `identity_sign_builderlab_binding`, which validates the challenge and signs only
+the fixed kind 24243 binding. They read the account after sign-in's automatic
+identity link settles. The session token stays native in the system keyring and
+survives a restart. A build with neither the session nor the broker has no
+Builderlab.
 
 ### Composer accessories
 
@@ -1416,11 +1416,10 @@ require the plugin to be enabled in the native catalog. External grants require 
 enabled current artifact and its integrity checks; safe mode pauses external
 plugins while enabled bundled plugins remain usable.
 
-Builderlab's effective manifest derives its exact origin from the validated
-[`BUZZ_BUILDERLAB_URL` build input](configuration.md#builderlab-url-build-input).
-With the [FI descriptor](configuration.md#federated-identity-build-input), it
-instead gets a `host.federatedIdentity` grant of exact Builderlab routes and no
-network origins or files. Its source manifest contains no deployment origins;
+Builderlab's effective manifest has only a `host.federatedIdentity` grant of
+exact Builderlab routes for the build's
+[first sign-in server](configuration.md#federated-identity-build-input), and no
+network origins or files; a build without one grants nothing. Its source manifest contains no deployment origins;
 external plugin declarations remain fixed in their installed artifacts.
 
 The `federatedIdentity` service forwards a granted operation natively to the

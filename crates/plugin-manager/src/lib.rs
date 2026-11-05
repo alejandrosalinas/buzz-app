@@ -342,13 +342,17 @@ pub const BUILDERLAB_ORIGIN: &str = env!("BUZZ_BUILDERLAB_ORIGIN");
 /// Exact Apps domain paired with the build's login origin, or empty when native SSO is unconfigured.
 pub const BUILDERLAB_APPS_DOMAIN: &str = env!("BUZZ_BUILDERLAB_APPS_DOMAIN");
 /// The Apps Platform control plane of the tenant whose Builderlab sign-in
-/// `origin` is, which the bundled Builderlab plugin deploys apps to. Kept in
-/// step with `src/bundled/builderlab/apps/environment.ts`.
+/// `origin` is, which the bundled Builderlab plugin deploys apps to through
+/// the native FI session. Kept in step with
+/// `src/bundled/builderlab/apps/environment.ts`.
 pub fn apps_control_plane(origin: &str) -> Option<&'static str> {
     match origin {
         "https://app.builderlab.xyz" => Some("https://compose-ctrl.builderlab.xyz"),
         "https://app.builderlabstaging.xyz" => Some("https://compose-ctrl.builderlabstaging.xyz"),
         "https://block.builderlab.xyz" => Some("https://compose-ctrl.block.builderlab.xyz"),
+        "https://block.builderlabstaging.xyz" => {
+            Some("https://compose-ctrl.block.builderlabstaging.xyz")
+        }
         _ => None,
     }
 }
@@ -386,24 +390,11 @@ pub fn bundled_manifests() -> Vec<Manifest> {
         "../../../src/bundled/builderlab/manifest.json"
     ))
     .expect("builderlab manifest");
-    let origin = BUILDERLAB_ORIGIN;
+    // Builderlab is reached only through the native FI session forwarder: no
+    // renderer network or file access. A development broker build reaches it
+    // through the broker, and a build with neither has no Builderlab.
     let descriptor = env!("BUZZ_BUILD_FEDERATED_IDENTITY_CONFIG");
-    builderlab.host = Some(if descriptor.is_empty() {
-        HostGrants {
-            files: apps_control_plane(origin).is_some(),
-            network_origins: if origin.is_empty() {
-                vec![]
-            } else {
-                std::iter::once(origin)
-                    .chain(apps_control_plane(origin))
-                    .map(Into::into)
-                    .collect()
-            },
-            ..HostGrants::default()
-        }
-    } else {
-        // An FI build reaches Builderlab only through the native session
-        // forwarder: no renderer network or file access.
+    builderlab.host = (!descriptor.is_empty()).then(|| {
         let config: serde_json::Value =
             serde_json::from_str(descriptor).expect("validated FI descriptor");
         let base = config["apiBasePath"].as_str().expect("API base");
@@ -2349,6 +2340,10 @@ mod tests {
             Some("https://compose-ctrl.block.builderlab.xyz")
         );
         assert_eq!(
+            super::apps_control_plane("https://block.builderlabstaging.xyz"),
+            Some("https://compose-ctrl.block.builderlabstaging.xyz")
+        );
+        assert_eq!(
             super::apps_control_plane("https://builderlab.example"),
             None
         );
@@ -2359,25 +2354,11 @@ mod tests {
         let temp = tempfile::tempdir().unwrap();
         let manager = Manager::open(Some(temp.path().into()), "test", false).unwrap();
         let grants = manager.host_grants("block.builderlab", "bundled").unwrap();
+        // Only the native session's Builderlab routes are granted, and only in
+        // an FI build.
         if env!("BUZZ_BUILD_FEDERATED_IDENTITY_CONFIG").is_empty() {
-            assert_eq!(
-                grants.files,
-                super::apps_control_plane(super::BUILDERLAB_ORIGIN).is_some()
-            );
-            assert_eq!(
-                grants.network_origins,
-                if env!("BUZZ_BUILDERLAB_ORIGIN").is_empty() {
-                    vec![]
-                } else {
-                    std::iter::once(env!("BUZZ_BUILDERLAB_ORIGIN"))
-                        .chain(super::apps_control_plane(env!("BUZZ_BUILDERLAB_ORIGIN")))
-                        .map(str::to_owned)
-                        .collect()
-                }
-            );
-            assert_eq!(grants.federated_identity, None);
+            assert_eq!(grants, super::HostGrants::default());
         } else {
-            // An FI build grants only the native session's Builderlab routes.
             assert!(!grants.files);
             assert!(grants.network_origins.is_empty());
             let grant = grants.federated_identity.clone().unwrap();

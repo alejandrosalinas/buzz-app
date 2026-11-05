@@ -19,14 +19,11 @@ permissions:
 
 env:
   BUZZ_EXTERNAL_MCP_COMMUNITIES: https://buzz.block.builderlab.xyz
-  # Legacy login origin, only when FI is not configured: the build scripts
-  # reject a nonempty legacy origin alongside the FI descriptor.
-  BUZZ_BUILDERLAB_URL: ${{ !vars.BUZZ_BUILD_FEDERATED_IDENTITY_CONFIG && (vars.BUZZ_BUILDERLAB_URL || 'https://app.builderlab.xyz') || '' }}
   # Automatic key backup to bb-public production, only for builds that sign in to
-  # app.builderlab.xyz: the native uploader accepts a login only from the build's own
-  # Builderlab origin, and the namespace must match that service's configuration.
-  BUZZ_NSEC_BACKUP_SERVICE_URL: ${{ !vars.BUZZ_BUILD_FEDERATED_IDENTITY_CONFIG && (vars.BUZZ_BUILDERLAB_URL || 'https://app.builderlab.xyz') == 'https://app.builderlab.xyz' && 'https://app.builderlab.xyz/api/goose' || '' }}
-  BUZZ_NSEC_BACKUP_NAMESPACE: ${{ !vars.BUZZ_BUILD_FEDERATED_IDENTITY_CONFIG && (vars.BUZZ_BUILDERLAB_URL || 'https://app.builderlab.xyz') == 'https://app.builderlab.xyz' && 'backup/bb-public/production' || '' }}
+  # app.builderlab.xyz: every build without an FI descriptor does, through the
+  # built-in server. The namespace must match that service's configuration.
+  BUZZ_NSEC_BACKUP_SERVICE_URL: ${{ !vars.BUZZ_BUILD_FEDERATED_IDENTITY_CONFIG && 'https://app.builderlab.xyz/api/goose' || '' }}
+  BUZZ_NSEC_BACKUP_NAMESPACE: ${{ !vars.BUZZ_BUILD_FEDERATED_IDENTITY_CONFIG && 'backup/bb-public/production' || '' }}
   # Public verification inputs; the native build and plugins.updater must match.
   # Candidate-only runs build without the updater.
   BUZZ_UPDATER_PUBLIC_KEY: ${{ !inputs.candidates && 'dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDJDQjQ2RDZFMUEwOERFMTEKUldRUjNnZ2FibTIwTE10QkVaMzFyYkZlY0R4ajhmbFBjdncvNVRCYnNpSm9kaFNBaHQzemZlZHkK' || '' }}
@@ -50,8 +47,19 @@ jobs:
     env:
       CI: "true"
       CARGO_TERM_COLOR: always
-      BUZZ_BUILD_FEDERATED_IDENTITY_CONFIG: ${{ vars.BUZZ_BUILD_FEDERATED_IDENTITY_CONFIG }}
     steps:
+      # Unset builds trust only the built-in sign-in server and an empty value
+      # opts out, so add the repository's servers only when it names some.
+      - name: Add sign-in servers
+        if: vars.BUZZ_BUILD_FEDERATED_IDENTITY_CONFIG != ''
+        shell: bash
+        env:
+          SERVERS: ${{ vars.BUZZ_BUILD_FEDERATED_IDENTITY_CONFIG }}
+        # The delimiter form keeps a pretty-printed, multiline value intact.
+        run: |
+          delimiter="FI_${RANDOM}${RANDOM}${RANDOM}"
+          [[ "$SERVERS" != *"$delimiter"* ]]
+          printf 'BUZZ_BUILD_FEDERATED_IDENTITY_CONFIG<<%s\n%s\n%s\n' "$delimiter" "$SERVERS" "$delimiter" >> "$GITHUB_ENV"
       - name: Require main and signing configuration
         env:
           SOURCE_REF: ${{ github.ref }}
@@ -323,14 +331,24 @@ jobs:
   windows:
     if: github.repository == 'block/buzz-app' && (inputs.candidates || (github.ref == 'refs/heads/main' && !inputs.promote_version))
     name: Windows x64 installer (unsigned)
-    env:
-      BUZZ_BUILD_FEDERATED_IDENTITY_CONFIG: ${{ vars.BUZZ_BUILD_FEDERATED_IDENTITY_CONFIG }}
     runs-on: windows-2025
     timeout-minutes: 120
     defaults:
       run:
         shell: bash
     steps:
+      # Unset builds trust only the built-in sign-in server and an empty value
+      # opts out, so add the repository's servers only when it names some.
+      - name: Add sign-in servers
+        if: vars.BUZZ_BUILD_FEDERATED_IDENTITY_CONFIG != ''
+        shell: bash
+        env:
+          SERVERS: ${{ vars.BUZZ_BUILD_FEDERATED_IDENTITY_CONFIG }}
+        # The delimiter form keeps a pretty-printed, multiline value intact.
+        run: |
+          delimiter="FI_${RANDOM}${RANDOM}${RANDOM}"
+          [[ "$SERVERS" != *"$delimiter"* ]]
+          printf 'BUZZ_BUILD_FEDERATED_IDENTITY_CONFIG<<%s\n%s\n%s\n' "$delimiter" "$SERVERS" "$delimiter" >> "$GITHUB_ENV"
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
@@ -418,8 +436,19 @@ jobs:
         shell: bash
     env:
       APPIMAGE_EXTRACT_AND_RUN: "1"
-      BUZZ_BUILD_FEDERATED_IDENTITY_CONFIG: ${{ vars.BUZZ_BUILD_FEDERATED_IDENTITY_CONFIG }}
     steps:
+      # Unset builds trust only the built-in sign-in server and an empty value
+      # opts out, so add the repository's servers only when it names some.
+      - name: Add sign-in servers
+        if: vars.BUZZ_BUILD_FEDERATED_IDENTITY_CONFIG != ''
+        shell: bash
+        env:
+          SERVERS: ${{ vars.BUZZ_BUILD_FEDERATED_IDENTITY_CONFIG }}
+        # The delimiter form keeps a pretty-printed, multiline value intact.
+        run: |
+          delimiter="FI_${RANDOM}${RANDOM}${RANDOM}"
+          [[ "$SERVERS" != *"$delimiter"* ]]
+          printf 'BUZZ_BUILD_FEDERATED_IDENTITY_CONFIG<<%s\n%s\n%s\n' "$delimiter" "$SERVERS" "$delimiter" >> "$GITHUB_ENV"
       - name: Install build and packaging dependencies
         run: |
           apt-get update

@@ -147,13 +147,13 @@ function relayAnswer(args: unknown) {
 }
 
 const notice = () => screen.queryByText("This destination couldn’t open");
-const signIn = () =>
-  screen.queryByRole("button", { name: "Sign in with Builderlab" });
+/** The first-run landing, which a build without Builderlab still shows. */
+const landing = () => screen.queryByRole("button", { name: "Other options" });
 async function firstRun() {
   const current = createServices();
   services = current;
   render(<App services={current} />);
-  await waitFor(() => expect(signIn()).toBeVisible());
+  await waitFor(() => expect(landing()).toBeVisible());
   expect(current.navigation.snapshot()).toMatchObject({
     status: "opening",
     entry: { target: { kind: "home" } },
@@ -169,7 +169,7 @@ async function openGate(current: AppServices) {
     expect(current.navigation.snapshot().status).toBe("opened"),
   );
   expect(notice()).not.toBeInTheDocument();
-  expect(signIn()).not.toBeInTheDocument();
+  expect(landing()).not.toBeInTheDocument();
 }
 
 it("presents the startup visit as-is however long the first-run gate stays up", async () => {

@@ -1,7 +1,6 @@
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import type { Host, HostResponse } from "../../../features/host/service";
-import { createOAuthSession } from "../oauth/session";
-import { deferred } from "../test-helpers";
+import { deferred, createTestSession } from "../test-helpers";
 import { createAgentClient } from "./client";
 
 beforeEach(() => {
@@ -31,9 +30,9 @@ const response = (value: unknown, status = 200): HostResponse => ({
 const viewer = "cd".repeat(32);
 const bound = (pubkey_hex = viewer) => response({ identity: { pubkey_hex } });
 async function fixture(subject = "user", canUseRemoteAgents = true) {
-  const session = createOAuthSession(
+  const session = createTestSession(
     async () => ({
-      value: "secret",
+      revision: "secret",
       account: {
         subject,
         email: "a@example.com",
@@ -96,7 +95,6 @@ it("lists the authenticated account through the configured native host", async (
     headers: {
       Accept: "application/json",
       "Content-Type": "application/json",
-      "X-BB-Session-Credential": "secret",
     },
     body: JSON.stringify({ include_instructions: true }),
   });
@@ -160,9 +158,8 @@ it.each([401, 403, 500])(
     }
     expect(error).toBeInstanceOf(Error);
     expect(String(error)).not.toContain("private-secret");
-    expect(h.session.snapshot().status).toBe(
-      status === 401 ? "signed-out" : "signed-in",
-    );
+    // A 401 refuses only this call: the native session decides when it ends.
+    expect(h.session.snapshot().status).toBe("signed-in");
   },
 );
 it.each(["sign-out", "new-login", "cancel", "dispose"])(
@@ -296,7 +293,6 @@ it("replaces instructions verbatim through the authenticated host", async () => 
     headers: {
       Accept: "application/json",
       "Content-Type": "application/json",
-      "X-BB-Session-Credential": "secret",
     },
     body: JSON.stringify({
       agent_pubkey: row.agent_pubkey,
@@ -356,7 +352,6 @@ it("deletes through the configured authenticated host", async () => {
     headers: {
       Accept: "application/json",
       "Content-Type": "application/json",
-      "X-BB-Session-Credential": "secret",
     },
     body: JSON.stringify({ agent_id: row.agent_id }),
   });
@@ -650,7 +645,6 @@ it("links an unbound Buzz key to the account before attesting", async () => {
   expect(calls[1]?.headers).toEqual({
     Accept: "application/json",
     "Content-Type": "application/json",
-    "X-BB-Session-Credential": "secret",
     Origin: "https://builderlab.example",
   });
   expect(JSON.parse(calls[1]?.body ?? "")).toEqual({
@@ -716,13 +710,13 @@ it("refuses to link without a local Buzz identity", async () => {
   );
   expect(h.host.request).not.toHaveBeenCalled();
 });
-it("signs out when the identity check finds the session expired", async () => {
+it("refuses activation, keeping the session, when the identity check finds it expired", async () => {
   const h = await fixture();
   vi.mocked(h.host.request).mockResolvedValueOnce(response({}, 401));
   await expect(
     h.client.activate(row.agent_pubkey, proof, undefined, h.signal),
   ).rejects.toThrow("session expired");
-  expect(h.session.snapshot().status).toBe("signed-out");
+  expect(h.session.snapshot().status).toBe("signed-in");
   expect(h.host.request).toHaveBeenCalledTimes(1);
 });
 it("attests without linking when there is no native identity", async () => {

@@ -3,11 +3,7 @@ import type { ComponentType } from "react";
 /** One signed-in Builderlab lifetime; never passed to website JavaScript.
  * `federated` is the public NIP-FI session revision; native holds its token. */
 export type BuilderlabViewerSession = Readonly<
-  (
-    | { credential: string }
-    | { federated: string }
-    | { broker: { origin: string; revision: string } }
-  ) & {
+  ({ federated: string } | { broker: { origin: string; revision: string } }) & {
     storage: string;
     signal: AbortSignal;
   }

@@ -18,8 +18,7 @@ import { AgentTabs } from "../../agents/AgentTabs";
 import type { Agents, Agent } from "../../../features/agents/service";
 import type { Host, HostResponse } from "../../../features/host/service";
 import { createAgentClient } from "../agents/client";
-import { createOAuthSession } from "../oauth/session";
-import { deferred } from "../test-helpers";
+import { deferred, createTestSession } from "../test-helpers";
 import { builderlabType } from "./index";
 import { PanelCard } from "../../../features/panels/PanelCard";
 import { createSignInFooter } from "./SignInFooter";
@@ -81,7 +80,7 @@ async function fixture(signedIn = true) {
   let email = "a@example.com";
   let canUseRemoteAgents = true;
   const acquire = vi.fn(async () => ({
-    value: "credential",
+    revision: "credential",
     account: {
       subject,
       email,
@@ -90,7 +89,7 @@ async function fixture(signedIn = true) {
     },
   }));
   const release = vi.fn();
-  const session = createOAuthSession(acquire, release, {
+  const session = createTestSession(acquire, release, {
     request: (input) => request(input),
   });
   if (signedIn) await session.signIn();
@@ -402,6 +401,8 @@ it.each([
 ])(
   "signs out before opening browser logout and preserves a mismatched draft ($activation, remote access: $canUseRemoteAgents)",
   async ({ canUseRemoteAgents, activation }) => {
+    // Browser logout is the development broker's account switch.
+    vi.stubEnv("VITE_BUZZ_LIVE", "1");
     vi.stubEnv(
       "VITE_BUZZ_BUILDERLAB_URL",
       "https://staging.builderlab.example:8443/api",
@@ -499,6 +500,7 @@ it.each([
 );
 
 it("recovers an unloaded no-access account through logout and normal sign-in, retaining ordinary Retry", async () => {
+  vi.stubEnv("VITE_BUZZ_LIVE", "1");
   const h = await fixture(false);
   const Footer = createSignInFooter(h.session);
   render(
@@ -570,7 +572,7 @@ it("recovers an unloaded no-access account through logout and normal sign-in, re
     } finally {
       await act(async () =>
         held.resolve({
-          value: "credential-a",
+          revision: "credential-a",
           account: {
             subject: "account-a",
             email: "a@example.com",

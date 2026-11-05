@@ -73,6 +73,7 @@ fn native_command_permissions_isolate_webviews() {
 
     let application_commands = [
         "federated_identity_snapshot",
+        "federated_identity_servers",
         "federated_identity_sign_in",
         "federated_identity_cancel_sign_in",
         "federated_identity_sign_out",
@@ -162,9 +163,6 @@ fn native_command_permissions_isolate_webviews() {
         "plugin_host_mcp_close",
         "plugin_host_read_file",
         "plugin_host_resolve_directory",
-        "oauth_callback_begin",
-        "oauth_callback_wait",
-        "oauth_callback_cancel",
         "app_agent_list",
         "app_agent_set_protection",
         "app_agent_protection_defaults",

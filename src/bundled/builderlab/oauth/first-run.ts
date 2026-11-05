@@ -2,34 +2,19 @@ import type { Context } from "@deepseek-ai/cordis";
 import { invoke } from "@tauri-apps/api/core";
 import { recoveryMessage } from "../../../features/federated-identity/CommunitySignIn";
 import type { FederatedIdentity } from "../../../features/federated-identity/service";
-import type { Host } from "../../../features/host/service";
 import type { StorageResult } from "../../../plugins/types";
 import manifest from "../manifest.json";
-import { federatedAccount } from "../session";
-import { browserCredential, type Credential } from "./browser";
+import {
+  type Credential,
+  federatedAccount,
+  type LoginSnapshot,
+} from "../session";
 
 /**
- * First launch runs before this plugin can share its Settings session, so the
- * welcome screen signs in through the same OAuth client under the bundled
- * plugin's own native network grant. Native code grants that origin at build
- * time; it does not depend on the plugin's JavaScript having started.
- */
-export const bundledHost: Host = {
-  runCommand: () => Promise.resolve(null),
-  request: (request) =>
-    invoke("plugin_host_request", {
-      id: manifest.id,
-      revision: "bundled",
-      request,
-    }),
-};
-
-/**
- * The NIP-FI session as the bundled plugin's installation calls it. An FI
- * build grants that installation the native forwarder instead of network
- * origins, and native admission checks only that grant, so first run can
- * use it whether or not the plugin's JavaScript has started, as
- * `bundledHost` does.
+ * The NIP-FI session as the bundled plugin's installation calls it. Native
+ * grants that installation the forwarder at build time and admission checks
+ * only that grant, so first launch can sign in whether or not the plugin's
+ * JavaScript has started.
  */
 export const bundledFederatedIdentity = (ctx: Context): FederatedIdentity =>
   ctx.extend({ pluginOwner: { id: manifest.id, revision: "bundled" } })
@@ -42,14 +27,13 @@ export type FirstRunIdentity = Pick<
 >;
 
 /**
- * The bundled grant exists only while this plugin is enabled, so with it
- * turned off the browser sign-in could finish but never exchange its code.
- * Refuse before opening the browser instead. With `federated`, an FI build's
- * sign-in: see `federatedCredential`.
+ * First run's Builderlab sign-in (`federatedCredential`). The bundled grant
+ * exists only while this plugin is enabled, so with it turned off the
+ * account could never be read; refuse before opening the browser instead.
  */
 export async function firstRunCredential(
   signal: AbortSignal,
-  federated?: FirstRunIdentity,
+  federated: FirstRunIdentity,
 ): Promise<Credential> {
   const result = await invoke<StorageResult>("plugin_catalog").catch(() => {
     throw new Error("Could not complete Builderlab sign-in. Try again.");
@@ -66,9 +50,7 @@ export async function firstRunCredential(
     throw new Error(
       "Builderlab is turned off on this device, so you can't sign in with email. Enter a community address instead.",
     );
-  return federated
-    ? federatedCredential(federated, signal)
-    : browserCredential(bundledHost, signal);
+  return federatedCredential(federated, signal);
 }
 
 // Native rejects with a bare failure code, such as a refused renewal's.
@@ -83,9 +65,9 @@ const signIn = (identity: FirstRunIdentity) =>
  * An FI build's sign-in: the native NIP-FI login, whose browser step, code
  * exchange and token stay native, then its account as the Builderlab plugin
  * reads it. A session that already exists, including a stored one native
- * restores, signs in again, so the browser can choose the account. The
- * credential's value is the session's public revision, which first run's
- * later calls are fenced to (`federatedBuilderlabAccount`).
+ * restores, signs in again, so the browser can choose the account. First
+ * run's later calls are fenced to the credential's revision
+ * (`federatedBuilderlabAccount`).
  */
 async function federatedCredential(
   identity: FirstRunIdentity,
@@ -144,7 +126,7 @@ async function federatedCredential(
     signal.throwIfAborted();
     if (!account || identity.snapshot().revision !== session.revision)
       throw new Error("Could not load your Builderlab account. Try again.");
-    return Object.freeze({ value: session.revision, account });
+    return Object.freeze({ revision: session.revision, account });
   } catch (error) {
     if (signal.aborted) throw new Error("Sign-in canceled.");
     throw error instanceof Error
@@ -154,4 +136,66 @@ async function federatedCredential(
     unsubscribe();
     signal.removeEventListener("abort", cancel);
   }
+}
+
+/**
+ * First run's hold on one sign-in: `acquire`'s credential while it lasts. A
+ * new sign-in or `cancel` ends the attempt and the credential, and a
+ * superseded attempt's answer is dropped.
+ */
+export function createFirstRunLogin(
+  acquire: (signal: AbortSignal) => Promise<Credential>,
+) {
+  let credential: Credential | undefined;
+  let attempt: AbortController | undefined;
+  let state: LoginSnapshot = { status: "signed-out" };
+  const listeners = new Set<() => void>();
+  const publish = (next: LoginSnapshot) => {
+    state = next;
+    for (const listener of [...listeners]) listener();
+  };
+  const reset = (announce = true) => {
+    attempt?.abort();
+    attempt = undefined;
+    credential = undefined;
+    if (announce) publish({ status: "signed-out" });
+  };
+  return {
+    snapshot: () => state,
+    subscribe(listener: () => void) {
+      listeners.add(listener);
+      return () => {
+        listeners.delete(listener);
+      };
+    },
+    credential() {
+      if (!credential) throw new Error("Sign in to Builderlab first.");
+      return credential;
+    },
+    async signIn() {
+      if (attempt) return;
+      reset(false);
+      const current = new AbortController();
+      attempt = current;
+      publish({ status: "pending" });
+      try {
+        const result = await acquire(current.signal);
+        if (attempt !== current) return;
+        credential = result;
+        publish({ status: "signed-in", account: result.account });
+      } catch (error) {
+        if (attempt !== current) return;
+        publish({
+          status: "signed-out",
+          error:
+            error instanceof Error
+              ? error.message
+              : "Sign-in failed. Try again.",
+        });
+      } finally {
+        if (attempt === current) attempt = undefined;
+      }
+    },
+    cancel: () => reset(),
+  };
 }

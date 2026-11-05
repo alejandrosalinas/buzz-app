@@ -613,6 +613,7 @@ function ConnectedAppContent({ services }: { services: AppServices }) {
                 <PrimarySidebar
                   creationAction={creationAction}
                   federatedIdentity={services.federatedIdentity}
+                  memberships={client.memberships}
                   relay={services.relay}
                   navigator={services.navigation}
                   agents={services.agents}

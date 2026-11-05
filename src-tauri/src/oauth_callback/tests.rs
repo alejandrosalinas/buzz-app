@@ -5,7 +5,7 @@ fn options(path: &str) -> OAuthRequest {
         authorization_url: "https://provider.example/authorize?client_id=buzz&scope=a%20b&scope=c"
             .into(),
         callback_path: path.into(),
-        use_state: None,
+        use_state: true,
     }
 }
 
@@ -23,10 +23,6 @@ fn start(host: &OAuthCallbackHost, request: OAuthRequest) -> Result<Started, Str
         Ok(())
     })?;
     let authorization = opened.unwrap();
-    assert_eq!(
-        serde_json::to_value(&attempt).unwrap(),
-        serde_json::json!({"id": attempt.id, "callbackUrl": attempt.callback_url})
-    );
     let callback_url = attempt.callback_url;
     assert_eq!(
         authorization
@@ -47,7 +43,7 @@ fn begin(host: &OAuthCallbackHost, path: String) -> Result<Started, String> {
     start(
         host,
         OAuthRequest {
-            use_state: Some(false),
+            use_state: false,
             ..options(&path)
         },
     )
@@ -162,7 +158,6 @@ async fn real_listener_preserves_callback_parameters_and_closes_after_completion
     let state = OAuthCallbackHost::default();
     let attempt = begin(&state, "/oauth2redirect/provider".into()).unwrap();
     let id = attempt.id.as_str();
-    state.1.arm(id, Some("synthetic-browser".into()));
     let url = url::Url::parse(&attempt.callback_url).unwrap();
     assert_eq!(url.host_str(), Some("127.0.0.1"));
     assert!(uuid::Uuid::parse_str(id).is_ok());
@@ -272,15 +267,9 @@ async fn real_listener_preserves_callback_parameters_and_closes_after_completion
         ("extra", "a"),
         ("extra", "b"),
     ]);
-    assert_eq!(
-        serde_json::to_value(&expected).unwrap(),
-        serde_json::json!({"parameters": [["code", "one+time"], ["state", "attempt+state"], ["extra", "a"], ["extra", "b"]]})
-    );
     assert_eq!(result, Ok(expected));
     assert!(state.0.lock().unwrap().is_none());
-    assert!(state.1.deadline(id).is_some());
     state.cancel(id).unwrap();
-    assert!(state.1.deadline(id).is_none());
     let mut byte = [0];
     let closed = tokio::time::timeout(Duration::from_secs(5), queued.read(&mut byte))
         .await
@@ -334,9 +323,6 @@ async fn abandoned_listener_expires_and_can_be_replaced() {
 async fn main_document_reload_cancels_wait_and_allows_new_sign_in() {
     use tauri::webview::PageLoadEvent::{Finished, Started};
 
-    // Async Tauri commands queue startup, allowing reload cleanup to overtake it.
-    let _: fn(_, _, _, _, _) -> Result<OAuthAttempt, String> =
-        oauth_callback_begin::<tauri::test::MockRuntime>;
     let state = OAuthCallbackHost::default();
     let first = start(&state, options("/callback/old")).unwrap().id;
     for (label, event) in [("browser-content", Started), ("main", Finished)] {
@@ -382,7 +368,7 @@ fn startup_rejects_unsafe_urls_and_conflicting_owned_parameters_before_launch() 
         },
         OAuthRequest {
             authorization_url: "https://provider.example/authorize?state=caller".into(),
-            use_state: Some(false),
+            use_state: false,
             ..options("/callback")
         },
         OAuthRequest {
@@ -499,7 +485,7 @@ async fn redirect_uri_is_used_even_with_state_disabled() {
     let attempt = start(
         &host,
         OAuthRequest {
-            use_state: Some(false),
+            use_state: false,
             ..options("/callback/random")
         },
     )
@@ -610,7 +596,6 @@ async fn federated_handoff_uses_return_to_without_legacy_oauth_fields_and_keeps_
         host.wait(&attempt.id).await.unwrap(),
         response(&[("code", "fixture-code")])
     );
-    assert!(host.1.deadline(&attempt.id).is_none());
     assert!(host.wait(&attempt.id).await.is_err());
     let next = start(&host, options("/other")).unwrap();
     host.cancel(&next.id).unwrap();

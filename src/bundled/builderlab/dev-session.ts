@@ -39,7 +39,7 @@ type State = {
 
 export function createDevSession() {
   let state: LoginSnapshot = { status: "pending", checking: true };
-  let owner: (Credential & { revision: string }) | undefined;
+  let owner: Credential | undefined;
   let viewer: BuilderlabViewerSession | undefined;
   let lifetime = new AbortController();
   let disposed = false;
@@ -169,7 +169,6 @@ export function createDevSession() {
       return response;
     },
     // The server processes 401s and expiry for every consumer together.
-    expired() {},
     viewerSession() {
       if (!viewer || disposed) throw new Error("Sign in to Builderlab first.");
       return viewer;

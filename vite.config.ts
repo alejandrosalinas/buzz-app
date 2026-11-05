@@ -10,7 +10,9 @@ import {
   relayOrigin,
 } from "./src/features/communities/destination.ts";
 import { parseFirstRunAccountSeed } from "./src/features/identity/first-run-seed.ts";
+import { isBuiltInBuilderlab } from "./src/features/federated-identity/community-hosts.ts";
 
+/** `BUZZ_BUILDERLAB_URL` from the process or `.env.local`, or undefined when unset. */
 function sharedBuilderlabUrl() {
   const key = "BUZZ_BUILDERLAB_URL";
   if (process.env[key] !== undefined) return process.env[key];
@@ -24,21 +26,39 @@ function sharedBuilderlabUrl() {
       "code" in error &&
       error.code === "ENOENT"
     )
-      return "https://app.builderlab.xyz";
+      return undefined;
     throw new Error("Could not read shared Builderlab build configuration.");
   }
-  return (
-    parseEnv(local.replace(/^\uFEFF/, ""))[key] ?? "https://app.builderlab.xyz"
-  );
+  return parseEnv(local.replace(/^\uFEFF/, ""))[key];
 }
 
-/** An FI build signs in to Builderlab through its NIP-FI identity origin and
- * API base, in the legacy URL's shape (`<url>/api/goose/`). Native builds
- * read the descriptor from the process only, and so does this. */
-function federatedBuilderlabUrl() {
+/** The built-in sign-in server's Builderlab, in the legacy URL's shape. Keep
+ * in step with `BUILT_IN` in src-tauri/src/federated_identity/config.rs. */
+const BUILT_IN_BUILDERLAB = "https://app.builderlab.xyz";
+
+/** An FI build signs in to Builderlab through its first sign-in server's
+ * identity origin and API base, in the legacy URL's shape
+ * (`<url>/api/goose/`). This applies native's rule (`compiled` in
+ * federated_identity/config.rs): unset adds nothing to the built-in server,
+ * empty opts out, and a Builderlab URL for another deployment turns the
+ * built-in server off. Native builds read the descriptor from the process
+ * only, and so does this. */
+function federatedBuilderlabUrl(legacy: string | undefined, live: boolean) {
   const raw = process.env.BUZZ_BUILD_FEDERATED_IDENTITY_CONFIG;
-  if (!raw) return undefined;
-  const { identityOrigin, apiBasePath } = JSON.parse(raw) as {
+  if (raw === "") return undefined;
+  // The development broker keeps its own Builderlab sign-in unless the
+  // build adds a server (native's `dev_viewer`).
+  if (raw === undefined && live) return undefined;
+  if (raw === undefined)
+    return legacy === undefined
+      ? BUILT_IN_BUILDERLAB
+      : isBuiltInBuilderlab(legacy)
+        ? legacy
+        : undefined;
+  const parsed = JSON.parse(raw) as unknown;
+  const { identityOrigin, apiBasePath } = (
+    Array.isArray(parsed) ? parsed[0] : parsed
+  ) as {
     identityOrigin?: unknown;
     apiBasePath?: unknown;
   };
@@ -57,12 +77,13 @@ export default defineConfig(async ({ command, mode }) => {
   // Native builds consume only process values and repository-root .env.local.
   // Keep this frontend value on the same source so Vite mode files cannot
   // select a different same-origin deployment path.
-  const federatedUrl = federatedBuilderlabUrl();
-  const builderlabUrl = federatedUrl ?? sharedBuilderlabUrl();
   // The development broker is the dev server's default: it runs whenever the
   // developer has pinned their public key. Production builds (`pnpm build`,
   // `pnpm tauri build`) never load it, regardless of .env.local contents.
   const live = command === "serve" && Boolean(env.BUZZ_DEV_VIEWER?.trim());
+  const legacyUrl = sharedBuilderlabUrl();
+  const federatedUrl = federatedBuilderlabUrl(legacyUrl, live);
+  const builderlabUrl = federatedUrl ?? legacyUrl ?? BUILT_IN_BUILDERLAB;
   const aliases = env.BUZZ_COMMUNITY_ALIASES ?? "";
   parseCommunityAliases(aliases);
   const externalMcpCommunities = (env.BUZZ_EXTERNAL_MCP_COMMUNITIES ?? "")

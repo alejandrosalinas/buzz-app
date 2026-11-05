@@ -130,7 +130,7 @@ it("sign-out closes live and parked account guests even while another attach is 
   const sessions = new BrowserSessions(browserPlatform);
   const lifetime = new AbortController();
   const viewer = {
-    credential: "private",
+    federated: "private",
     storage: "account-one",
     signal: lifetime.signal,
   };
@@ -179,7 +179,7 @@ it("sign-out closes live and parked account guests even while another attach is 
     "account-two",
     "b",
     {
-      credential: "other",
+      federated: "other",
       storage: "account-two",
       signal: other.signal,
     },
@@ -208,7 +208,7 @@ it.each([undefined, "a"])(
       "account",
       "b",
       {
-        credential: "private",
+        federated: "private",
         storage: "account",
         signal: lifetime.signal,
       },

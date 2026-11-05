@@ -4,7 +4,6 @@ import {
   type BackupStatus,
   backUpWith,
   createBackupStatus,
-  handoffBackupSession,
   handoffFederatedBackupSession,
 } from "./backup";
 import { BACKUP_FAILURES } from "./backup-failure";
@@ -43,8 +42,7 @@ function native(initial: BackupStatus = at(1, 0, "idle")) {
         return watch();
       }
       if (command === "nsec_backup_state") return state();
-      if (command === "nsec_backup_session")
-        return session(args?.credential ?? args?.federated);
+      if (command === "nsec_backup_session") return session(args?.federated);
       if (command === "nsec_backup_set_choice") return choice();
       throw new Error(`Unexpected command: ${command}`);
     },
@@ -150,54 +148,25 @@ it("silences the channel and its listeners on dispose", async () => {
   expect(listener).toHaveBeenCalledTimes(1);
 });
 
-it("resolves a handoff to its ticket, or null when none is issued or the handoff fails", async () => {
-  const send =
-    vi.fn<
-      (command: string, args?: Record<string, unknown>) => Promise<unknown>
-    >();
-  const handoff = (credential: string | null) =>
-    handoffBackupSession("builderlab", credential, send as Send);
-  send.mockResolvedValueOnce(4);
-  await expect(handoff("token")).resolves.toBe(4);
-  send.mockResolvedValueOnce(null);
-  await expect(handoff(null)).resolves.toBeNull();
-  send.mockRejectedValueOnce(new Error("Unknown login source"));
-  await expect(handoff("token")).resolves.toBeNull();
-  expect(send).toHaveBeenNthCalledWith(1, "nsec_backup_session", {
-    source: "builderlab",
-    generation: expect.any(Number),
-    credential: "token",
-  });
-});
-
-it("hands off a federated revision with no credential, sharing the generation counter", async () => {
+it("hands off only the public revision, resolving to its ticket, or null when none is issued or the handoff fails", async () => {
   const send = vi.fn<
     (command: string, args?: Record<string, unknown>) => Promise<unknown>
   >(async () => 2);
   await expect(
     handoffFederatedBackupSession("revision-1", send as Send),
   ).resolves.toBe(2);
-  await handoffFederatedBackupSession(null, send as Send);
-  await handoffBackupSession("hosted", "token", send as Send);
+  send.mockResolvedValueOnce(null);
+  await expect(
+    handoffFederatedBackupSession(null, send as Send),
+  ).resolves.toBeNull();
   expect(send.mock.calls.map(([, args]) => args)).toEqual([
-    {
-      source: "builderlab",
-      generation: expect.any(Number),
-      credential: null,
-      federated: "revision-1",
-    },
-    {
-      source: "builderlab",
-      generation: expect.any(Number),
-      credential: null,
-      federated: null,
-    },
-    { source: "hosted", generation: expect.any(Number), credential: "token" },
+    { federated: "revision-1", generation: expect.any(Number) },
+    { federated: null, generation: expect.any(Number) },
   ]);
-  const [first = 0, second = 0, third = 0] = send.mock.calls.map(
+  const [first = 0, second = 0] = send.mock.calls.map(
     ([, args]) => args?.generation as number,
   );
-  expect([second - first, third - second]).toEqual([1, 1]);
+  expect(second - first).toBe(1);
   send.mockRejectedValueOnce(new Error("Invalid backup session"));
   await expect(
     handoffFederatedBackupSession("stale", send as Send),
@@ -209,15 +178,12 @@ const pubkey = "a".repeat(64);
 const commands = (host: ReturnType<typeof native>) =>
   host.send.mock.calls.map(([command, args]) =>
     command === "nsec_backup_session"
-      ? `${command}(${args?.credential ?? args?.federated ?? null})`
+      ? `${command}(${args?.federated ?? null})`
       : command,
   );
 /** The first-run waiter against the identity's real store over `host`, with a
  * deadline the test expires. */
-function backUp(
-  host: ReturnType<typeof native>,
-  session: Parameters<typeof backUpWith>[2] = { credential: "private-token" },
-) {
+function backUp(host: ReturnType<typeof native>, revision = "fi-revision") {
   const identity: Waiter = {
     backup: host.store(),
     setBackupChoice: ((pubkey: string, automatic: boolean) =>
@@ -234,7 +200,7 @@ function backUp(
       expire = resolve;
     });
   });
-  const done = backUpWith(identity, pubkey, session, {
+  const done = backUpWith(identity, pubkey, revision, {
     after,
     send: host.send as Send,
   });
@@ -252,7 +218,7 @@ function backUp(
       vi.waitFor(() =>
         expect(host.send).toHaveBeenCalledWith(
           "nsec_backup_session",
-          expect.objectContaining(session),
+          expect.objectContaining({ federated: revision }),
         ),
       ),
   };
@@ -260,7 +226,7 @@ function backUp(
 const settledAt = (seq: number, pass: number, settled: object) =>
   ({ seq, pass, builderlab: true, ...settled }) as BackupStatus;
 
-it("turns consent on, hands the credential over and waits for the pass its ticket names", async () => {
+it("turns consent on, hands the revision over and waits for the pass its ticket names", async () => {
   // A stale failure from before the handoff must not answer.
   const host = native(
     settledAt(1, 0, { status: "failed", kind: "unreachable" }),
@@ -279,8 +245,8 @@ it("turns consent on, hands the credential over and waits for the pass its ticke
     "nsec_backup_watch",
     "nsec_backup_state",
     "nsec_backup_set_choice",
-    "nsec_backup_session(private-token)",
-    "nsec_backup_session(null)",
+    "nsec_backup_session(fi-revision)",
+    "nsec_backup_session(fi-revision)",
   ]);
   expect(host.send).toHaveBeenCalledWith("nsec_backup_set_choice", {
     pubkey,
@@ -317,7 +283,7 @@ it.each([
   },
 );
 
-it("offers no Try again for an ended sign-in, which would send the same credential", () => {
+it("offers no Try again for an ended sign-in, which would send the same revision", () => {
   expect(new BackupError("signed_out")).toMatchObject({
     message:
       "Your Builderlab sign-in is no longer valid, so your key wasn’t backed up.",
@@ -364,7 +330,7 @@ it.each([
   "leaves an FI session, which the Builderlab plugin shares, with the uploader only after a %s pass",
   async (_label, end, last) => {
     const host = native();
-    const backup = backUp(host, { federated: "fi-revision" });
+    const backup = backUp(host);
     await backup.started();
     end(host, backup);
     await backup.failed;
@@ -386,7 +352,7 @@ it("is unavailable when the handoff starts no pass, and still hands the slot bac
   host.session.mockResolvedValueOnce(null);
   expect(await backUp(host).failed).toMatchObject({ kind: "unavailable" });
   expect(commands(host).slice(-2)).toEqual([
-    "nsec_backup_session(private-token)",
+    "nsec_backup_session(fi-revision)",
     "nsec_backup_session(null)",
   ]);
 });

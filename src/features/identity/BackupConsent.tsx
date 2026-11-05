@@ -14,8 +14,13 @@ import {
   subscribeLegacyImport,
 } from "../communities/legacy-communities";
 import type { CommunityReader, Membership } from "../communities/service";
+import { coversCommunity } from "../federated-identity/community-hosts";
+import {
+  signInServers,
+  type SessionSnapshot,
+} from "../federated-identity/service";
 import type { BackupStatus } from "./backup";
-import { hostedByThisBuilderlab } from "./builderlab-hosted";
+import { builderlabCommunityHosts } from "./builderlab-hosted";
 import type { BackupChoice, Identity } from "./service";
 
 /**
@@ -28,7 +33,7 @@ export function decideBackup(
   status: BackupStatus | undefined,
   choice: Pick<BackupChoice, "automatic">,
   memberships: readonly Pick<Membership, "id">[],
-  build?: string,
+  hosts: readonly string[] | undefined,
 ): "save" | "ask" | undefined {
   if (
     status?.status !== "waiting" ||
@@ -37,13 +42,14 @@ export function decideBackup(
     choice.automatic !== null
   )
     return undefined;
-  return memberships.some(({ id }) => hosted(id, build)) ? "save" : "ask";
+  return memberships.some(({ id }) => hosted(id, hosts)) ? "save" : "ask";
 }
 
 /** By the saved relay host alone: no relay is read for its NIP-11 `self`. */
-function hosted(id: string, build?: string) {
+function hosted(id: string, hosts: readonly string[] | undefined) {
+  if (!hosts) return false;
   try {
-    return hostedByThisBuilderlab({ url: communityDestination(id).url }, build);
+    return coversCommunity(hosts, communityDestination(id).url);
   } catch {
     return false;
   }
@@ -67,9 +73,12 @@ let answering = 0;
 export function BackupConsent({
   identity,
   communities,
+  servers = signInServers,
 }: {
   identity: Identity;
   communities: Pick<CommunityReader, "snapshot" | "subscribe">;
+  /** The build's sign-in servers, for which communities its Builderlab hosts. */
+  servers?: () => Promise<readonly SessionSnapshot[]>;
 }) {
   const status = useSyncExternalStore(
     identity.backup.subscribe,
@@ -106,13 +115,17 @@ export function BackupConsent({
       const { memberships } = client;
       if (client.status !== "ready" || memberships === latest) return;
       latest = memberships;
-      identity.getBackupChoice().then(
-        (choice) => {
+      Promise.all([
+        identity.getBackupChoice(),
+        builderlabCommunityHosts(servers),
+      ]).then(
+        ([choice, hosts]) => {
           if (memberships !== latest) return;
           const decision = decideBackup(
             identity.backup.snapshot(),
             choice,
             memberships,
+            hosts,
           );
           if (decision === "save") {
             // The user's own answer, still being saved, stands; the next
@@ -135,7 +148,7 @@ export function BackupConsent({
       latest = undefined;
       stop();
     };
-  }, [identity, communities, waiting, held]);
+  }, [identity, communities, servers, waiting, held]);
   if (!asking || held) return null;
   return (
     <BackupPrompt

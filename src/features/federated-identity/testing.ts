@@ -4,7 +4,7 @@ import type {
   SessionSnapshot,
   AuthenticatedRequest,
 } from "./service";
-import type { HostResponse } from "../host/service";
+import type { HostRequest, HostResponse } from "../host/service";
 
 /** Consumer fixtures supply public host events; they do not implement credential custody. */
 export function federatedFixture(
@@ -19,6 +19,7 @@ export function federatedFixture(
       apiBasePath: "/api/goose/",
       signIn: "on-demand",
       organization: null,
+      communityHosts: ["relay.example"],
     },
     revision: `${revision}:0`,
     email: null,
@@ -73,5 +74,42 @@ export function federatedFixture(
     service,
     publish,
     request: vi.mocked(service.request),
+  };
+}
+
+/**
+ * A signed-in NIP-FI session at `revision` whose forwarder answers through
+ * `request`, called with the URL native would send to at `origin`.
+ */
+export function forwardingSession(
+  revision: string,
+  request: (input: HostRequest) => Promise<HostResponse>,
+  origin = "https://builderlab.example",
+): Pick<FederatedIdentity, "snapshot" | "request"> {
+  const snapshot: SessionSnapshot = {
+    status: "signed-in",
+    authority: {
+      id: "test",
+      identityOrigin: origin,
+      apiBasePath: "/api/goose/",
+      signIn: "on-demand",
+      organization: null,
+      communityHosts: [],
+    },
+    revision,
+    email: null,
+    failure: null,
+    expiresAt: null,
+    expiring: false,
+  };
+  return {
+    snapshot: () => snapshot,
+    request: ({ path, method, headers, body }) =>
+      request({
+        url: `${origin}${path}`,
+        ...(method ? { method } : {}),
+        ...(headers ? { headers } : {}),
+        ...(body === undefined ? {} : { body }),
+      }),
   };
 }

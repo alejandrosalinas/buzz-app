@@ -11,8 +11,7 @@ import type {
   KnownCommunities,
 } from "../../../features/communities/service";
 import type { Host } from "../../../features/host/service";
-import { createOAuthSession } from "../oauth/session";
-import { deferred } from "../test-helpers";
+import { deferred, createTestSession } from "../test-helpers";
 import {
   createKnownCommunitiesClient,
   type KnownCommunitiesClient,
@@ -129,8 +128,8 @@ async function fixture({
   arrange(client);
   // Which Builderlab account the next sign-in is for.
   const account = { subject: "user" };
-  const session = createOAuthSession(async () => ({
-    value: "secret",
+  const session = createTestSession(async () => ({
+    revision: "secret",
     account: {
       subject: account.subject,
       email: "a@example.com",
@@ -301,9 +300,9 @@ it("halts on a 200 list the real client cannot read, forgetting no membership", 
     memberships: [{ id: "https://primary.example", name: "Primary" }],
     sync: { known: [primary], outbox: [] },
   });
-  const session = createOAuthSession(
+  const session = createTestSession(
     async () => ({
-      value: "secret",
+      revision: "secret",
       account: {
         subject: "user",
         email: "a@example.com",

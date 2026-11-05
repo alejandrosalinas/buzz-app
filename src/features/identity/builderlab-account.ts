@@ -1,9 +1,7 @@
 import { invoke } from "@tauri-apps/api/core";
 import { listedAddress } from "../../bundled/builderlab/known-communities/client";
-import {
-  type Credential,
-  oauthTarget,
-} from "../../bundled/builderlab/oauth/browser";
+import { oauthTarget } from "../../bundled/builderlab/oauth/browser";
+import type { Credential } from "../../bundled/builderlab/session";
 import {
   ApiFailure,
   boundKey,
@@ -14,7 +12,7 @@ import {
 } from "../../bundled/builderlab/communities/api";
 import { enteredRelayOrigin, relayAddress } from "../communities/destination";
 import type { FederatedIdentity } from "../federated-identity/service";
-import type { Host, HostResponse } from "../host/service";
+import type { HostResponse } from "../host/service";
 import { BackupError, backUpWith } from "./backup";
 import type { BackupFailureKind } from "./backup-failure";
 import type { FirstRunAccountSeed } from "./first-run-seed";
@@ -341,43 +339,18 @@ export async function backupOfferedFor(
 }
 
 /**
- * The real reads, binding and unlink, against the build URL's kgoose
- * (`<BUZZ_BUILDERLAB_URL>/api/goose`),
- * authenticated with the first-run session credential and sent through the
- * bundled plugin's native grant like the sign-in itself. Routes and reply
- * shapes are the communities section's (`communities/native.ts` ROUTES
- * `identity`, `list` and `unbind`, and its `bind`; `api.ts` parsers) and, for the saved
- * destinations, the Builderlab plugin's known-communities list and add;
- * neither owner's own client is touched. The backup goes through the native
- * uploader instead (`backup.ts`).
- */
-export function builderlabAccount(
-  credential: Credential,
-  request: Host["request"],
-  identity: BackupIdentity,
-): FirstRunAccount {
-  const target = oauthTarget();
-  return kgooseAccount(
-    (path, headers, body) =>
-      request({
-        url: `${target}${path}`,
-        method: "POST",
-        headers: { ...headers, "X-BB-Session-Credential": credential.value },
-        body,
-      }),
-    { credential: credential.value },
-    identity,
-  );
-}
-
-/**
- * `builderlabAccount` for an FI build's sign-in (`firstRunCredential`): the
- * same routes through the bundled plugin's NIP-FI forwarder, which sends the
- * native session as a Bearer token, each fenced to the session that sign-in
- * returned (`credential.value` is its revision).
+ * The real reads, binding and unlink, against this build's kgoose through the
+ * bundled plugin's NIP-FI forwarder, which sends the native session as a
+ * Bearer token, each fenced to the session first run's sign-in returned
+ * (`firstRunCredential`). Routes and reply shapes are the communities
+ * section's (`communities/native.ts` ROUTES `identity`, `list` and `unbind`,
+ * and its `bind`; `api.ts` parsers) and, for the saved destinations, the
+ * Builderlab plugin's known-communities list and add; neither owner's own
+ * client is touched. The backup goes through the native uploader instead
+ * (`backup.ts`).
  */
 export function federatedBuilderlabAccount(
-  credential: Pick<Credential, "value">,
+  credential: Pick<Credential, "revision">,
   federated: Pick<FederatedIdentity, "snapshot" | "request">,
   identity: BackupIdentity,
 ): FirstRunAccount {
@@ -386,7 +359,7 @@ export function federatedBuilderlabAccount(
       const session = federated.snapshot();
       if (
         session.status !== "signed-in" ||
-        session.revision !== credential.value ||
+        session.revision !== credential.revision ||
         !session.authority
       )
         return Promise.reject(new Error(SIGNED_OUT));
@@ -397,7 +370,7 @@ export function federatedBuilderlabAccount(
         body,
       });
     },
-    { federated: credential.value },
+    credential.revision,
     identity,
   );
 }
@@ -411,7 +384,7 @@ type Post = (
 
 function kgooseAccount(
   send: Post,
-  session: Parameters<typeof backUpWith>[2],
+  revision: string,
   identity: BackupIdentity,
 ): FirstRunAccount {
   const portal = new URL(oauthTarget()).origin;
@@ -632,7 +605,7 @@ function kgooseAccount(
         { community_url: relayAddress(url) },
       );
     },
-    backUp: (pubkey) => backUpWith(identity, pubkey, session),
+    backUp: (pubkey) => backUpWith(identity, pubkey, revision),
     // Backup routes answer plain text, not the card's reply shape, so only
     // the status and a 2xx body are read.
     async backupStatus() {

@@ -8,8 +8,11 @@ export type Account = Readonly<{
   canUseRemoteAgents: boolean;
   canUseBuilderlabDecisions: boolean;
 }>;
-/** One sign-in. A new sign-in is a new object, so identity tells a change. */
-export type Credential = Readonly<{ account: Account }>;
+/**
+ * One sign-in: the NIP-FI session's public revision and its account. A new
+ * sign-in is a new object, so identity tells a change. Never a token.
+ */
+export type Credential = Readonly<{ revision: string; account: Account }>;
 export type LoginSnapshot = Readonly<{
   status: "signed-out" | "pending" | "signed-in";
   account?: Account;
@@ -27,9 +30,9 @@ export type BuilderlabRequest = Readonly<{
 }>;
 
 /**
- * Builderlab's sign-in: the legacy in-memory OAuth credential, or in an FI
- * build the native NIP-FI session, whose token stays in OS secure storage
- * and survives restarts. Neither hands its token to consumers.
+ * Builderlab's sign-in: the native NIP-FI session, whose token stays in OS
+ * secure storage and survives restarts, or in live development the broker's.
+ * Neither hands its token to consumers.
  */
 export type BuilderlabSession = Readonly<{
   snapshot(): LoginSnapshot;
@@ -40,8 +43,6 @@ export type BuilderlabSession = Readonly<{
     credential: Credential,
     input: BuilderlabRequest,
   ): Promise<HostResponse>;
-  /** Builderlab answered a call by `credential` with HTTP 401. */
-  expired(credential: Credential): void;
   viewerSession(): BuilderlabViewerSession;
   /** Creation joins a login that is already running; it never cancels it. */
   ensureSignedIn(signal: AbortSignal): Promise<void>;
@@ -116,7 +117,7 @@ const ACCOUNT_FAILED = "Could not load your Builderlab account. Try again.";
 export function createNativeSession(
   identity: FederatedIdentity,
 ): BuilderlabSession {
-  type Native = Credential & Readonly<{ revision: string; storage: string }>;
+  type Native = Credential & Readonly<{ storage: string }>;
   let credential: Native | undefined;
   let viewer: BuilderlabViewerSession | undefined;
   let viewerLifetime: AbortController | undefined;
@@ -230,7 +231,6 @@ export function createNativeSession(
         path: `${authority.apiBasePath}${input.path.slice(1)}`,
       });
     },
-    expired: () => {},
     viewerSession() {
       if (disposed || !viewer) throw new Error("Sign in to Builderlab first.");
       return viewer;

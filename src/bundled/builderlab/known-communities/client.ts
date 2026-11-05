@@ -41,8 +41,8 @@ const isRefusal = (code: unknown): code is Named =>
   typeof code === "string" && REFUSALS.has(code);
 /** A status outside the route's contract: another client error is a refusal
  * of the request as sent, while a timeout, a rate limit or a server error is
- * a failure to retry. (A legacy 401 ends the session before reaching here;
- * an FI build answers it as this request's refusal.) */
+ * a failure to retry. A 401 refuses only this request: the native session
+ * decides when it ends. */
 function unexpected(status: number): Refusal {
   if (status >= 400 && status < 500 && status !== 408 && status !== 429)
     return { kind: "rejected", status };
@@ -106,11 +106,6 @@ export function createKnownCommunitiesClient(session: BuilderlabSession) {
       throw new Error("Couldn’t reach Builderlab.");
     }
     check(credential, signal);
-    if (response.status === 401) {
-      // The session is over; the fence reports it as the cancellation it is.
-      session.expired(credential);
-      check(credential, signal);
-    }
     let value: unknown;
     try {
       value = JSON.parse(response.body);

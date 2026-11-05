@@ -45,6 +45,7 @@ import type { SidebarRows } from "../../features/channel-navigation/sidebar-rows
 import type { SidebarSections } from "../../features/channel-navigation/sidebar-sections-service";
 import { CommunitySignIn } from "../../features/federated-identity/CommunitySignIn";
 import type { FederatedIdentity } from "../../features/federated-identity/service";
+import type { Membership } from "../../features/communities/service";
 
 const noSubscription = () => () => {};
 
@@ -57,6 +58,8 @@ const filters = [
 
 type Props = {
   federatedIdentity?: FederatedIdentity;
+  /** Joined communities, so a sign-in switch names the ones it affects. */
+  memberships?: readonly Membership[] | undefined;
   relay: RelayData;
   navigator: Navigation;
   agents?: Agents | undefined;
@@ -280,7 +283,12 @@ function ScopedSidebar({
                 )}
                 <LiveSignIn
                   session={connection.session}
-                  identity={props.federatedIdentity}
+                  identity={communityIdentity(
+                    props.federatedIdentity,
+                    connection.origin,
+                  )}
+                  relay={connection.origin}
+                  memberships={props.memberships}
                 />
                 {before}
                 <SidebarUnread listRef={sidebar.list} dmPreviews={dmPreviews}>
@@ -391,9 +399,14 @@ function ScopedSidebar({
                 {connection.status === "error" && !connection.retrying && (
                   <>
                     <CommunitySignIn
-                      identity={props.federatedIdentity}
+                      identity={communityIdentity(
+                        props.federatedIdentity,
+                        connection.origin,
+                      )}
                       error={connection.error}
                       retry={props.relay.retry}
+                      relay={connection.origin}
+                      memberships={props.memberships}
                     />
                     <Button onClick={props.relay.retry}>Try again</Button>
                   </>
@@ -405,6 +418,14 @@ function ScopedSidebar({
       )}
     </SidebarBoundary>
   );
+}
+
+/** The sign-in session for the community's own server, when it has one. */
+function communityIdentity(
+  identity: FederatedIdentity | undefined,
+  origin: string | undefined,
+) {
+  return (origin && identity?.forCommunity?.(origin)) || identity;
 }
 
 function InventoryGroup({
@@ -459,9 +480,13 @@ function InventoryGroup({
 function LiveSignIn({
   session,
   identity,
+  relay,
+  memberships,
 }: {
   session: RelaySession;
   identity: FederatedIdentity | undefined;
+  relay: string | undefined;
+  memberships: readonly Membership[] | undefined;
 }) {
   const live = useSyncExternalStore(
     session.live.subscribe,
@@ -474,6 +499,8 @@ function LiveSignIn({
       identity={identity}
       error={live.error}
       retry={session.live.retry}
+      relay={relay}
+      memberships={memberships}
     />
   );
 }

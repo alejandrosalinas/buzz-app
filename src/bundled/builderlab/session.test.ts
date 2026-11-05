@@ -39,9 +39,6 @@ it("reads each native session's account once and fences requests and viewers to 
   expect(h.request).toHaveBeenLastCalledWith({
     path: "/api/goose/v1/buzz/communities/list",
   });
-  // Builderlab's 401 does not end the native session.
-  session.expired(first);
-  expect(session.snapshot().status).toBe("signed-in");
 
   h.request.mockResolvedValueOnce(me("second"));
   h.publish({ revision: "user:2" });

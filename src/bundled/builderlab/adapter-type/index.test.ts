@@ -1,8 +1,8 @@
+import { createTestSession } from "../test-helpers";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import type { Host, HostResponse } from "../../../features/host/service";
 import { createAgentClient } from "../agents/client";
 import type { RelayData } from "../../../features/relay/service";
-import { createOAuthSession } from "../oauth/session";
 import { builderlabType } from "./index";
 
 const pubkey = "ab".repeat(32);
@@ -37,9 +37,9 @@ afterEach(() => {
 });
 
 async function fixture(subject = "account-a") {
-  const session = createOAuthSession(
+  const session = createTestSession(
     async () => ({
-      value: "credential",
+      revision: "credential",
       account: {
         subject,
         email: "a@example.com",
@@ -290,7 +290,7 @@ it("does not stop a turn for an agent outside the signed-in account", async () =
 
 it("rejects a stop at once when signed out, without signing in or reaching Builderlab", async () => {
   const acquire = vi.fn(async () => ({
-    value: "credential",
+    revision: "credential",
     account: {
       subject: "account-a",
       email: "a@example.com",
@@ -298,7 +298,7 @@ it("rejects a stop at once when signed out, without signing in or reaching Build
       canUseBuilderlabDecisions: false,
     },
   }));
-  const session = createOAuthSession(acquire, undefined, {
+  const session = createTestSession(acquire, undefined, {
     request: (input) => request(input),
   });
   const request = vi.fn<Host["request"]>();

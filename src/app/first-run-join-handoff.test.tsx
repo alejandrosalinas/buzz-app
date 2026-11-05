@@ -45,11 +45,13 @@ vi.mock("../bundled", async () => ({
     },
   ],
 }));
-// The browser sign-in, which the seeded account below never sends anywhere.
-vi.mock("../bundled/builderlab/oauth/first-run", () => ({
-  bundledHost: { request: vi.fn() },
+// The NIP-FI sign-in, whose seeded account below never sends anywhere.
+vi.mock("../bundled/builderlab/oauth/first-run", async (importOriginal) => ({
+  ...(await importOriginal<
+    typeof import("../bundled/builderlab/oauth/first-run")
+  >()),
   firstRunCredential: vi.fn(async () => ({
-    value: "private-token",
+    revision: "private-token",
     account: {
       subject: "user",
       email: "a@example.com",
@@ -91,6 +93,8 @@ beforeEach(() => {
   requests = [];
   vi.useFakeTimers({ shouldAdvanceTime: true });
   vi.stubEnv("VITE_BUZZ_LIVE", "0");
+  // First run signs in to Builderlab only in an FI build.
+  vi.stubEnv("VITE_BUZZ_FEDERATED_IDENTITY", "1");
   vi.stubEnv("VITE_BUZZ_OPEN_RELAY", "");
   vi.stubEnv(
     "VITE_BUZZ_FIRST_RUN_ACCOUNT",

@@ -24,13 +24,12 @@ import { AgentSaveButton } from "../../features/agents/AgentSaveButton";
 import { Input } from "../../shared/design-system/ui/Input";
 import { Button } from "../../shared/design-system/ui/Button";
 import { AgentDetails } from "./AgentDetails";
-import { createOAuthSession } from "../builderlab/oauth/session";
 import {
   AccountRecoverySheet,
   createProfileActions,
   createSignInFooter,
 } from "../builderlab/adapter-type/SignInFooter";
-import { deferred } from "../builderlab/test-helpers";
+import { deferred, createTestSession } from "../builderlab/test-helpers";
 
 vi.mock("../builderlab/oauth/browser", async (original) => ({
   ...(await original<typeof import("../builderlab/oauth/browser")>()),
@@ -204,6 +203,8 @@ it.each([
   "closes the $target editor for account access (recovery: $recovery)",
   async ({ target, recovery }) => {
     vi.stubEnv("VITE_BUZZ_BUILDERLAB_URL", "https://builderlab.example");
+    // Switching accounts from the sheet is the development broker's recovery.
+    if (recovery) vi.stubEnv("VITE_BUZZ_LIVE", "1");
     let canUseRemoteAgents = true;
     const callbacks = new Set<() => void>();
     vi.stubGlobal(
@@ -219,8 +220,8 @@ it.each([
         unobserve() {}
       },
     );
-    const session = createOAuthSession(async () => ({
-      value: "credential",
+    const session = createTestSession(async () => ({
+      revision: "credential",
       account: {
         subject: "account",
         email: "a@example.com",

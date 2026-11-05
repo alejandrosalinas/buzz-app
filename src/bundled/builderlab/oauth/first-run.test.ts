@@ -6,11 +6,7 @@ import { FederatedIdentityService } from "../../../features/federated-identity/s
 import { federatedFixture } from "../../../features/federated-identity/testing";
 import type { StorageResult } from "../../../plugins/types";
 import manifest from "../manifest.json";
-import {
-  bundledFederatedIdentity,
-  bundledHost,
-  firstRunCredential,
-} from "./first-run";
+import { bundledFederatedIdentity, firstRunCredential } from "./first-run";
 vi.mock("@tauri-apps/api/core", () => ({
   invoke: vi.fn(),
   isTauri: vi.fn(() => true),
@@ -40,45 +36,7 @@ const catalog = (enabled: boolean): StorageResult => ({
   externalPluginsPaused: false,
 });
 
-it("requests under the bundled Builderlab grant without a plugin owner", async () => {
-  vi.mocked(invoke).mockResolvedValueOnce({
-    status: 200,
-    headers: {},
-    body: "{}",
-  });
-  const request = { url: "https://app.builderlab.xyz/api/goose/v1/auth/me" };
-  await bundledHost.request(request);
-  expect(invoke).toHaveBeenCalledWith("plugin_host_request", {
-    id: "block.builderlab",
-    revision: "bundled",
-    request,
-  });
-  expect(await bundledHost.runCommand("any")).toBeNull();
-});
-
-it("starts the native browser handoff at the configured build URL", async () => {
-  vi.stubEnv("VITE_BUZZ_BUILDERLAB_URL", "https://builderlab.example");
-  vi.mocked(invoke).mockResolvedValueOnce(catalog(true));
-  // A refused listener ends the attempt before any exchange request.
-  vi.mocked(invoke).mockRejectedValueOnce("listener unavailable");
-  await expect(
-    firstRunCredential(new AbortController().signal),
-  ).rejects.toThrow("Could not complete");
-  expect(invoke).toHaveBeenCalledTimes(2);
-  expect(invoke).toHaveBeenNthCalledWith(1, "plugin_catalog");
-  expect(invoke).toHaveBeenNthCalledWith(
-    2,
-    "oauth_callback_begin",
-    expect.objectContaining({
-      authorizationUrl: expect.stringMatching(
-        /^https:\/\/builderlab\.example\/api\/goose\/v1\/auth\/login\?/,
-      ),
-      useState: true,
-    }),
-  );
-});
-
-// A disabled bundled plugin has no native grant, so its code exchange fails.
+// A disabled bundled plugin has no native grant, so its account read fails.
 it.each([
   [
     "Builderlab is turned off",
@@ -93,16 +51,17 @@ it.each([
 ])(
   "refuses before opening the browser when %s",
   async (_label, answer, message) => {
-    vi.stubEnv("VITE_BUZZ_BUILDERLAB_URL", "https://builderlab.example");
     answer();
+    const fi = federatedFixture();
     await expect(
-      firstRunCredential(new AbortController().signal),
+      firstRunCredential(new AbortController().signal, fi.service),
     ).rejects.toThrow(new Error(message));
     expect(vi.mocked(invoke).mock.calls).toEqual([["plugin_catalog"]]);
+    expect(fi.service.signIn).not.toHaveBeenCalled();
   },
 );
 
-describe("an FI build", () => {
+describe("the NIP-FI sign-in", () => {
   const me = {
     subject: "user",
     email: " a@example.com ",
@@ -140,7 +99,7 @@ describe("an FI build", () => {
     await root.fiber.dispose();
   });
 
-  it("signs in through the native session and reads its account, never opening the plugin's own browser handoff", async () => {
+  it("signs in through the native session and reads its account", async () => {
     vi.mocked(invoke).mockResolvedValueOnce(catalog(true));
     const fi = federatedFixture();
     fi.request.mockResolvedValueOnce({
@@ -153,7 +112,7 @@ describe("an FI build", () => {
       fi.service,
     );
     expect(credential).toEqual({
-      value: fi.service.snapshot().revision,
+      revision: fi.service.snapshot().revision,
       account: {
         subject: "user",
         email: "a@example.com",
@@ -253,7 +212,7 @@ describe("an FI build", () => {
       new AbortController().signal,
       fi.service,
     );
-    expect(credential.value).toBe("user:1");
+    expect(credential.revision).toBe("user:1");
     expect(fi.service.signIn).toHaveBeenCalledOnce();
   });
 
@@ -315,7 +274,7 @@ describe("an FI build", () => {
         new AbortController().signal,
         fi.service,
       );
-      expect(credential.value).toBe("user:1");
+      expect(credential.revision).toBe("user:1");
       expect(fi.service.signIn).toHaveBeenCalledTimes(2);
     });
 
@@ -333,7 +292,7 @@ describe("an FI build", () => {
         new AbortController().signal,
         fi.service,
       );
-      expect(credential.value).toBe("chosen");
+      expect(credential.revision).toBe("chosen");
       expect(fi.service.signIn).toHaveBeenCalledOnce();
     });
 

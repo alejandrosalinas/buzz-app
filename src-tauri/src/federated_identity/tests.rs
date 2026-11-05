@@ -72,6 +72,124 @@ pub(super) fn record() -> Arc<Session> {
     })
 }
 
+#[test]
+fn each_community_routes_by_host_to_its_own_server() {
+    let servers = config::compiled(
+        Some(r#"{"version":1,"id":"bb-block","identityOrigin":"https://block.builderlab.xyz","communityHosts":["buzz.block.builderlab.xyz"],"adapterBase":"https://block.builderlab.xyz/api/goose","apiBasePath":"/api/goose/"}"#),
+        None,
+        None,
+    )
+    .unwrap();
+    let server = |config: Config| {
+        FederatedIdentity::with_store(
+            Some(config),
+            String::new(),
+            String::new(),
+            Arc::new(Memory::default()),
+        )
+    };
+    let mut servers = servers.into_iter();
+    let first = servers.next().unwrap();
+    let public = server(servers.next().unwrap());
+    let first = FederatedIdentity::build(
+        Some(first),
+        String::new(),
+        String::new(),
+        Arc::new(Memory::default()),
+        vec![public.clone()],
+    );
+    let id = |relay: &str| {
+        first
+            .server_for(relay)
+            .unwrap()
+            .0
+            .config
+            .as_ref()
+            .unwrap()
+            .id
+            .clone()
+    };
+    assert_eq!(id("wss://buzz.block.builderlab.xyz"), "bb-block");
+    assert_eq!(id("wss://team.communities.buzz.xyz"), "bb-public");
+    assert!(first
+        .server_for("wss://team.communities.buzz.xyz")
+        .unwrap()
+        .is(&public));
+    // A community no server covers stays with the first, which attaches no token.
+    assert_eq!(id("wss://relay.example"), "bb-block");
+    assert_eq!(
+        first
+            .server_for_command(Some("https://Team.communities.buzz.xyz"), None)
+            .unwrap()
+            .0
+            .config
+            .as_ref()
+            .unwrap()
+            .id,
+        "bb-public"
+    );
+    assert!(first.server_for_command(None, None).unwrap().is(&first));
+    // Settings names a server by id: each signs out on its own.
+    assert!(first
+        .server_for_command(None, Some("bb-public"))
+        .unwrap()
+        .is(&public));
+    assert!(first
+        .server_for_command(None, Some("bb-block"))
+        .unwrap()
+        .is(&first));
+    assert!(first.server_for_command(None, Some("other")).is_err());
+    assert_eq!(
+        first
+            .servers()
+            .map(|server| server.0.config.as_ref().unwrap().id.as_str())
+            .collect::<Vec<_>>(),
+        ["bb-block", "bb-public"]
+    );
+}
+
+#[tokio::test]
+async fn signing_out_of_one_server_keeps_the_others_session() {
+    let mut configs = config::compiled(
+        Some(r#"{"version":1,"id":"bb-block","identityOrigin":"https://block.builderlab.xyz","communityHosts":["buzz.block.builderlab.xyz"],"adapterBase":"https://block.builderlab.xyz/api/goose","apiBasePath":"/api/goose/"}"#),
+        None,
+        None,
+    )
+    .unwrap()
+    .into_iter();
+    let signed_in = |config: Config, peers| {
+        let store = Arc::new(Memory::default());
+        let session = record();
+        *store.raw.lock().unwrap() = Some(session.raw.clone());
+        let server = FederatedIdentity::build(
+            Some(config),
+            "fingerprint".into(),
+            "account".into(),
+            store.clone(),
+            peers,
+        );
+        {
+            let mut state = server.state();
+            state.restored = true;
+            state.session = Some(session);
+            state.snapshot.status = Status::SignedIn;
+        }
+        (server, store)
+    };
+    let block = configs.next().unwrap();
+    let (public, public_store) = signed_in(configs.next().unwrap(), Vec::new());
+    let (first, first_store) = signed_in(block, vec![public.clone()]);
+    let snapshot = first
+        .server_for_command(None, Some("bb-public"))
+        .unwrap()
+        .sign_out()
+        .await;
+    assert!(snapshot.status == Status::SignedOut);
+    assert!(public_store.raw.lock().unwrap().is_none());
+    assert!(first.snapshot().status == Status::SignedIn);
+    assert!(first_store.raw.lock().unwrap().is_some());
+}
+
 #[tokio::test]
 async fn restored_snapshots_do_not_wait_for_an_interactive_operation() {
     use futures_util::FutureExt;

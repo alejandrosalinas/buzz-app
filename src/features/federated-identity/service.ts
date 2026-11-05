@@ -21,6 +21,8 @@ export type SessionSnapshot = Readonly<{
     signIn: "on-demand" | "at-launch";
     /** Display name for sign-in copy, such as "Block". */
     organization: string | null;
+    /** The community hosts it covers; match them with `coversCommunity`. */
+    communityHosts: readonly string[];
   }> | null;
   revision: string;
   email: string | null;
@@ -35,6 +37,19 @@ export type AuthenticatedRequest = Readonly<{
   method?: "GET" | "HEAD" | "POST" | "PUT" | "PATCH" | "DELETE";
   headers?: Readonly<Record<string, string>>;
   body?: string;
+  /** Native deadline in milliseconds, 1–180000. Defaults to 30000. */
+  timeoutMs?: number;
+  /** To the server's Apps Platform control plane, as `bl apps` calls it;
+   * native allows only the bundled Builderlab plugin. */
+  apps?: boolean;
+  /** An Apps deploy: a `.tar.gz` file in the home directory, POSTed as a
+   * multipart form. */
+  upload?: Readonly<{
+    field: string;
+    path: string;
+    name: string;
+    contentType: string;
+  }>;
 }>;
 export interface FederatedIdentity {
   /** Granted routes are forwarded natively with the session as a Bearer token. */
@@ -45,6 +60,12 @@ export interface FederatedIdentity {
   cancelSignIn(): Promise<void>;
   signOut(): Promise<void>;
   request(input: AuthenticatedRequest): Promise<HostResponse>;
+  /** The session of the sign-in server for a community (`wss://` or
+   * `https://` origin). Native chooses the server from the community's host,
+   * never from the relay; it is this session for the build's Builderlab. */
+  forCommunity?(relay: string): FederatedIdentity;
+  /** The session of the sign-in server with this id, for Settings. */
+  forServer?(id: string): FederatedIdentity;
 }
 declare module "@deepseek-ai/cordis" {
   interface Context {
@@ -70,6 +91,7 @@ export class FederatedIdentityService
     listeners: new Set<() => void>(),
     epoch: 0,
     closed: false,
+    communities: new Map<string, CommunitySession>(),
     // Keyed by the calling plugin's fiber: each `this.ctx` access is a new
     // object, while the fiber lasts exactly as long as the plugin.
     registrations: new WeakMap<Context["fiber"], Promise<string>>(),
@@ -79,6 +101,8 @@ export class FederatedIdentityService
     ctx.effect(() => () => {
       this.shared.closed = true;
       this.shared.listeners.clear();
+      for (const session of this.shared.communities.values()) session.dispose();
+      this.shared.communities.clear();
     });
     ctx.effect(async () => {
       if (!nativeIdentityEnabled())
@@ -161,6 +185,23 @@ export class FederatedIdentityService
     await invoke("federated_identity_cancel_sign_in");
     await this.operation("federated_identity_snapshot");
   }
+  forCommunity = (relay: string): FederatedIdentity => {
+    let session = this.shared.communities.get(relay);
+    if (!session) {
+      session = new CommunitySession({ relay });
+      this.shared.communities.set(relay, session);
+    }
+    return session;
+  };
+  forServer = (id: string): FederatedIdentity => {
+    const key = `server:${id}`;
+    let session = this.shared.communities.get(key);
+    if (!session) {
+      session = new CommunitySession({ server: id });
+      this.shared.communities.set(key, session);
+    }
+    return session;
+  };
   async request(request: AuthenticatedRequest): Promise<HostResponse> {
     const owner = this.ctx.pluginOwner;
     if (!owner || !nativeIdentityEnabled() || this.shared.closed)
@@ -236,15 +277,132 @@ export class FederatedIdentityService
   }
 }
 
-/** Calls `reauthorize` when the session becomes signed in or changes account,
- * so every relay read it refused retries at once instead of waiting for a
- * manual Retry. Startup restore is not a change: nothing was refused for it. */
+const EVENTS = ["federated-identity", "federated-identity-community"];
+
+/** Every sign-in server this build trusts, the build's Builderlab first, as
+ * native compiled them: none outside the desktop app. */
+export async function signInServers(): Promise<readonly SessionSnapshot[]> {
+  if (!nativeIdentityEnabled()) return [];
+  return invoke<SessionSnapshot[]>("federated_identity_servers");
+}
+
+/** Which server a session command is for: a community's, or one by id. */
+type Target = Readonly<{ relay: string } | { server: string }>;
+
+/** One sign-in server's session, for a community's sign-in prompt or its
+ * Settings row. Snapshots follow its server, whichever event stream native
+ * publishes them on. */
+class CommunitySession implements FederatedIdentity {
+  readonly apiAvailable = false;
+  private state: SessionSnapshot = Object.freeze({
+    status: "restoring",
+    authority: null,
+    revision: "",
+    email: null,
+    failure: null,
+    expiresAt: null,
+    expiring: false,
+  }) as SessionSnapshot;
+  private readonly listeners = new Set<() => void>();
+  private started = false;
+  private epoch = 0;
+  private readonly unlistens: Promise<() => void>[] = [];
+  constructor(private readonly target: Target) {}
+  /** Releases its native event listeners, including ones still registering. */
+  dispose() {
+    this.started = true;
+    for (const unlisten of this.unlistens.splice(0))
+      void unlisten.then((release) => release());
+  }
+  private accept(snapshot: SessionSnapshot) {
+    this.epoch++;
+    this.state = Object.freeze(snapshot);
+    for (const listener of this.listeners) listener();
+  }
+  private start() {
+    if (this.started || !nativeIdentityEnabled()) return;
+    this.started = true;
+    for (const event of EVENTS)
+      this.unlistens.push(
+        listen<SessionSnapshot>(event, ({ payload }) => {
+          const id =
+            this.state.authority?.id ??
+            ("server" in this.target ? this.target.server : undefined);
+          if (id && payload.authority?.id === id) this.accept(payload);
+        }).catch(() => () => {}),
+      );
+    void this.operation("federated_identity_snapshot").catch(() => {});
+  }
+  snapshot = () => this.state;
+  subscribe = (listener: () => void) => {
+    this.start();
+    this.listeners.add(listener);
+    return () => {
+      this.listeners.delete(listener);
+    };
+  };
+  private async operation(command: string) {
+    if (!nativeIdentityEnabled())
+      throw new Error("Federated identity requires Buzz desktop");
+    const epoch = this.epoch;
+    try {
+      const snapshot = await invoke<SessionSnapshot>(command, this.target);
+      if (this.epoch === epoch) this.accept(snapshot);
+      return this.state;
+    } catch (error) {
+      throw typeof error === "string" ? new Error(error) : error;
+    }
+  }
+  signIn() {
+    return this.operation("federated_identity_sign_in");
+  }
+  async signOut() {
+    await this.operation("federated_identity_sign_out");
+  }
+  async cancelSignIn() {
+    await invoke("federated_identity_cancel_sign_in", this.target);
+    await this.operation("federated_identity_snapshot");
+  }
+  request(): Promise<HostResponse> {
+    return Promise.reject(
+      new Error("Authenticated requests use the Builderlab session"),
+    );
+  }
+}
+
+/** `onSignedIn` for every sign-in server but the build's Builderlab. */
+export function onCommunitySignedIn(reauthorize: () => void) {
+  if (!nativeIdentityEnabled()) return () => {};
+  const previous = new Map<string, SessionSnapshot>();
+  const unlisten = listen<SessionSnapshot>(
+    "federated-identity-community",
+    ({ payload }) => {
+      const id = payload.authority?.id;
+      if (!id || payload.status === "restoring") return;
+      const before = previous.get(id);
+      previous.set(id, payload);
+      if (
+        payload.status === "signed-in" &&
+        before !== undefined &&
+        (before.status !== "signed-in" || before.revision !== payload.revision)
+      )
+        reauthorize();
+    },
+  ).catch(() => () => {});
+  return () => void unlisten.then((stop) => stop());
+}
+
+/** Calls `reauthorize` when the session, or any other sign-in server's,
+ * becomes signed in or changes account, so every relay read it refused
+ * retries at once instead of waiting for a manual Retry. Startup restore is
+ * not a change: nothing was refused for it. */
 export function onSignedIn(
   identity: FederatedIdentity,
   reauthorize: () => void,
 ) {
+  const others = onCommunitySignedIn(reauthorize);
   let previous = identity.snapshot();
-  return identity.subscribe(() => {
+  const unsubscribe = identity.subscribe(() => {
     const next = identity.snapshot();
     // Keep the state before recovery; only startup itself begins as restoring.
     if (next.status === "restoring") return;
@@ -255,4 +413,8 @@ export function onSignedIn(
     previous = next;
     if (changed) reauthorize();
   });
+  return () => {
+    unsubscribe();
+    others();
+  };
 }
