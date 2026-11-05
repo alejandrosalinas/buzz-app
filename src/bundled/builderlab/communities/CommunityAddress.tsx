@@ -117,7 +117,10 @@ export function CommunityAddressField({
           </div>
         </div>
       ) : (
-        <p role="status" className="text-body-sm text-muted">
+        <p
+          role="status"
+          className={`text-body-sm ${valid && enabled && available ? "text-success" : "text-muted"}`}
+        >
           {valid && enabled
             ? available === null
               ? "Checking availability…"

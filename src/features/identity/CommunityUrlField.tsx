@@ -68,7 +68,7 @@ export function CommunityUrlField({
               inputMode="url"
               autoComplete="off"
               spellCheck={false}
-              placeholder="community.example"
+              placeholder="Paste a link or address"
               value={url}
               disabled={disabled}
               onChange={(event) => {
