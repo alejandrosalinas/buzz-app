@@ -443,13 +443,13 @@ No user key belongs in release configuration.
 ## Local restore helper on macOS
 
 macOS builds with Rust debug assertions accept `BUZZ_DEV_CREDENTIAL_HELPER` as an
-absolute executable path. When set, `read_human()` and native agent storage use
-this helper.
+absolute executable path. When set, `read_human()`, native agent storage, and
+federated session storage use this helper.
 The helper replaces both the normal read and the copy from the previous service.
 Its setup must select the intended saved identity, including its service name.
 Exit 10 declares that identity absent; it does not start a Keychain migration.
 Release builds ignore it. With no setting, the normal Keychain read is unchanged.
-Human import, creation, deletion, and session records keep their own owners.
+Human import, creation, and deletion keep their own owners.
 Legacy agent import also keeps its exact-source read owner.
 
 The helper receives a fresh Unix socket as stdout and no stdin. It must return
@@ -496,6 +496,24 @@ The app retains bundle validation, create-only agent writes, migration order,
 locks, cache epochs, and read-back checks. The helper does not store keys in
 files or change their access controls to avoid approval. Configure its signed
 binary outside this repository. Do not copy existing keys into its setup.
+
+For federated sessions, the app passes `--session-store <operation> <service>
+<account>`. It uses the same socket protocol as agent storage. Operations are
+`read`, `replace`, and `delete`. The only service is
+`xyz.block.buzz.desktop.federated-session.debug`. Accounts contain exactly 64
+lowercase hexadecimal characters. The session owner derives them from the
+profile and deployment, or from the exact agent grant. Each direction has a
+1 MiB limit. The helper must restrict access to the exact configured accounts.
+It must retain peer checks, item access controls, and disabled normal dialogs.
+The app retains session locks, compare-before-write, refusal records, and
+validation. An older helper that rejects session requests stops the operation;
+the app never retries through direct Keychain access.
+
+Independent worktrees have separate app identifiers. A helper must admit each
+exact identifier and certificate before it serves that app. Preserve the helper's
+code identity across compatible updates. An ad hoc signed helper has a code-hash
+requirement; a rebuild cannot establish that it retains existing item approval.
+Verify normal launch and restart without approval mode before claiming success.
 
 Before a real test, wait for green CI. Obtain explicit consent for first approval.
 Then use a disposable agent to check creation, restore after restart, and deletion.

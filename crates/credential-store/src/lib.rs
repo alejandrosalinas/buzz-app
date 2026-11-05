@@ -25,6 +25,17 @@ pub fn dev_agent_store(
         .map(|helper| dev_helper::agent(&helper, operation, service, account, value))
 }
 
+#[cfg(all(not(test), target_os = "macos", debug_assertions))]
+fn dev_session_store(
+    operation: &str,
+    service: &str,
+    account: &str,
+    value: &[u8],
+) -> Option<Result<Zeroizing<Vec<u8>>>> {
+    std::env::var_os("BUZZ_DEV_CREDENTIAL_HELPER")
+        .map(|helper| dev_helper::session(&helper, operation, service, account, value))
+}
+
 pub const HUMAN_ACCOUNT: &str = "human";
 pub const HUMAN_SERVICE: &str = human_service(cfg!(debug_assertions));
 /// The human key's service before 1.0, which reads copy from.
@@ -407,6 +418,10 @@ pub fn delete_session(service: &str, account: &str) -> Result<()> {
         return Err(Error::Denied);
     }
     let _lock = acquire(&lock_root()?, service, account)?;
+    #[cfg(all(target_os = "macos", debug_assertions))]
+    if let Some(result) = dev_session_store("delete", service, account, &[]) {
+        return result.map(|_| ());
+    }
     #[cfg(target_os = "macos")]
     return security_framework::passwords::delete_generic_password(service, account)
         .map_err(mac_error);
@@ -459,6 +474,10 @@ fn session_write(service: &str, account: &str, value: Option<&[u8]>) -> Result<(
 
 #[cfg(all(not(test), target_os = "macos"))]
 pub fn read_session(service: &str, account: &str) -> Result<Zeroizing<Vec<u8>>> {
+    #[cfg(debug_assertions)]
+    if let Some(result) = dev_session_store("read", service, account, &[]) {
+        return result;
+    }
     use security_framework::os::macos::keychain::SecKeychain;
     SecKeychain::default()
         .map_err(mac_error)?
@@ -469,6 +488,18 @@ pub fn read_session(service: &str, account: &str) -> Result<Zeroizing<Vec<u8>>> 
 
 #[cfg(all(not(test), target_os = "macos"))]
 fn session_write(service: &str, account: &str, value: Option<&[u8]>) -> Result<()> {
+    #[cfg(debug_assertions)]
+    if let Some(result) = dev_session_store(
+        if value.is_some() { "replace" } else { "delete" },
+        service,
+        account,
+        value.unwrap_or_default(),
+    ) {
+        return match result {
+            Err(Error::Absent) if value.is_none() => Ok(()),
+            result => result.map(|_| ()),
+        };
+    }
     use security_framework::os::macos::keychain::SecKeychain;
     let keychain = SecKeychain::default().map_err(mac_error)?;
     match (keychain.find_generic_password(service, account), value) {
