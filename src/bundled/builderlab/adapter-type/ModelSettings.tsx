@@ -26,9 +26,12 @@ import {
   type RemoteAgentModel,
 } from "../agents/client";
 import type { BuilderlabSession } from "../session";
-import { AccountRecoverySheet, SettingsErrorSheet } from "./SignInFooter";
+import {
+  AccountRecoverySheet,
+  SettingsErrorSheet,
+  SignInSheet,
+} from "./SignInFooter";
 import { effortLabel, modelChoice } from "./models";
-import { SignInAction } from "./SignInAction";
 
 const statuses = {
   "setup-required": "Choose a model and thinking level to finish setup.",
@@ -40,7 +43,13 @@ const statuses = {
     "The server has not confirmed the saved model selection. Choose a model and thinking level.",
 };
 const message = (reason: unknown) =>
-  reason instanceof Error ? reason.message : "Could not load model settings.";
+  reason instanceof Error
+    ? reason.message
+    : typeof reason === "string"
+      ? reason
+      : "Could not load model settings.";
+const accessDenied = (reason: unknown) =>
+  reason instanceof Error && "status" in reason && reason.status === 403;
 const accountMismatchMessage =
   "Sign in to the Builderlab account that loaded these settings.";
 
@@ -49,15 +58,13 @@ export function ModelSettings({
   session,
   settings,
   harnessControl,
-  openIdentity,
 }: {
   client: AgentClient;
   session: BuilderlabSession;
-  openIdentity?: (() => void) | undefined;
-  harnessControl?: (action: ReactNode) => ReactNode;
+  harnessControl?: () => ReactNode;
   settings:
     | { agent: RemoteAgent; subject: string; email?: string }
-    | { pending: boolean; error: string; retry(): void };
+    | { pending: boolean; error: unknown; retry(): void };
 }) {
   const login = useSyncExternalStore(session.subscribe, session.snapshot);
   const reducedMotion = useReducedMotion();
@@ -66,10 +73,6 @@ export function ModelSettings({
   const subject = "subject" in settings ? settings.subject : undefined;
   const mismatch =
     signedIn && subject !== undefined && login.account?.subject !== subject;
-  const accountProblem =
-    signedIn && (mismatch || login.account?.canUseRemoteAgents === false);
-  const hasAccess = signedIn && !accountProblem;
-  const signInAction = <SignInAction session={session} />;
   const email = mismatch && "email" in settings ? settings.email : undefined;
   const form = useId();
   const notify = useToastNotification();
@@ -80,12 +83,21 @@ export function ModelSettings({
   const [instructions, setInstructions] = useState(agent?.instructions ?? "");
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
+  const [error, setError] = useState<unknown>("");
+  const [catalogError, setCatalogError] = useState<unknown>("");
+  const loadError = "error" in settings ? settings.error : "";
+  const accessError = [loadError, error, catalogError].find(accessDenied);
+  const accountProblem =
+    signedIn &&
+    (mismatch || login.account?.canUseRemoteAgents === false || !!accessError);
+  const hasAccess = signedIn && !accountProblem;
   const busy = !saved || loading || saving || !hasAccess;
-  const [error, setError] = useState("");
   useEffect(() => {
-    if (!signedIn) setError("");
+    if (!signedIn) {
+      setError("");
+      setCatalogError("");
+    }
   }, [signedIn]);
-  const [catalogError, setCatalogError] = useState("");
   const [revision, setRevision] = useState(0);
   const controller = useRef<AbortController | null>(null);
   useEffect(() => {
@@ -117,7 +129,7 @@ export function ModelSettings({
           if (!current.signal.aborted) setModels(catalog);
         },
         (reason) => {
-          if (!current.signal.aborted) setCatalogError(message(reason));
+          if (!current.signal.aborted) setCatalogError(reason);
         },
       )
       .finally(() => {
@@ -185,7 +197,7 @@ export function ModelSettings({
         notify("Model preferences saved", "success");
     } catch (reason) {
       if (!signal.aborted && session.snapshot().status === "signed-in")
-        setError(message(reason));
+        setError(reason);
     } finally {
       if (!signal.aborted) setSaving(false);
     }
@@ -208,7 +220,6 @@ export function ModelSettings({
           ? "Still loading…"
           : "…"
         : "Unavailable";
-  const loadError = "error" in settings ? settings.error : "";
   const failure = hasAccess ? loadError || error || catalogError : "";
   return (
     <LoadingRegion
@@ -235,12 +246,13 @@ export function ModelSettings({
         ) : undefined
       }
     >
+      <SignInSheet session={session} />
       <AccountRecoverySheet
         session={session}
-        openIdentity={openIdentity}
         active={accountProblem}
         email={email}
         mismatch={mismatch}
+        detail={accessError ? message(accessError) : undefined}
       />
       <SettingsErrorSheet
         active={!!failure}
@@ -251,7 +263,7 @@ export function ModelSettings({
               ? "Couldn’t save changes"
               : "Couldn’t load models"
         }
-        message={failure}
+        message={message(failure)}
         action={{
           label: loadError ? "Retry" : error ? "Try again" : "Retry models",
           disabled: loadError ? false : error ? disabled : busy,
@@ -280,7 +292,7 @@ export function ModelSettings({
           </p>
         )}
         <SettingsGroup>
-          {harnessControl?.(signInAction) ?? (
+          {harnessControl?.() ?? (
             <PreferenceRow
               title="Harness"
               trailing={
@@ -289,7 +301,6 @@ export function ModelSettings({
                     <BuilderlabLogoIcon size={20} aria-hidden="true" />
                     Builderlab
                   </span>
-                  {signInAction}
                 </div>
               }
             />

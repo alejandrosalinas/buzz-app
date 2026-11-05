@@ -127,9 +127,10 @@ async function fixture(signedIn = true) {
       : stored;
   });
   const client = createAgentClient(session);
+  const disconnected = { status: "disconnected", generation: 0 };
   const type = {
     ...builderlabType(client, session, {
-      snapshot: () => ({ status: "disconnected", generation: 0 }),
+      snapshot: () => disconnected,
       subscribe: () => () => {},
     } as unknown as RelayData),
     key: "block.builderlab/builderlab",
@@ -167,8 +168,12 @@ async function loadedInstructions() {
   await waitFor(() => expect(field).toBeEnabled());
   return field;
 }
-it("does not start sign-in or provider reads on mount, then loads after explicit sign-in", async () => {
+it("automatically signs in on Identity without provider reads before verification", async () => {
   const h = await fixture(false);
+  const acquire = h.acquire.getMockImplementation();
+  if (!acquire) throw new Error("Missing sign-in fixture");
+  const held = deferred<Awaited<ReturnType<typeof h.acquire>>>();
+  h.acquire.mockReturnValueOnce(held.promise);
   const signIn = vi.spyOn(h.session, "signIn");
   renderTabs(h);
   const harness = screen.getByRole("button", {
@@ -178,12 +183,16 @@ it("does not start sign-in or provider reads on mount, then loads after explicit
   expect(mark).toHaveAttribute("width", "1.25rem");
   expect(screen.getByRole("button", { name: "Model:" })).toBeDisabled();
   expect(screen.queryByRole("textbox", { name: "Instructions" })).toBeNull();
-  const action = screen.getByRole("button", { name: "Sign in to Builderlab" });
-  expect(harness.closest(".buzz-preference-row")).toContainElement(action);
-  expect(signIn).not.toHaveBeenCalled();
+  expect(
+    screen.queryByRole("button", { name: "Sign in to Builderlab" }),
+  ).toBeNull();
+  expect(signIn).toHaveBeenCalledOnce();
   expect(h.request).not.toHaveBeenCalled();
   const user = userEvent.setup();
-  await user.click(action);
+  await act(async () => {
+    held.resolve(await acquire());
+    await signIn.mock.results[0]?.value;
+  });
   expect(await loadedInstructions()).toHaveValue("First instructions.");
   expect(
     screen.getByRole("button", { name: "Change harness from Builderlab" }),
@@ -487,12 +496,12 @@ it.each([
 
 it("recovers an unloaded no-access account through logout and normal sign-in, retaining ordinary Retry", async () => {
   const h = await fixture(false);
-  render(<h.Tab agent={agent()} save={vi.fn()} />);
   h.prepareAccount({
     subject: "account-b",
     email: "b@example.com",
     canUseRemoteAgents: false,
   });
+  render(<h.Tab agent={agent()} save={vi.fn()} />);
   await act(() => h.session.signIn());
   expect(await screen.findByRole("alert")).toHaveTextContent(
     "This account can’t access Builderlab agents.",
@@ -542,8 +551,9 @@ it("recovers an unloaded no-access account through logout and normal sign-in, re
       );
       expect(h.acquire).toHaveBeenCalledTimes(3);
       expect(
-        screen.getByRole("button", { name: "Sign in to Builderlab" }),
-      ).toHaveAttribute("aria-busy", "true");
+        screen.queryByRole("button", { name: "Sign in to Builderlab" }),
+      ).toBeNull();
+      expect(h.session.snapshot().status).toBe("pending");
       expect(screen.queryByRole("alert")).toBeNull();
       expect(
         screen.queryByRole("button", { name: "Use another account" }),
@@ -577,6 +587,44 @@ it("recovers an unloaded no-access account through logout and normal sign-in, re
     browser.stop();
   }
 });
+
+it.each(["forbidden", "missing-agent"])(
+  "offers account recovery instead of Retry when settings are inaccessible (%s)",
+  async (failure) => {
+    const h = await fixture();
+    h.request.mockResolvedValueOnce(
+      failure === "forbidden"
+        ? { status: 403, headers: {}, body: "{}" }
+        : { status: 200, headers: {}, body: '{"status":1,"agents":[]}' },
+    );
+    render(<h.Tab agent={agent()} save={vi.fn()} />);
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      failure === "forbidden"
+        ? "This Builderlab account cannot manage remote agents."
+        : "Agent not found in this Builderlab account.",
+    );
+    const action = screen.getByRole("button", { name: "Use another account" });
+    expect(action).toHaveAttribute("href", "https://builderlab.example/logout");
+    expect(screen.queryByRole("button", { name: "Retry" })).toBeNull();
+    expect(h.request).toHaveBeenCalledOnce();
+    const browser = observeLogout(h.session);
+    try {
+      const user = userEvent.setup();
+      await user.click(action);
+      expect(browser.opened).toEqual([
+        { url: "https://builderlab.example/logout", status: "signed-out" },
+      ]);
+      await user.click(
+        screen.getByRole("button", { name: "Sign in to Builderlab" }),
+      );
+      expect(await loadedInstructions()).toHaveValue("First instructions.");
+      expect(screen.queryByRole("alert")).toBeNull();
+    } finally {
+      browser.stop();
+      h.session.dispose();
+    }
+  },
+);
 
 it("retries a failed load and refuses to save a draft through another account", async () => {
   const h = await fixture();
@@ -710,6 +758,7 @@ it("switching agents hides the old draft and ignores the switched-away read", as
 function renderTabs(
   h: Awaited<ReturnType<typeof fixture>>,
   close?: () => void,
+  initialActivity = false,
 ) {
   function Pane() {
     const agents = { save: vi.fn() } as unknown as Agents;
@@ -733,6 +782,7 @@ function renderTabs(
     return (
       <AgentSaveFooter value={{ target }}>
         <AgentTabs
+          initialActivity={initialActivity}
           agents={agents}
           agent={agent()}
           type={h.type}
@@ -766,6 +816,34 @@ function renderTabs(
     { wrapper: StrictMode },
   );
 }
+
+it("opens Activity without login and keeps Identity's login running after leaving it", async () => {
+  const h = await fixture(false);
+  const acquire = h.acquire.getMockImplementation();
+  if (!acquire) throw new Error("Missing sign-in fixture");
+  const held = deferred<Awaited<ReturnType<typeof h.acquire>>>();
+  h.acquire.mockReturnValueOnce(held.promise);
+  const signIn = vi.spyOn(h.session, "signIn");
+  renderTabs(h, undefined, true);
+  expect(h.acquire).not.toHaveBeenCalled();
+  expect(h.request).not.toHaveBeenCalled();
+  const user = userEvent.setup();
+  await user.click(screen.getByRole("tab", { name: "Identity" }));
+  expect(h.acquire).toHaveBeenCalledOnce();
+  await user.click(screen.getByRole("tab", { name: "Activity" }));
+  expect(h.session.snapshot().status).toBe("pending");
+  await act(async () => {
+    held.resolve(await acquire());
+    await signIn.mock.results[0]?.value;
+  });
+  expect(h.session.snapshot().status).toBe("signed-in");
+  expect(h.request).not.toHaveBeenCalled();
+  expect(screen.queryByRole("textbox", { name: "Instructions" })).toBeNull();
+  await user.click(screen.getByRole("tab", { name: "Identity" }));
+  expect(await loadedInstructions()).toHaveValue("First instructions.");
+  expect(h.acquire).toHaveBeenCalledOnce();
+  h.session.dispose();
+});
 
 it("dismisses Harness help before allowing Escape to close the agent pane", async () => {
   const h = await fixture();
@@ -809,15 +887,12 @@ it("dismisses Harness help before allowing Escape to close the agent pane", asyn
 
 it("shows the remote execution hint only while the shared account is signed in", async () => {
   const h = await fixture(false);
+  const held = deferred<Awaited<ReturnType<typeof h.acquire>>>();
+  h.acquire.mockReturnValueOnce(held.promise);
+  const signIn = vi.spyOn(h.session, "signIn");
   renderTabs(h);
   expect(screen.queryByRole("note")).not.toBeInTheDocument();
   expect(h.request).not.toHaveBeenCalled();
-  const held = deferred<Awaited<ReturnType<typeof h.acquire>>>();
-  h.acquire.mockReturnValueOnce(held.promise);
-  let signingIn = Promise.resolve();
-  await act(async () => {
-    signingIn = h.session.signIn();
-  });
   try {
     expect(h.session.snapshot().status).toBe("pending");
     expect(screen.queryByRole("note")).not.toBeInTheDocument();
@@ -832,7 +907,7 @@ it("shows the remote execution hint only while the shared account is signed in",
           canUseBuilderlabDecisions: false,
         },
       });
-      await signingIn;
+      await signIn.mock.results[0]?.value;
     });
   }
   await loadedInstructions();

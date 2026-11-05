@@ -440,6 +440,48 @@ it("checks the live credential before saving even when the displayed session has
   }
 });
 
+it.each(["save", "catalog"])(
+  "recovers from a forbidden %s request through another account without losing the draft",
+  async (operation) => {
+    const h = await fixture({
+      modelId: "model-one",
+      reasoningEffort: "high",
+      modelSelectionStatus: "valid",
+      instructions: "Saved instructions.",
+    });
+    const user = userEvent.setup();
+    await user.type(
+      screen.getByRole("textbox", { name: "Instructions" }),
+      " Draft",
+    );
+    h.request.mockResolvedValueOnce({ status: 403, headers: {}, body: "{}" });
+    if (operation === "save")
+      await user.click(screen.getByRole("button", { name: "Save" }));
+    else {
+      act(() => h.session.signOut());
+      await act(() => h.session.signIn());
+    }
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      "This Builderlab account cannot manage remote agents.",
+    );
+    expect(
+      screen.getByRole("button", { name: "Use another account" }),
+    ).toBeEnabled();
+    expect(
+      screen.queryByRole("button", { name: /Retry|Try again|Save/ }),
+    ).toBeNull();
+    act(() => h.session.signOut());
+    await act(() => h.session.signIn());
+    await waitFor(() =>
+      expect(screen.getByRole("button", { name: /^Model:/ })).toBeEnabled(),
+    );
+    expect(screen.getByRole("textbox", { name: "Instructions" })).toHaveValue(
+      "Saved instructions. Draft",
+    );
+    expect(screen.queryByRole("alert")).toBeNull();
+  },
+);
+
 it("replaces a previous account's catalog error with mismatch guidance and recovers on the original account", async () => {
   const h = await fixture({
     modelId: "model-one",

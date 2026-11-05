@@ -1,5 +1,5 @@
 import { ProviderDialog } from "./ProviderDialog";
-import { useId, useRef, useState, type ReactNode } from "react";
+import { useId, useRef, useState } from "react";
 import type {
   Agent,
   AgentSettingsHost,
@@ -104,14 +104,13 @@ export function useAgentSettingsHost({
             ...(pendingTypeSave ? { pendingSave: pendingTypeSave } : {}),
             ...(showTypeControl
               ? {
-                  typeControl: (dirty: boolean, action?: ReactNode) => (
+                  typeControl: (dirty: boolean) => (
                     <TypeField
                       agents={agents}
                       agent={agent}
                       type={type}
                       types={types}
                       dirty={dirty}
-                      action={action}
                       selected={stagedType?.key ?? agent.type}
                       onSelect={setPendingType}
                     />
@@ -137,7 +136,6 @@ function TypeField({
   dirty,
   selected,
   onSelect,
-  action,
 }: {
   agents: Agents;
   agent: Agent;
@@ -145,7 +143,6 @@ function TypeField({
   types: readonly RegisteredAgentType[];
   dirty: boolean;
   selected: string;
-  action?: ReactNode;
   onSelect(type: { key: string; config: unknown } | undefined): void;
 }) {
   const others = types.filter((item) => item.key !== agent.type);
@@ -214,100 +211,97 @@ function TypeField({
       <PreferenceRow
         title="Harness"
         trailing={
-          <div className="flex min-w-0 flex-wrap items-center justify-end gap-2">
-            {others.length > 0 ? (
-              <div className="buzz-select" data-variant="compact">
-                <MenuRoot
-                  onOpenChange={(open) => {
-                    if (open) setError("");
-                    else setHelpOpen(undefined);
+          others.length > 0 ? (
+            <div className="buzz-select" data-variant="compact">
+              <MenuRoot
+                onOpenChange={(open) => {
+                  if (open) setError("");
+                  else setHelpOpen(undefined);
+                }}
+              >
+                <MenuTrigger
+                  aria-label={`Change harness from ${selectedType?.title ?? "unavailable harness"}`}
+                  render={
+                    <Button
+                      ref={providerButton}
+                      variant="outline"
+                      shape="control"
+                      size="sm"
+                    >
+                      {value}
+                      <CaretDownIcon size={14} aria-hidden="true" />
+                    </Button>
+                  }
+                />
+                <MenuPopup
+                  onKeyDownCapture={(event) => {
+                    // WebKit keeps focus on the menu root after pointer entry.
+                    // Consume the help's Escape here, including that focus path.
+                    if (event.key === "Escape" && helpOpen) {
+                      event.preventDefault();
+                      event.stopPropagation();
+                      setHelpOpen(undefined);
+                    }
                   }}
                 >
-                  <MenuTrigger
-                    aria-label={`Change harness from ${selectedType?.title ?? "unavailable harness"}`}
-                    render={
-                      <Button
-                        ref={providerButton}
-                        variant="outline"
-                        shape="control"
-                        size="sm"
-                      >
-                        {value}
-                        <CaretDownIcon size={14} aria-hidden="true" />
-                      </Button>
-                    }
-                  />
-                  <MenuPopup
-                    onKeyDownCapture={(event) => {
-                      // WebKit keeps focus on the menu root after pointer entry.
-                      // Consume the help's Escape here, including that focus path.
-                      if (event.key === "Escape" && helpOpen) {
-                        event.preventDefault();
-                        event.stopPropagation();
-                        setHelpOpen(undefined);
-                      }
-                    }}
+                  <MenuRadioGroup
+                    value={selected}
+                    onValueChange={(next) => choose(String(next))}
                   >
-                    <MenuRadioGroup
-                      value={selected}
-                      onValueChange={(next) => choose(String(next))}
-                    >
-                      {[true, false].map((remote) => {
-                        const label = remote ? "Remote" : "Local";
-                        const choices = types.filter(
-                          (item) => Boolean(item.remote) === remote,
-                        );
-                        if (!choices.length) return null;
-                        const blocked = choices.filter((item) =>
-                          unavailable.includes(item),
-                        );
-                        return (
-                          <MenuGroup key={label}>
-                            <MenuGroupLabel emphasis="quiet">
-                              <span className="text-caption">{label}</span>
-                            </MenuGroupLabel>
-                            {choices
-                              .filter((item) => !unavailable.includes(item))
-                              .map((item) => {
-                                const Icon = item.icon;
-                                return (
-                                  <MenuRadioItem
-                                    key={item.key}
-                                    value={item.key}
-                                    selection="highlight"
-                                    closeOnClick
-                                  >
-                                    <ChoiceRow
-                                      label={item.title}
-                                      leading={
-                                        Icon ? <Icon size={20} /> : undefined
-                                      }
-                                    />
-                                  </MenuRadioItem>
-                                );
-                              })}
-                            {blocked.length > 0 && (
-                              <UnavailableHarnessChoices
-                                types={blocked}
-                                source={type}
-                                open={helpOpen === label}
-                                onOpenChange={(open) =>
-                                  setHelpOpen(open ? label : undefined)
-                                }
-                              />
-                            )}
-                          </MenuGroup>
-                        );
-                      })}
-                    </MenuRadioGroup>
-                  </MenuPopup>
-                </MenuRoot>
-              </div>
-            ) : (
-              value
-            )}
-            {action}
-          </div>
+                    {[true, false].map((remote) => {
+                      const label = remote ? "Remote" : "Local";
+                      const choices = types.filter(
+                        (item) => Boolean(item.remote) === remote,
+                      );
+                      if (!choices.length) return null;
+                      const blocked = choices.filter((item) =>
+                        unavailable.includes(item),
+                      );
+                      return (
+                        <MenuGroup key={label}>
+                          <MenuGroupLabel emphasis="quiet">
+                            <span className="text-caption">{label}</span>
+                          </MenuGroupLabel>
+                          {choices
+                            .filter((item) => !unavailable.includes(item))
+                            .map((item) => {
+                              const Icon = item.icon;
+                              return (
+                                <MenuRadioItem
+                                  key={item.key}
+                                  value={item.key}
+                                  selection="highlight"
+                                  closeOnClick
+                                >
+                                  <ChoiceRow
+                                    label={item.title}
+                                    leading={
+                                      Icon ? <Icon size={20} /> : undefined
+                                    }
+                                  />
+                                </MenuRadioItem>
+                              );
+                            })}
+                          {blocked.length > 0 && (
+                            <UnavailableHarnessChoices
+                              types={blocked}
+                              source={type}
+                              open={helpOpen === label}
+                              onOpenChange={(open) =>
+                                setHelpOpen(open ? label : undefined)
+                              }
+                            />
+                          )}
+                        </MenuGroup>
+                      );
+                    })}
+                  </MenuRadioGroup>
+                </MenuPopup>
+              </MenuRoot>
+            </div>
+          ) : (
+            value
+          )
         }
       />
       {error && !migration && (

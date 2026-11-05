@@ -14,16 +14,10 @@ import type { AgentClient, RemoteAgent } from "../agents/client";
 import type { BuilderlabSession } from "../session";
 import { ModelSettings } from "./ModelSettings";
 
-const message = (reason: unknown) =>
-  reason instanceof Error
-    ? reason.message
-    : "Could not load Builderlab settings.";
-
 /** Hosted settings belong to Builderlab, rather than Agents' local config. */
 export function createSettingsTab(
   client: AgentClient,
   session: BuilderlabSession,
-  openIdentity?: () => void,
 ) {
   function Editor({
     pubkey,
@@ -32,7 +26,7 @@ export function createSettingsTab(
   }: {
     pubkey: string;
     retry(): void;
-    harnessControl: (action: ReactNode) => ReactNode;
+    harnessControl: () => ReactNode;
   }) {
     const login = useSyncExternalStore(session.subscribe, session.snapshot);
     const [loaded, setLoaded] = useState<{
@@ -41,7 +35,7 @@ export function createSettingsTab(
       email: string;
     }>();
     const [busy, setBusy] = useState(true);
-    const [error, setError] = useState("");
+    const [error, setError] = useState<unknown>("");
     useEffect(() => {
       if (loaded || login.status !== "signed-in") return;
       setBusy(true);
@@ -59,7 +53,10 @@ export function createSettingsTab(
         if (session.credential() !== credential)
           throw new DOMException("Builderlab session changed.", "AbortError");
         if (!remote)
-          throw new Error("Agent not found in this Builderlab account.");
+          throw Object.assign(
+            new Error("Agent not found in this Builderlab account."),
+            { status: 403 },
+          );
         if (remote.status !== "Active")
           throw new Error("Only Active agents can have their settings edited.");
         setLoaded({
@@ -70,7 +67,7 @@ export function createSettingsTab(
       };
       void load()
         .catch((reason: unknown) => {
-          if (!current.signal.aborted) setError(message(reason));
+          if (!current.signal.aborted) setError(reason);
         })
         .finally(() => {
           if (!current.signal.aborted) setBusy(false);
@@ -81,7 +78,6 @@ export function createSettingsTab(
       <ModelSettings
         client={client}
         session={session}
-        openIdentity={openIdentity}
         settings={
           loaded ?? {
             pending: busy && login.status === "signed-in",
@@ -112,9 +108,7 @@ export function createSettingsTab(
             key={`${agent.pubkey}/${revision}`}
             pubkey={agent.pubkey}
             retry={() => setRevision((value) => value + 1)}
-            harnessControl={(action) =>
-              settingsHost?.typeControl?.(false, action)
-            }
+            harnessControl={() => settingsHost?.typeControl?.(false)}
           />
         )}
         {settingsSection !== "identity" && (
