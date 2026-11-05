@@ -166,9 +166,12 @@ fn store(
             }
             pending = &pending[count..];
         }
-        channel
-            .shutdown(Shutdown::Write)
-            .map_err(|_| Error::Unavailable)?;
+        match channel.shutdown(Shutdown::Write) {
+            // macOS can close the peer before its buffered reply is read.
+            Err(error)
+                if operation != "replace" && error.kind() == std::io::ErrorKind::NotConnected => {}
+            result => result.map_err(|_| Error::Unavailable)?,
+        }
         let mut output = Zeroizing::new(Vec::new());
         let mut buffer = Zeroizing::new([0; 8192]);
         loop {
