@@ -1,6 +1,6 @@
 //! Native-only viewer exchange. Credentials never enter a URL or website JavaScript.
 use crate::federated_identity::FederatedIdentity;
-use reqwest::header::{HeaderName, HeaderValue, AUTHORIZATION};
+use reqwest::header::{HeaderName, HeaderValue};
 use serde::Deserialize;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use url::Url;
@@ -160,12 +160,13 @@ fn exchange_request(
                 if current != revision {
                     return None;
                 }
-                let mut value =
-                    HeaderValue::from_str(&Zeroizing::new(format!("Bearer {}", **token))).ok()?;
+                // The NIP-FI session is a Builderlab CLI session. Kgoose's exchange
+                // takes it only in this header and refuses any Authorization header.
+                let mut value = HeaderValue::from_str(token.as_str()).ok()?;
                 value.set_sensitive(true);
                 Some((
                     format!("{}{}{PATH}", config.identity_origin, config.api_base_path),
-                    AUTHORIZATION,
+                    HeaderName::from_static("x-bb-session-credential"),
                     value,
                 ))
             })
@@ -325,7 +326,7 @@ mod tests {
     }
 
     #[test]
-    fn federated_exchange_sends_the_bearer_only_for_the_current_revision() {
+    fn federated_exchange_sends_the_session_credential_only_for_the_current_revision() {
         let fi = signed_in();
         let (url, name, value) =
             exchange_request(ViewerAuth::Federated(revision(&fi)), &fi).unwrap();
@@ -333,8 +334,8 @@ mod tests {
             url,
             "https://identity.example/api/v1/auth/hosted-site/native-session"
         );
-        assert_eq!(name, AUTHORIZATION);
-        assert_eq!(value.to_str().unwrap(), "Bearer fixture-session-token");
+        assert_eq!(name.as_str(), "x-bb-session-credential");
+        assert_eq!(value.to_str().unwrap(), "fixture-session-token");
         assert!(value.is_sensitive());
         for stale in [revision(&fi) + "x", String::new()] {
             assert_eq!(
