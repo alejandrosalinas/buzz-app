@@ -36,8 +36,6 @@ export type Credential = Readonly<{
     email: string;
     canUseRemoteAgents: boolean;
     canUseBuilderlabDecisions: boolean;
-    /** The account hasn't finished Builderlab's account setup (name, birthday, country). */
-    needsDetails?: boolean;
   }>;
 }>;
 
@@ -176,7 +174,6 @@ export async function browserCredential(
           account.capabilities?.can_use_remote_agents === true,
         canUseBuilderlabDecisions:
           account.capabilities?.can_use_builderlab_decisions === true,
-        needsDetails: account.account_status === "ACCOUNT_STATUS_NEEDS_DETAILS",
       }),
     });
   } catch (error) {

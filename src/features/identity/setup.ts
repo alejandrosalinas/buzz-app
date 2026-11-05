@@ -29,7 +29,6 @@ export type Next = Readonly<{ next: readonly SetupStep[] }>;
  * start-over page for a lost key).
  */
 export type SetupPause =
-  | "account-details"
   | "connect-choice"
   | "key-import"
   | "welcome-back"

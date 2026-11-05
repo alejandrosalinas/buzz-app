@@ -157,10 +157,8 @@ const owning =
   (owned: readonly OwnedCommunity[] = []) =>
   () =>
     Promise.resolve({ owned, canCreate: false });
-/** Create a community and account setup are never reached. */
+/** Create a community is never reached. */
 const noCreation = {
-  saveDetails: () =>
-    Promise.reject(new Error("Welcome saved details it never asked for")),
   communityAvailable: () =>
     Promise.reject(new Error("Welcome checked an address it never offered")),
   createCommunity: () =>
@@ -7295,88 +7293,6 @@ it("first-run onboarding never asks about backup, even while the uploader waits 
   await act(() => identity.backup.ready());
   expect(identity.backup.snapshot()).toMatchObject({ reason: "no_consent" });
   expect(screen.queryByRole("alertdialog")).toBeNull();
-  identity.dispose();
-});
-
-/** First-run sign-in for a key-less account, with `credential`'s account status. */
-function renderSignIn(
-  signedIn: Credential,
-  saveDetails: FirstRunAccount["saveDetails"],
-) {
-  vi.stubEnv("VITE_BUZZ_BUILDERLAB_URL", "https://app.builderlab.xyz");
-  vi.mocked(invoke).mockImplementation(async (command) => {
-    if (command === "identity_restore") return null;
-    if (command === "identity_legacy_available") return false;
-    if (command === "identity_create") return viewer;
-    return awaitingConsent(command);
-  });
-  const identity = createIdentity();
-  const account = unlinkedWith(async () => {});
-  render(
-    <Welcome
-      identity={identity}
-      communities={noJoin}
-      invites={invites}
-      account={(...args) => ({ ...account(...args), saveDetails })}
-      connect={async () => signedIn}
-    >
-      <p>Signed in</p>
-    </Welcome>,
-  );
-  return identity;
-}
-
-it("an account that still needs Builderlab's details finishes setting up before Buzz continues", async () => {
-  const saveDetails = vi.fn(async () => {});
-  const identity = renderSignIn(
-    { ...credential, account: { ...credential.account, needsDetails: true } },
-    saveDetails,
-  );
-  const user = userEvent.setup();
-  await user.click(await screen.findByRole("button", { name: SIGN_IN }));
-  expect(
-    await screen.findByRole("heading", {
-      name: "Finish setting up your account",
-    }),
-  ).toBeVisible();
-  await user.click(screen.getByRole("button", { name: "Continue" }));
-  expect(await screen.findByText("Enter your first name.")).toBeVisible();
-  expect(saveDetails).not.toHaveBeenCalled();
-  await user.type(screen.getByLabelText("First name"), " Ada ");
-  await user.type(screen.getByLabelText("Last name"), "Lovelace");
-  fireEvent.change(screen.getByLabelText("Date of birth"), {
-    target: { value: "1990-05-01" },
-  });
-  await user.click(screen.getByRole("combobox", { name: "Country or region" }));
-  await user.click(await screen.findByRole("option", { name: "Canada" }));
-  await user.click(screen.getByRole("button", { name: "Continue" }));
-  expect(
-    await screen.findByRole("heading", { name: "Connect to a community" }),
-  ).toBeVisible();
-  expect(saveDetails).toHaveBeenCalledExactlyOnceWith({
-    first_name: "Ada",
-    last_name: "Lovelace",
-    date_of_birth: "1990-05-01",
-    country_code: "CA",
-  });
-  identity.dispose();
-});
-
-it("an account with its details already saved never sees account setup", async () => {
-  const saveDetails = vi.fn(async () => {});
-  const identity = renderSignIn(
-    { ...credential, account: { ...credential.account, needsDetails: false } },
-    saveDetails,
-  );
-  const user = userEvent.setup();
-  await user.click(await screen.findByRole("button", { name: SIGN_IN }));
-  expect(
-    await screen.findByRole("heading", { name: "Connect to a community" }),
-  ).toBeVisible();
-  expect(
-    screen.queryByRole("heading", { name: "Finish setting up your account" }),
-  ).toBeNull();
-  expect(saveDetails).not.toHaveBeenCalled();
   identity.dispose();
 });
 

@@ -55,7 +55,6 @@ import { InviteCodeField } from "./InviteCodeField";
 import styles from "./IdentitySetup.module.css";
 import { parseFirstRunAccountSeed } from "./first-run-seed";
 import { JoinCommunity } from "./JoinCommunity";
-import { AccountDetails } from "./AccountDetails";
 import { KeyImport } from "./KeyImport";
 import { KeyLost } from "./KeyLost";
 import { KeyRestore } from "./KeyRestore";
@@ -380,18 +379,8 @@ export function Welcome({
     if (attempt !== cancels.current || login.snapshot().status !== "signed-in")
       return;
     rememberBuilderlab();
-    const credential = login.credential();
-    const current = account(credential, identity);
+    const current = account(login.credential(), identity);
     reads.current = current;
-    // Account setup the web console would ask for comes first, in Buzz.
-    if (credential.account.needsDetails) pause("account-details");
-    else checkSignedIn(current);
-  };
-  /**
-   * The account check picks the lane: a linked key pauses on Welcome back,
-   * otherwise setup goes on by itself.
-   */
-  const checkSignedIn = (current: FirstRunAccount) => {
     let checkedKey: string | undefined;
     let checkedBackups: readonly string[] | undefined;
     const signedIn = identity.snapshot();
@@ -757,17 +746,6 @@ export function Welcome({
   const paused = (at: SetupPause) => {
     const current = reads.current;
     switch (at) {
-      case "account-details":
-        return current ? (
-          <AccountDetails
-            email={login.credential().account.email}
-            onBack={backToLanding}
-            onSave={async (details) => {
-              await current.saveDetails(details);
-              checkSignedIn(current);
-            }}
-          />
-        ) : null;
       case "connect-choice":
         // Connect is the landing's own sign-in: resetting first lets the
         // landing stay visible while the browser completes sign-in.
@@ -1070,7 +1048,7 @@ export function Welcome({
   // so the title bar and window controls stay.
   if (
     progress.status === "paused" &&
-    ["account-details", "key-import", "key-restore"].includes(progress.at)
+    ["key-import", "key-restore"].includes(progress.at)
   )
     return paused(progress.at) ?? <WireframeScreen>{null}</WireframeScreen>;
   if (

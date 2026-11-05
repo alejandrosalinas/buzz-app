@@ -57,7 +57,6 @@ it("acquires a verified credential with the RFC 7636 S256 proof", async () => {
       email: "a@example.com",
       canUseRemoteAgents: false,
       canUseBuilderlabDecisions: false,
-      needsDetails: false,
     },
   });
   const options = vi.mocked(bridge.begin).mock.calls[0]?.[0];
@@ -238,31 +237,6 @@ it.each([
   },
 );
 
-it.each([
-  [undefined, false],
-  ["ACCOUNT_STATUS_OK", false],
-  ["ACCOUNT_STATUS_PENDING", false],
-  ["ACCOUNT_STATUS_NEEDS_DETAILS", true],
-])(
-  "reads account status %j as needing details: %s",
-  async (status, expected) => {
-    const { host, bridge, controller } = fixture();
-    vi.mocked(host.request)
-      .mockResolvedValueOnce({
-        status: 200,
-        headers: {},
-        body: '{"session_credential":"private-token"}',
-      })
-      .mockResolvedValueOnce({
-        status: 200,
-        headers: {},
-        body: JSON.stringify({ ...account, account_status: status }),
-      });
-    const credential = await browserCredential(host, controller.signal, bridge);
-    expect(credential.account.needsDetails).toBe(expected);
-  },
-);
-
 it("redacts a rejected exchange and retries with a fresh verifier without downgrading", async () => {
   const { host, bridge, controller } = fixture();
   vi.mocked(host.request).mockResolvedValueOnce({
@@ -372,7 +346,6 @@ it.each([
         email: expected,
         canUseRemoteAgents: false,
         canUseBuilderlabDecisions: false,
-        needsDetails: false,
       },
     });
   },
