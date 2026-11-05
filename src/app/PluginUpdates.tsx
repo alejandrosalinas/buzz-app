@@ -78,16 +78,12 @@ export function PluginUpdates({
     setStore(updates);
     let timer: ReturnType<typeof setTimeout> | undefined;
     let disposed = false;
+    const visible = () => document.visibilityState !== "hidden";
     const check = async () => {
       clearTimeout(timer);
-      if (document.visibilityState === "hidden") return;
+      if (!visible()) return;
       const delay = await updates.check();
-      if (
-        delay === undefined ||
-        disposed ||
-        document.visibilityState === "hidden"
-      )
-        return;
+      if (delay === undefined || disposed || !visible()) return;
       clearTimeout(timer);
       timer = setTimeout(check, delay);
     };
