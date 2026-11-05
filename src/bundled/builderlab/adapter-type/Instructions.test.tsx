@@ -183,8 +183,15 @@ it("automatically signs in on Identity without provider reads before verificatio
   expect(mark).toHaveAttribute("width", "1.25rem");
   expect(screen.getByRole("button", { name: "Model:" })).toBeDisabled();
   expect(screen.queryByRole("textbox", { name: "Instructions" })).toBeNull();
+  const inlineSignIn = screen.getByRole("button", {
+    name: "Sign in to Builderlab",
+  });
+  expect(inlineSignIn.parentElement).toBe(
+    harness.closest(".buzz-select")?.parentElement,
+  );
+  expect(inlineSignIn).toHaveAttribute("aria-busy", "true");
   expect(
-    screen.queryByRole("button", { name: "Sign in to Builderlab" }),
+    screen.queryByRole("region", { name: "Sign in to Builderlab" }),
   ).toBeNull();
   expect(signIn).toHaveBeenCalledOnce();
   expect(h.request).not.toHaveBeenCalled();
@@ -210,6 +217,61 @@ it("automatically signs in on Identity without provider reads before verificatio
   expect(await loadedInstructions()).toHaveValue("First instructions. Draft");
   h.session.dispose();
 });
+
+it.each(["cancel", "timeout"] as const)(
+  "keeps automatic login and %s recovery in the actual Harness row without a sheet",
+  async (outcome) => {
+    const h = await fixture(false);
+    const held = deferred<Awaited<ReturnType<typeof h.acquire>>>();
+    h.acquire.mockReturnValueOnce(held.promise);
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    renderTabs(h);
+    try {
+      expect(h.acquire).toHaveBeenCalledOnce();
+      await act(() => vi.advanceTimersByTimeAsync(3000));
+      const cancel = screen.getByRole("button", { name: "Cancel sign-in" });
+      const harness = screen.getByRole("button", {
+        name: "Change harness from Builderlab",
+      });
+      expect(cancel.parentElement).toBe(
+        harness.closest(".buzz-select")?.parentElement,
+      );
+      expect(screen.queryByRole("region")).toBeNull();
+      if (outcome === "cancel") fireEvent.click(cancel);
+      else
+        await act(async () =>
+          held.reject(new Error("Builderlab authentication timed out")),
+        );
+      await act(() => vi.advanceTimersByTimeAsync(10_000));
+      const retry = screen.getByRole("button", {
+        name: "Sign in to Builderlab",
+      });
+      expect(retry).toBeEnabled();
+      expect(screen.queryByRole("region")).toBeNull();
+      expect(h.acquire).toHaveBeenCalledOnce();
+      expect(h.request).not.toHaveBeenCalled();
+      vi.useRealTimers();
+      fireEvent.click(retry);
+      await screen.findByRole("textbox", { name: "Instructions" });
+      expect(await loadedInstructions()).toHaveValue("First instructions.");
+      expect(h.acquire).toHaveBeenCalledTimes(2);
+      expect(
+        screen.queryByRole("button", { name: "Sign in to Builderlab" }),
+      ).toBeNull();
+    } finally {
+      held.resolve({
+        value: "late-credential",
+        account: {
+          subject: "account-a",
+          email: "a@example.com",
+          canUseRemoteAgents: true,
+          canUseBuilderlabDecisions: false,
+        },
+      });
+      h.session.dispose();
+    }
+  },
+);
 
 it("offers retry after a slow settings read and ignores its late result", async () => {
   const h = await fixture(false);
@@ -552,8 +614,8 @@ it("recovers an unloaded no-access account through logout and normal sign-in, re
       );
       expect(h.acquire).toHaveBeenCalledTimes(3);
       expect(
-        screen.queryByRole("button", { name: "Sign in to Builderlab" }),
-      ).toBeNull();
+        screen.getByRole("button", { name: "Sign in to Builderlab" }),
+      ).toHaveAttribute("aria-busy", "true");
       expect(h.session.snapshot().status).toBe("pending");
       expect(screen.queryByRole("alert")).toBeNull();
       expect(

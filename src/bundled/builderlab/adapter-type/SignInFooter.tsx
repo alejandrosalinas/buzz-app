@@ -1,6 +1,5 @@
 import {
   useContext,
-  useEffect,
   useLayoutEffect,
   useMemo,
   useRef,
@@ -20,7 +19,6 @@ import { Button } from "../../../shared/design-system/ui/Button";
 import { Header } from "../../../shared/design-system/ui/Header";
 import { oauthTarget } from "../oauth/browser";
 import type { BuilderlabSession } from "../session";
-import { useSignInProgress } from "../login/use-sign-in-progress";
 
 /** Profile edits need an account; messaging uses the owner's relay connection. */
 export function createProfileActions(session: BuilderlabSession) {
@@ -157,42 +155,6 @@ export function SettingsErrorSheet({
     return () => report(null);
   }, [report, active, content]);
   return report ? null : <AnimatePresence>{active && content}</AnimatePresence>;
-}
-
-/** Try once on opening Identity; slow attempts and failures earn a sheet. */
-export function SignInSheet({ session }: { session: BuilderlabSession }) {
-  const login = useSyncExternalStore(session.subscribe, session.snapshot);
-  const attempted = useRef(false);
-  useEffect(() => {
-    if (attempted.current || login.checking) return;
-    attempted.current = true;
-    if (login.status === "signed-out" && !login.error) void session.signIn();
-  }, [session, login.status, login.checking, login.error]);
-  const { pending, waiting } = useSignInProgress(login);
-  return (
-    <SettingsErrorSheet
-      active={
-        waiting ||
-        (login.status === "signed-out" && (attempted.current || !!login.error))
-      }
-      accessRequired
-      announce={login.error ? "alert" : "status"}
-      title={login.error ? "Couldn’t sign in" : "Sign in to Builderlab"}
-      message={
-        login.error ??
-        (waiting
-          ? "Finish signing in to Builderlab in your browser, then return to Buzz."
-          : "Use your Builderlab account to edit and manage this agent.")
-      }
-      action={{
-        label: pending ? "Cancel sign-in" : "Sign in to Builderlab",
-        run: () => {
-          if (pending) session.cancel();
-          else void session.signIn();
-        },
-      }}
-    />
-  );
 }
 
 /** Settings supplies the verified account context; the host owns placement. */

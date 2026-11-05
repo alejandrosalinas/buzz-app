@@ -25,11 +25,7 @@ import type { Host, HostResponse } from "../../../features/host/service";
 import { createAgentClient } from "../agents/client";
 import { createSettingsTab } from "./Instructions";
 import { deferred } from "../test-helpers";
-import {
-  AccountRecoverySheet,
-  createProfileActions,
-  SignInSheet,
-} from "./SignInFooter";
+import { AccountRecoverySheet, createProfileActions } from "./SignInFooter";
 
 vi.mock("../oauth/browser", async (original) => ({
   ...(await original<typeof import("../oauth/browser")>()),
@@ -90,18 +86,19 @@ it("offers browser logout for FI account recovery and explicitly ends its sessio
   session.dispose();
 });
 
-it("automatically starts once, waits three seconds for its sheet, and does not loop after cancellation", async () => {
+it("automatically starts once, keeps slow login inline, and does not loop after cancellation", async () => {
   vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
   const held = deferred<Credential>();
   const acquire = vi.fn((_signal: AbortSignal) => held.promise);
   const session = createOAuthSession(acquire);
-  render(<SignInSheet session={session} />, { wrapper: StrictMode });
+  render(<SignInAction session={session} automatic />, { wrapper: StrictMode });
   expect(acquire).toHaveBeenCalledOnce();
   expect(screen.queryByRole("region")).toBeNull();
   await act(() => vi.advanceTimersByTimeAsync(2999));
   expect(screen.queryByRole("region")).toBeNull();
   await act(() => vi.advanceTimersByTimeAsync(1));
   expect(screen.getByRole("status")).toHaveTextContent(/Finish signing in/);
+  expect(screen.queryByRole("region")).toBeNull();
   fireEvent.click(screen.getByRole("button", { name: "Cancel sign-in" }));
   expect(acquire.mock.calls[0]?.[0].aborted).toBe(true);
   expect(session.snapshot().status).toBe("signed-out");
@@ -120,7 +117,7 @@ it("finishes a fast automatic sign-in without showing its sheet", async () => {
   const held = deferred<Credential>();
   const session = createOAuthSession(() => held.promise);
   const signIn = vi.spyOn(session, "signIn");
-  render(<SignInSheet session={session} />);
+  render(<SignInAction session={session} automatic />);
   await act(async () => {
     held.resolve(credential);
     await signIn.mock.results[0]?.value;
@@ -131,15 +128,39 @@ it("finishes a fast automatic sign-in without showing its sheet", async () => {
   session.dispose();
 });
 
-it("shows automatic login failures immediately and retries only when asked", async () => {
+it("shows automatic login failures inline and retries only when asked", async () => {
   const held = deferred<Credential>();
   const acquire = vi.fn(() => held.promise);
   const session = createOAuthSession(acquire);
-  render(<SignInSheet session={session} />);
+  render(<SignInAction session={session} automatic />);
   await act(async () => held.reject(new Error("Browser could not open.")));
   expect(screen.getByRole("alert")).toHaveTextContent(
     "Browser could not open.",
   );
+  expect(acquire).toHaveBeenCalledOnce();
+  expect(screen.queryByRole("region")).toBeNull();
+  acquire.mockResolvedValueOnce(credential);
+  fireEvent.click(
+    screen.getByRole("button", { name: "Sign in to Builderlab" }),
+  );
+  await waitFor(() => expect(session.snapshot().status).toBe("signed-in"));
+  expect(acquire).toHaveBeenCalledTimes(2);
+  session.dispose();
+});
+
+it("returns a timed-out automatic login to inline retry without a sheet", async () => {
+  const held = deferred<Credential>();
+  const acquire = vi.fn(() => held.promise);
+  const session = createOAuthSession(acquire);
+  render(<SignInAction session={session} automatic />);
+  await act(async () =>
+    held.reject(new Error("Builderlab authentication timed out")),
+  );
+  expect(screen.getByRole("alert")).toHaveTextContent("timed out");
+  expect(
+    screen.getByRole("button", { name: "Sign in to Builderlab" }),
+  ).toBeEnabled();
+  expect(screen.queryByRole("region")).toBeNull();
   expect(acquire).toHaveBeenCalledOnce();
   acquire.mockResolvedValueOnce(credential);
   fireEvent.click(
@@ -156,7 +177,7 @@ it("retains an existing sign-in failure on opening instead of starting another a
   });
   const session = createOAuthSession(acquire);
   await session.signIn();
-  render(<SignInSheet session={session} />, { wrapper: StrictMode });
+  render(<SignInAction session={session} automatic />, { wrapper: StrictMode });
   expect(screen.getByRole("alert")).toHaveTextContent("Sign-in failed.");
   expect(acquire).toHaveBeenCalledOnce();
   session.dispose();
@@ -182,7 +203,7 @@ it("waits for restoration and leaves the subsequent login running when Identity 
       };
     },
   };
-  const view = render(<SignInSheet session={projected} />, {
+  const view = render(<SignInAction session={projected} automatic />, {
     wrapper: StrictMode,
   });
   expect(acquire).not.toHaveBeenCalled();

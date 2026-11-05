@@ -1,4 +1,4 @@
-import { useSyncExternalStore } from "react";
+import { useEffect, useRef, useSyncExternalStore } from "react";
 import { Button } from "../../../shared/design-system/ui/Button";
 import type { BuilderlabSession } from "../session";
 import { useSignInProgress } from "../login/use-sign-in-progress";
@@ -7,11 +7,19 @@ import { useSignInProgress } from "../login/use-sign-in-progress";
 export function SignInAction({
   session,
   disabled = false,
+  automatic = false,
 }: {
   session: BuilderlabSession;
   disabled?: boolean;
+  automatic?: boolean;
 }) {
   const login = useSyncExternalStore(session.subscribe, session.snapshot);
+  const attempted = useRef(false);
+  useEffect(() => {
+    if (!automatic || attempted.current || login.checking) return;
+    attempted.current = true;
+    if (login.status === "signed-out" && !login.error) void session.signIn();
+  }, [automatic, session, login.status, login.checking, login.error]);
   const { pending, waiting } = useSignInProgress(login);
   if (login.status === "signed-in") return null;
   return (

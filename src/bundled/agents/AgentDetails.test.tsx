@@ -361,7 +361,9 @@ it.each([
           name: "Sign in to Builderlab",
         });
         expect(reconnect).toBeEnabled();
-        expect(screen.getByRole("tab", { selected: true })).toHaveFocus();
+        await waitFor(() =>
+          expect(screen.getByRole("tab", { selected: true })).toHaveFocus(),
+        );
         expect(session.snapshot().status).toBe("signed-out");
         expect(signIn).toHaveBeenCalledTimes(attempts);
         const selected = screen.getByRole("tab", { selected: true });

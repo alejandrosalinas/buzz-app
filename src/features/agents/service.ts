@@ -269,8 +269,9 @@ export type AgentChange<Config = unknown> = Readonly<{
 /** What a type's read-only peek receives. */
 export type AgentPeekProps<Config = unknown> = { agent: Agent<Config> };
 export type AgentSettingsHost = Readonly<{
-  /** A labelled Type control supplied only by the Agents build view. */
-  typeControl?: (dirty: boolean) => ReactNode;
+  /** A labelled Type control supplied only by the Agents build view.
+   * An optional provider action sits beside the harness choice. */
+  typeControl?: (dirty: boolean, action?: ReactNode) => ReactNode;
   /** Host-owned type change committed with the target type's settings draft. */
   pendingSave?: (config?: unknown) => Promise<void>;
 }>;

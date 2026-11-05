@@ -26,11 +26,8 @@ import {
   type RemoteAgentModel,
 } from "../agents/client";
 import type { BuilderlabSession } from "../session";
-import {
-  AccountRecoverySheet,
-  SettingsErrorSheet,
-  SignInSheet,
-} from "./SignInFooter";
+import { AccountRecoverySheet, SettingsErrorSheet } from "./SignInFooter";
+import { SignInAction } from "./SignInAction";
 import { effortLabel, modelChoice } from "./models";
 
 const statuses = {
@@ -61,12 +58,13 @@ export function ModelSettings({
 }: {
   client: AgentClient;
   session: BuilderlabSession;
-  harnessControl?: () => ReactNode;
+  harnessControl?: (action: ReactNode) => ReactNode;
   settings:
     | { agent: RemoteAgent; subject: string; email?: string }
     | { pending: boolean; error: unknown; retry(): void };
 }) {
   const login = useSyncExternalStore(session.subscribe, session.snapshot);
+  const signIn = <SignInAction session={session} automatic />;
   const reducedMotion = useReducedMotion();
   const signedIn = login.status === "signed-in";
   const agent = "agent" in settings ? settings.agent : undefined;
@@ -246,7 +244,6 @@ export function ModelSettings({
         ) : undefined
       }
     >
-      <SignInSheet session={session} />
       <AccountRecoverySheet
         session={session}
         active={accountProblem}
@@ -292,7 +289,7 @@ export function ModelSettings({
           </p>
         )}
         <SettingsGroup>
-          {harnessControl?.() ?? (
+          {harnessControl?.(signIn) ?? (
             <PreferenceRow
               title="Harness"
               trailing={
@@ -301,6 +298,7 @@ export function ModelSettings({
                     <BuilderlabLogoIcon size={20} aria-hidden="true" />
                     Builderlab
                   </span>
+                  {signIn}
                 </div>
               }
             />
