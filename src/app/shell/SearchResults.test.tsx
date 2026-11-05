@@ -2608,6 +2608,8 @@ it("translates combined operators into a single server-ranked scoped read and op
       />,
     );
     await act(async () => vi.advanceTimersByTimeAsync(SEARCH_DEBOUNCE_MS));
+    // The exact open-channel lookup settles before the in: channel resolves.
+    await act(async () => vi.advanceTimersByTimeAsync(SEARCH_DEBOUNCE_MS));
     const users = wire.next();
     expect(users.filters).toEqual([
       { kinds: [0], search: "alice", search_mode: "prefix", limit: 40 },
@@ -3464,7 +3466,7 @@ it.each([
       expect(await people.findAllByRole("option")).toHaveLength(2);
       fireEvent.click(people.getAllByRole("option")[1] as HTMLElement);
       expect(change).toHaveBeenCalledWith(
-        query.replace(/from:@?baxen/i, `from:${second.pubkey}`),
+        `from:${second.pubkey} ${query.replace(/from:@?baxen\s*/i, "")}`,
       );
     } finally {
       cleanup();
@@ -3880,9 +3882,12 @@ it("renders from:<author chip> without exposing the signed operand in the input"
       }),
     );
     expect(chip).toBeVisible();
-    expect((input as HTMLInputElement).value).toMatch(
-      /^before:\d{4}-\d{2}-\d{2} ?$/,
-    );
+    expect(
+      screen.getByRole("button", {
+        name: /^Remove date before:\d{4}-\d{2}-\d{2}$/,
+      }),
+    ).toBeVisible();
+    expect(input).toHaveValue("");
     expect((input as HTMLInputElement).value).not.toContain(human.pubkey);
     await waitFor(() =>
       expect(reads.at(-1)?.[0]).toMatchObject({ authors: [human.pubkey] }),
@@ -4089,6 +4094,386 @@ it("shows only the requested date suggestions and inserts local calendar dates",
   }
 });
 
+it("offers during: periods and an on: calendar that insert local dates", async () => {
+  const relay = keypair(),
+    viewer = keypair();
+  const owner = createRelaySession(
+    scriptedTransport(viewer.pubkey, relay.pubkey).transport,
+  );
+  const change = vi.fn();
+  vi.useFakeTimers({ toFake: ["Date"] });
+  vi.setSystemTime(new Date(2026, 9, 7, 12));
+  try {
+    const props = {
+      session: owner.session,
+      onQueryChange: change,
+      input: createRef<HTMLInputElement>(),
+      pages: [],
+      openConversation: () => {},
+    };
+    const view = render(<SearchResults {...props} query="deploy during:" />);
+    const dates = within(screen.getByRole("group", { name: "Dates" }));
+    expect(
+      dates.getAllByRole("option").map((option) => option.textContent),
+    ).toEqual([
+      "Today2026-10-07",
+      "Yesterday2026-10-06",
+      "This week2026-10-05",
+      "This month2026-10",
+      "This year2026",
+    ]);
+    fireEvent.click(dates.getByRole("option", { name: /This week/ }));
+    // There is no week period, so the week starts after its Monday.
+    expect(change).toHaveBeenLastCalledWith("after:2026-10-05 deploy ");
+    fireEvent.click(dates.getByRole("option", { name: /This year/ }));
+    expect(change).toHaveBeenLastCalledWith("during:2026 deploy ");
+    view.rerender(<SearchResults {...props} query="deploy on:" />);
+    expect(screen.queryByRole("group", { name: "Dates" })).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: /October 14th, 2026/ }));
+    expect(change).toHaveBeenLastCalledWith("on:2026-10-14 deploy ");
+  } finally {
+    cleanup();
+    owner.dispose();
+  }
+});
+
+it("picks an in: channel from the joined channels and an in:@ person like from:@", async () => {
+  const relay = keypair(),
+    viewer = keypair(),
+    baxen = keypair();
+  const { owner } = operatorSession(viewer, relay, [
+    metadata(relay, "bugs", "buzz-bugs"),
+    roster(relay, "bugs", [viewer.pubkey]),
+    metadata(relay, "builds", "builds"),
+    roster(relay, "builds", [viewer.pubkey]),
+    metadata(relay, "crew", "crew"),
+    roster(relay, "crew", [viewer.pubkey]),
+    profile(baxen, { display_name: "Baxen" }),
+  ]);
+  const session = {
+    ...owner.session,
+    searchProfiles: async () => [
+      eventDto(profile(baxen, { display_name: "Baxen" })),
+    ],
+  };
+  const change = vi.fn();
+  const props = {
+    session,
+    onQueryChange: change,
+    input: createRef<HTMLInputElement>(),
+    pages: [],
+    openConversation: () => {},
+  };
+  try {
+    const view = render(<SearchResults {...props} query="deploy in:#bu" />);
+    const channels = within(
+      await screen.findByRole("group", { name: "Channels" }),
+    );
+    await waitFor(() =>
+      expect(
+        channels.getAllByRole("option").map((option) => option.textContent),
+      ).toEqual(["builds" + "Channel", "buzz-bugs" + "Channel"]),
+    );
+    fireEvent.click(channels.getByRole("option", { name: /buzz-bugs/ }));
+    expect(change).toHaveBeenLastCalledWith("in:bugs deploy ");
+    view.rerender(<SearchResults {...props} query="in:#" />);
+    expect(
+      await within(
+        await screen.findByRole("group", { name: "Channels" }),
+      ).findAllByRole("option"),
+    ).toHaveLength(3);
+    view.rerender(<SearchResults {...props} query="deploy in:@bax" />);
+    const people = within(await screen.findByRole("group", { name: "People" }));
+    fireEvent.click(await people.findByRole("option", { name: /Baxen/ }));
+    expect(change).toHaveBeenLastCalledWith(`in:@${baxen.pubkey} deploy `);
+  } finally {
+    cleanup();
+    owner.dispose();
+  }
+});
+
+it("keeps a picked channel's identity past an open live namesake", async () => {
+  const relay = keypair(),
+    viewer = keypair();
+  const joined = "00000000-0000-4000-8000-000000000001";
+  const { owner, reads } = operatorSession(
+    viewer,
+    relay,
+    [
+      metadata(relay, joined, "crew", 1700000000, [
+        ["t", "stream"],
+        ["archived", "true"],
+      ]),
+      roster(relay, joined, [viewer.pubkey]),
+      metadata(relay, "open", "crew", 1700000000, openChannel),
+    ],
+    [message(viewer, joined, "deploy archived", 1700000001)],
+  );
+  const change = vi.fn();
+  const props = {
+    ...operatorProps,
+    session: owner.session,
+    onQueryChange: change,
+  };
+  try {
+    const view = render(<SearchResults {...props} query="deploy in:#cr" />);
+    const channels = within(
+      await screen.findByRole("group", { name: "Channels" }),
+    );
+    fireEvent.click(await channels.findByRole("option", { name: /crew/ }));
+    expect(change).toHaveBeenLastCalledWith(`in:${joined} deploy `);
+    view.rerender(<SearchResults {...props} query={`in:${joined} deploy `} />);
+    expect(
+      screen.getByRole("button", { name: "Remove channel crew" }),
+    ).toBeVisible();
+    await waitFor(() =>
+      expect(reads.flat()).toEqual([
+        expect.objectContaining({ "#h": [joined] }),
+      ]),
+    );
+  } finally {
+    cleanup();
+    owner.dispose();
+  }
+});
+
+it.each([
+  ["from:@ali", "Alice", "in:@bo", "Bob"],
+  ["IN:@bo", "Bob", "from:@ali", "Alice"],
+])(
+  "keeps %s as a chip when a person is then picked for the other operator",
+  async (first, firstName, second, secondName) => {
+    const relay = keypair(),
+      viewer = keypair(),
+      alice = keypair(),
+      bob = keypair();
+    const { owner } = operatorSession(viewer, relay, []);
+    const session = {
+      ...owner.session,
+      searchProfiles: async () => [
+        eventDto(profile(alice, { display_name: "Alice" })),
+        eventDto(profile(bob, { display_name: "Bob" })),
+      ],
+    };
+    const operand = (name: string, typed: string) =>
+      /^in:/i.test(typed)
+        ? `in:@${(name === "Bob" ? bob : alice).pubkey}`
+        : `from:${(name === "Bob" ? bob : alice).pubkey}`;
+    const changes: string[] = [];
+    function Search() {
+      const [query, setQuery] = useState(first);
+      return (
+        <SearchResults
+          {...operatorProps}
+          session={session}
+          query={query}
+          onQueryChange={(next) => {
+            changes.push(next);
+            setQuery(next);
+          }}
+        />
+      );
+    }
+    const pick = async (name: string) =>
+      fireEvent.click(
+        await within(
+          await screen.findByRole("group", { name: "People" }),
+        ).findByRole("option", { name: new RegExp(name) }),
+      );
+    try {
+      render(<Search />);
+      await pick(firstName);
+      const input = screen.getByRole("combobox", { name: "Search Buzz" });
+      fireEvent.change(input, { target: { value: second } });
+      await pick(secondName);
+      expect(changes.at(-1)).toBe(
+        `${operand(firstName, first)} ${operand(secondName, second)} `,
+      );
+      expect(input).toHaveValue("");
+      const chips = screen
+        .getAllByRole("button", { name: /^Remove (author|conversation)/ })
+        .map((chip) => chip.textContent);
+      expect(chips).toEqual([
+        `× ${/^in:/i.test(first) ? "in" : "from"}:@${firstName}`,
+        `× ${/^in:/i.test(second) ? "in" : "from"}:@${secondName}`,
+      ]);
+      // Backspace before the text turns the last chip back into its text.
+      fireEvent.keyDown(input, { key: "Backspace" });
+      const restored = `${/^in:/i.test(second) ? "in" : "from"}:@${secondName}`;
+      expect(input).toHaveValue(restored);
+      expect(changes.at(-1)).toBe(`${operand(firstName, first)} ${restored}`);
+      expect(screen.getAllByRole("button", { name: /^Remove/ })).toHaveLength(
+        1,
+      );
+    } finally {
+      cleanup();
+      owner.dispose();
+    }
+  },
+);
+
+it("turns date and channel picks into chips that Backspace edits", async () => {
+  const relay = keypair(),
+    viewer = keypair();
+  const { owner } = operatorSession(viewer, relay, [
+    metadata(relay, "crew", "crew"),
+    roster(relay, "crew", [viewer.pubkey]),
+  ]);
+  const changes: string[] = [];
+  function Search() {
+    const [query, setQuery] = useState("deploy in:#cr");
+    return (
+      <SearchResults
+        {...operatorProps}
+        session={owner.session}
+        query={query}
+        onQueryChange={(next) => {
+          changes.push(next);
+          setQuery(next);
+        }}
+      />
+    );
+  }
+  vi.useFakeTimers({ toFake: ["Date"] });
+  vi.setSystemTime(new Date(2026, 9, 7, 12));
+  try {
+    render(<Search />);
+    fireEvent.click(
+      await within(
+        await screen.findByRole("group", { name: "Channels" }),
+      ).findByRole("option", { name: /crew/ }),
+    );
+    const input = screen.getByRole("combobox", { name: "Search Buzz" });
+    expect(input).toHaveValue("deploy ");
+    fireEvent.change(input, { target: { value: "deploy on:" } });
+    fireEvent.click(screen.getByRole("button", { name: /October 14th, 2026/ }));
+    expect(changes.at(-1)).toBe("in:crew on:2026-10-14 deploy ");
+    expect(input).toHaveValue("deploy ");
+    expect(
+      screen.getByRole("button", { name: "Remove channel crew" }),
+    ).toHaveTextContent("in:#crew");
+    expect(
+      screen.getByRole("button", { name: "Remove date on:2026-10-14" }),
+    ).toBeVisible();
+    (input as HTMLInputElement).setSelectionRange(0, 0);
+    fireEvent.keyDown(input, { key: "Backspace" });
+    // The edited token ends the query, where its picker can see it.
+    expect(input).toHaveValue("deploy on:2026-10-14");
+    expect(changes.at(-1)).toBe("in:crew deploy on:2026-10-14");
+    // Backspace inside the text edits text, not a chip.
+    fireEvent.keyDown(input, { key: "Backspace" });
+    expect(
+      screen.getByRole("button", { name: "Remove channel crew" }),
+    ).toBeVisible();
+    fireEvent.change(input, { target: { value: "deploy " } });
+    (input as HTMLInputElement).setSelectionRange(0, 0);
+    fireEvent.keyDown(input, { key: "Backspace" });
+    expect(input).toHaveValue("deploy in:#crew");
+    fireEvent.click(
+      await within(
+        await screen.findByRole("group", { name: "Channels" }),
+      ).findByRole("option", { name: /crew/ }),
+    );
+    expect(changes.at(-1)).toBe("in:crew deploy ");
+  } finally {
+    cleanup();
+    owner.dispose();
+  }
+});
+
+it("lets a picked person or channel replace a typed filter of its kind", async () => {
+  const relay = keypair(),
+    viewer = keypair(),
+    bob = keypair();
+  const first = "00000000-0000-4000-8000-00000000000a";
+  const crew = "00000000-0000-4000-8000-00000000000b";
+  const { owner, reads } = operatorSession(viewer, relay, [
+    metadata(relay, first, "builds"),
+    roster(relay, first, [viewer.pubkey]),
+    metadata(relay, crew, "crew"),
+    roster(relay, crew, [viewer.pubkey]),
+  ]);
+  const session = {
+    ...owner.session,
+    searchProfiles: async () => [
+      eventDto(profile(bob, { display_name: "Bob" })),
+    ],
+  };
+  const change = vi.fn();
+  const props = { ...operatorProps, session, onQueryChange: change };
+  try {
+    const view = render(
+      <SearchResults {...props} query={'from:me "from:me" deploy from:@bo'} />,
+    );
+    fireEvent.click(
+      await within(
+        await screen.findByRole("group", { name: "People" }),
+      ).findByRole("option", { name: /Bob/ }),
+    );
+    const author = `from:${bob.pubkey} "from:me" deploy `;
+    expect(change).toHaveBeenLastCalledWith(author);
+    view.rerender(<SearchResults {...props} query={author} />);
+    await waitFor(() =>
+      expect(reads.at(-1)?.[0]).toMatchObject({ authors: [bob.pubkey] }),
+    );
+    view.rerender(
+      <SearchResults {...props} query={`in:${first} deploy in:#cr`} />,
+    );
+    fireEvent.click(
+      await within(
+        await screen.findByRole("group", { name: "Channels" }),
+      ).findByRole("option", { name: /crew/ }),
+    );
+    const channel = `in:${crew} deploy `;
+    expect(change).toHaveBeenLastCalledWith(channel);
+    view.rerender(<SearchResults {...props} query={channel} />);
+    await waitFor(() =>
+      expect(reads.at(-1)?.[0]).toMatchObject({ "#h": [crew] }),
+    );
+  } finally {
+    cleanup();
+    owner.dispose();
+  }
+});
+
+it("shows only messages once text sits beside an operator", async () => {
+  const relay = keypair(),
+    viewer = keypair();
+  const { owner, reads } = operatorSession(
+    viewer,
+    relay,
+    [
+      metadata(relay, "bugs", "buzz-bugs"),
+      roster(relay, "bugs", [viewer.pubkey]),
+      metadata(relay, "kr", "kalvin-reviewers"),
+      roster(relay, "kr", [viewer.pubkey]),
+    ],
+    [message(viewer, "bugs", "kalvin found it", 1700000001)],
+  );
+  try {
+    render(
+      <SearchResults
+        session={owner.session}
+        query="in:#buzz-bugs kalvin"
+        {...operatorProps}
+      />,
+    );
+    expect(
+      await screen.findByRole("option", { name: /kalvin found it/ }),
+    ).toBeVisible();
+    expect(reads.flat()).toEqual([
+      expect.objectContaining({ "#h": ["bugs"], search: "kalvin" }),
+    ]);
+    expect(screen.queryByRole("group", { name: "Channels" })).toBeNull();
+    expect(
+      screen.queryByRole("option", { name: /kalvin-reviewers/ }),
+    ).toBeNull();
+  } finally {
+    cleanup();
+    owner.dispose();
+  }
+});
+
 it("never widens a search when a name or channel operator is unresolved", async () => {
   vi.useFakeTimers();
   const relay = keypair(),
@@ -4284,7 +4669,7 @@ it("resolves an exact public name beyond eight preceding substring matches and r
     render(
       <SearchResults
         session={session}
-        query="deploy in:#dev"
+        query="deploy in:#dev "
         onQueryChange={() => {}}
         input={createRef()}
         pages={[]}
@@ -4352,7 +4737,7 @@ it("keeps a pending in: lookup pending, then retries its failure and resumes sco
     render(
       <SearchResults
         session={owner.session}
-        query="deploy in:#dev"
+        query="deploy in:#dev "
         onQueryChange={() => {}}
         input={createRef()}
         pages={[]}
@@ -4412,7 +4797,7 @@ it("shows a pending in: channel lookup beside Most relevant", async () => {
     render(
       <SearchResults
         session={session}
-        query="deploy in:#dev"
+        query="deploy in:#dev "
         onQueryChange={() => {}}
         input={createRef()}
         pages={[]}
@@ -4471,7 +4856,7 @@ it("holds an early Enter while an in: channel is still being found", async () =>
     render(
       <SearchResults
         session={owner.session}
-        query="deploy in:#dev"
+        query="deploy in:#dev "
         onQueryChange={() => {}}
         input={createRef()}
         pages={[]}
@@ -4587,7 +4972,7 @@ it("matches an in: operator against the rendered DM participant label", async ()
     render(
       <SearchResults
         session={owner.session}
-        query="deploy in:alice"
+        query="deploy in:alice "
         onQueryChange={() => {}}
         input={createRef()}
         pages={[]}
@@ -4628,7 +5013,7 @@ it("treats bare in:# as no channel operator", async () => {
     render(
       <SearchResults
         session={owner.session}
-        query="hello in:#"
+        query="hello in:# "
         onQueryChange={() => {}}
         input={createRef()}
         pages={[]}
@@ -4686,6 +5071,8 @@ it.each([true, false])(
           openConversation={open}
         />,
       );
+      await act(async () => vi.advanceTimersByTimeAsync(SEARCH_DEBOUNCE_MS));
+      // The exact open-channel lookup settles before the in: channel resolves.
       await act(async () => vi.advanceTimersByTimeAsync(SEARCH_DEBOUNCE_MS));
       const request = wire.next();
       expect(request.filters[0]?.authors).toEqual([signer.pubkey]);
@@ -6568,6 +6955,527 @@ it("labels a row by its verified name over a cached profile name without a namin
     expect(owner.session.profiles.snapshot().get(fake.pubkey)?.verified).toBe(
       undefined,
     );
+  } finally {
+    cleanup();
+    owner.dispose();
+  }
+});
+
+/** A session over joined `discovery` whose searches answer `hits`, recording
+ * every message read. */
+function operatorSession(
+  viewer: ReturnType<typeof keypair>,
+  relay: ReturnType<typeof keypair>,
+  discovery: ReturnType<typeof metadata>[],
+  hits: ReturnType<typeof message>[] = [],
+) {
+  const reads: Filter[][] = [];
+  const owner = createRelaySession({
+    ...scriptedTransport(viewer.pubkey, relay.pubkey).transport,
+    async query(filters) {
+      if (
+        filters.some(
+          (filter) => filter.search !== undefined || filter.kinds?.includes(9),
+        )
+      ) {
+        reads.push(filters as Filter[]);
+        return hits;
+      }
+      return discovery.filter((event) =>
+        filters.some((filter) => matchFilter(filter as Filter, event)),
+      );
+    },
+  });
+  return { owner, reads };
+}
+
+const operatorProps = {
+  onQueryChange: () => {},
+  input: createRef<HTMLInputElement>(),
+  pages: [],
+  openConversation: () => {},
+};
+
+it.each(["from:me", "deploy from:@ME in:#crew "])(
+  "searches the viewer's own messages for %s without a people lookup",
+  async (query) => {
+    const relay = keypair(),
+      viewer = keypair();
+    const { owner, reads } = operatorSession(
+      viewer,
+      relay,
+      [metadata(relay, "crew", "crew"), roster(relay, "crew", [viewer.pubkey])],
+      [message(viewer, "crew", "deploy by me", 1700000001)],
+    );
+    try {
+      render(
+        <SearchResults
+          session={owner.session}
+          query={query}
+          {...operatorProps}
+        />,
+      );
+      expect(
+        await screen.findByRole("option", { name: /deploy by me/ }),
+      ).toBeVisible();
+      expect(reads.flat()).toEqual([
+        expect.objectContaining({ authors: [viewer.pubkey] }),
+      ]);
+      expect(screen.queryByText("Searching people…")).toBeNull();
+    } finally {
+      cleanup();
+      owner.dispose();
+    }
+  },
+);
+
+it("resolves in:@person to the viewer's direct message with them", async () => {
+  const relay = keypair(),
+    viewer = keypair(),
+    alice = keypair(),
+    bob = keypair();
+  const dm = (id: string, person: ReturnType<typeof keypair>) => [
+    metadata(relay, id, "opaque", 1700000000, [
+      ["t", "dm"],
+      ["private", ""],
+    ]),
+    roster(relay, id, [viewer.pubkey, person.pubkey]),
+  ];
+  const { owner, reads } = operatorSession(
+    viewer,
+    relay,
+    [
+      ...dm("dm-alice", alice),
+      ...dm("dm-bob", bob),
+      profile(alice, { name: "Alice" }),
+      profile(bob, { name: "Bob" }),
+    ],
+    [message(alice, "dm-alice", "deploy to Alice", 1700000001)],
+  );
+  try {
+    render(
+      <SearchResults
+        session={owner.session}
+        query="deploy in:@alice "
+        {...operatorProps}
+      />,
+    );
+    expect(
+      await screen.findByRole("option", { name: /deploy to Alice/ }),
+    ).toBeVisible();
+    expect(reads.flat()).toEqual([
+      expect.objectContaining({ "#h": ["dm-alice"] }),
+    ]);
+  } finally {
+    cleanup();
+    owner.dispose();
+  }
+});
+
+it("resolves in:@me to the viewer's self-DM", async () => {
+  const relay = keypair(),
+    viewer = keypair(),
+    alice = keypair();
+  const { owner, reads } = operatorSession(
+    viewer,
+    relay,
+    [
+      metadata(relay, "self", "opaque", 1700000000, [
+        ["t", "dm"],
+        ["private", ""],
+      ]),
+      roster(relay, "self", [viewer.pubkey]),
+      metadata(relay, "dm-alice", "opaque", 1700000000, [
+        ["t", "dm"],
+        ["private", ""],
+      ]),
+      roster(relay, "dm-alice", [viewer.pubkey, alice.pubkey]),
+    ],
+    [message(viewer, "self", "deploy note to self", 1700000001)],
+  );
+  try {
+    render(
+      <SearchResults
+        session={owner.session}
+        query="deploy in:@me "
+        {...operatorProps}
+      />,
+    );
+    expect(
+      await screen.findByRole("option", { name: /deploy note to self/ }),
+    ).toBeVisible();
+    expect(reads.flat()).toEqual([expect.objectContaining({ "#h": ["self"] })]);
+  } finally {
+    cleanup();
+    owner.dispose();
+  }
+});
+
+it("prefers a live in: channel over an archived namesake", async () => {
+  const relay = keypair(),
+    viewer = keypair();
+  const { owner, reads } = operatorSession(
+    viewer,
+    relay,
+    [
+      metadata(relay, "old", "crew", 1700000000, [
+        ["t", "stream"],
+        ["archived", "true"],
+      ]),
+      roster(relay, "old", [viewer.pubkey]),
+      metadata(relay, "live", "crew"),
+      roster(relay, "live", [viewer.pubkey]),
+    ],
+    [message(viewer, "live", "deploy live", 1700000001)],
+  );
+  try {
+    render(
+      <SearchResults
+        session={owner.session}
+        query="deploy in:#crew "
+        {...operatorProps}
+      />,
+    );
+    expect(
+      await screen.findByRole("option", { name: /deploy live/ }),
+    ).toBeVisible();
+    expect(reads.flat()).toEqual([expect.objectContaining({ "#h": ["live"] })]);
+  } finally {
+    cleanup();
+    owner.dispose();
+  }
+});
+
+const openChannel = [
+  ["public", ""],
+  ["t", "stream"],
+];
+
+it("prefers a live open in: channel over an archived joined namesake", async () => {
+  const relay = keypair(),
+    viewer = keypair();
+  const { owner, reads } = operatorSession(
+    viewer,
+    relay,
+    [
+      metadata(relay, "old", "crew", 1700000000, [
+        ["t", "stream"],
+        ["archived", "true"],
+      ]),
+      roster(relay, "old", [viewer.pubkey]),
+      metadata(relay, "open", "crew", 1700000000, openChannel),
+    ],
+    [message(viewer, "open", "deploy open", 1700000001)],
+  );
+  try {
+    render(
+      <SearchResults
+        session={owner.session}
+        query="deploy in:#crew "
+        {...operatorProps}
+      />,
+    );
+    await waitFor(() =>
+      expect(reads.flat()).toEqual([
+        expect.objectContaining({ "#h": ["open"] }),
+      ]),
+    );
+  } finally {
+    cleanup();
+    owner.dispose();
+  }
+});
+
+it("refuses a joined in: channel with a live open namesake", async () => {
+  const relay = keypair(),
+    viewer = keypair();
+  const { owner, reads } = operatorSession(viewer, relay, [
+    metadata(relay, "joined", "crew"),
+    roster(relay, "joined", [viewer.pubkey]),
+    metadata(relay, "open", "crew", 1700000000, openChannel),
+  ]);
+  try {
+    render(
+      <SearchResults
+        session={owner.session}
+        query="deploy in:#crew "
+        {...operatorProps}
+      />,
+    );
+    expect(
+      await screen.findByText(
+        "More than one conversation is named “crew”. Search in that conversation instead.",
+      ),
+    ).toBeVisible();
+    expect(reads).toEqual([]);
+  } finally {
+    cleanup();
+    owner.dispose();
+  }
+});
+
+it("waits for the exact in: lookup before trusting one cached open namesake", async () => {
+  const relay = keypair(),
+    viewer = keypair();
+  const { owner, reads } = operatorSession(viewer, relay, [
+    metadata(relay, "team-a", "team", 1700000000, openChannel),
+    metadata(relay, "team-b", "team", 1700000000, openChannel),
+  ]);
+  const searchPublic = owner.session.channels.searchPublic;
+  assert.exists(searchPublic);
+  let release!: () => void;
+  const held = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  let lookups = 0;
+  try {
+    owner.session.channels.ensureList();
+    await waitFor(() =>
+      expect(owner.session.channels.list().status).toBe("ready"),
+    );
+    // Both namesakes are previewable, but the cache holds only the first.
+    const { channels } = await searchPublic("team", { exact: true });
+    expect(channels).toHaveLength(2);
+    const session = {
+      ...owner.session,
+      channels: {
+        ...owner.session.channels,
+        matchPublic: () => channels.slice(0, 1),
+        searchPublic: async (...args: Parameters<typeof searchPublic>) => {
+          if (args[1]?.exact) lookups++;
+          await held;
+          return searchPublic(...args);
+        },
+      },
+    };
+    vi.useFakeTimers();
+    render(
+      <SearchResults
+        session={session}
+        query="deploy in:#team "
+        {...operatorProps}
+      />,
+    );
+    // Past both debounces: a resolved channel would have started a read.
+    await act(async () => vi.advanceTimersByTimeAsync(SEARCH_DEBOUNCE_MS * 2));
+    expect(lookups).toBe(1);
+    expect(reads).toEqual([]);
+    await act(async () => {
+      release();
+      await vi.advanceTimersByTimeAsync(SEARCH_DEBOUNCE_MS * 2);
+    });
+    expect(
+      screen.getByText(
+        "More than one conversation is named “team”. Search in that conversation instead.",
+      ),
+    ).toBeVisible();
+    expect(reads).toEqual([]);
+  } finally {
+    release();
+    cleanup();
+    owner.dispose();
+  }
+});
+
+it.each([
+  [
+    "deploy in:#crew ",
+    "More than one conversation is named “crew”. Search in that conversation instead.",
+  ],
+  ["deploy in:@nobody ", "No conversation named “@nobody”."],
+])("explains an unresolved %s and does not search", async (query, text) => {
+  vi.useFakeTimers();
+  const relay = keypair(),
+    viewer = keypair();
+  const { owner, reads } = operatorSession(viewer, relay, [
+    metadata(relay, "one", "crew"),
+    roster(relay, "one", [viewer.pubkey]),
+    metadata(relay, "two", "crew"),
+    roster(relay, "two", [viewer.pubkey]),
+  ]);
+  try {
+    render(
+      <SearchResults
+        session={owner.session}
+        query={query}
+        {...operatorProps}
+      />,
+    );
+    // Past the debounce, with the joined list read: any search has started.
+    await act(async () => vi.advanceTimersByTimeAsync(SEARCH_DEBOUNCE_MS * 2));
+    expect(screen.getByText(text)).toBeVisible();
+    expect(reads).toEqual([]);
+  } finally {
+    cleanup();
+    owner.dispose();
+  }
+});
+
+it("sends a phrase with exclusions as a full-text search", async () => {
+  const relay = keypair(),
+    viewer = keypair();
+  const { owner, reads } = operatorSession(
+    viewer,
+    relay,
+    [metadata(relay, "crew", "crew"), roster(relay, "crew", [viewer.pubkey])],
+    [message(viewer, "crew", "the rollback plan for prod", 1700000001)],
+  );
+  try {
+    render(
+      <SearchResults
+        session={owner.session}
+        query={'"rollback plan" -staging on:2023-11-14'}
+        {...operatorProps}
+      />,
+    );
+    expect(
+      await screen.findByRole("option", { name: /rollback plan for prod/ }),
+    ).toBeVisible();
+    expect(reads.flat()).toEqual([
+      expect.objectContaining({
+        search: '"rollback plan" -staging',
+        search_mode: "fulltext",
+        since: Math.floor(new Date(2023, 10, 14).getTime() / 1000),
+        until: Math.floor(new Date(2023, 10, 15).getTime() / 1000) - 1,
+      }),
+    ]);
+  } finally {
+    cleanup();
+    owner.dispose();
+  }
+});
+
+it.each([
+  '"rollback during:october from:me plan"',
+  '"-staging"',
+  '"OR"',
+  'error:"connection refused"',
+  'rollback"plan now"',
+])(
+  "searches the quoted phrase %s as text, not filters or exclusions",
+  async (query) => {
+    const relay = keypair(),
+      viewer = keypair();
+    const { owner, reads } = operatorSession(
+      viewer,
+      relay,
+      [metadata(relay, "crew", "crew"), roster(relay, "crew", [viewer.pubkey])],
+      [message(viewer, "crew", "quoted phrase hit", 1700000001)],
+    );
+    try {
+      render(
+        <SearchResults
+          session={owner.session}
+          query={query}
+          {...operatorProps}
+        />,
+      );
+      expect(
+        await screen.findByRole("option", { name: /quoted phrase hit/ }),
+      ).toBeVisible();
+      // Plain text also searches people; only the message read is in scope.
+      expect(
+        reads.flat().filter((filter) => filter.kinds?.includes(9)),
+      ).toEqual([
+        {
+          kinds: [40002, 40008, 9],
+          search: query,
+          search_mode: "fulltext",
+          limit: 20,
+        },
+      ]);
+    } finally {
+      cleanup();
+      owner.dispose();
+    }
+  },
+);
+
+it("keeps an author operator typed inside an open quote as phrase text", async () => {
+  const relay = keypair(),
+    viewer = keypair();
+  const { owner, reads } = operatorSession(
+    viewer,
+    relay,
+    [metadata(relay, "crew", "crew"), roster(relay, "crew", [viewer.pubkey])],
+    [message(viewer, "crew", "quoted author text", 1700000001)],
+  );
+  try {
+    render(
+      <SearchResults
+        session={owner.session}
+        query={'"rollback from:alex'}
+        {...operatorProps}
+      />,
+    );
+    expect(
+      await screen.findByRole("option", { name: /quoted author text/ }),
+    ).toBeVisible();
+    expect(screen.queryByRole("group", { name: "People" })).toBeNull();
+    expect(reads.flat().filter((filter) => filter.kinds?.includes(9))).toEqual([
+      expect.objectContaining({
+        search: '"rollback from:alex',
+        search_mode: "prefix",
+      }),
+    ]);
+  } finally {
+    cleanup();
+    owner.dispose();
+  }
+});
+
+it("searches a double-hyphen command flag rather than refusing it as an exclusion", async () => {
+  const relay = keypair(),
+    viewer = keypair();
+  const { owner, reads } = operatorSession(
+    viewer,
+    relay,
+    [metadata(relay, "crew", "crew"), roster(relay, "crew", [viewer.pubkey])],
+    [message(viewer, "crew", "run it with --help", 1700000001)],
+  );
+  try {
+    render(
+      <SearchResults
+        session={owner.session}
+        query="--help"
+        {...operatorProps}
+      />,
+    );
+    expect(
+      await screen.findByRole("option", { name: /run it with --help/ }),
+    ).toBeVisible();
+    expect(reads.flat().filter((filter) => filter.kinds?.includes(9))).toEqual([
+      expect.objectContaining({ search: "--help", search_mode: "prefix" }),
+    ]);
+  } finally {
+    cleanup();
+    owner.dispose();
+  }
+});
+
+it("asks for a search word when the text only excludes", async () => {
+  vi.useFakeTimers();
+  const relay = keypair(),
+    viewer = keypair();
+  const { owner, reads } = operatorSession(viewer, relay, [
+    metadata(relay, "crew", "crew"),
+    roster(relay, "crew", [viewer.pubkey]),
+  ]);
+  try {
+    render(
+      <SearchResults
+        session={owner.session}
+        query="-staging in:#crew "
+        {...operatorProps}
+      />,
+    );
+    await act(async () => vi.advanceTimersByTimeAsync(SEARCH_DEBOUNCE_MS * 2));
+    expect(
+      screen.getByText(
+        "Add a word or “phrase” to search for alongside -exclusions.",
+      ),
+    ).toBeVisible();
+    expect(reads).toEqual([]);
   } finally {
     cleanup();
     owner.dispose();

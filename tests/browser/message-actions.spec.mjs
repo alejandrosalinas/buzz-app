@@ -56,7 +56,7 @@ test("coordination keeps its first line visible throughout expansion and collaps
     const onTransitionStart = (event) => {
       if (
         event.target.matches('[class*="audiencePanel"]') &&
-        event.propertyName === "grid-template-rows"
+        event.propertyName === "height"
       )
         animated = true;
     };

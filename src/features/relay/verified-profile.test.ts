@@ -75,6 +75,18 @@ it("requires explicit discovery and a cryptographically verified relay event", (
     }),
   ).toEqual({ pubkey: relay.pubkey, multipleIssuers: false });
   expect(
+    verifiedProfileAuthority({
+      self: relay.pubkey,
+      federated_identity: {
+        public_profile: {
+          kind: 30382,
+          multiple_issuers: false,
+          searchable: true,
+        },
+      },
+    }),
+  ).toEqual({ pubkey: relay.pubkey, multipleIssuers: false, searchable: true });
+  expect(
     verifiedProfile(
       signed(alice, {
         kind: 0,

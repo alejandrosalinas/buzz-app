@@ -177,7 +177,8 @@ that agent in Buzz; they do not notify the external app through this connection.
   you. Unmute restores ordinary unread emphasis and dots. Manual **Mark as unread**
   can still make the name bold. Muted rows show no unread dots, including thread
   dots, and do not contribute to the sidebar’s floating **N unread** buttons or
-  their avatar previews. Muting does not mark messages or threads as read.
+  their avatar previews. Muted activity does not light the macOS Dock unread dot.
+  Muting does not mark messages or threads as read.
 - **Message link previews** appear when you hover or focus a Buzz message link.
   When the message can't be shown, the card says why: the channel is private,
   gone or in another community; the message isn't available, and may have
@@ -193,7 +194,22 @@ that agent in Buzz; they do not notify the external app through this connection.
 - **Message search** treats the last word you type as the start of a word, so
   it searches only once that word has at least three characters, even with
   `from:` or `in:`. A shorter last word shows how many characters to type, not
-  "no results".
+  "no results". Filters narrow it, alone or with text:
+  - `from:me`, `from:@name`: messages by you or someone else.
+  - `in:#channel`, `in:@person`: one channel, or your DM with someone
+    (`in:@me` is your own). A name that matches several conversations, or
+    none, says so instead of searching.
+  - `after:`, `before:`, `on:` a date (`YYYY-MM-DD`, `today`, `yesterday`), and
+    `during:` a day, month (`2026-10`, `october`), or year, in local time.
+    `after:` includes its day; `before:` does not.
+  - `"exact phrase"` and `-word` match whole words, not word starts. Anything
+    inside quotes, `from:` or `-` included, is part of the phrase.
+  Other words with a colon, such as `has:link`, are searched as text. An
+  unfinished `from:` or `in:@` lists people, `in:` or `in:#` your channels,
+  `after:`, `before:` or `during:` common dates, and `on:` a calendar; choose
+  one to make it a chip. Click a chip to remove it, or press Backspace at the
+  start of the text to edit the last one. With a filter, search shows only
+  messages.
 - **Channel, people, and message search** shows “Searching…” beside each section heading
   if a lookup takes more than a second. You can open results already shown
   while the rest of the search finishes.
@@ -400,6 +416,9 @@ confirmation.
   macOS (inside the app's installed name, such as `Buzz Foundation.app`), with
   no setup or token. Without such a plugin there are no tools to
   offer; do not promise them.
+- The **GitHub** plugin’s pull request panel offers **Queue for merge** when
+  the target branch requires a merge queue. After confirmation, it queues the
+  displayed commit and shows **Queued for merge**; GitHub controls when it merges.
 - Some desktop plugins can upload images you provide to services they declare.
 - Agents running on this computer can write plugins while the **Plugin
   development** plugin is on (it is by default). It gives them

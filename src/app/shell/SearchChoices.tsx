@@ -51,6 +51,19 @@ export type SearchGroup = {
   headingStatus?: string | undefined;
 };
 
+/** A chosen filter shown before the typed text. */
+export type SearchChip = {
+  /** As the query holds it, e.g. `from:<key>` or `in:<channel id>`. */
+  operand: string;
+  /** What the chip shows, e.g. `from:@Wes`. */
+  text: string;
+  /** The text Backspace restores for editing. */
+  edit: string;
+  /** The remove button's accessible name. */
+  label: string;
+  title?: string;
+};
+
 export type SearchInputProps = {
   inlineSettings?: readonly SearchGroup[] | undefined;
   query: string;
@@ -60,9 +73,10 @@ export type SearchInputProps = {
   scope?: { label: string; onRemove: () => void } | undefined;
   /** A control that refines the scoped results, beside the scope chip. */
   scopeAction?: ReactNode;
-  authorChip?:
-    | { label: string; title: string; onRemove: () => void }
-    | undefined;
+  chips?: readonly SearchChip[] | undefined;
+  onRemoveChip?: ((chip: SearchChip) => void) | undefined;
+  /** Backspace before the text edits the last chip. */
+  onEditLastChip?: (() => void) | undefined;
   displayQuery?: string | undefined;
   onDisplayQueryChange?: ((value: string) => void) | undefined;
   /** False while the palette closes, so a held Enter chooses nothing. */
@@ -103,7 +117,9 @@ export function SearchChoices({
   groups: originalGroups,
   query,
   onQueryChange,
-  authorChip,
+  chips,
+  onRemoveChip,
+  onEditLastChip,
   displayQuery,
   onDisplayQueryChange,
   input,
@@ -399,17 +415,20 @@ export function SearchChoices({
       <SearchField
         variant="palette"
         prefix={
-          authorChip ? (
+          chips?.length ? (
             <span className="search-palette-author-prefix">
-              <button
-                type="button"
-                className="search-palette-author-chip"
-                aria-label={`Remove author ${authorChip.label}`}
-                title={authorChip.title}
-                onClick={authorChip.onRemove}
-              >
-                <span aria-hidden="true">×</span> from:@{authorChip.label}
-              </button>
+              {chips.map((chip) => (
+                <button
+                  key={chip.operand}
+                  type="button"
+                  className="search-palette-author-chip"
+                  aria-label={chip.label}
+                  title={chip.title}
+                  onClick={() => onRemoveChip?.(chip)}
+                >
+                  <span aria-hidden="true">×</span> {chip.text}
+                </button>
+              ))}
             </span>
           ) : undefined
         }
@@ -445,6 +464,16 @@ export function SearchChoices({
               event.preventDefault();
               if (!event.repeat) highlight.choose(destination.key);
             }
+            return;
+          }
+          if (
+            event.key === "Backspace" &&
+            chips?.length &&
+            event.currentTarget.selectionStart === 0 &&
+            event.currentTarget.selectionEnd === 0
+          ) {
+            event.preventDefault();
+            onEditLastChip?.();
             return;
           }
           if (event.key === "ArrowDown" || event.key === "ArrowUp")

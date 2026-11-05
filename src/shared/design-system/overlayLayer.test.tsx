@@ -122,7 +122,8 @@ it("permits a surface inside a nested menu while covering background controls", 
       </MenuRoot>
     </Background>,
   );
-  await user.click(screen.getByRole("button", { name: "Open layer" }));
+  const trigger = screen.getByRole("button", { name: "Open layer" });
+  await user.click(trigger);
   const more = await screen.findByRole("menuitem", { name: "More" });
   more.focus();
   await user.keyboard("{ArrowRight}");
@@ -130,6 +131,11 @@ it("permits a surface inside a nested menu while covering background controls", 
   expect(behindActiveOverlay(nested)).toBe(false);
   await waitFor(() =>
     expect(screen.getByLabelText("Covered").textContent).toBe("true"),
+  );
+  // The menu's opener is not covered by its own menu or nested menus.
+  expect(behindActiveOverlay(trigger)).toBe(true);
+  expect(behindActiveOverlay(trigger, more.closest('[role="menu"]'))).toBe(
+    false,
   );
 });
 

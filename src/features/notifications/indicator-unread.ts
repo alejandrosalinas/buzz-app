@@ -21,6 +21,7 @@ export function bindUnreadIndicator(
   let previous: boolean | undefined;
   let stopRoster = () => {};
   let refresh = () => {};
+  let stopPreferences = () => {};
   const channels = new Map<string, () => void>();
   const publish = (unread: boolean) => {
     if (unread === previous) return;
@@ -29,6 +30,7 @@ export function bindUnreadIndicator(
   };
   const clear = () => {
     stopRoster();
+    stopPreferences();
     refresh = () => {};
     for (const stop of channels.values()) stop();
     channels.clear();
@@ -59,8 +61,18 @@ export function bindUnreadIndicator(
     const valid = () => !closed && session === owned && identity === next;
     const changed = () => {
       if (!valid()) return;
+      const preferences = owned.sidebarPreferences.snapshot();
+      if (
+        preferences.status !== "ready" &&
+        preferences.status !== "unsupported"
+      ) {
+        publish(false);
+        return;
+      }
+      const muted = new Set(preferences.data?.muted ?? []);
       publish(
         [...channels.keys()].some((channelId) => {
+          if (muted.has(channelId)) return false;
           const snapshot = owned.unread.snapshot({
             kind: "channel",
             channelId,
@@ -71,6 +83,8 @@ export function bindUnreadIndicator(
         }),
       );
     };
+    stopPreferences = owned.sidebarPreferences.subscribe(changed);
+    changed();
     const roster = () => {
       if (!valid()) return;
       const ids = new Set(

@@ -42,6 +42,9 @@ export type PullChecklist = Readonly<{
   authored: boolean;
   /** The viewer may merge past branch rules. */
   canBypass: boolean;
+  /** The target branch requires GitHub’s merge queue. */
+  queueRequired: boolean;
+  queued: boolean;
   methods: readonly MergeMethod[];
   method: MergeMethod;
   canEnableAutoMerge: boolean;
@@ -67,6 +70,7 @@ export const PANEL_PULL_FIELDS = `id title body bodyHTML createdAt updatedAt mer
       headRepository{nameWithOwner} headRepositoryOwner{login} baseRepository{nameWithOwner}
       additions deletions changedFiles
       reviewDecision viewerDidAuthor viewerCanUpdate viewerCanUpdateBranch viewerCanMergeAsAdmin
+      isMergeQueueEnabled isInMergeQueue
       viewerCanEnableAutoMerge viewerCanDisableAutoMerge
       autoMergeRequest{mergeMethod enabledBy{login}}
       reviewRequests(first:20){nodes{requestedReviewer{__typename ... on User{login} ... on Team{name} ... on Bot{login} ... on Mannequin{login}}}}
@@ -106,6 +110,8 @@ export type PullData = {
       changedFiles?: number;
       mergeStateStatus?: string;
       reviewDecision?: PullChecklist["review"]["decision"];
+      isMergeQueueEnabled?: boolean;
+      isInMergeQueue?: boolean;
       viewerDidAuthor?: boolean;
       viewerCanUpdate?: boolean;
       viewerCanUpdateBranch?: boolean;
@@ -281,6 +287,8 @@ export function parsePull(
       canUpdateBranch: !!pull.viewerCanUpdateBranch,
       authored: !!pull.viewerDidAuthor,
       canBypass: !!pull.viewerCanMergeAsAdmin,
+      queueRequired: !!pull.isMergeQueueEnabled,
+      queued: !!pull.isInMergeQueue,
       methods,
       method:
         preferred && methods.includes(preferred)
@@ -302,6 +310,7 @@ export type ReviewEvent = "COMMENT" | "APPROVE" | "REQUEST_CHANGES";
 
 export type PullAction =
   | { type: "merge"; method: MergeMethod }
+  | { type: "enqueue" }
   | { type: "review"; event: ReviewEvent; body: string }
   | { type: "auto-merge"; method: MergeMethod }
   | { type: "cancel-auto-merge" }
@@ -316,6 +325,8 @@ function mutationOf(
   const id = { pullRequestId: pull.id };
   const head = { ...id, expectedHeadOid: pull.head };
   switch (action.type) {
+    case "enqueue":
+      return ["enqueuePullRequest", head];
     case "merge":
       return ["mergePullRequest", { ...head, mergeMethod: action.method }];
     case "auto-merge":
