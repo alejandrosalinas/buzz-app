@@ -2,6 +2,7 @@
 // apart above the agent's other conversations. Types list their own sessions.
 import { type ReactNode, useEffect, useId, useRef, useState } from "react";
 import { formatItemTimestamp } from "../../shared/datetime";
+import { useClockFormat } from "../../shared/clock-preference";
 import styles from "./ActivityLayout.module.css";
 import { Button } from "../../shared/design-system/ui/Button";
 import { InlineHeader } from "../../shared/design-system/ui/Header";
@@ -243,6 +244,7 @@ export function OpenedConversation({
   detail?: ReactNode;
   onView(): void;
 }) {
+  useClockFormat();
   const id = useId();
   const place = (session ? session.root : conversation.rootId)
     ? "thread"

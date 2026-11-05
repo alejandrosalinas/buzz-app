@@ -58,7 +58,8 @@ import { watchPulls } from "./watcher";
 import { presentPull } from "./attention";
 import { SubmitReview } from "./SubmitReview";
 import { PullFiles } from "./PullFiles";
-import { AuthorSettings } from "./AuthorSettings";
+import { GitHubSettings } from "./GitHubSettings";
+import { openGitHubLinksInBuzz } from "./link-preference";
 
 /** How often an open pull request panel reads GitHub again. */
 export const REFRESH_MS = PANEL_REFRESH_MS;
@@ -87,7 +88,8 @@ export const apply: PluginModule["apply"] = (ctx) => {
       <SoloPullLauncher {...props} relay={ctx.relay} pullsFor={pullsFor} />
     ),
     deferUntilShown: true,
-    matches: (target) => !!parseGitHubReference(target),
+    matches: (target) =>
+      openGitHubLinksInBuzz() && !!parseGitHubReference(target),
     component: (props: PanelProps) => {
       const channelId = props.context?.channelId;
       return (
@@ -209,14 +211,14 @@ export const apply: PluginModule["apply"] = (ctx) => {
   ctx.inject(["agents", "host", "navigation"], (scope) =>
     watchPulls(scope, states, gh, presentPull(scope.navigation)),
   );
-  // Whose comments and reviews wake them.
+  // One settings destination for the plugin, retaining its existing deep link.
   ctx.inject(["settingsCards"], (scope) => {
     scope.settingsCards.register({
       id: "authors",
-      title: "GitHub comment authors",
+      title: "GitHub",
       group: "Plugins",
       icon: GithubLogoIcon,
-      component: ({ active }) => <AuthorSettings active={active} />,
+      component: ({ active }) => <GitHubSettings active={active} />,
     });
   });
 };

@@ -370,6 +370,7 @@ function relayMediaTarget(raw, relay) {
     /^[0-9a-f]{64}$/.test(hash) &&
     (extension === "" ||
       extension === "thumb.jpg" ||
+      extension === "thumb.webp" ||
       /^[a-z0-9]{1,8}$/.test(extension))
     ? target
     : undefined;

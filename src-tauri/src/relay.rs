@@ -434,6 +434,12 @@ fn valid_canvas(event: &EventTemplate) -> bool {
         && event
             .tags
             .iter()
+            .filter(|tag| tag.first().map(String::as_str) == Some("canvas-instructions"))
+            .count()
+            <= 1
+        && event
+            .tags
+            .iter()
             .filter(|tag| tag.first().map(String::as_str) == Some("h"))
             .count()
             == 1
@@ -450,6 +456,7 @@ fn valid_canvas(event: &EventTemplate) -> bool {
             match tag[0].as_str() {
                 "h" => channel_writes::uuid(&tag[1]),
                 "client-id" => tag[1].encode_utf16().count() <= 128,
+                "canvas-instructions" => tag[1] == "unapproved",
                 "expected-revision" => {
                     tag[1] == "none"
                         || (tag[1].len() == 64
@@ -2149,6 +2156,7 @@ fn media_url(target: &str) -> Option<Url> {
     let (hash, extension) = name.split_once('.').unwrap_or((name, ""));
     let extension_ok = extension.is_empty()
         || extension == "thumb.jpg"
+        || extension == "thumb.webp"
         || (extension.len() <= 8
             && extension
                 .bytes()

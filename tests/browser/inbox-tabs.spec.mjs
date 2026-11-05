@@ -162,3 +162,179 @@ test("an Inbox tab's menu opens its thread in its channel", async ({
       .getByText("Unread reply 1", { exact: true }),
   ).toBeVisible();
 });
+
+// Browser-only: the list's offset needs real layout. Leaving Inbox through a
+// thread tab's channel name unmounts the page; Back returns to the offset the
+// user chose, even away from the selected row and after rows shifted, unless
+// a fresh reply moved a selected row they could see out of view while away.
+// A tab moved to the main pane covers the list, which is placed once it shows.
+const titles = {
+  kept: "",
+  moved: " around a row that moved",
+  covered: " around a row that moved under a main-pane tab",
+  away: " away from the selected row",
+  shifted: " away from the selected row as rows shift",
+  drifted: " after rows pushed the selected row out of view",
+};
+for (const variant of Object.keys(titles))
+  test(`returning to Inbox keeps the list's place${titles[variant]}`, async ({
+    page,
+    app,
+  }) => {
+    // Mentioned threads, enough to overflow the list; later ones land live.
+    const seed = (from, count, deliver) =>
+      Array.from({ length: count }, (_, offset) => {
+        const index = from + offset;
+        const root = app.append(
+          "primary",
+          "beta",
+          `Beta root ${index}`,
+          deliver,
+          false,
+        );
+        app.append(
+          "primary",
+          "beta",
+          `Beta mention ${index}`,
+          deliver,
+          false,
+          root.id,
+          undefined,
+          [["p", app.viewer]],
+        );
+        return root;
+      });
+    const roots = seed(0, 25, false);
+    await page.setViewportSize({ width: 1280, height: 900 });
+    await open(page, app);
+    await openPage(page, "Inbox");
+    const inbox = page.getByRole("region", { name: "Inbox", exact: true });
+    await expect(inbox.getByText("Checking recent activity…")).toHaveCount(0);
+    const list = inbox.getByRole("list", { name: "Inbox conversations" });
+    const scroller = list.locator("xpath=..");
+    const rows = list.getByRole("listitem");
+    // Scrolling past the selected row before leaving, or rows pushing it out
+    // of view while the list shows, leaves it off-screen on return.
+    const away = variant === "away" || variant === "shifted";
+    const offscreen = away || variant === "drifted";
+    const moved = variant === "moved" || variant === "covered";
+    // A row near the top is in view at once; a low one needs scrolling.
+    const row = rows.filter({
+      hasText: offscreen ? "Beta mention 24" : "Beta mention 3",
+    });
+    await expect(rows).toHaveCount(28);
+    if (!offscreen) {
+      await expect(row).not.toBeInViewport();
+      await row.scrollIntoViewIfNeeded();
+    }
+    await row.getByRole("button", { name: /^Open / }).click();
+    const channel = inbox.getByRole("button", { name: "#Beta", exact: true });
+    await expect(channel).toBeVisible();
+    await expect(row).toBeInViewport();
+    if (away) {
+      await scroller.evaluate((element) => {
+        element.scrollTop = element.scrollHeight;
+      });
+      await expect(row).not.toBeInViewport();
+    }
+    if (variant === "drifted") {
+      seed(25, 20, true);
+      await expect(rows).toHaveCount(48);
+      await expect(row).not.toBeInViewport();
+    }
+    const top = () => scroller.evaluate((element) => element.scrollTop);
+    const offset = await top();
+    if (variant === "drifted") expect(offset).toBe(0);
+    else expect(offset).toBeGreaterThan(0);
+
+    const main = inbox.getByRole("tablist", { name: "Inbox tabs" });
+    const listTab = main.getByRole("tab", { name: "Inbox", exact: true });
+    if (variant === "covered") {
+      // Opening the thread reveals its message and focuses the row once the
+      // thread has loaded. Move the tab after that, or the late reveal takes
+      // focus from it.
+      await expect(
+        inbox
+          .getByRole("region", { name: "Thread messages", exact: true })
+          .locator("[data-message-id]", { hasText: "Beta mention 3" }),
+      ).toBeFocused();
+      await inbox
+        .getByRole("tablist", { name: "Panel tabs" })
+        .getByRole("tab")
+        .focus();
+      await page.keyboard.press("Alt+Shift+ArrowLeft");
+      await expect(main.getByRole("tab")).toHaveText([
+        "Inbox",
+        "Thread · Beta",
+      ]);
+      await expect(
+        main.getByRole("tab", { name: "Thread · Beta", exact: true }),
+      ).toBeFocused();
+      await expect(listTab).toHaveAttribute("aria-selected", "false");
+      await expect(channel).toBeVisible();
+    }
+
+    await channel.click();
+    await expect(inbox).toHaveCount(0);
+    if (moved) {
+      app.append(
+        "primary",
+        "beta",
+        "Fresh Beta mention 3",
+        true,
+        false,
+        roots[3].id,
+        undefined,
+        [["p", app.viewer]],
+      );
+      // Delivered to the open thread, so the session has the row's move.
+      await expect(
+        page.getByText("Fresh Beta mention 3", { exact: true }),
+      ).toBeVisible();
+    }
+    if (variant === "shifted") {
+      // A new mentioned thread adds a row above, shifting the rest down.
+      const root = app.append("primary", "beta", "Beta root 25", true, false);
+      app.append(
+        "primary",
+        "beta",
+        "Beta mention 25",
+        true,
+        false,
+        root.id,
+        undefined,
+        [["p", app.viewer]],
+      );
+      // Delivered to the open channel, so the session has the new row.
+      await expect(
+        page.getByText("Beta root 25", { exact: true }),
+      ).toBeVisible();
+    }
+    await page.getByRole("button", { name: "Go back", exact: true }).click();
+    if (variant === "covered") {
+      // Inbox returns under the moved tab, which renders the moved row unseen.
+      await expect(listTab).toHaveAttribute("aria-selected", "false");
+      await expect(
+        inbox
+          .getByRole("list", {
+            name: "Inbox conversations",
+            includeHidden: true,
+          })
+          .getByRole("listitem", { includeHidden: true })
+          .nth(1),
+      ).toContainText("Fresh Beta mention 3");
+      await listTab.click();
+    }
+    await expect(row).toHaveAttribute("data-selected", "true");
+    if (moved) {
+      // The newer DM fixture row stays first; the thread moved above its page.
+      await expect(rows.nth(1)).toContainText("Fresh Beta mention 3");
+      await expect(row).toBeInViewport();
+      return;
+    }
+    if (variant === "shifted") await expect(rows).toHaveCount(29);
+    await expect.poll(top).toBeGreaterThanOrEqual(offset - 1);
+    expect(await top()).toBeLessThanOrEqual(offset + 1);
+    if (offscreen) await expect(row).not.toBeInViewport();
+    else await expect(row).toBeInViewport();
+  });

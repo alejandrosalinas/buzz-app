@@ -508,7 +508,15 @@ The timeline, channel-list preview and filtered plugin views share that operatio
 
 - Reads: three active slots, at most one background request, 128 pending distinct
   requests, ten-second deadlines including queue time, four filters per request,
-  500 per-filter limit, 64 KiB keys, and an 8 MiB result budget.
+  500 per-filter limit, 64 KiB keys, and an 8 MiB result budget. Full-roster
+  discovery reads (scan pages and omission confirmation) and the read-state
+  snapshot, whose results can approach that budget, get 30 seconds
+  (`LARGE_READ_DEADLINE_MS`, the native per-request ceiling); a read-state
+  operation that takes a snapshot gets that plus its usual ten seconds. This lets
+  the measured large reads finish on a slow link; one that needs longer still
+  fails and enters recovery. A slow background snapshot can hold the one
+  background slot that long. The browser development broker still caps upstream
+  queries at 20 seconds.
 - Outbox: at most 256 operations / 2 MiB persisted, 32 KiB per submitted payload,
   three concurrent deliveries, ten-second delivery deadlines including queue time. Only outstanding
   operations count toward capacity; completed events move to a separate 2,048-event /

@@ -476,15 +476,37 @@ export function useAppNavigation(
       const { pluginImport: _pluginImport, ...settings } = current;
       navigation.dismiss([request.entryId], settings);
     },
+    dismissPluginDetails(request: PageNavigation | undefined) {
+      const current = request?.target;
+      if (!request || current?.kind !== "settings" || !current.pluginId) return;
+      const { pluginId: _pluginId, ...settings } = current;
+      const parent = targetKey(settings);
+      navigation.dismiss((target) => {
+        if (target.kind !== "settings" || target.pluginId !== current.pluginId)
+          return false;
+        const { pluginId: _pluginId, ...settings } = target;
+        return targetKey(settings) === parent;
+      }, settings);
+    },
     leaveSettings() {
       const current = navigation.snapshot().entry.target;
       if (current.kind !== "settings") return;
-      const { section: _section, provider: _provider, ...dialog } = current;
+      const {
+        section: _section,
+        provider: _provider,
+        pluginId: _pluginId,
+        ...dialog
+      } = current;
       const dialogKey = targetKey(dialog);
       const dismiss = (fallback: OpenTarget) =>
         navigation.dismiss((target) => {
           if (target.kind !== "settings") return false;
-          const { section: _section, provider: _provider, ...dialog } = target;
+          const {
+            section: _section,
+            provider: _provider,
+            pluginId: _pluginId,
+            ...dialog
+          } = target;
           return targetKey(dialog) === dialogKey;
         }, fallback);
       const previous = lastNonSettings.current;

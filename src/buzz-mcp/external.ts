@@ -8,10 +8,11 @@ type Policy = Readonly<{
   fields: readonly string[];
   required?: readonly string[];
 }>;
-const supportedScopes: readonly ExternalScope[] = ["read", "post"];
+const supportedScopes: readonly ExternalScope[] = ["read", "post", "create"];
 const policies: Readonly<Record<string, Policy>> = {
   channel_list: { scope: "read", fields: ["q", "all", "types"] },
   channel_get: { scope: "read", fields: ["channel"], required: ["channel"] },
+  channel_create: { scope: "create", fields: ["name"], required: ["name"] },
   read: {
     scope: "read",
     fields: [
@@ -42,6 +43,12 @@ const tools = TOOLS.filter((tool) => Object.hasOwn(policies, tool.name)).map(
     const policy = policies[tool.name] as Policy;
     return {
       ...tool,
+      ...(tool.name === "channel_create"
+        ? {
+            description:
+              "Create a private Solo chat with you, your owner and their saved Bestie.",
+          }
+        : {}),
       inputSchema: {
         ...tool.inputSchema,
         properties: Object.fromEntries(
@@ -101,6 +108,7 @@ export async function respondExternal(
   input: unknown,
   connected: () => void,
   scopes: readonly ExternalScope[] = ["read", "post"],
+  defaultWorker?: () => Promise<string>,
 ) {
   if (!input || typeof input !== "object" || Array.isArray(input))
     throw new Error("Expected one JSON-RPC message.");
@@ -140,6 +148,7 @@ export async function respondExternal(
       },
     });
   }
+  let request = input;
   if (method === "tools/call") {
     try {
       const tool = tools.find((tool) => tool.name === params.name);
@@ -195,6 +204,33 @@ export async function respondExternal(
         !values.message_url
       )
         throw new Error("channel is required with q.");
+      if (tool.name === "channel_create") {
+        const owner = client.owner,
+          caller = client.pubkey;
+        const validKey = (key: unknown): key is string =>
+          typeof key === "string" && /^[0-9a-f]{64}$/.test(key);
+        if (!validKey(owner) || !validKey(caller))
+          throw new Error(
+            "The external connection has invalid identities. Authorize the app again in Buzz.",
+          );
+        if (!defaultWorker)
+          throw new Error("Solo creation is unavailable in this copy of Buzz.");
+        const worker = await defaultWorker();
+        if (!validKey(worker))
+          throw new Error("Choose and save a Bestie in Buzz, then try again.");
+        request = {
+          ...message,
+          params: {
+            ...params,
+            arguments: {
+              name: values.name,
+              visibility: "private",
+              solo: true,
+              members: [...new Set([owner, caller, worker])],
+            },
+          },
+        };
+      }
     } catch (error) {
       return result({
         isError: true,
@@ -202,8 +238,8 @@ export async function respondExternal(
       });
     }
   }
-  return respond(client, {}, input, [], {
+  return respond(client, {}, request, [], {
     instructions:
-      "Act as the agent selected by the owner in Buzz. Supply explicit channel or message IDs. Keys stay in Buzz. If this connection ends, start setup again in the external app and authorize it in Buzz.",
+      "Act as the agent selected by the owner in Buzz. Supply explicit channel or message IDs. Keys stay in Buzz. Use saved approval to restore a closed connection. Revoked or expired approval needs owner consent. Never repeat a post after a lost response. Read its destination first.",
   });
 }

@@ -45,6 +45,23 @@
 .toField:focus-within {
   border-radius: var(--radius-control);
 }
+.recipientHeader[data-appearance="field"] {
+  padding: 0;
+  border-bottom: 0;
+}
+[data-appearance="field"] .toField {
+  min-height: var(--size-control);
+  padding: var(--space-1) var(--space-control-inset);
+  border-radius: var(--radius-control);
+  background: var(--surface-inset);
+}
+[data-appearance="field"] .toField:has(.toInput:disabled) {
+  background: var(--affordance-disabled);
+  cursor: not-allowed;
+}
+[data-appearance="field"] :is(.toField > label, .toInput) {
+  @apply text-body;
+}
 .chip {
   @apply text-body-sm;
   display: inline-flex;

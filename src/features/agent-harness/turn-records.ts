@@ -7,9 +7,41 @@ import type { EventData } from "../relay/events";
 export const quoted = (value: unknown) =>
   JSON.stringify(value).replaceAll("<", "\\u003c").replaceAll(">", "\\u003e");
 
+/** The names a message's record shows for its author. `pubkey` stays the
+ * author's identity; these are for reading and tagging them. */
+export type AuthorNames = Readonly<{
+  /** The author's verified username, when the community verified one: what
+   * an agent writes after `@` to tag them. */
+  username?: string;
+  /** The author's display name, for addressing them in prose. */
+  display_name?: string;
+}>;
+
+/** A message with its author's names beside its pubkey. A protection plugin
+ * checks them with the rest of the text; they are not part of the signed
+ * event. */
+export function withNames<T extends { id: string; pubkey: string }>(
+  message: T,
+  names: AuthorNames | undefined,
+) {
+  const { username, display_name } = names ?? {};
+  if (!username && !display_name) return message;
+  const { id, pubkey, ...rest } = message;
+  return {
+    id,
+    pubkey,
+    ...(username ? { username } : {}),
+    ...(display_name ? { display_name } : {}),
+    ...rest,
+  };
+}
+
 /** The event a turn is for, then what it asks of the agent. */
-export const eventBody = (event: EventData, request: string) =>
-  `${quoted(event)}\nRequest: ${quoted(request)}`;
+export const eventBody = (
+  event: EventData,
+  request: string,
+  names?: AuthorNames,
+) => `${quoted(withNames(event, names))}\nRequest: ${quoted(request)}`;
 
 /** Who sent the event in an `eventBody`, and its request; undefined for any
  * other text. */

@@ -33,8 +33,16 @@ import {
   setMessageAutocorrectPreference,
   useMessageAutocorrectPreference,
 } from "../features/messages/autocorrect-preference";
+import {
+  setUnreadFirstPreference,
+  useUnreadFirstPreference,
+} from "../features/search/unread-first-preference";
 import { macWebKit } from "../features/messages/mac-webkit";
 import { SwitchPreferenceRow } from "../shared/design-system/ui/SwitchPreferenceRow";
+import {
+  setClockPreference,
+  useClockPreference,
+} from "../shared/clock-preference";
 
 export function AppearanceSettings({
   appearance,
@@ -48,6 +56,8 @@ export function AppearanceSettings({
 }) {
   const followUp = useFollowUpBehaviorPreference();
   const autocorrect = useMessageAutocorrectPreference();
+  const unreadFirst = useUnreadFirstPreference();
+  const clock = useClockPreference();
   const { placement, unsaved } = useThreadPlacementPreference();
   const increaseButton = useRef<HTMLButtonElement>(null);
   const pendingFocus = useRef<HTMLButtonElement | null>(null);
@@ -233,6 +243,36 @@ export function AppearanceSettings({
               />
             }
           />
+          <PreferenceRow
+            title="Clock"
+            subtitle="System uses your device’s time format."
+            trailing={
+              <Select
+                variant="compact"
+                label="Clock"
+                value={clock.hourCycle}
+                groups={[
+                  {
+                    label: "Clock",
+                    options: [
+                      { value: "system", label: "System" },
+                      { value: "h12", label: "12-hour" },
+                      { value: "h23", label: "24-hour" },
+                    ],
+                  },
+                ]}
+                onValueChange={(value) => {
+                  if (value === "system" || value === "h12" || value === "h23")
+                    setClockPreference({ hourCycle: value });
+                }}
+              />
+            }
+          />
+          <SwitchPreferenceRow
+            label="Show seconds"
+            checked={clock.seconds}
+            onCheckedChange={(seconds) => setClockPreference({ seconds })}
+          />
         </SettingsGroup>
       </div>
       <div className="mt-section-gap">
@@ -287,6 +327,35 @@ export function AppearanceSettings({
               />
             }
           />
+          <PreferenceRow
+            title="Message timestamps"
+            subtitle="Hidden times stay available to screen readers."
+            trailing={
+              <Select
+                variant="compact"
+                label="Message timestamps"
+                value={clock.messageTimestamps}
+                groups={[
+                  {
+                    label: "Timestamps",
+                    options: [
+                      { value: "show", label: "Show" },
+                      { value: "hide-solo", label: "Hide in Solo chats" },
+                      { value: "hide", label: "Hide" },
+                    ],
+                  },
+                ]}
+                onValueChange={(value) => {
+                  if (
+                    value === "show" ||
+                    value === "hide-solo" ||
+                    value === "hide"
+                  )
+                    setClockPreference({ messageTimestamps: value });
+                }}
+              />
+            }
+          />
           {autocorrectAvailable && (
             <SwitchPreferenceRow
               label="Allow automatic spelling correction"
@@ -295,6 +364,12 @@ export function AppearanceSettings({
               onCheckedChange={setMessageAutocorrectPreference}
             />
           )}
+          <SwitchPreferenceRow
+            label="Show unread first in search"
+            description="With nothing typed, search leads with unread channels and DMs and selects the newest."
+            checked={unreadFirst.enabled}
+            onCheckedChange={setUnreadFirstPreference}
+          />
         </SettingsGroup>
         {active && followUp.unsaved && (
           <ToastNotice
@@ -306,6 +381,20 @@ export function AppearanceSettings({
               onClick={() => setFollowUpBehaviorPreference(followUp.behavior)}
             >
               Retry saving follow-up behavior
+            </Button>
+          </ToastNotice>
+        )}
+        {active && clock.unsaved && (
+          <ToastNotice
+            title="Clock preference wasn’t saved"
+            description="This choice is active, but could not be saved on this device. Try again."
+          >
+            <Button
+              type="button"
+              size="sm"
+              onClick={() => setClockPreference({})}
+            >
+              Retry saving clock preference
             </Button>
           </ToastNotice>
         )}
@@ -322,6 +411,20 @@ export function AppearanceSettings({
               }
             >
               Retry saving spelling correction
+            </Button>
+          </ToastNotice>
+        )}
+        {active && unreadFirst.unsaved && (
+          <ToastNotice
+            title="Search preference wasn’t saved"
+            description="This choice is active, but could not be saved on this device. Try again."
+          >
+            <Button
+              type="button"
+              size="sm"
+              onClick={() => setUnreadFirstPreference(unreadFirst.enabled)}
+            >
+              Retry saving search preference
             </Button>
           </ToastNotice>
         )}

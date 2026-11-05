@@ -39,6 +39,7 @@ import {
   formatItemTimestamp,
   formatTime,
 } from "../../shared/datetime";
+import { useClockFormat } from "../../shared/clock-preference";
 import referenceStyles from "../../shared/InlineReference.module.css";
 import type { AgentViewProps } from "./service";
 import styles from "./ActivityTranscript.module.css";
@@ -69,6 +70,7 @@ const time = (at: number) => formatTime(at / 1000);
 const known = (at: number) => !!at && !Number.isNaN(new Date(at).getTime());
 /** An entry's time under it; the turn header already dates the prompt. */
 function Stamp({ item }: { item: TranscriptItem }) {
+  useClockFormat();
   if (item.type === "prompt" || !known(item.at)) return null;
   return (
     <time
@@ -193,6 +195,7 @@ function Turn({
   agentName: string;
   openConversation: AgentViewProps["openConversation"];
 }) {
+  useClockFormat();
   const status = turn.error
     ? "Error"
     : state === "working"

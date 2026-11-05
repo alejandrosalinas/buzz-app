@@ -13,6 +13,7 @@ import { PanelView } from "../panels/PanelView";
 import { panelOpening, type PanelOpening } from "../panels/service";
 import type { ThreadPanelProps } from "../messages/ThreadPanel";
 import { useConversationPresentation } from "./ConversationPresentation";
+import { ForwardMessageProvider } from "../messages/ForwardMessage";
 import type { MediaReview } from "./Conversation";
 
 export type ConversationHostServices = Pick<
@@ -120,7 +121,11 @@ export function ConversationHost({
     return true;
   };
   return (
-    <>
+    <ForwardMessageProvider
+      session={session}
+      scope={scope}
+      navigation={host.navigation}
+    >
       {children(
         {
           onOpenLink: (url, origin) => open(url, origin?.rootId),
@@ -193,6 +198,6 @@ export function ConversationHost({
           />
         </Dialog>
       )}
-    </>
+    </ForwardMessageProvider>
   );
 }

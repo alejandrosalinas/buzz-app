@@ -146,6 +146,23 @@ recovery, and lifecycle transitions; consider concurrency, persistence, security
 and performance where the change affects them. Do not add machinery for
 hypothetical requirements.
 
+Design every relay-facing path for the whole fleet running it at once. A relay
+rollout, restart, or network blip makes every client reconnect, renew, and catch
+up in the same few seconds, so relay reads per client times clients is the real
+load. Before adding or changing a connect, reconnect, renewal, poll, or catch-up
+path:
+
+- State its relay reads per client, and reconnect from a cursor rather than
+  rebuilding state. One replay filter per channel meant ~306 filters per
+  reconnect for a 300-channel client
+  ([block/buzz-app#2308](https://github.com/block/buzz-app/pull/2308)). Skip a
+  repair read only when the replay proves continuity and the client can
+  reconcile every projection it touched; otherwise keep the repair, bounded.
+- Jitter its start, and back off on failure with a cap.
+- Prefer an event-driven refresh with a long backstop over a short poll. A
+  60-second full channel-list read became a 15-minute one
+  ([block/buzz-app#2215](https://github.com/block/buzz-app/pull/2215)).
+
 Validate the affected user contract, not just isolated helpers. Add regression
 coverage for changed behavior and relevant failure paths; exercise real integration
 boundaries where practical. Follow the contribution workflow's iteration and batch

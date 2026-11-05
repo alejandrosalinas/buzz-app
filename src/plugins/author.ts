@@ -27,6 +27,7 @@ export type {
   PageSidebarProps,
   Pages,
 } from "../features/pages/service";
+export type { Backdrop, Backdrops } from "../features/backdrops/service";
 export type {
   SidebarRow,
   SidebarRowSortMode,

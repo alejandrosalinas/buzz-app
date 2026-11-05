@@ -37,6 +37,11 @@ export const apply: PluginModule["apply"] = (ctx) => {
     ctx.effect(() =>
       connection.bind({
         connect: ctx.agents.connectExternal.bind(ctx.agents),
+        pairing: (operation, request) => {
+          if (!ctx.host.externalMcpPairing)
+            throw new Error("Saved approval is unavailable");
+          return ctx.host.externalMcpPairing(operation, request);
+        },
         deny: (request) => {
           if (!ctx.host.denyMcpAuthorization)
             throw new Error("External authorization is unavailable");

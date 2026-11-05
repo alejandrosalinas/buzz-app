@@ -122,6 +122,10 @@ mod items {
             Err(value) => Err(error(value)),
         }
     }
+    pub(super) fn helper_selected(_: &Path) -> bool {
+        cfg!(all(target_os = "macos", debug_assertions))
+            && std::env::var_os("BUZZ_DEV_CREDENTIAL_HELPER").is_some()
+    }
     pub(super) fn compare(
         _: &Path,
         account: &str,
@@ -147,6 +151,15 @@ pub(crate) mod items {
     use zeroize::Zeroizing;
     type Items = HashMap<PathBuf, HashMap<String, Vec<u8>>>;
     static ITEMS: Mutex<Option<Items>> = Mutex::new(None);
+    static UNCERTAIN: Mutex<Option<PathBuf>> = Mutex::new(None);
+    static HELPER_ROOT: Mutex<Option<PathBuf>> = Mutex::new(None);
+    pub(crate) fn uncertain_write(root: &Path) {
+        *HELPER_ROOT.lock().unwrap() = Some(root.into());
+        *UNCERTAIN.lock().unwrap() = Some(root.into());
+    }
+    pub(super) fn helper_selected(root: &Path) -> bool {
+        HELPER_ROOT.lock().unwrap().as_deref() == Some(root)
+    }
     pub(crate) fn enable(root: &Path) {
         ITEMS
             .lock()
@@ -186,7 +199,13 @@ pub(crate) mod items {
                 None => items.remove(account),
             };
             Ok(())
-        })?
+        })??;
+        let mut uncertain = UNCERTAIN.lock().unwrap();
+        if uncertain.as_deref() == Some(root) {
+            uncertain.take();
+            return Err("storage-unavailable");
+        }
+        Ok(())
     }
     pub(crate) fn delete(root: &Path, account: &str) -> Result<(), &'static str> {
         with(root, |items| {
@@ -265,8 +284,8 @@ impl SecureStore {
         Ok((raw, bundle))
     }
     /// Replaces the item read as `current` with `bundle`, deleting it once
-    /// empty, and returns what it wrote. As before bundles, an error means
-    /// nothing was written: a login abandons its retirement on one.
+    /// empty, and returns what it wrote. Session replacements through a helper
+    /// remain refused until their write succeeds.
     fn save(&self, current: Option<&[u8]>, bundle: &mut Bundle) -> Result<Item, &'static str> {
         // Register before writing any secret. Buzz identity deletion walks these
         // public account keys even after configuration or profile changes.
@@ -309,10 +328,26 @@ impl SecureStore {
         if bundle.session.as_deref().map(str::as_bytes) != expected {
             return Err("session-changed");
         }
+        let guarded = match replacement {
+            Some(value) if items::helper_selected(&self.root) => {
+                let record: super::Record =
+                    serde_json::from_slice(value).map_err(|_| "storage-corrupt")?;
+                if self.refused(&record.revision)?.is_none() {
+                    self.refuse(&record.revision)?;
+                    Some(record.revision.clone())
+                } else {
+                    None
+                }
+            }
+            _ => None,
+        };
         bundle.session.zeroize();
         bundle.session = replacement.map(text).transpose()?;
-        self.save(raw.as_deref().map(Vec::as_slice), &mut bundle)
-            .map(drop)
+        self.save(raw.as_deref().map(Vec::as_slice), &mut bundle)?;
+        if let Some(revision) = guarded {
+            self.clear_refusal(&revision)?;
+        }
+        Ok(())
     }
     /// The store for `key`'s own item, as before bundles.
     fn item(&self, key: &str) -> Self {
@@ -597,6 +632,41 @@ mod tests {
         remove_all(root.path().into()).unwrap();
         assert!(item(&store, &store.account).is_none());
         assert!(!store.index().exists());
+    }
+
+    #[test]
+    fn uncertain_helper_save_keeps_the_replacement_refused() {
+        let root = tempfile::tempdir().unwrap();
+        let store = secure(&root);
+        let previous = super::super::tests::record();
+        let replacement = super::super::tests::record();
+        store.compare(None, Some(&previous.raw)).unwrap();
+        items::uncertain_write(root.path());
+        assert_eq!(
+            store.compare(Some(&previous.raw), Some(&replacement.raw)),
+            Err("storage-unavailable")
+        );
+        let (stored, refusal) = store.load().unwrap();
+        assert_eq!(stored.unwrap().as_slice(), replacement.raw.as_slice());
+        assert_eq!(
+            refusal.as_deref(),
+            Some(replacement.record.revision.as_str())
+        );
+        assert_eq!(
+            store.remove(&previous.raw, &previous.record.revision),
+            Err("session-changed")
+        );
+        assert!(store
+            .refused(&replacement.record.revision)
+            .unwrap()
+            .is_some());
+        let next = super::super::tests::record();
+        store
+            .compare(Some(&replacement.raw), Some(&next.raw))
+            .unwrap();
+        let (stored, refusal) = store.load().unwrap();
+        assert_eq!(stored.unwrap().as_slice(), next.raw.as_slice());
+        assert!(refusal.is_none());
     }
 
     #[test]

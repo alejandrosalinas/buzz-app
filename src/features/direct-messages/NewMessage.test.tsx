@@ -15,7 +15,8 @@ import {
   within,
 } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import type { ChannelSummary } from "../relay/contracts";
+import type { ChannelSummary, Profile } from "../relay/contracts";
+import type { VerifiedProfile } from "../relay/verified-profile";
 import type { OutgoingEvent } from "../relay/outbox";
 import {
   pickerText,
@@ -23,7 +24,10 @@ import {
   recordChoice,
   recordVisit,
 } from "../search/usage";
-import { publicKeyLabels } from "../../shared/identity/public-key";
+import {
+  abbreviatedPublicKey,
+  publicKeyLabels,
+} from "../../shared/identity/public-key";
 import type { RelaySession } from "../relay/session";
 import { NewMessage } from "./NewMessage";
 import { createAgentChoices } from "../agents/choices";
@@ -1727,3 +1731,222 @@ it.each([
     expect(t.directMessages.open).not.toHaveBeenCalled();
   },
 );
+
+const verifiedAs = (
+  displayName: string,
+  username: string,
+  fullName?: string,
+): VerifiedProfile => ({
+  displayName,
+  username,
+  ...(fullName ? { fullName } : {}),
+  issuerLabel: "Block",
+  verifiedAt: 1,
+  status: "checked",
+  multipleIssuers: false,
+});
+/** A community verifying names with `answers`. Its reads wait for `held`, and
+ * `change` swaps or withdraws its authority. */
+function verifying(
+  t: ReturnType<typeof setup>,
+  answers: ReadonlyMap<string, VerifiedProfile>,
+  held: Promise<void> = Promise.resolve(),
+) {
+  let authority: { pubkey: string; multipleIssuers: boolean } | undefined = {
+    pubkey: "9".repeat(64),
+    multipleIssuers: false,
+  };
+  const listeners = new Set<() => void>();
+  Object.assign(t.session.profiles, {
+    verifiedAuthority: () => authority,
+    subscribe: (listener: () => void) => {
+      listeners.add(listener);
+      return () => listeners.delete(listener);
+    },
+  });
+  const verified = vi.fn(async (pubkeys: readonly string[]) => {
+    await held;
+    return {
+      authority,
+      profiles: new Map(
+        pubkeys.flatMap((pubkey) => {
+          const answer = answers.get(pubkey);
+          return answer ? [[pubkey, answer] as const] : [];
+        }),
+      ),
+    };
+  });
+  Object.assign(t.directMessages, { verified });
+  return {
+    verified,
+    change(next: typeof authority) {
+      authority = next;
+      act(() => {
+        for (const listener of listeners) listener();
+      });
+    },
+  };
+}
+const aleksandr = { pubkey: "a".repeat(64), name: "jack" };
+const petrov = verifiedAs("Aleksandr", "aleksandr", "Aleksandr Petrov");
+const petrovRow = { name: "Aleksandr, Aleksandr Petrov · @aleksandr" };
+
+it("labels people by verified identity, never an editable handle, and opens the chosen key", async () => {
+  const t = setup();
+  // An unverified "jack" whose handle imitates the verified one, and a
+  // verified "jack" whose handle equals its name.
+  const imitator = {
+    pubkey: "b".repeat(64),
+    name: "jack",
+    username: "aleksandr",
+  };
+  const realJack = { pubkey: "c".repeat(64), name: "Jack" };
+  t.directMessages.people.mockResolvedValue({
+    people: [aleksandr, imitator, realJack],
+    hasMore: false,
+  });
+  verifying(
+    t,
+    new Map([
+      [aleksandr.pubkey, petrov],
+      [realJack.pubkey, verifiedAs("jack", "jack")],
+    ]),
+  );
+  const labels = publicKeyLabels([imitator.pubkey, realJack.pubkey]);
+  t.mount();
+  await waitFor(() => expect(recipient()).toBeEnabled());
+  await t.user.type(recipient(), "jack");
+  await screen.findByRole("option", petrovRow);
+  expect(
+    screen.getByRole("option", { name: `jack ${labels.get(imitator.pubkey)}` }),
+  ).not.toHaveTextContent("@");
+  screen.getByRole("option", {
+    name: `jack ${labels.get(realJack.pubkey)}, @jack`,
+  });
+  // Found by the editable "jack", Aleksandr is that name's namesake: Space
+  // has no single exact name to pick.
+  await t.user.keyboard(" ");
+  expect(recipient()).toHaveValue("jack ");
+  await t.user.click(screen.getByRole("option", petrovRow));
+  await t.user.type(screen.getByRole("textbox"), "Hello");
+  await t.user.click(send());
+  await waitFor(() => expect(t.onStarted).toHaveBeenCalledOnce());
+  expect(t.directMessages.open).toHaveBeenCalledWith(
+    [aleksandr.pubkey],
+    expect.any(AbortSignal),
+  );
+});
+
+it.each([
+  ["the shared profiles", true],
+  ["an earlier page", false],
+])(
+  "finds people verified by %s by their verified name, handle or full name",
+  async (_source, shared) => {
+    const t = setup();
+    if (shared) {
+      const profiles = t.session.profiles.snapshot() as Map<string, Profile>;
+      profiles.set(aleksandr.pubkey, { ...aleksandr, verified: petrov });
+    }
+    // The directory finds them only by the editable name, and only in the browse.
+    t.directMessages.people.mockImplementation(async (query) => ({
+      people: shared || query.trim() ? [] : [aleksandr],
+      hasMore: false,
+    }));
+    verifying(t, shared ? new Map() : new Map([[aleksandr.pubkey, petrov]]));
+    t.mount();
+    await waitFor(() => expect(recipient()).toBeEnabled());
+    for (const text of ["aleksandr", "petrov"]) {
+      await t.user.clear(recipient());
+      await t.user.type(recipient(), text);
+      expect(await screen.findByRole("option", petrovRow)).toBeVisible();
+    }
+  },
+);
+
+it("relabels a recipient whose verification answers late, keeping a failed send's error", async () => {
+  const t = setup();
+  t.directMessages.people.mockResolvedValue({
+    people: [aleksandr],
+    hasMore: false,
+  });
+  let release = () => {};
+  verifying(
+    t,
+    new Map([[aleksandr.pubkey, petrov]]),
+    new Promise<void>((resolve) => (release = resolve)),
+  );
+  t.directMessages.open.mockRejectedValueOnce(new Error("Offline"));
+  t.mount();
+  await waitFor(() => expect(recipient()).toBeEnabled());
+  await t.user.click(await screen.findByRole("option", { name: "jack" }));
+  await t.user.type(screen.getByRole("textbox"), "Hello");
+  await t.user.click(send());
+  await screen.findByRole("alert");
+  release();
+  await screen.findByRole("button", { name: "Remove Aleksandr" });
+  screen.getByRole("textbox", { name: "Message Aleksandr" });
+  expect(screen.getByRole("alert")).toBeVisible();
+});
+
+it.each([
+  ["the browsed profile name", true],
+  ["the key", false],
+])(
+  "names a chosen recipient by %s once verification is withdrawn, then by a current profile",
+  async (_fallback, browsed) => {
+    const t = setup();
+    // Shared heads replace the profile name with the verified one.
+    let shared = new Map<string, Profile>([
+      [aleksandr.pubkey, { name: "Aleksandr", verified: petrov }],
+    ]);
+    Object.assign(t.session.profiles, { snapshot: () => shared });
+    t.directMessages.people.mockResolvedValue({
+      people: browsed ? [aleksandr] : [],
+      hasMore: false,
+    });
+    const { change } = verifying(t, new Map());
+    t.mount();
+    await waitFor(() => expect(recipient()).toBeEnabled());
+    if (browsed) await screen.findByRole("option", petrovRow);
+    await t.user.type(recipient(), "aleks");
+    await t.user.click(await screen.findByRole("option", petrovRow));
+    shared = new Map();
+    change(undefined);
+    const name = browsed ? "jack" : abbreviatedPublicKey(aleksandr.pubkey);
+    await screen.findByRole("button", { name: `Remove ${name}` });
+    screen.getByRole("textbox", { name: `Message ${name}` });
+    shared = new Map([[aleksandr.pubkey, { name: "Jack Editable" }]]);
+    change(undefined);
+    await screen.findByRole("button", { name: "Remove Jack Editable" });
+  },
+);
+
+it("searches and labels by profile names on a relay without verified identity", async () => {
+  const t = setup();
+  const imitator = {
+    pubkey: "b".repeat(64),
+    name: "jack",
+    username: "aleksandr",
+  };
+  const labels = publicKeyLabels([aleksandr.pubkey, imitator.pubkey]);
+  t.directMessages.people.mockResolvedValue({
+    people: [aleksandr, imitator],
+    hasMore: false,
+  });
+  expect(t.session.profiles.verifiedAuthority).toBeUndefined();
+  expect("verified" in t.directMessages).toBe(false);
+  t.mount();
+  await waitFor(() => expect(recipient()).toBeEnabled());
+  await t.user.type(recipient(), "jack");
+  for (const person of [aleksandr, imitator])
+    expect(
+      await screen.findByRole("option", {
+        name: `jack ${labels.get(person.pubkey)}`,
+      }),
+    ).not.toHaveTextContent("@");
+  await t.user.click(
+    screen.getByRole("option", { name: `jack ${labels.get(imitator.pubkey)}` }),
+  );
+  screen.getByRole("textbox", { name: "Message jack" });
+});

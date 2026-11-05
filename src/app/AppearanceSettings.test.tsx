@@ -13,6 +13,10 @@ import { afterEach, expect, it, vi } from "vitest";
 import { ToastProvider } from "../shared/design-system/ui/Toast";
 import { createAppearance } from "../shared/theme/service";
 import { AppearanceSettings } from "./AppearanceSettings";
+import {
+  setUnreadFirstPreference,
+  unreadFirstPreference,
+} from "../features/search/unread-first-preference";
 
 import {
   setThreadPlacementPreference,
@@ -27,6 +31,10 @@ import {
   messageAutocorrectPreference,
   setMessageAutocorrectPreference,
 } from "../features/messages/autocorrect-preference";
+import {
+  clockPreference,
+  setClockPreference,
+} from "../shared/clock-preference";
 
 const preferenceAppearances: ReturnType<typeof createAppearance>[] = [];
 function preferencesPage() {
@@ -43,6 +51,12 @@ afterEach(() => {
   setThreadPlacementPreference("side");
   setFollowUpBehaviorPreference("immediate");
   setMessageAutocorrectPreference(false);
+  setUnreadFirstPreference(true);
+  setClockPreference({
+    hourCycle: "system",
+    seconds: false,
+    messageTimestamps: "show",
+  });
   localStorage.clear();
   vi.unstubAllGlobals();
 });
@@ -407,6 +421,30 @@ it("preserves follow-up choice and save recovery when Appearance is hidden", asy
   );
 });
 
+it("saves the clock, seconds and message timestamp choices", async () => {
+  const user = userEvent.setup();
+  render(preferencesPage(), { wrapper: ToastProvider });
+  const clock = screen.getByRole("combobox", { name: "Clock" });
+  expect(clock).toHaveTextContent("System");
+  await user.click(clock);
+  await user.click(await screen.findByRole("option", { name: "24-hour" }));
+  await user.click(screen.getByRole("switch", { name: "Show seconds" }));
+  await user.click(
+    screen.getByRole("combobox", { name: "Message timestamps" }),
+  );
+  await user.click(
+    await screen.findByRole("option", { name: "Hide in Solo chats" }),
+  );
+  expect(clockPreference()).toEqual({
+    hourCycle: "h23",
+    seconds: true,
+    messageTimestamps: "hide-solo",
+  });
+  expect(JSON.parse(localStorage.getItem("buzz-clock.v1") ?? "")).toEqual(
+    clockPreference(),
+  );
+});
+
 it("switches contrast through the shared select and restores it", async () => {
   const appearance = createAppearance();
   render(
@@ -495,6 +533,62 @@ it("keeps an unsaved spelling opt-in active and retries the same choice", async 
     screen.getByRole("button", { name: "Retry saving spelling correction" }),
   );
   expect(localStorage.getItem("buzz-message-autocorrect.v1")).toBe("on");
+  await waitFor(() =>
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument(),
+  );
+});
+
+it("leads search with unread until this device turns it off", async () => {
+  const user = userEvent.setup();
+  const appearance = createAppearance();
+  preferenceAppearances.push(appearance);
+  const toggle = () =>
+    screen.getByRole("switch", { name: "Show unread first in search" });
+  render(<AppearanceSettings appearance={appearance} />, {
+    wrapper: ToastProvider,
+  });
+  expect(toggle()).toBeChecked();
+  await user.click(toggle());
+  expect(unreadFirstPreference()).toBe(false);
+  expect(localStorage.getItem("buzz-search-unread-first.v1")).toBe("off");
+  cleanup();
+  render(<AppearanceSettings appearance={appearance} />, {
+    wrapper: ToastProvider,
+  });
+  expect(toggle()).not.toBeChecked();
+  act(() => {
+    localStorage.setItem("buzz-search-unread-first.v1", "on");
+    window.dispatchEvent(
+      new StorageEvent("storage", { key: "buzz-search-unread-first.v1" }),
+    );
+  });
+  expect(toggle()).toBeChecked();
+});
+
+it("keeps an unsaved unread-first choice active and retries the same choice", async () => {
+  const user = userEvent.setup();
+  const appearance = createAppearance();
+  preferenceAppearances.push(appearance);
+  render(<AppearanceSettings appearance={appearance} />, {
+    wrapper: ToastProvider,
+  });
+  const write = vi
+    .spyOn(Storage.prototype, "setItem")
+    .mockImplementation(() => {
+      throw new Error("unavailable");
+    });
+  await user.click(
+    screen.getByRole("switch", { name: "Show unread first in search" }),
+  );
+  expect(unreadFirstPreference()).toBe(false);
+  expect(await screen.findByRole("dialog")).toHaveTextContent(
+    "Search preference wasn’t saved",
+  );
+  write.mockRestore();
+  await user.click(
+    screen.getByRole("button", { name: "Retry saving search preference" }),
+  );
+  expect(localStorage.getItem("buzz-search-unread-first.v1")).toBe("off");
   await waitFor(() =>
     expect(screen.queryByRole("dialog")).not.toBeInTheDocument(),
   );

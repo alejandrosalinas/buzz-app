@@ -32,7 +32,11 @@ import {
   type ReadJournal,
   type ReadStateStorage,
 } from "./read-state-storage";
-import type { Priority, RelayReader } from "./reader";
+import {
+  LARGE_READ_DEADLINE_MS,
+  type Priority,
+  type RelayReader,
+} from "./reader";
 
 export type ReadSyncSnapshot = Readonly<{
   capability: "unsupported" | "read-only" | "frontier-sync";
@@ -427,6 +431,14 @@ export function createReadState({
     }
   }
   const snapshotted = () => !!host?.communityId && !!reader.readStateSnapshot;
+  // An operation's ten seconds, plus the reader's large-read deadline when it
+  // reads a complete snapshot: a caller signal shorter than that deadline would
+  // cancel the snapshot first.
+  const budget = (snapshot: boolean) =>
+    AbortSignal.any([
+      lifetime.signal,
+      AbortSignal.timeout(10000 + (snapshot ? LARGE_READ_DEADLINE_MS : 0)),
+    ]);
   // Sizes of a complete snapshot, kept current by every later observation.
   function basis(events: readonly RelayEvent[]) {
     snapshotSizes = new Map(
@@ -459,10 +471,7 @@ export function createReadState({
     if (closed || !host) return;
     if (refreshing) return refreshing;
     const generation = epoch;
-    const signal = AbortSignal.any([
-      lifetime.signal,
-      AbortSignal.timeout(10000),
-    ]);
+    const signal = budget(snapshotted());
     const task = queue(async () => {
       try {
         await ready;
@@ -606,10 +615,7 @@ export function createReadState({
       clearTimeout(timer);
       timer = undefined;
     }
-    const signal = AbortSignal.any([
-      lifetime.signal,
-      AbortSignal.timeout(10000),
-    ]);
+    let signal = budget(false);
     const sign = host.sign;
     const task = queue(async () => {
       try {
@@ -621,6 +627,9 @@ export function createReadState({
           attemptedRevision = journal.revision;
           // A restart or gap leaves no capacity basis: take one before any send.
           if (!snapshotSizes && snapshotted() && reader.readStateSnapshot) {
+            // Decided here, not at the call: a gap while this flush waited
+            // can drop the basis. The lock only uses its signal to acquire.
+            signal = budget(true);
             const generation = epoch;
             const observed = await reader.readStateSnapshot({
               signal,

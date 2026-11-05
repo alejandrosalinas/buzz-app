@@ -74,7 +74,9 @@ export function AgentConnectionSetup({
     session.profiles.snapshot,
   );
   const isAgent = (key: string) => profiles.get(key)?.isAgent === true;
-  const members = [...new Set(channel?.members ?? [])];
+  // Only a DM has a peer; a channel can have thousands of members.
+  const members =
+    channel?.channelType === "dm" ? [...new Set(channel.members ?? [])] : [];
   const peer =
     channel?.channelType === "dm" &&
     !channel.archived &&

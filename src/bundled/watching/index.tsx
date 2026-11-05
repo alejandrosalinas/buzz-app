@@ -8,6 +8,8 @@ export const apply: PluginModule["apply"] = ({ agents, relay, navigation }) => {
   agents.registerTab({
     id: "watching",
     title: "Attention",
+    // Hosted agents have no attention on this device.
+    when: (agent) => agent.place === "here",
     component: createTab({ agents, relay, navigation }),
   });
 };

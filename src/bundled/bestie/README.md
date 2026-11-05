@@ -43,9 +43,24 @@ another agent and asks before replacing your Bestie. A remote agent, hosted or
 on another device, can be your Bestie too. Change, **Make my bestie** and **Make
 my Bestie again** offer it, and say before saving that some bestie features
 aren't available with remote agents, as **Choosing a Bestie** does: one
-question, the replacement's, when it replaces your Bestie. A remote Bestie's
-switches show as unavailable, as its instructions and timers aren't on this
-device, and it doesn't start with Remembers you on. **Remove as Bestie** asks,
+question, the replacement's, when it replaces your Bestie. A Bestie on another
+device shows no tab, as its instructions and timers aren't on this device. A
+hosted Bestie shows the tab, and its provider can hold its instructions: where
+it does (Builderlab does), **Remembers you** reads and saves them through the
+provider, as a local agent's synced instructions are, and the row says why
+when they can't be read or saved, such as when they would pass the provider's
+length limit or you aren't signed in to it. Reading them never starts the
+provider's sign-in. A save replaces only the copy the tab shows: if they were
+changed elsewhere since, it saves nothing, says so and shows the newer copy.
+**Check-ins** stay unavailable for it, as hosted agents have no
+Attention timers; a hosted agent whose provider holds no instructions shows
+both rows as unavailable. A remote Bestie doesn't start with Remembers you
+on. Once it is no longer Bestie, its provider is read once per connection if
+this device saw it as Bestie, and it shows **Former Bestie** while its memory
+section is on or it is in one of your private channels. If its latest read
+fails, even after an earlier one found memory off, the tab stays until a read
+succeeds, so its Retry can read again; a read that
+started before the newest one recorded never replaces it. **Remove as Bestie** asks,
 then saves no Bestie to your account: the agent stays, its check-ins stop, and
 its memory section and private channels stay, which its Former Bestie tab can
 turn off.
@@ -111,9 +126,9 @@ this one when it next reads your account, once per connection. Turning the
 Bestie plugin off stops a removal under way before its next save. Its memory
 section and channels stay. An agent this device makes Bestie starts with
 Remembers you on; a choice synced from elsewhere changes nothing, so memory
-turned off stays off. A former Bestie keeps a **Former Bestie** tab while it has
-a Bestie section, or, if this device saw it as Bestie, while it is in one of
-your private channels. The tab has the same switches, **Remove from all** for
+turned off stays off. A former Bestie running here or hosted keeps a
+**Former Bestie** tab while it has a Bestie section, or, if this device saw it
+as Bestie, while it is in one of your private channels. The tab has the same switches, **Remove from all** for
 its channels, and **Make my Bestie again**.
 
 ### Choosing a Bestie

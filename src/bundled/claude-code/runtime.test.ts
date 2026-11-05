@@ -2711,12 +2711,18 @@ it("method calls: a session launch makes no call on the relay session (launch-bo
   expect(f.claudes()).toHaveLength(1);
   expect(systemPromptOf(f.claudes()[0])).toContain("I am Claude.");
   // The start makes no config requests. The only calls are the agent's
-  // recent notes, by slug; a prompt names no one, so it reads no profiles.
-  const { "agentMemories.read": notes, ...rest } = made();
+  // recent notes, by slug, and the profiles of the people the turn quotes,
+  // so it can give their names beside their pubkeys.
+  const {
+    "agentMemories.read": notes,
+    "profiles.ensure": profiles,
+    ...rest
+  } = made();
   expect(notes?.map(([pubkey, , slug]) => [pubkey, slug])).toEqual([
     [self, expect.stringMatching(/^mem\/notes\/\d{4}-\d{2}-\d{2}$/)],
     [self, expect.stringMatching(/^mem\/notes\/\d{4}-\d{2}-\d{2}$/)],
   ]);
+  expect(profiles).toEqual([[[message("1", "").pubkey], "foreground"]]);
   expect(rest).toEqual({});
 });
 

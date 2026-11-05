@@ -71,6 +71,7 @@ function fixture({
   unread,
   capability = "frontier-sync",
   viewOnly = false,
+  canLeave,
   preview,
 }: {
   /** Observed unread messages in this chat; fakes the read state when given. */
@@ -78,6 +79,7 @@ function fixture({
   /** What the read state can do on this connection. */
   capability?: "unsupported" | "read-only" | "frontier-sync";
   viewOnly?: boolean;
+  canLeave?: boolean;
   /** An unjoined reader of an open chat, including legacy admission defaults. */
   preview?: { joinRole?: "member" | "guest" };
   /** Other Solo chats listed after this one in the sidebar's Chats. */
@@ -251,7 +253,7 @@ function fixture({
         canArchive: !viewOnly,
         canUnarchive: false,
         canDelete: !viewOnly,
-        canLeave: viewOnly,
+        canLeave: canLeave ?? viewOnly,
         canHide: false,
       })),
       run,
@@ -365,18 +367,19 @@ function fixture({
     resolve: () => true,
   };
   const open = vi.fn(async () => ({ status: "opened" as const }));
+  const navigationSnapshot = {
+    entry: {
+      id: navigation.entryId,
+      target: behindSettings
+        ? { version: 1, kind: "settings", scope: null }
+        : navigation.target,
+    },
+    attempt: { signal: abort.signal },
+  };
   const navigator = {
     open,
     retry() {},
-    snapshot: () => ({
-      entry: {
-        id: navigation.entryId,
-        target: behindSettings
-          ? { version: 1, kind: "settings", scope: null }
-          : navigation.target,
-      },
-      attempt: { signal: abort.signal },
-    }),
+    snapshot: () => navigationSnapshot,
   } as unknown as Navigation;
   const archive: ArchiveShortcut = {};
   const read: ReadShortcut = {};
@@ -463,6 +466,28 @@ it("offers no Archive shortcut outside a Solo chat", async () => {
   f.mount();
   await screen.findByRole("textbox", { name: "Message #Planning" });
   expect(f.archive.current).toBeUndefined();
+});
+
+it("turns /leave into the existing channel confirmation without posting it", async () => {
+  const f = fixture({ type: "stream", canLeave: true });
+  f.mount();
+  const editor = await screen.findByRole("textbox", {
+    name: "Message #Planning",
+  });
+  const user = userEvent.setup();
+  await user.type(editor, "/leave{Enter}");
+  const dialog = await screen.findByRole("dialog", {
+    name: "Leave channel: Planning",
+  });
+  expect(f.session.channelLifecycle.load).toHaveBeenCalledWith(
+    id,
+    expect.any(AbortSignal),
+  );
+  expect(f.send).not.toHaveBeenCalled();
+  expect(editor).toHaveValue("");
+  await user.click(within(dialog).getByRole("button", { name: "Cancel" }));
+  await waitFor(() => expect(editor).toHaveFocus());
+  expect(f.run).not.toHaveBeenCalled();
 });
 
 it("retires the Archive shortcut once the chat is archived", async () => {

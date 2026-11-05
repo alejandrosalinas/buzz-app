@@ -77,6 +77,7 @@ type ToastCardProps = {
   tone: Tone;
   closeLabel?: string;
   onClose?: (() => void) | undefined;
+  navigation?: { label: string; open(): void } | undefined;
 };
 
 function ToastCard({
@@ -86,6 +87,7 @@ function ToastCard({
   tone,
   closeLabel = "Dismiss notification",
   onClose,
+  navigation,
 }: ToastCardProps) {
   const titleId = useId();
   const descriptionId = useId();
@@ -98,6 +100,15 @@ function ToastCard({
       data-type={tone}
       className="buzz-toast floating-surface"
     >
+      {navigation && (
+        <button
+          type="button"
+          className="buzz-toast-open"
+          aria-label={navigation.label}
+          title={navigation.label}
+          onClick={navigation.open}
+        />
+      )}
       <div className="buzz-toast-heading">
         <div className="buzz-toast-message">
           <div id={titleId} className="buzz-toast-title text-label-sm">
@@ -164,6 +175,7 @@ export function ToastNotice({
   closeLabel = "Dismiss notification",
   timeout = 0,
   tone = "error",
+  navigation,
 }: {
   title: string;
   description?: string;
@@ -173,6 +185,7 @@ export function ToastNotice({
   /** Zero keeps recovery visible until its source resolves or explicitly dismisses. */
   timeout?: number;
   tone?: Tone;
+  navigation?: ToastCardProps["navigation"];
 }) {
   const id = useId();
   const toasterId = useContext(ToastHost);
@@ -218,13 +231,24 @@ export function ToastNotice({
       tone,
       children,
       closeLabel,
+      navigation,
       onClose: dismissible
         ? () => {
             toast.dismiss(id);
           }
         : undefined,
     });
-  }, [source, id, title, description, tone, children, closeLabel, dismissible]);
+  }, [
+    source,
+    id,
+    title,
+    description,
+    tone,
+    children,
+    closeLabel,
+    dismissible,
+    navigation,
+  ]);
   return null;
 }
 

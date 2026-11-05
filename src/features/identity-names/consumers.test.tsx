@@ -133,6 +133,15 @@ function fixture() {
     agentActivity: { snapshot: () => activity, subscribe },
     directMessages: { people: async () => ({ people: [] }) },
     channelLifecycle: { snapshot: () => visibility, subscribe },
+    unread: {
+      snapshot: () => ({ manual: "none", observedCount: 0 }),
+      activity: () => ({ items: [] }),
+      subscribe: (_target: unknown, listener: () => void) =>
+        subscribe(listener),
+      subscribeActivity: (_id: string, listener: () => void) =>
+        subscribe(listener),
+    },
+    sidebarPreferences: { snapshot: () => ({ status: "ready" }), subscribe },
     typing: { snapshot: () => publicTyping, subscribe },
     thread: () => ({
       snapshot: () => thread,

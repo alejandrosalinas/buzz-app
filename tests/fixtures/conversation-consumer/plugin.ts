@@ -98,26 +98,38 @@ export function apply(ctx: Context) {
         { type: "button", onClick: () => rerender(renders + 1) },
         `Rerender consumer ${renders}`,
       ),
-      h(
-        "div",
-        { "aria-label": "Consumer messages" },
-        window.rows.map((row) =>
-          h(ui.ui.Message, {
-            key: row.id,
-            row,
-            profile: undefined,
-            media: session.media,
-            onOpenLink: () => false,
-            day: false,
-            retry: session.messages.retry,
-          }),
-        ),
-      ),
-      h(ui.ui.Composer, {
+      // The host's no-visit scope gives these rows its message actions.
+      h(ui.ui.Conversation, {
         session,
         scope: connection.scope ?? "disconnected",
         channelId,
         channelName,
+        children: (interactions) =>
+          h(
+            React.Fragment,
+            null,
+            h(
+              "div",
+              { "aria-label": "Consumer messages" },
+              window.rows.map((row) =>
+                h(ui.ui.Message, {
+                  key: row.id,
+                  row,
+                  profile: undefined,
+                  media: session.media,
+                  onOpenLink: interactions.onOpenLink,
+                  day: false,
+                  retry: session.messages.retry,
+                }),
+              ),
+            ),
+            h(ui.ui.Composer, {
+              session,
+              scope: connection.scope ?? "disconnected",
+              channelId,
+              channelName,
+            }),
+          ),
       }),
     );
   }

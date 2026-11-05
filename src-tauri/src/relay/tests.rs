@@ -1841,6 +1841,7 @@ fn media_proxy_only_reaches_relay_blobs() {
         format!("https://relay.test/media/{hash}"),
         format!("https://relay.test/media/{hash}.png"),
         format!("https://relay.test:8443/media/{hash}.thumb.jpg"),
+        format!("https://relay.test/media/{hash}.thumb.webp"),
     ] {
         assert!(media_url(&target).is_some(), "{target}");
     }
@@ -1853,6 +1854,7 @@ fn media_proxy_only_reaches_relay_blobs() {
         format!("https://relay.test/media/{hash}#"),
         format!("https://relay.test/media/{hash}.png#buzz-anim=https%3A%2F%2Frelay.test%2Fmedia%2F{hash}.png"),
         format!("https://relay.test/media/{hash}.tar.gz"),
+        format!("https://relay.test/media/{hash}.thumb.png"),
         format!("https://relay.test/upload/{hash}"),
         format!("https://relay.test/media/{}", "A".repeat(64)),
         format!("https://relay.test/media/{hash}/../../query"),

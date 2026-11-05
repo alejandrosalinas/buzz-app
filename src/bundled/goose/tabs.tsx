@@ -35,6 +35,7 @@ import { Input } from "../../shared/design-system/ui/Input";
 import { Combobox } from "../../shared/design-system/ui/Combobox";
 import { Select } from "../../shared/design-system/ui/Select";
 import { formatItemTimestamp } from "../../shared/datetime";
+import { useClockFormat } from "../../shared/clock-preference";
 import { InlineHeader } from "../../shared/design-system/ui/Header";
 import { SettingsGroup } from "../../shared/design-system/ui/SettingsGroup";
 import { GooseLogoIcon } from "../../shared/design-system/icons";
@@ -930,6 +931,7 @@ export function createTabs({
     close?: AgentViewProps<Config>["close"];
     openConversation?: AgentViewProps<Config>["openConversation"];
   }) {
+    useClockFormat();
     const live = useSyncExternalStore(
       (listener) => runtime.subscribe(listener),
       () => runtime.sessions(agent.key),

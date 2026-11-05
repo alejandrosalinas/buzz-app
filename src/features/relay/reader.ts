@@ -24,6 +24,9 @@ export type ReadOptions = {
   priority?: Priority;
   /** A write preflight must start after its intent, never join an older in-flight read. */
   fresh?: boolean;
+  /** Replaces the reader's deadline for new work; a joining read keeps the
+   * deadline of the read it joins. */
+  deadlineMs?: number;
 };
 /** Finite, verified event reads. No retained event cache or claim of live freshness. */
 export type RelayReader = {
@@ -62,6 +65,7 @@ type Job = {
   timer: ReturnType<typeof setTimeout>;
   running: boolean;
   began: number;
+  deadlineMs: number;
   dueAt: number;
   parentId?: string | undefined;
   owner?: string | undefined;
@@ -75,6 +79,11 @@ const cancelled = () => new DOMException("Relay read cancelled", "AbortError");
 
 /** The most serialized events one read may return. */
 export const RELAY_READ_BYTES = 8 * 1024 * 1024;
+/** For reads whose result can approach RELAY_READ_BYTES: the native
+ * transport's per-request ceiling (src-tauri/src/relay.rs). Ten seconds needs
+ * about 800 KB/s for such a result, so a slow relay link would fail the read
+ * on every retry rather than finish it. */
+export const LARGE_READ_DEADLINE_MS = 30_000;
 
 /** Session-owned scheduling and cancellation. Equal concurrent reads share work;
  * cancelling one consumer never cancels another. Completion releases all request state. */
@@ -211,10 +220,10 @@ export function createRelayReader(
         reason: error,
         cancellation,
         ms: elapsed,
-        deadlineMs: timeoutMs,
+        deadlineMs: job.deadlineMs,
         dueAt: job.dueAt,
         ...(cancellation?.initiator === "deadline"
-          ? { latenessMs: Math.max(0, elapsed - timeoutMs) }
+          ? { latenessMs: Math.max(0, elapsed - job.deadlineMs) }
           : {}),
       });
     markNetworkCancellation(
@@ -321,7 +330,12 @@ export function createRelayReader(
   ): Promise<AgentLibrary>;
   function read(
     filters: readonly ReadFilter[],
-    { signal, priority = "foreground", fresh = false }: ReadOptions = {},
+    {
+      signal,
+      priority = "foreground",
+      fresh = false,
+      deadlineMs = timeoutMs,
+    }: ReadOptions = {},
     snapshot = false,
     profiles?: Job["profiles"],
     library = false,
@@ -428,7 +442,8 @@ export function createRelayReader(
         priority,
         controller,
         began: performance.now(),
-        dueAt: Date.now() + timeoutMs,
+        deadlineMs,
+        dueAt: Date.now() + deadlineMs,
         parentId: parent?.operationId,
         owner:
           parent?.owner ??
@@ -446,7 +461,7 @@ export function createRelayReader(
               new ReadError("unavailable", "Relay read timed out"),
               { initiator: "deadline", owner: "reader" },
             ),
-          timeoutMs,
+          deadlineMs,
         ),
       };
       jobs.set(key, job);
@@ -458,7 +473,7 @@ export function createRelayReader(
           parentId: parent?.operationId,
           owner: job.owner,
           relay: transport.scope,
-          deadlineMs: timeoutMs,
+          deadlineMs: job.deadlineMs,
           dueAt: job.dueAt,
         });
     } else if (!job.running && priority === "foreground")
@@ -525,7 +540,7 @@ export function createRelayReader(
     readStateSnapshot: (options?: ReadOptions) =>
       read(
         [{ kinds: [30078], authors: [transport?.viewer ?? ""], limit: 500 }],
-        options,
+        { ...options, deadlineMs: LARGE_READ_DEADLINE_MS },
         true,
       ),
     ...(transport?.searchProfiles

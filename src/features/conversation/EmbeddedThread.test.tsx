@@ -160,6 +160,7 @@ function fixture(
   };
   const session = {
     viewer,
+    directMessages: { available: false },
     thread: () => ({
       snapshot: () => thread,
       subscribe: () => () => {},

@@ -315,7 +315,7 @@ export type AgentViewProps<Config = unknown> = {
  * starting config, from `defaults`, to fill in. The app owns its key, name and
  * picture around it. */
 export type AgentCreateProps<Config = unknown> = {
-  /** Existing cards supply their membership and scoped settings action. */
+  /** Existing agent when editing saved config or rendering a library card. */
   agent?: Agent<Config>;
   openSettings?: () => void;
   /** Model fields may use the compact card treatment in the library. */
@@ -335,9 +335,10 @@ export type AgentTab<Config = unknown> = Readonly<{
   splitSettings?: boolean;
   component: ComponentType<AgentViewProps<Config>>;
 }>;
-/** A tab a plugin adds to the settings of every agent running on this device,
- * whatever its type, or only those `when` accepts. It reads the agent and
- * saves through the plugin's own `agents`. */
+/** A tab a plugin adds to the settings of every agent shown on this device,
+ * whatever its type or place, or only those `when` accepts: a tab for local
+ * agents only says so in its `when`. It reads the agent and saves through the
+ * plugin's own `agents`. */
 export type AgentAddedTab = Readonly<{
   id: string;
   title: string;
@@ -799,6 +800,8 @@ export type AgentType<Config = unknown> = {
   ProfileActions?: ComponentType<{ children: ReactNode }>;
   /** Compact model field for creation and library cards; the type owns discovery and configuration. */
   CreateModel?: ComponentType<AgentCreateProps<Config>>;
+  /** Compact Thinking control for creation; the type owns its values and default representation. */
+  CreateThinking?: ComponentType<AgentCreateProps<Config>>;
   /** Device-wide readiness and management. Agents supplies the menu row,
    * provider identity, modal framing and focus behavior. */
   provider?: AgentProvider;
@@ -918,11 +921,43 @@ export type RemoteAgentType = Readonly<{
       signal: AbortSignal;
     }>,
   ): Promise<boolean>;
+  /** Reads and replaces the instructions its provider holds for the agent,
+   * so a plugin can edit them as a local agent's are. `set` rejects what the
+   * provider refuses, such as instructions too long. Without it, its
+   * instructions can only be edited in the provider's own settings. */
+  instructions?: Readonly<{
+    get(
+      input: Readonly<{
+        pubkey: string;
+        community: string;
+        signal: AbortSignal;
+      }>,
+    ): Promise<string>;
+    set(
+      input: Readonly<{
+        pubkey: string;
+        community: string;
+        instructions: string;
+        signal: AbortSignal;
+      }>,
+    ): Promise<void>;
+  }>;
   /** Stops it and deletes its key. An agent already gone counts as removed. */
   remove(
     input: Readonly<{ pubkey: string; community: string; signal: AbortSignal }>,
   ): Promise<void>;
 }>;
+/** A hosted agent's instructions, read and replaced through its provider. */
+export type HostedInstructions = Readonly<{
+  get(signal?: AbortSignal): Promise<string>;
+  /** Replaces them only while the provider still holds `base`, the copy the
+   * caller last read; otherwise it rejects and replaces nothing, so an edit
+   * saved elsewhere is never overwritten from an older copy. */
+  set(instructions: string, base: string, signal?: AbortSignal): Promise<void>;
+}>;
+/** A hosted agent's instructions changed since the caller read them. */
+export const HOSTED_INSTRUCTIONS_CHANGED =
+  "Its instructions were changed elsewhere. Check the latest, then try again.";
 export type RegisteredAgentType = Contribution<AgentType>;
 export type RetypePreview = Readonly<{
   /** Destination settings after applying the target type's migration policy. */
@@ -1266,6 +1301,10 @@ export type Agents = {
   leave(agent: AgentKey): Promise<void>;
   /** Whether the owner can stop a hosted agent's turns through its provider. */
   interruptible(agent: AgentKey): boolean;
+  /** A hosted agent's instructions, through its provider; undefined unless
+   * the agent is hosted here and its provider offers them. Each call stops
+   * with the agent's community connection. */
+  hostedInstructions(agent: AgentKey): HostedInstructions | undefined;
   /** Session controls are available only in the copy holding this agent. */
   sessionState(agent: AgentKey, place: SessionPlace): SessionState;
   session(
@@ -2754,6 +2793,8 @@ export class AgentsService extends Service implements Agents {
       relayOrigin(selected.selected) !== relayOrigin(agent.relay)
     )
       throw new Error("Select this agent's connected community first.");
+    const approvedViewer = selected.viewer;
+    const approvedCommunity = communityDestination(selected.selected).url;
     const controller = new AbortController();
     const lifetime = AbortSignal.any([signal, controller.signal]);
     const check = () => {
@@ -2809,13 +2850,91 @@ export class AgentsService extends Service implements Agents {
           });
           return (message) => {
             check();
-            return respondExternal(client, message, connected, scopes);
+            return respondExternal(
+              client,
+              message,
+              connected,
+              scopes,
+              async () => {
+                check();
+                if (!session.mainAgent)
+                  throw new Error(
+                    "Your saved Bestie is unavailable in this copy of Buzz.",
+                  );
+                let worker: string | null | undefined;
+                try {
+                  worker = await session.mainAgent.read();
+                } catch {
+                  check();
+                  throw new Error(
+                    "Your saved Bestie could not be read. Check the community connection and try again.",
+                  );
+                }
+                check();
+                if (!worker || !/^[0-9a-f]{64}$/.test(worker))
+                  throw new Error(
+                    "Choose and save a Bestie in Buzz, then try again.",
+                  );
+                const unavailable =
+                  "Your saved Bestie could not be checked. Check the community connection and try again.";
+                try {
+                  await session.agentChoices.refresh(true, { fresh: true });
+                } catch {
+                  check();
+                  throw new Error(unavailable);
+                }
+                check();
+                const choices = session.agentChoices.snapshot();
+                if (
+                  !choices.selectable.some((agent) => agent.pubkey === worker)
+                )
+                  throw new Error(
+                    choices.complete
+                      ? "Your saved Bestie is not available in this community. Choose another in Buzz, then try again."
+                      : unavailable,
+                  );
+                return worker;
+              },
+            );
           };
         },
         lifetime,
       );
       void server.closed.then(release);
-      return server;
+      const authorize = server.authorize;
+      return Object.freeze({
+        ...server,
+        ...(authorize
+          ? {
+              authorize: (
+                request: import("../host/service").McpAuthorization,
+              ) => {
+                check();
+                const { durable_client, ...nativeRequest } = request;
+                if (durable_client)
+                  nativeRequest.approval = {
+                    client: durable_client,
+                    viewer: approvedViewer,
+                    agent: key,
+                    community: approvedCommunity,
+                    scopes,
+                  };
+                if (
+                  request.approval &&
+                  (request.approval.viewer !== selected.viewer ||
+                    request.approval.agent !== key ||
+                    request.approval.community !== approvedCommunity ||
+                    JSON.stringify(request.approval.scopes) !==
+                      JSON.stringify(scopes))
+                )
+                  throw new Error(
+                    "Buzz approval does not match the selected identity and access.",
+                  );
+                return authorize(nativeRequest);
+              },
+            }
+          : {}),
+      });
     } catch (error) {
       release();
       throw error;
@@ -3801,6 +3920,35 @@ export class AgentsService extends Service implements Agents {
     );
     return !!this.types().find((entry) => entry.key === agent?.type)?.remote
       ?.interrupt;
+  }
+  hostedInstructions(pubkey: AgentKey): HostedInstructions | undefined {
+    const agent = this.state.agents.find(
+      (entry) => entry.pubkey === pubkey && entry.place === "hosted",
+    );
+    const provider = this.types().find((entry) => entry.key === agent?.type)
+      ?.remote?.instructions;
+    if (!provider) return undefined;
+    const call = (signal?: AbortSignal) => {
+      const { agent, binding } = this.hosted(pubkey);
+      return {
+        pubkey,
+        community: agent.relay,
+        signal: signal
+          ? AbortSignal.any([signal, binding.controller.signal])
+          : binding.controller.signal,
+      };
+    };
+    return {
+      get: (signal) => provider.get(call(signal)),
+      async set(instructions, base, signal) {
+        // No provider offers compare-and-swap, so read again just before
+        // replacing. An edit saved between this read and the write can still
+        // be lost; one saved before the owner acted cannot.
+        if ((await provider.get(call(signal))) !== base)
+          throw new Error(HOSTED_INSTRUCTIONS_CHANGED);
+        await provider.set({ ...call(signal), instructions });
+      },
+    };
   }
   /** Stops the hosted agent's turn in `place`; false when none was running. */
   async interrupt(

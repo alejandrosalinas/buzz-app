@@ -16,6 +16,7 @@ import {
   CopyIcon,
   DotsThreeIcon,
   LinkIcon,
+  ForwardIcon,
 } from "../../shared/design-system/icons";
 import { IconButton } from "../../shared/design-system/ui/IconButton";
 import {
@@ -48,6 +49,7 @@ type Props = {
   menuTriggerRef?: Ref<HTMLButtonElement>;
   onSendToChannel?: (() => void) | undefined;
   onReply?: (() => void) | undefined;
+  onForward?: (() => void) | undefined;
   replyDisabled?: boolean | undefined;
   link?: string | undefined;
   copyText(): string;
@@ -90,6 +92,7 @@ function MessageActionBarControls({
   children,
   onSendToChannel,
   onReply,
+  onForward,
   replyDisabled,
   link,
   copyText,
@@ -224,6 +227,21 @@ function MessageActionBarControls({
           </MenuIcon>
           Copy link
         </MenuItem>
+        {onForward && (
+          <MenuItem
+            disabled={!link}
+            title={!link ? "Message link unavailable" : undefined}
+            onClick={() => {
+              setHandingOffFocus(true);
+              afterClose.current = onForward;
+            }}
+          >
+            <MenuIcon>
+              <ForwardIcon />
+            </MenuIcon>
+            Forward message
+          </MenuItem>
+        )}
         {overflowItems}
       </AfterMenuClose.Provider>
     </MenuPopup>
@@ -325,6 +343,20 @@ function MessageActionBarControls({
                 if (link) void copy(() => link, "Link");
               }}
             />
+            {onForward && (
+              <IconButton
+                hint={link ? "familiar" : "helpful"}
+                aria-label="Forward message"
+                title={link ? "Forward message" : "Message link unavailable"}
+                size="sm"
+                disabled={!link}
+                icon={<ForwardIcon />}
+                onClick={(event) => {
+                  event.currentTarget.focus();
+                  onForward();
+                }}
+              />
+            )}
             <MenuRoot
               open={open}
               onOpenChange={(next, details) => {

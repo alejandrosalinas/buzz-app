@@ -1,4 +1,4 @@
-import { expect, test } from "@playwright/test";
+import { expect, test } from "../../browser/playwright-test.mjs";
 
 const viewer = "/tests/fixtures/design-system.html";
 
@@ -347,4 +347,61 @@ test("removing a focused recovery resumes remaining confirmation timers", async 
   await expect(page.locator("[data-sonner-toast]")).toHaveCount(1);
   await page.clock.runFor(6000);
   await expect(confirmation).toHaveCount(0);
+});
+
+// The notice surface and its nested controls need real hit testing.
+test("notice body opens its destination while nested actions keep their targets", async ({
+  page,
+}) => {
+  await page.goto(`${viewer}#/design/components/toast`);
+  const recovery = page.getByRole("dialog", {
+    name: "Plugin update available",
+    exact: true,
+  });
+  const destination = page.getByRole("dialog", {
+    name: "Example dialog",
+    exact: true,
+  });
+  for (const [mode, width] of [
+    ["light", 390],
+    ["dark", 1280],
+  ] as const) {
+    await page.setViewportSize({ width, height: 900 });
+    const theme = page.getByRole("button", { name: `Use ${mode} mode` });
+    if (await theme.count()) await theme.click();
+    await page
+      .getByRole("button", { name: "Show linked notice", exact: true })
+      .click();
+    await expect(recovery).toBeVisible();
+    const body = recovery.getByRole("button", { name: "Open related dialog" });
+    await body.hover();
+    await expect(body).toHaveCSS("cursor", "pointer");
+    const title = await recovery
+      .getByText("Plugin update available", { exact: true })
+      .boundingBox();
+    if (!title) throw new Error("Missing notice title");
+    await page.mouse.click(
+      title.x + title.width / 2,
+      title.y + title.height / 2,
+    );
+    await expect(destination).toBeVisible();
+    await destination
+      .getByRole("button", { name: "Close", exact: true })
+      .click();
+    await page
+      .getByRole("button", { name: "Show linked notice", exact: true })
+      .click();
+    await recovery.getByRole("button", { name: "Update", exact: true }).click();
+    await expect(recovery).toHaveCount(0);
+    await expect(destination).toHaveCount(0);
+    await page
+      .getByRole("button", { name: "Show linked notice", exact: true })
+      .click();
+    await body.focus();
+    await page.keyboard.press("Enter");
+    await expect(destination).toBeVisible();
+    await destination
+      .getByRole("button", { name: "Close", exact: true })
+      .click();
+  }
 });

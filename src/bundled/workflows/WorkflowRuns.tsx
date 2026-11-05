@@ -9,6 +9,7 @@ import {
   formatFullTimestamp,
   formatItemTimestamp,
 } from "../../shared/datetime";
+import { useClockFormat } from "../../shared/clock-preference";
 import { Button } from "../../shared/design-system/ui/Button";
 import { useWorkflowView } from "./useWorkflowView";
 
@@ -52,6 +53,7 @@ function RunPage({
   onPage: (cursor: WorkflowRunCursor | undefined) => void;
   heading: boolean;
 }) {
+  useClockFormat();
   const { snapshot, refresh } = useWorkflowView(
     useCallback(
       () => capability.runs(workflow, cursor),

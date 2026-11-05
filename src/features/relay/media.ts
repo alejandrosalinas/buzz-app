@@ -79,6 +79,59 @@ export function rememberOpeningFrame(
   }
 }
 
+/** Decoded attachment originals detached by virtualized rows, so a remount
+ * re-adopts the painted element. A new element would hide until it decodes,
+ * and WebKit refetches custom-scheme images for every element. Only the
+ * retaining owner (session) can claim one. Bounded by decoded size; disposing
+ * session media forgets them and refuses retention that began before. */
+const DECODED_IMAGE_BUDGET = 512 * 1024 * 1024;
+// 16 MP; a larger original would push out many smaller ones.
+const DECODED_IMAGE_LIMIT = 64 * 1024 * 1024;
+const decodedImages = new Map<
+  string,
+  { owner: WeakRef<object>; image: HTMLImageElement; bytes: number }
+>();
+let decodedImageBytes = 0;
+let decodedImageScope = 0;
+export function decodedImageCapture(): number {
+  return decodedImageScope;
+}
+export function hasDecodedImage(owner: object, source: string): boolean {
+  return decodedImages.get(source)?.owner.deref() === owner;
+}
+/** Claims the retained element; a concurrent mount of the source gets none. */
+export function takeDecodedImage(
+  owner: object,
+  source: string,
+): HTMLImageElement | undefined {
+  if (!hasDecodedImage(owner, source)) return undefined;
+  return forgetDecodedImage(source);
+}
+function forgetDecodedImage(source: string) {
+  const entry = decodedImages.get(source);
+  if (!entry) return undefined;
+  decodedImages.delete(source);
+  decodedImageBytes -= entry.bytes;
+  return entry.image;
+}
+export function retainDecodedImage(
+  owner: object,
+  source: string,
+  image: HTMLImageElement,
+  capture: number,
+) {
+  const bytes = image.naturalWidth * image.naturalHeight * 4;
+  if (capture !== decodedImageScope || !bytes || bytes > DECODED_IMAGE_LIMIT)
+    return;
+  forgetDecodedImage(source);
+  decodedImages.set(source, { owner: new WeakRef(owner), image, bytes });
+  decodedImageBytes += bytes;
+  for (const oldest of decodedImages.keys()) {
+    if (decodedImageBytes <= DECODED_IMAGE_BUDGET) break;
+    forgetDecodedImage(oldest);
+  }
+}
+
 /** Avatar request warming, the react-native-web Image model: fetch and
  * decode() into detached images, then retain nothing. The browser's own HTTP
  * and decoded-image caches serve the real <img> mounts. Never warms
@@ -194,11 +247,15 @@ export function createMediaPreparation() {
     }),
     dispose() {
       disposed = true;
-      // Frames are module-wide, so disposing any session's media (including a
-      // handed-off or stale successor) forgets them all. That only costs reuse.
+      // Frames and decoded images are module-wide, so disposing any session's
+      // media (including a handed-off or stale successor) forgets them all.
+      // That only costs reuse.
       openingFrames.clear();
       openingFrameBytes = 0;
       openingFrameScope++;
+      decodedImages.clear();
+      decodedImageBytes = 0;
+      decodedImageScope++;
       queue = [];
       for (const image of active) {
         image.src = "";

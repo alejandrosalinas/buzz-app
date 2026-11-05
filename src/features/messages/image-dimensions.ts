@@ -3,7 +3,7 @@ import type { RelaySession } from "../relay/session";
 
 type Dimensions = NonNullable<Attachment["dimensions"]>;
 // Like timeline geometry, decoded sizes outlive virtualized rows, not sessions.
-// Retain only numbers, never pixels or readiness; each new image still decodes.
+// Retain only numbers; relay/media owns the bounded pool of decoded pixels.
 const sessions = new WeakMap<RelaySession, Map<string, Dimensions>>();
 const limit = 512;
 

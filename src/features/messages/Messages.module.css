@@ -563,6 +563,11 @@ html[data-keyboard-navigation] .authorLink:focus-visible {
 .attachmentImage video {
   object-fit: contain;
 }
+/* The scale hides the blur's faded edge. */
+.attachmentImage img[data-thumbnail] {
+  filter: blur(12px);
+  transform: scale(1.1);
+}
 .mediaGridBadge {
   position: absolute;
   inset-inline-start: var(--space-2);

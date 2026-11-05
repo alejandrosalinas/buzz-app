@@ -632,6 +632,142 @@ it.each([
   },
 );
 
+it("returns the list to its last offset in the same session", async () => {
+  const h = fixture();
+  const view = render(h.view);
+  await waitFor(() => expect(rows()).toHaveLength(2));
+  expect(scroller()?.scrollTop).toBe(0);
+  scrollTo(120);
+  view.unmount();
+  render(h.view);
+  await waitFor(() => expect(rows()).toHaveLength(2));
+  expect(scroller()?.scrollTop).toBe(120);
+  // Drafts replaces the list; returning keeps the offset scrolled last.
+  scrollTo(40);
+  await chooseFilter("Drafts");
+  await chooseFilter("All activity");
+  await waitFor(() => expect(rows()).toHaveLength(2));
+  expect(scroller()?.scrollTop).toBe(40);
+});
+
+it("does not override a scroll made before the list's rows arrive", async () => {
+  const h = fixture();
+  const view = render(h.view);
+  await waitFor(() => expect(rows()).toHaveLength(2));
+  scrollTo(120);
+  await chooseFilter("Unread only", "Attention");
+  view.unmount();
+  await act(async () => {
+    await h.owner.session.unread.markChannelRead("room");
+  });
+  render(h.view);
+  await screen.findByText("No unread activity in this view");
+  // Compositor scrolling can move the list before its scroll event arrives.
+  const list = scroller();
+  if (!list) throw new Error("Missing Inbox scroller");
+  list.scrollTop = 40;
+  const mention = message(
+    h.alice,
+    "room",
+    "Fresh mention",
+    Math.floor(Date.now() / 1000) + 5,
+    [["p", h.viewer.pubkey]],
+  );
+  h.addEvent(mention);
+  act(() => h.emit([mention]));
+  await waitFor(() => expect(rows()).toHaveLength(1));
+  expect(scroller()?.scrollTop).toBe(40);
+});
+
+it("keeps a saved offset off a list the user refilters", async () => {
+  const h = fixture();
+  const view = render(h.view);
+  await waitFor(() => expect(rows()).toHaveLength(2));
+  scrollTo(120);
+  await chooseFilter("Unread only", "Attention");
+  view.unmount();
+  await act(async () => {
+    await h.owner.session.unread.markChannelRead("room");
+  });
+  const returned = render(h.view);
+  await screen.findByText("No unread activity in this view");
+  // Rows the user's filter change shows are not the list the offset was for.
+  await chooseFilter("All", "Attention");
+  await waitFor(() => expect(rows()).toHaveLength(2));
+  expect(scroller()?.scrollTop).toBe(0);
+  // The next return still restores the offset scrolled last.
+  scrollTo(40);
+  returned.unmount();
+  render(h.view);
+  await waitFor(() => expect(rows()).toHaveLength(2));
+  expect(scroller()?.scrollTop).toBe(40);
+});
+
+it("neither measures nor places the list until a tab moved to the main pane uncovers it", async () => {
+  const h = fixture();
+  const view = render(h.view);
+  await waitFor(() => expect(rows()).toHaveLength(2));
+  const list = scroller();
+  if (!list) throw new Error("Missing Inbox scroller");
+  scrollTo(120);
+  const [first] = rows();
+  if (!first) throw new Error("Missing fixture row");
+  fireEvent.click(within(first).getByRole("button", { name: /^Open / }));
+  await findReader();
+  const [label] = sideTabs();
+  if (!label) throw new Error("Missing side tab");
+  act(() => {
+    fireEvent.keyDown(screen.getByRole("tab", { name: label }), {
+      key: "ArrowLeft",
+      altKey: true,
+      shiftKey: true,
+    });
+  });
+  expect(tabs("Inbox tabs")).toHaveLength(2);
+  expect(list.closest("[inert]")).not.toBeNull();
+  // The covered list keeps its selected row, which an update would measure.
+  expect(list.querySelector("li[data-selected]")).not.toBeNull();
+  const measure = vi.spyOn(Element.prototype, "getBoundingClientRect");
+  try {
+    const mention = message(
+      h.alice,
+      "room",
+      "Fresh mention",
+      Math.floor(Date.now() / 1000) + 5,
+      [["p", h.viewer.pubkey]],
+    );
+    h.addEvent(mention);
+    act(() => h.emit([mention]));
+    await waitFor(() => expect(list).toHaveTextContent("Fresh mention"));
+    // Rows arriving above a scrolled, covered list can anchor it.
+    list.scrollTop = 160;
+    fireEvent.scroll(list);
+    expect(
+      measure.mock.contexts.filter(
+        (element) => element instanceof Node && list.contains(element),
+      ),
+    ).toEqual([]);
+  } finally {
+    measure.mockRestore();
+  }
+  // Returning to Inbox under the moved tab leaves the list where it is
+  // until that tab is no longer selected.
+  view.unmount();
+  render(h.view);
+  const returned = await screen.findByRole("list", {
+    name: "Inbox conversations",
+    hidden: true,
+  });
+  await waitFor(() => expect(returned).toHaveTextContent("Fresh mention"));
+  const covered = returned.parentElement;
+  if (!covered) throw new Error("Missing Inbox scroller");
+  expect(covered.closest("[inert]")).not.toBeNull();
+  expect(covered.scrollTop).toBe(0);
+  fireEvent.click(screen.getByRole("tab", { name: "Inbox" }));
+  expect(covered.closest("[inert]")).toBeNull();
+  expect(covered.scrollTop).toBe(160);
+});
+
 it("offers no Archive shortcut while Drafts is shown", async () => {
   const h = fixture();
   render(h.view);
@@ -2460,6 +2596,15 @@ const rows = () =>
   within(
     screen.getByRole("list", { name: "Inbox conversations" }),
   ).queryAllByRole("listitem");
+/** The element that scrolls the Inbox list. */
+const scroller = () =>
+  screen.getByRole("list", { name: "Inbox conversations" }).parentElement;
+const scrollTo = (top: number) => {
+  const list = scroller();
+  if (!list) throw new Error("Missing Inbox scroller");
+  list.scrollTop = top;
+  fireEvent.scroll(list);
+};
 /** The conversation Inbox opened in a tab beside its list. */
 const reader = () => screen.getByRole("region", { name: /^Conversation in / });
 const queryReader = () =>

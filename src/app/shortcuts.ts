@@ -198,6 +198,11 @@ export function registerAppShortcuts(
       ),
     );
   }
+  // macOS Buzz → Settings… runs the Open Settings shortcut, with its own
+  // eligibility.
+  const settings = () => shortcuts.runHost("settings");
+  window.addEventListener("buzz:open-settings", settings);
+  remove.push(() => window.removeEventListener("buzz:open-settings", settings));
   return () => {
     for (const dispose of remove) dispose();
   };

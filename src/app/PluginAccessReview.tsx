@@ -118,7 +118,7 @@ function hostDeclarations(
     ),
     ...(manifest.host?.processes ?? []).map((process) => ({
       key: `process:${process.id}`,
-      signature: `Process ${process.id}: ${JSON.stringify([process.program, ...(process.args ?? [])])}${process.bundled ? " (bundled with Buzz)" : ""} and any further arguments · stdin, full user access`,
+      signature: `Process ${process.id}: ${JSON.stringify([process.program, ...(process.args ?? [])])}${process.bundled ? " (bundled with Buzz)" : ""} · artifact: ${JSON.stringify(process.artifact ?? null)} and any further arguments · stdin, full user access`,
       title: `Process ${process.id}:`,
       label: `Start ${process.program}`,
       hint: "Can start a background process with additional arguments, using your account’s full access.",
@@ -127,6 +127,22 @@ function hostDeclarations(
         <>
           <ProgramDetails program={process.program} args={process.args ?? []} />
           {process.bundled && <p className="mb-0 mt-2">Bundled with Buzz.</p>}
+          {process.artifact && (
+            <div className="mt-2 break-all">
+              <p className="m-0">
+                Executable artifact: <code>{process.artifact.path}</code>
+              </p>
+              <p className="m-0">
+                SHA-256: <code>{process.artifact.sha256}</code>
+              </p>
+              {process.artifact.siblings?.map((sibling) => (
+                <p className="m-0" key={sibling.name}>
+                  Sibling <code>{sibling.name}</code>:{" "}
+                  <code>{sibling.sha256}</code>
+                </p>
+              ))}
+            </div>
+          )}
           <p className="mb-0 mt-2">
             Allows further arguments and standard input, with your account’s
             full access.
@@ -195,6 +211,18 @@ function hostDeclarations(
         ]
       : []),
   ];
+}
+
+export function pluginAccessIncreases(
+  manifest: PluginManifest,
+  previous: PluginManifest,
+) {
+  const granted = new Set(
+    hostDeclarations(previous, []).map((item) => item.signature),
+  );
+  return hostDeclarations(manifest, []).some(
+    (item) => !granted.has(item.signature),
+  );
 }
 
 export function PluginAccessReview({

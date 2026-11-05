@@ -9,6 +9,7 @@ import { type ReactNode, useEffect, useRef, useState } from "react";
 import Markdown, { type Components } from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { formatFullTimestamp } from "../../shared/datetime";
+import { useClockFormat } from "../../shared/clock-preference";
 import { relativeTimestamp } from "../../shared/relative-timestamp";
 import { IconButton } from "../../shared/design-system/ui/IconButton";
 import type { CommunityReader } from "../communities/service";
@@ -302,6 +303,7 @@ function MemorySection({
 }
 
 function MemoryAccordion({ entry }: { entry: MemoryEntry }) {
+  useClockFormat();
   return (
     <ContextMenuRoot>
       <ContextMenuTrigger render={<div />}>

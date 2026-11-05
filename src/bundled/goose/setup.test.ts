@@ -800,6 +800,18 @@ describe("GooseSetup", () => {
     expect(read?.killed).toBe(true);
   });
 
+  it("reads thinking levels goose lists inside an option group", async () => {
+    const { setup: goose } = setup({
+      thinking: {
+        "": { current: "high", levels: ["low", "high"], grouped: true },
+      },
+    });
+    expect(await goose.efforts({ provider: "anthropic", model: " " })).toEqual({
+      current: "high",
+      levels: ["low", "high"],
+    });
+  });
+
   it("offers each model's thinking levels, read in one goose, on the agent's level", async () => {
     const { fake, setup: goose } = setup({
       saved: new Map([["anthropic", new Set(["ANTHROPIC_API_KEY"])]]),

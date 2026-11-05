@@ -6,13 +6,25 @@ import {
   fireEvent,
   render,
   screen,
+  waitFor,
   within,
 } from "@testing-library/react";
-import { afterEach, expect, it } from "vitest";
+import { afterEach, expect, it, vi } from "vitest";
 import { createRelaySession } from "../relay/session";
 import { flush, keypair, scriptedTransport, signed } from "../relay/testing";
 import type { UserStatus } from "../relay/user-status";
+import { HELPFUL_HINT_REST_MS } from "../../shared/design-system/ui/hoverIntent";
 import { StatusDisplay } from "./StatusDisplay";
+
+// The caption ticker measures its slot.
+vi.stubGlobal(
+  "ResizeObserver",
+  class {
+    observe() {}
+    unobserve() {}
+    disconnect() {}
+  },
+);
 
 const viewer = keypair(),
   other = keypair(),
@@ -31,7 +43,7 @@ function harness(status: UserStatus) {
   });
   owners.push(owner);
   const { session } = owner;
-  render(
+  const view = (status: UserStatus) => (
     <>
       <section aria-label="Full">
         <StatusDisplay status={status} session={session} />
@@ -39,12 +51,18 @@ function harness(status: UserStatus) {
       <section aria-label="Compact">
         <StatusDisplay compact status={status} session={session} />
       </section>
-    </>,
+      <section aria-label="Caption">
+        <StatusDisplay size="caption" status={status} session={session} />
+      </section>
+    </>
   );
+  const { rerender } = render(view(status));
   const catalogRead = () =>
     wire.pending.find((entry) => entry.filters[0]?.kinds?.includes(30030));
   return {
+    update: (next: UserStatus) => rerender(view(next)),
     full: within(screen.getByRole("region", { name: "Full" })),
+    caption: within(screen.getByRole("region", { name: "Caption" })),
     compact: screen.getByRole("img", { name: `${status.emoji} Buzzin'` }),
     catalogRead,
     async respondCatalog(tags: string[][]) {
@@ -74,6 +92,14 @@ async function tooltip(trigger: HTMLElement) {
   act(() => trigger.focus());
   return screen.findByRole("tooltip");
 }
+/** A full status's emoji is not focusable; its name hint opens on hover alone. */
+async function hint(emoji: HTMLElement) {
+  fireEvent.mouseEnter(emoji);
+  fireEvent.mouseMove(emoji);
+  const tip = await screen.findByRole("tooltip");
+  fireEvent.mouseLeave(emoji);
+  return tip;
+}
 
 it("renders a status's own image in every mode without reading the catalog", async () => {
   const h = harness(status(":bee:", beeUrl));
@@ -84,9 +110,13 @@ it("renders a status's own image in every mode without reading the catalog", asy
   const decorative = h.compact.querySelector("img");
   expect(decorative).toHaveAttribute("src", beeUrl);
   expect(decorative).toHaveAttribute("alt", "");
+  expect(
+    await hint(h.full.getByRole("img", { name: ":bee:" })),
+  ).toHaveTextContent(/^:bee:$/);
+  await waitFor(() => expect(screen.queryByRole("tooltip")).toBeNull());
   const tip = await tooltip(h.compact);
   expect(tip.querySelector("img")).toHaveAttribute("src", beeUrl);
-  expect(tip).toHaveTextContent("Buzzin'");
+  expect(tip).toHaveTextContent(/^Buzzin'$/);
   expect(h.catalogRead()).toBeUndefined();
   // A failed image falls back to the catalog, then degrades like an unresolved code.
   if (decorative) fireEvent.error(decorative);
@@ -96,6 +126,62 @@ it("renders a status's own image in every mode without reading the catalog", asy
   expect(fallback).toHaveAttribute("src", catalogUrl);
   if (fallback) fireEvent.error(fallback);
   expect(h.compact).toHaveTextContent(/^💬$/);
+});
+
+it("names a Unicode status emoji on hover, as reactions do", async () => {
+  const h = harness(status("🏠"));
+  expect(await hint(h.full.getByText("🏠"))).toHaveTextContent(/^:house:$/);
+  await waitFor(() => expect(screen.queryByRole("tooltip")).toBeNull());
+  // Over the caption ticker's emoji, the name replaces its full-status title.
+  expect(h.caption.getByText("🏠")).toHaveAttribute("title", "");
+  // The compact slot's hint already shows the whole status, so it stays as is.
+  expect(await tooltip(h.compact)).toHaveTextContent(/^🏠Buzzin'$/);
+  expect(h.compact).toHaveAccessibleName("🏠 Buzzin'");
+  // A status that changes between a glyph and an image keeps its hint.
+  act(() => h.compact.blur());
+  await waitFor(() => expect(screen.queryByRole("tooltip")).toBeNull());
+  h.update(status(":bee:", beeUrl));
+  expect(
+    await hint(h.full.getByRole("img", { name: ":bee:" })),
+  ).toHaveTextContent(/^:bee:$/);
+});
+
+it("gives free text in the emoji slot no name, keeping the ticker's title", async () => {
+  const h = harness(status("🏠"));
+  // Completion barrier: the hint's name table has loaded.
+  await act(() => import("../messages/reaction-name"));
+  const rest = () =>
+    act(() => vi.advanceTimersByTimeAsync(HELPFUL_HINT_REST_MS));
+  const hover = async (emoji: HTMLElement) => {
+    fireEvent.mouseEnter(emoji);
+    fireEvent.mouseMove(emoji);
+    await rest();
+  };
+  vi.useFakeTimers();
+  try {
+    // Control: past the rest delay, the same hover names an emoji.
+    const house = h.full.getByText("🏠");
+    await hover(house);
+    expect(screen.getByRole("tooltip")).toHaveTextContent(/^:house:$/);
+    fireEvent.mouseLeave(house);
+    await rest();
+    expect(screen.queryByRole("tooltip")).toBeNull();
+    h.update(status("🐝 working from the office"));
+    await hover(h.full.getByText("🐝 working from the office"));
+    expect(screen.queryByRole("tooltip")).toBeNull();
+  } finally {
+    vi.useRealTimers();
+  }
+  // With no name to show, the ticker's full-status title still covers the text.
+  const caption = h.caption.getByText("🐝 working from the office");
+  expect(caption).not.toHaveAttribute("title");
+  expect(caption.closest("[title]")).toHaveAttribute(
+    "title",
+    "🐝 working from the office Buzzin'",
+  );
+  expect(await tooltip(h.compact)).toHaveTextContent(
+    /^🐝 working from the officeBuzzin'$/,
+  );
 });
 
 it("resolves from the catalog when a status's own URL is not loadable", async () => {

@@ -11,6 +11,7 @@ import { dirname, join } from "node:path";
 import { AgentTabs } from "../agents/AgentTabs";
 import type {
   Agents,
+  NewAgent,
   RegisteredAgentType,
 } from "../../features/agents/service";
 // @vitest-environment jsdom
@@ -24,7 +25,7 @@ import {
   waitFor,
   within,
 } from "@testing-library/react";
-import { StrictMode } from "react";
+import { StrictMode, useState } from "react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import type { Agent, AgentType } from "../../features/agents/service";
@@ -37,6 +38,7 @@ import type { HostProcessOptions } from "../../features/host/service";
 import type { ChannelSummary } from "../../features/relay/contracts";
 import type { RelayData } from "../../features/relay/service";
 import { ClaudeLogoIcon } from "../../shared/design-system/icons";
+import { AgentCreateDialog } from "../agents/AgentCreateDialog";
 import { manifestProcesses } from "./claude-testing";
 import { apply, inject } from "./index";
 import { type Config, DEFAULT_CONFIG } from "./runtime";
@@ -44,7 +46,15 @@ import { ClaudeSetup } from "./setup";
 import { ClaudeDefaults } from "./defaults";
 
 const desktop = vi.hoisted(() => ({ tauri: true }));
-vi.mock("@tauri-apps/api/core", () => ({ isTauri: () => desktop.tauri }));
+vi.mock("@tauri-apps/api/core", () => ({
+  isTauri: () => desktop.tauri,
+  invoke: async () => null,
+}));
+const dialogMotion = vi.hoisted(() => ({ reduced: false }));
+vi.mock("motion/react", async (actual) => ({
+  ...(await actual<typeof import("motion/react")>()),
+  useReducedMotion: () => dialogMotion.reduced,
+}));
 
 beforeEach(() => {
   desktop.tauri = true;
@@ -58,6 +68,11 @@ beforeEach(() => {
       disconnect() {}
     },
   );
+  vi.stubGlobal("matchMedia", () => ({
+    matches: false,
+    addEventListener() {},
+    removeEventListener() {},
+  }));
 });
 const homes: string[] = [];
 afterEach(() => {
@@ -143,7 +158,7 @@ function applied({
   latest?: string;
   files?: Record<string, string>;
   /** Whether Claude lists its models when asked. */
-  catalog?: { listed: boolean; ready?: Promise<void> };
+  catalog?: { listed: boolean; ready?: Promise<void>; models?: typeof CATALOG };
 } = {}) {
   let type: AgentType<Config> | undefined;
   const home = mkdtempSync(join(tmpdir(), "claude-tabs-"));
@@ -227,7 +242,7 @@ function applied({
                 subtype: "success",
                 request_id: message.request_id,
                 response: {
-                  models: catalog.listed ? CATALOG : [],
+                  models: catalog.listed ? (catalog.models ?? CATALOG) : [],
                 },
               },
             })}\n`,
@@ -1015,6 +1030,36 @@ it("keeps a saved thinking level changeable without Claude's model list", async 
   expect(save).toHaveBeenCalledWith(DEFAULT_CONFIG);
 });
 
+it("disables create-time Thinking when Claude model discovery fails", async () => {
+  const { type, spawn } = installed();
+  const Model = type.CreateModel;
+  const Thinking = type.CreateThinking;
+  if (!Model || !Thinking) throw new Error("Missing create controls");
+  const original = spawn.getMockImplementation();
+  if (!original) throw new Error("Missing process fixture");
+  spawn.mockImplementation(async (id, options = {}) => {
+    if (options.args?.includes("--input-format"))
+      throw new Error("model catalog unavailable");
+    return original(id, options);
+  });
+  const config = { ...DEFAULT_CONFIG, model: "sonnet", effort: "high" };
+  const onChange = vi.fn();
+  render(
+    <>
+      <Model config={config} onChange={onChange} disabled={false} />
+      <Thinking config={config} onChange={onChange} disabled={false} />
+    </>,
+  );
+  const thinking = await screen.findByRole("combobox", { name: "Thinking" });
+  expect(await screen.findByRole("alert")).toHaveTextContent(
+    "model catalog unavailable",
+  );
+  expect(thinking).toBeDisabled();
+  expect(thinking).toHaveTextContent("High");
+  expect(thinking).not.toHaveTextContent("High (unavailable)");
+  expect(onChange).not.toHaveBeenCalled();
+});
+
 it("keeps Save focused while saving, and lets a failed save be retried", async () => {
   const Settings = tab(installed().type, 0);
   let fail: (error: Error) => void = () => undefined;
@@ -1082,6 +1127,333 @@ it("starts a new agent with finite model choices and preserves its other setting
     ...config,
     instructions: "Plan.",
   });
+});
+
+it("uses Claude's effort catalog at creation and reopens the saved choice", async () => {
+  let releaseCatalog!: () => void;
+  const catalogReady = new Promise<void>((resolve) => {
+    releaseCatalog = resolve;
+  });
+  const loads = vi.spyOn(ClaudeSetup.prototype, "loadModels");
+  const { type } = installed({
+    catalog: { listed: true, ready: catalogReady },
+  });
+  const Thinking = type.CreateThinking;
+  const Model = type.CreateModel;
+  const Settings = tab(type, 0);
+  if (!Thinking || !Model) throw new Error("Missing create controls");
+  const config = { ...DEFAULT_CONFIG, model: "sonnet" };
+  const onChange = vi.fn();
+  const view = render(
+    <>
+      <Model config={config} onChange={onChange} disabled={false} />
+      <Thinking config={config} onChange={onChange} disabled={false} />
+    </>,
+  );
+  const control = await screen.findByRole("combobox", { name: "Thinking" });
+  try {
+    await waitFor(() => expect(loads).toHaveBeenCalled());
+    const model = await screen.findByRole("combobox", { name: "Model" });
+    await waitFor(() => expect(model).toBeDisabled());
+    expect(control).toBeDisabled();
+  } finally {
+    releaseCatalog();
+  }
+  await waitFor(() => expect(control).toBeEnabled());
+  expect(control).toHaveTextContent("Automatic · Default");
+
+  const user = userEvent.setup();
+  await user.click(control);
+  expect(
+    (await screen.findAllByRole("option")).map((option) => option.textContent),
+  ).toEqual(["Automatic · Default", "Low", "Medium", "High", "Extra high"]);
+  await user.click(screen.getByRole("option", { name: "Extra high" }));
+  expect(onChange).toHaveBeenLastCalledWith({ ...config, effort: "xhigh" });
+  view.unmount();
+
+  render(
+    <Settings
+      agent={agent({ ...config, effort: "xhigh" })}
+      save={vi.fn(async () => undefined)}
+    />,
+  );
+  expect(screen.getByRole("combobox", { name: "Thinking" })).toHaveTextContent(
+    "Extra high",
+  );
+});
+
+it.each(["unrelated", "thinking", "model"])(
+  "preserves saved Claude Thinking through an update unless explicitly edited (%s)",
+  async (edit) => {
+    const { type } = installed({
+      catalog: {
+        listed: true,
+        models: CATALOG.map((model) => ({
+          ...model,
+          supportsEffort: true,
+          supportedEffortLevels: ["low"],
+        })),
+      },
+    });
+    const existing = agent({
+      ...DEFAULT_CONFIG,
+      model: "sonnet",
+      effort: "high",
+    });
+    const onSave = vi.fn(async (_input: NewAgent) => undefined);
+    render(
+      <AgentCreateDialog
+        agents={{} as Agents}
+        types={[{ ...type, key: existing.type } as RegisteredAgentType]}
+        onCreated={vi.fn()}
+        onClose={vi.fn()}
+        update={{
+          agent: existing,
+          onSave,
+          request: {
+            id: "update",
+            requester: "requester",
+            requesterName: "Parent",
+            owner: existing.owner,
+            community: "here",
+            agent: existing.pubkey,
+            agentName: existing.name,
+            agentType: existing.type,
+            name: "Renamed",
+            instructions: "Review PRs.",
+          },
+        }}
+      />,
+    );
+    const user = userEvent.setup();
+    const thinking = await screen.findByRole("combobox", { name: "Thinking" });
+    await waitFor(() => expect(thinking).toBeEnabled());
+    if (edit === "thinking") {
+      await user.click(thinking);
+      await user.click(await screen.findByRole("option", { name: "Low" }));
+    } else if (edit === "model") {
+      await user.click(screen.getByRole("combobox", { name: "Model" }));
+      await user.click(
+        await screen.findByRole("option", { name: "Haiku 4.5" }),
+      );
+    }
+    await user.click(screen.getByRole("button", { name: "Save changes" }));
+    await waitFor(() =>
+      expect(onSave).toHaveBeenCalledWith(
+        expect.objectContaining({
+          name: "Renamed",
+          config: {
+            ...existing.config,
+            instructions: "Review PRs.",
+            model: edit === "model" ? "haiku" : "sonnet",
+            effort:
+              edit === "thinking" ? "low" : edit === "model" ? "" : "high",
+          },
+        }),
+      ),
+    );
+  },
+);
+
+it("passes the real Claude Thinking choice through Create agent", async () => {
+  const { type } = installed();
+  if (!type) throw new Error("no type registered");
+  const registeredType = {
+    ...type,
+    key: "buzz.claude-code/claude-code",
+    pluginId: "buzz.claude-code",
+    revision: "r1",
+  } as unknown as RegisteredAgentType;
+  let saved: Agent<Config> | undefined;
+  const create = vi.fn(async (input: NewAgent) => {
+    saved = {
+      ...agent({ ...DEFAULT_CONFIG, ...(input.config as Config) }),
+      name: input.name,
+      type: input.type,
+    };
+    return saved;
+  });
+  const agents = { create } as unknown as Agents;
+  const view = render(
+    <AgentCreateDialog
+      agents={agents}
+      types={[registeredType]}
+      onCreated={vi.fn()}
+      onClose={vi.fn()}
+    />,
+  );
+  const dialog = screen.getByRole("dialog", { name: "Create agent" });
+  const user = userEvent.setup();
+  await user.type(within(dialog).getByLabelText("Name"), "Nova");
+
+  const model = within(dialog).getByRole("combobox", { name: "Model" });
+  await waitFor(() => expect(model).toBeEnabled());
+  await user.click(model);
+  await user.click(await screen.findByRole("option", { name: "Sonnet 5.5" }));
+
+  const thinking = within(dialog).getByRole("combobox", { name: "Thinking" });
+  await waitFor(() => expect(thinking).toBeEnabled());
+  await user.click(thinking);
+  await user.click(await screen.findByRole("option", { name: "High" }));
+  await user.click(
+    within(dialog).getByRole("button", { name: "Create agent" }),
+  );
+
+  await waitFor(() => expect(create).toHaveBeenCalledOnce());
+  expect(create).toHaveBeenCalledWith(
+    expect.objectContaining({
+      type: "buzz.claude-code/claude-code",
+      config: expect.objectContaining({ model: "sonnet", effort: "high" }),
+    }),
+  );
+  expect(saved?.config).toMatchObject({ model: "sonnet", effort: "high" });
+
+  view.unmount();
+  const Settings = tab(type, 0);
+  if (!saved) throw new Error("agent was not saved");
+  render(<Settings agent={saved} save={vi.fn(async () => undefined)} />);
+  expect(screen.getByRole("combobox", { name: "Thinking" })).toHaveTextContent(
+    "High",
+  );
+});
+
+it("returns Claude create-time effort to Default when the inherited model changes", async () => {
+  const { type } = installed();
+  function Controls() {
+    const DefaultControl = type.provider?.DefaultControl;
+    const Thinking = type.CreateThinking;
+    if (!DefaultControl || !Thinking)
+      throw new Error("Missing provider or create-time Thinking control");
+    const [config, setConfig] = useState({ ...DEFAULT_CONFIG });
+    return (
+      <>
+        <DefaultControl onConfigure={vi.fn()} />
+        <Thinking config={config} onChange={setConfig} disabled={false} />
+        <output data-testid="create-config">{JSON.stringify(config)}</output>
+      </>
+    );
+  }
+  render(<Controls />);
+  const user = userEvent.setup();
+  const providerModel = await screen.findByRole("button", {
+    name: /^Claude default model:/,
+  });
+  await waitFor(() => {
+    expect(providerModel).toHaveTextContent("Opus 5.5");
+    expect(providerModel).toBeEnabled();
+  });
+  fireEvent.click(providerModel);
+  fireEvent.click(await screen.findByRole("menuitem", { name: "Claude" }));
+  fireEvent.click(
+    await screen.findByRole("menuitemradio", { name: "Sonnet 5.5" }),
+  );
+  const sonnetEfforts = await screen.findByRole("menu", {
+    name: "Sonnet 5.5 thinking effort",
+  });
+  fireEvent.click(
+    within(sonnetEfforts).getByRole("menuitemradio", { name: "High" }),
+  );
+  await waitFor(() => expect(providerModel).toHaveTextContent("Sonnet 5.5"));
+
+  const thinking = screen.getByRole("combobox", { name: "Thinking" });
+  await waitFor(() => expect(thinking).toBeEnabled());
+  await user.click(thinking);
+  await user.click(await screen.findByRole("option", { name: "Extra high" }));
+  expect(thinking).toHaveTextContent("Extra high");
+
+  await waitFor(() => expect(providerModel).toBeEnabled());
+  fireEvent.click(providerModel);
+  fireEvent.click(await screen.findByRole("menuitem", { name: "Claude" }));
+  fireEvent.click(
+    await screen.findByRole("menuitemradio", { name: "Haiku 4.5" }),
+  );
+  const haikuEfforts = await screen.findByRole("menu", {
+    name: "Haiku 4.5 thinking effort",
+  });
+  fireEvent.click(
+    within(haikuEfforts).getByRole("menuitemradio", { name: "High" }),
+  );
+  await waitFor(() => expect(providerModel).toHaveTextContent("Haiku 4.5"));
+  await waitFor(() =>
+    expect(thinking).toHaveTextContent("Automatic · Default"),
+  );
+  expect(
+    JSON.parse(screen.getByTestId("create-config").textContent ?? "null"),
+  ).toMatchObject({ model: "", effort: "" });
+});
+
+it("clears a create-time Claude effort the newly selected model does not support", async () => {
+  const Model = installed().type.CreateModel;
+  if (!Model) throw new Error("Missing model control");
+  const config = { ...DEFAULT_CONFIG, model: "sonnet", effort: "xhigh" };
+  const onChange = vi.fn();
+  render(<Model config={config} onChange={onChange} disabled={false} />);
+  const control = await screen.findByRole("combobox", { name: "Model" });
+  await waitFor(() => expect(control).toBeEnabled());
+
+  const user = userEvent.setup();
+  await user.click(control);
+  await user.click(await screen.findByRole("option", { name: "Haiku 4.5" }));
+  expect(onChange).toHaveBeenCalledWith({
+    ...config,
+    model: "haiku",
+    effort: "",
+  });
+});
+
+it("retains a create-time Claude effort supported by the selected model", async () => {
+  const Model = installed().type.CreateModel;
+  if (!Model) throw new Error("Missing model control");
+  const config = { ...DEFAULT_CONFIG, model: "sonnet", effort: "high" };
+  const onChange = vi.fn();
+  render(<Model config={config} onChange={onChange} disabled={false} />);
+  const control = await screen.findByRole("combobox", { name: "Model" });
+  await waitFor(() => expect(control).toBeEnabled());
+
+  const user = userEvent.setup();
+  await user.click(control);
+  await user.click(await screen.findByRole("option", { name: "Haiku 4.5" }));
+  expect(onChange).toHaveBeenCalledWith({
+    ...config,
+    model: "haiku",
+    effort: "high",
+  });
+});
+
+it("clears inherited Claude effort when discovery omits its effective model", async () => {
+  const storage = localStore();
+  await new ClaudeDefaults(storage).save({
+    model: "retired-model",
+    effort: "xhigh",
+  });
+  const createThinking = installed({ storage }).type.CreateThinking;
+  function Controls() {
+    const Thinking = createThinking;
+    if (!Thinking) throw new Error("Missing create-time Thinking control");
+    const [config, setConfig] = useState({
+      ...DEFAULT_CONFIG,
+      effort: "xhigh",
+    });
+    return (
+      <>
+        <Thinking config={config} onChange={setConfig} disabled={false} />
+        <output data-testid="create-config">{JSON.stringify(config)}</output>
+      </>
+    );
+  }
+  render(<Controls />);
+  const thinking = await screen.findByRole("combobox", { name: "Thinking" });
+  await waitFor(() => expect(thinking).toBeEnabled());
+  await waitFor(() =>
+    expect(
+      JSON.parse(screen.getByTestId("create-config").textContent ?? "null"),
+    ).toMatchObject({ model: "", effort: "" }),
+  );
+
+  await userEvent.setup().click(thinking);
+  expect(
+    (await screen.findAllByRole("option")).map((option) => option.textContent),
+  ).toEqual(["Automatic · Default"]);
 });
 
 it("disables a new agent's controls while it is being created", () => {

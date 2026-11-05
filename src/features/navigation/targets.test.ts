@@ -15,6 +15,20 @@ const conversation = {
 } as const;
 
 describe("open target boundary", () => {
+  it("bounds a scoped forwarding presentation independently of its underlying message", () => {
+    const target = parseOpenTarget({
+      ...conversation,
+      forward: "D".repeat(64),
+    });
+    expect(target).toEqual({
+      ...parseOpenTarget(conversation),
+      forward: "d".repeat(64),
+    });
+    expect(targetKey(target)).not.toBe(targetKey(conversation));
+    expect(() =>
+      parseOpenTarget({ ...conversation, forward: "invalid" }),
+    ).toThrow();
+  });
   it("bounds nested provider addresses to Agent setup and keeps their scope", () => {
     const target = {
       version: 1,
@@ -262,6 +276,27 @@ it("keeps explicit Personal space distinct from an unspecified page scope", () =
   expect(parseOpenTarget(personal)).toEqual(personal);
   expect(targetKey(personal)).not.toBe(targetKey(page));
   expect(() => parseOpenTarget({ ...conversation, scope: null })).toThrow();
+});
+
+it("addresses one installed plugin only within Plugins settings", () => {
+  const target = {
+    version: 1,
+    kind: "settings",
+    section: "plugins",
+    pluginId: "example.notes",
+  };
+  expect(parseOpenTarget(target)).toEqual(target);
+  expect(() => parseOpenTarget({ ...target, section: "profile" })).toThrow();
+  expect(() => parseOpenTarget({ ...target, pluginId: "../bad" })).toThrow();
+  expect(() =>
+    parseOpenTarget({
+      ...target,
+      pluginImport: {
+        repository: "https://example.com/repo",
+        reference: "main",
+      },
+    }),
+  ).toThrow();
 });
 
 it("retains copied Git source fields only on the Plugins settings destination", () => {

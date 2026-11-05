@@ -91,6 +91,84 @@ it.each([false, true])(
   },
 );
 
+it("names each message's author beside their pubkey", () => {
+  const known = {
+    [alice]: { username: "asmith", display_name: "Alice Smith" },
+  } as Record<string, { username: string; display_name: string }>;
+  const sections = promptSections(
+    turnPrompt({
+      agent,
+      event: event("3", "@Agent look"),
+      channel: { id: "chan", name: "general" },
+      scope: "thread" as const,
+      context: [event("1", "first"), event("2", "second", { pubkey: bob })],
+      total: 2,
+      names: (pubkey) => known[pubkey],
+    }),
+  );
+  const history = JSON.parse(sections[0]?.body ?? "").messages;
+  expect(history.map(Object.keys)).toEqual([
+    ["id", "pubkey", "username", "display_name", "created_at", "content"],
+    ["id", "pubkey", "created_at", "content"],
+  ]);
+  expect(history[0]).toMatchObject({
+    username: "asmith",
+    display_name: "Alice Smith",
+  });
+  const current = sections.find((section) => section.tag === "buzz-event");
+  expect(JSON.parse(current?.body.split("\n")[0] ?? "")).toMatchObject({
+    pubkey: alice,
+    username: "asmith",
+    display_name: "Alice Smith",
+  });
+  expect(promptMessage(sections)).toEqual({
+    author: undefined,
+    text: "@Agent look",
+  });
+});
+
+it("shows the person a relay-signed context message is for, with their names", () => {
+  const relay = "d".repeat(64);
+  const sections = promptSections(
+    turnPrompt({
+      agent,
+      event: event("3", "@Agent look"),
+      channel: { id: "chan", name: "general" },
+      scope: "thread" as const,
+      context: [
+        event("1", "for alice", {
+          pubkey: relay,
+          tags: [
+            ["h", "chan"],
+            ["actor", alice],
+          ],
+        }),
+        // Only the signing authority speaks for someone else.
+        event("2", "bob's own", {
+          pubkey: bob,
+          tags: [
+            ["h", "chan"],
+            ["actor", alice],
+          ],
+        }),
+      ],
+      total: 3,
+      names: (pubkey) =>
+        pubkey === alice ? { display_name: "Alice Smith" } : undefined,
+      signingAuthority: relay,
+    }),
+  );
+  const history = JSON.parse(sections[0]?.body ?? "").messages;
+  expect(history[0]).toMatchObject({
+    pubkey: alice,
+    display_name: "Alice Smith",
+  });
+  expect(history[1]).toEqual(
+    expect.not.objectContaining({ display_name: expect.anything() }),
+  );
+  expect(history[1].pubkey).toBe(bob);
+});
+
 it("builds the harness system prompt with instructions and core memory", () => {
   const prompt = systemPrompt({
     scope: "thread",

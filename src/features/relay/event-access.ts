@@ -1,4 +1,5 @@
 import type { EventData } from "./events";
+import { channelRowChannel, channelRowKind } from "./membership";
 
 const AUXILIARY = new Set([5, 7, 9005, 40003, 39005]);
 /** Visibility, not a second membership model. Reference-only auxiliaries need
@@ -11,6 +12,7 @@ export function eventVisibility(
   const memo = new Map<string, boolean>();
   const visiting = new Set<string>();
   function visible(event: EventData): boolean {
+    if (channelRowKind(event.kind) && !channelRowChannel(event)) return false;
     const cached = memo.get(event.id);
     if (cached !== undefined) return cached;
     if (visiting.has(event.id) || visiting.size >= 32) return false;

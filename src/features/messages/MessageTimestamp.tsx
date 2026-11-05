@@ -5,6 +5,7 @@ import {
   formatFullTimestamp,
   formatItemTimestamp,
 } from "../../shared/datetime";
+import { useClockPreference } from "../../shared/clock-preference";
 import { useLocalDay } from "../../shared/use-local-day";
 import styles from "./Messages.module.css";
 
@@ -54,19 +55,29 @@ export function DayDivider({ createdAt }: { createdAt: number }) {
   );
 }
 
-/** The byline includes a day outside today because its divider can scroll away. */
-export function MessageTimestamp({ createdAt }: { createdAt: number }) {
+/** The byline includes a day outside today because its divider can scroll away.
+ * When timestamps are hidden in settings, only assistive technology reads it. */
+export function MessageTimestamp({
+  createdAt,
+  visible = true,
+}: {
+  createdAt: number;
+  visible?: boolean;
+}) {
   useLocalDay();
+  useClockPreference();
   const date = new Date(createdAt * 1000);
   const fullDate = formatFullTimestamp(createdAt);
+  // Keep accessible dates out of copied conversation text.
+  const accessible = <span className="sr-only select-none">{fullDate}</span>;
+  if (!visible) return <time dateTime={date.toISOString()}>{accessible}</time>;
   return (
     <Tooltip content={fullDate} disableHoverablePopup>
       <time dateTime={date.toISOString()} style={{ cursor: "default" }}>
         <span aria-hidden="true">
           {formatItemTimestamp(createdAt, { withTime: true })}
         </span>
-        {/* Keep accessible dates out of copied conversation text. */}
-        <span className="sr-only select-none">{fullDate}</span>
+        {accessible}
       </time>
     </Tooltip>
   );
@@ -84,6 +95,7 @@ export function MessageTimestampHint({
   children: ReactNode;
 }) {
   useLocalDay();
+  useClockPreference();
   return (
     <div
       className={styles.messagePayload}

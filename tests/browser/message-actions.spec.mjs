@@ -212,7 +212,7 @@ for (const direction of ["forward", "backward"]) {
     await page.keyboard.press(direction === "forward" ? "Tab" : "Shift+Tab");
     await expect(
       actions.getByRole("button", {
-        name: direction === "forward" ? "Reply" : "Copy link",
+        name: direction === "forward" ? "Reply" : "Forward message",
         exact: true,
       }),
     ).toBeFocused();

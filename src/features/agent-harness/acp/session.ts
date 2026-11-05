@@ -15,9 +15,20 @@ type Waiter = (settled: Settled) => void;
 export type ConfigOptions = {
   configOptions?: {
     category?: string | null;
-    options?: { value: string }[];
+    options?: ConfigValue[];
   }[];
 };
+/** A select's choice, or a group of them. */
+export type ConfigValue = { value?: string; options?: ConfigValue[] };
+/** Every choice's value, groups flattened. */
+export const valuesOf = (options: readonly ConfigValue[] = []): string[] =>
+  options.flatMap((option) =>
+    option.options
+      ? valuesOf(option.options)
+      : typeof option.value === "string"
+        ? [option.value]
+        : [],
+  );
 
 /** One conversation's ACP session. Messages sent while a turn runs are
  * steered into it, when the harness can steer; one that arrives as the turn
@@ -442,7 +453,7 @@ export class AcpSession {
     const option = configOptions.find(
       (item) => item.category === "thought_level",
     );
-    this.levels = (option?.options ?? []).map(({ value }) => value);
+    this.levels = valuesOf(option?.options);
   }
 
   private ranAs(runId: string | undefined) {

@@ -1,7 +1,7 @@
 use crate::{Error, Result};
 use std::ffi::OsStr;
 use std::io::Read;
-use std::os::fd::OwnedFd;
+use std::os::fd::{AsFd, OwnedFd};
 use std::os::unix::net::UnixStream;
 use std::path::Path;
 use std::process::{Command, Stdio};
@@ -71,18 +71,66 @@ pub(super) fn agent(
     account: &str,
     value: &[u8],
 ) -> Result<Zeroizing<Vec<u8>>> {
+    if !matches!(
+        service,
+        "xyz.block.buzz.desktop.agents" | "dev.local.buzz.foundation.agents"
+    ) || !(account == "agent-bundle-v1" || account.starts_with("agent:"))
+    {
+        return Err(Error::Unavailable);
+    }
+    store(
+        helper,
+        "--agent-store",
+        operation,
+        service,
+        account,
+        value,
+        2 * 1024 * 1024,
+    )
+}
+
+pub(super) fn session(
+    helper: &OsStr,
+    operation: &str,
+    service: &str,
+    account: &str,
+    value: &[u8],
+) -> Result<Zeroizing<Vec<u8>>> {
+    if service != "xyz.block.buzz.desktop.federated-session.debug"
+        || account.len() != 64
+        || !account
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+    {
+        return Err(Error::Unavailable);
+    }
+    store(
+        helper,
+        "--session-store",
+        operation,
+        service,
+        account,
+        value,
+        1024 * 1024,
+    )
+}
+
+fn store(
+    helper: &OsStr,
+    store: &str,
+    operation: &str,
+    service: &str,
+    account: &str,
+    value: &[u8],
+    limit: usize,
+) -> Result<Zeroizing<Vec<u8>>> {
+    use nix::poll::{poll, PollFd, PollFlags, PollTimeout};
     use std::io::Write;
     use std::net::Shutdown;
 
-    const MAX: usize = 2 * 1024 * 1024;
     if !Path::new(helper).is_absolute()
         || !matches!(operation, "read" | "replace" | "delete")
-        || !matches!(
-            service,
-            "xyz.block.buzz.desktop.agents" | "dev.local.buzz.foundation.agents"
-        )
-        || !(account == "agent-bundle-v1" || account.starts_with("agent:"))
-        || value.len() > MAX
+        || value.len() > limit
         || (operation != "replace" && !value.is_empty())
     {
         return Err(Error::Unavailable);
@@ -97,7 +145,7 @@ pub(super) fn agent(
         command.arg("--authorize");
     }
     let mut child = command
-        .args(["--agent-store", operation, service, account])
+        .args([store, operation, service, account])
         .stdin(Stdio::null())
         .stdout(Stdio::from(OwnedFd::from(helper_channel)))
         .stderr(Stdio::null())
@@ -119,23 +167,35 @@ pub(super) fn agent(
             }
             pending = &pending[count..];
         }
-        channel
-            .shutdown(Shutdown::Write)
-            .map_err(|_| Error::Unavailable)?;
+        match channel.shutdown(Shutdown::Write) {
+            // macOS can close the peer before its buffered reply is read.
+            Err(error)
+                if operation != "replace" && error.kind() == std::io::ErrorKind::NotConnected => {}
+            result => result.map_err(|_| Error::Unavailable)?,
+        }
         let mut output = Zeroizing::new(Vec::new());
         let mut buffer = Zeroizing::new([0; 8192]);
         loop {
             let remaining = deadline
                 .checked_duration_since(Instant::now())
                 .ok_or(Error::Unavailable)?;
-            channel
-                .set_read_timeout(Some(remaining))
-                .map_err(|_| Error::Unavailable)?;
+            let ready = {
+                let mut descriptors = [PollFd::new(channel.as_fd(), PollFlags::POLLIN)];
+                poll(
+                    &mut descriptors,
+                    PollTimeout::try_from(remaining).map_err(|_| Error::Unavailable)?,
+                )
+            };
+            match ready {
+                Err(nix::errno::Errno::EINTR) => continue,
+                Ok(0) | Err(_) => return Err(Error::Unavailable),
+                Ok(_) => {}
+            }
             let count = channel.read(&mut *buffer).map_err(|_| Error::Unavailable)?;
             if count == 0 {
                 break;
             }
-            if output.len() + count > if operation == "read" { MAX } else { 0 } {
+            if output.len() + count > if operation == "read" { limit } else { 0 } {
                 return Err(Error::Corrupt);
             }
             output.extend_from_slice(&buffer[..count]);

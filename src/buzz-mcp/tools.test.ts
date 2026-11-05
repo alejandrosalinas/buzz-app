@@ -8,6 +8,8 @@ import { schnorr } from "@noble/curves/secp256k1.js";
 import { npubEncode } from "nostr-tools/nip19";
 import { bytesToHex } from "nostr-tools/utils";
 import { expect, it, vi } from "vitest";
+import { eventDto } from "../features/relay/events";
+import { keypair, signed } from "../features/relay/testing";
 import type { BuzzClient, BuzzEvent, Filter, Memory, Template } from "./client";
 import { respond } from "./rpc";
 import { ATTENTION_TOOLS } from "./attention";
@@ -471,6 +473,106 @@ it("refuses to post a name it cannot resolve unless told who it means", async ()
     mentions: [bob],
   });
   expect(published[0]?.tags).toContainEqual(["p", bob]);
+});
+
+it("tags a member by the names the relay verified, ahead of names people gave themselves", async () => {
+  const relay = keypair();
+  // Signed and admitted, as a connection's query returns them.
+  const verified = (
+    subject: string,
+    names: readonly string[][],
+    { by = relay, at = 100, active = true } = {},
+  ): BuzzEvent =>
+    eventDto(
+      signed(by, {
+        kind: 30382,
+        content: "",
+        created_at: at,
+        tags: [
+          ["d", subject],
+          ["p", subject],
+          ["active", String(active)],
+          ...(active
+            ? [
+                ["issuer_label", "Example"],
+                ["verified_at", String(at)],
+              ]
+            : []),
+          ...names,
+        ],
+      }),
+    );
+  const { client, published } = fake([
+    ...community,
+    verified(alice, [
+      ["display_name", "Alice S"],
+      ["username", "asmith"],
+      ["full_name", "Alice Smith-Jones"],
+    ]),
+    // Bob's own profile claims Alice's verified name, and her username.
+    profile(bob, "Alice S"),
+    event({
+      kind: 0,
+      pubkey: bob,
+      created_at: 101,
+      content: JSON.stringify({ display_name: "Alice S", name: "asmith" }),
+    }),
+    // A name another key signed, one the relay retracted, and one the app
+    // would reject give nobody.
+    verified(
+      bob,
+      [
+        ["display_name", "Forged"],
+        ["username", "forged"],
+      ],
+      {
+        by: keypair(),
+      },
+    ),
+    verified(
+      bob,
+      [
+        ["display_name", "Bobby"],
+        ["username", "bobby"],
+      ],
+      {
+        at: 90,
+      },
+    ),
+    verified(bob, [], { at: 95, active: false }),
+    verified(me, [
+      ["display_name", "Bad"],
+      ["username", "Not A Handle"],
+    ]),
+  ]);
+  const tagged = { ...client, relayAuthor: relay.pubkey };
+  const context = { channel: "chan", root };
+  for (const text of [
+    "@Alice S see this",
+    "@asmith see this",
+    "@alice smith-jones see this",
+  ]) {
+    await callTool(tagged, context, "send", { audience: "everyone", text });
+    expect(published.at(-1)?.tags).toEqual([
+      ["h", "chan"],
+      ["e", root, "", "reply"],
+      ["p", alice],
+    ]);
+  }
+  for (const name of ["forged", "bobby", "bad"])
+    await expect(
+      callTool(tagged, context, "send", {
+        audience: "everyone",
+        text: `@${name} hi`,
+      }),
+    ).rejects.toThrow(`No single channel member is @${name}`);
+  // Without the relay's key, verified names are not read at all, so only
+  // the names people gave themselves are left.
+  await callTool(client, context, "send", {
+    audience: "everyone",
+    text: "@asmith hi",
+  });
+  expect(published.at(-1)?.tags).toContainEqual(["p", bob]);
 });
 
 it("replies to a message inside a thread at the thread's root, and posts a file's text and attachments", async () => {

@@ -625,29 +625,28 @@ test("decoded image resizing preserves reading and bottom following across remou
         .toBeLessThan(1);
       expect(await bottomDistance()).toBeGreaterThan(400);
 
-      await navigate(page, 1);
-      await waiting(page, "58");
-      expect(
-        await latestImage.evaluate(
-          (node, previous) => node !== previous,
-          originalNode,
-        ),
-      ).toBe(true);
-      await expect(latestImage).toHaveCSS("visibility", "hidden");
-      // A loaded image must retain its learned frame while the new DOM node's
-      // decode is pending. Otherwise eviction restores the 320px placeholder
-      // and feeds another geometry correction back into the virtualizer.
-      await expect(latestImage).toHaveCSS("height", "10px");
-      await settle(page, feed);
       const completed = await page.evaluate(() =>
         window.imageTest.completed("58"),
       );
-      await releaseDecode(page, "58");
-      await expect
-        .poll(() => page.evaluate(() => window.imageTest.completed("58")))
-        .toBeGreaterThan(completed);
+      await navigate(page, 1);
+      await expect(latestImage).toHaveCount(1);
+      // The remount re-adopts the decoded original instead of hiding a new
+      // node until it decodes, which flashed an empty frame on every return.
+      expect(
+        await latestImage.evaluate(
+          (node, previous) => node === previous,
+          originalNode,
+        ),
+      ).toBe(true);
       await expect(latestImage).toHaveCSS("visibility", "visible");
+      await expect(latestImage).toHaveCSS("height", "10px");
       await settle(page, feed);
+      expect(
+        await page.evaluate(() => [
+          window.imageTest.waiting("58"),
+          window.imageTest.completed("58"),
+        ]),
+      ).toEqual([false, completed]);
       expect(await bottomDistance()).toBeLessThan(4);
     } finally {
       await originalNode.dispose();

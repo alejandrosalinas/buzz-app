@@ -7,6 +7,7 @@ import {
   MenuTrigger,
   MenuPopup,
   MenuItem,
+  MenuCheckboxItem,
 } from "../shared/design-system/ui/Menu";
 import { IconButton } from "../shared/design-system/ui/IconButton";
 import { Button } from "../shared/design-system/ui/Button";
@@ -21,6 +22,7 @@ export function PluginMenu({
   label = "More plugin actions",
   toggle,
   onRemoved,
+  openUpdateSettings = false,
 }: {
   plugin: PluginInfo;
   plugins: PluginManager;
@@ -28,9 +30,11 @@ export function PluginMenu({
   label?: string;
   onRemoved?: () => void;
   toggle?: { label: string; disabled: boolean; run(): void };
+  openUpdateSettings?: boolean;
 }) {
   const deleteTrigger = useRef<HTMLButtonElement>(null);
   const cancelDelete = useRef<HTMLButtonElement>(null);
+  const updateChoice = useRef<HTMLDivElement>(null);
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [deleting, setDeleting] = useState(false);
   const [deleteError, setDeleteError] = useState<string | null>(null);
@@ -41,7 +45,12 @@ export function PluginMenu({
   if (plugin.source !== "external") return null;
   return (
     <>
-      <MenuRoot>
+      <MenuRoot
+        defaultOpen={openUpdateSettings}
+        onOpenChangeComplete={(open) => {
+          if (open && openUpdateSettings) updateChoice.current?.focus();
+        }}
+      >
         <MenuTrigger
           render={
             <IconButton
@@ -63,6 +72,25 @@ export function PluginMenu({
           }
         >
           <MenuItem onClick={() => setShowAccess(true)}>Review access</MenuItem>
+          {plugin.manifest.updates &&
+            plugin.updateSource &&
+            "repository" in plugin.updateSource && (
+              <MenuCheckboxItem
+                ref={updateChoice}
+                checked={
+                  plugin.updateChecks ?? plugin.manifest.updates.defaultEnabled
+                }
+                disabled={busy}
+                onCheckedChange={(checked) =>
+                  void plugins.change(
+                    checked ? "enable-update-checks" : "disable-update-checks",
+                    plugin.manifest.id,
+                  )
+                }
+              >
+                Check for updates automatically
+              </MenuCheckboxItem>
+            )}
           {toggle && (
             <MenuItem disabled={toggle.disabled} onClick={toggle.run}>
               {toggle.label}

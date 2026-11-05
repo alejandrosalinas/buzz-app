@@ -79,6 +79,7 @@ mod relaunch;
 mod relay;
 mod relay_admin;
 mod sign_out;
+mod system_clock;
 use identity::{
     identity_create, identity_export, identity_import, identity_import_legacy,
     identity_legacy_available, identity_prepare_remote_agent_authorization, identity_restore,
@@ -113,8 +114,8 @@ use host_files::{
     plugin_host_save_bytes,
 };
 use host_mcp::{
-    plugin_host_mcp_authorize, plugin_host_mcp_close, plugin_host_mcp_reply, plugin_host_mcp_serve,
-    HostMcpServers,
+    plugin_host_mcp_authorize, plugin_host_mcp_close, plugin_host_mcp_pairing,
+    plugin_host_mcp_reply, plugin_host_mcp_serve, HostMcpServers,
 };
 use host_process::{
     plugin_host_process_kill, plugin_host_process_spawn, plugin_host_process_write, HostProcesses,
@@ -378,6 +379,7 @@ async fn plugin_import_git(
     identity: tauri::State<'_, IdentityHost>,
     fi: tauri::State<'_, federated_identity::FederatedIdentity>,
     imports: tauri::State<'_, Imports>,
+    manager: tauri::State<'_, PluginManager>,
     repository: String,
     reference: String,
     authorization: Option<String>,
@@ -410,6 +412,7 @@ async fn plugin_import_git(
     let host = fi.inner().clone();
     let viewer = identity.inner().clone();
     let admitted = assertion.clone();
+    let access = repository_access(&manager.0);
     let result = if check_only == Some(true) {
         // Checks own only their clone; they must never lock or replace Add's preview.
         tauri::async_runtime::spawn_blocking(move || {
@@ -426,6 +429,7 @@ async fn plugin_import_git(
                     .as_ref()
                     .and_then(|authorization| authorization.header()),
                 None,
+                &access,
             )
             .map(|prepared| Some(prepared.preview))
         })
@@ -453,6 +457,7 @@ async fn plugin_import_git(
                     .as_ref()
                     .and_then(|authorization| authorization.header()),
                 retired,
+                &access,
             )
             .map(Some)
         })
@@ -543,6 +548,26 @@ fn ready(manager: &Manager, catalog: Catalog) -> InstallationResult {
 
 // Invalid environment configuration must not prevent the recovery shell from opening.
 struct PluginManager(Result<Manager, String>);
+
+/// Read per import so an edited rules file applies without restarting Buzz.
+fn repository_access(manager: &Result<Manager, String>) -> buzzodz_plugins::access::AccessRules {
+    use buzzodz_plugins::access::{built_in, Status};
+    let Ok(manager) = manager else {
+        return built_in();
+    };
+    let access = manager.repository_access();
+    let path = access
+        .path
+        .as_ref()
+        .map_or(String::new(), |path| path.display().to_string());
+    if let Status::Invalid { reason } = &access.status {
+        eprintln!("Ignoring repository access file {path}: {reason}");
+    }
+    for problem in &access.problems {
+        eprintln!("Repository access file {path}: {problem}");
+    }
+    access
+}
 async fn with_manager<T: Send + 'static>(
     state: tauri::State<'_, PluginManager>,
     operation: impl FnOnce(Manager) -> Result<T, String> + Send + 'static,
@@ -706,6 +731,7 @@ fn commands<R: tauri::Runtime>() -> impl Fn(tauri::ipc::Invoke<R>) -> bool + Sen
         clipboard::clipboard_write_text,
         media_stream_base,
         get_os_idle_seconds,
+        system_clock::system_hour_cycle,
         workspace_pick_folder,
         repositories_folder_validate,
         legacy_communities,
@@ -733,6 +759,7 @@ fn commands<R: tauri::Runtime>() -> impl Fn(tauri::ipc::Invoke<R>) -> bool + Sen
         plugin_host_process_kill,
         plugin_host_mcp_serve,
         plugin_host_mcp_authorize,
+        plugin_host_mcp_pairing,
         plugin_host_mcp_reply,
         plugin_host_mcp_close,
         plugin_host_read_file,
@@ -843,6 +870,7 @@ pub fn run() {
                 Ok(())
             },
             || {
+                host_mcp::pairing::revoke(&paths.app_data)?;
                 federated_identity::store::remove_all(federated_identity::store::root()?)?;
                 identity::remove_saved_key()
             },
@@ -1193,6 +1221,7 @@ mod tests {
             .manage(super::Imports::default())
             .manage(super::IdentityHost::default())
             .manage(super::federated_identity::FederatedIdentity::new().unwrap())
+            .manage(super::PluginManager(Err("No plugin storage".into())))
             .build(super::app_context())
             .unwrap();
         let imports = app.state::<super::Imports>();
@@ -1204,6 +1233,7 @@ mod tests {
         // Invalid references fail before network access, after reaching Git validation.
         let check = |check_only| {
             tauri::async_runtime::block_on(super::plugin_import_git(
+                app.state(),
                 app.state(),
                 app.state(),
                 app.state(),
@@ -1222,6 +1252,7 @@ mod tests {
         assert!(check(true).contains("branch or tag"));
         let pinned = |commit: &str, check_only| {
             tauri::async_runtime::block_on(super::plugin_import_git(
+                app.state(),
                 app.state(),
                 app.state(),
                 app.state(),

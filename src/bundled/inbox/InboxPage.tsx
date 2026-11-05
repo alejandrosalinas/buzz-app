@@ -179,12 +179,29 @@ const tabTarget = (
       };
 
 type Selection = { channelId: string; messageId: string; rootId?: string };
-// The row a tab opened, kept as long as the session's tabs so returning to
-// Inbox still archives and advances from the conversation it restores.
+// The row a tab opened and the list's offset, kept as long as the session's
+// tabs so returning to Inbox still archives and advances from the conversation
+// it restores, at the place it left. A relaunch starts at the top.
 const selections = new WeakMap<
   RelaySession,
-  { opened?: PageTabTarget | undefined; target?: Selection | undefined }
+  {
+    opened?: PageTabTarget | undefined;
+    target?: Selection | undefined;
+    scrollTop?: number | undefined;
+    /** Whether the selected row overlapped the list's visible box. */
+    selectedShown?: boolean | undefined;
+  }
 >();
+/** Whether the selected row overlaps the list's visible box, once rendered. */
+function selectedInView(list: HTMLElement) {
+  const row = list.querySelector("li[data-selected]");
+  if (!row) return undefined;
+  const bounds = list.getBoundingClientRect();
+  const rect = row.getBoundingClientRect();
+  return rect.bottom > bounds.top && rect.top < bounds.bottom;
+}
+/** Whether another tab covers the list, or it is hidden; neither is measured. */
+const covered = (list: HTMLElement) => !!list.closest("[hidden], [inert]");
 
 type InboxPageTabs = (props: PageTabsProps) => ReactNode;
 
@@ -347,10 +364,19 @@ function InboxList({
   const [filters, setFilters] = useState(() => readFilters(archiveScope));
   const { show, activity, sender: senderFilter } = filters;
   const unreadOnly = filters.attention === "unread";
+  // Each list returns to the session's last offset once its rows show,
+  // unless the user has already scrolled it. The offset they chose wins,
+  // unless the selected row they could see has since left the view.
+  const scroller = useRef<HTMLDivElement | null>(null);
+  const placed = useRef<HTMLDivElement | null>(null);
   function setFilter(patch: Partial<Filters>) {
     const next = { ...filters, ...patch };
     setFilters(next);
     writeView(archiveScope, filtersKey, next);
+    // A filter change keeps the list's current offset. A mounted list stays
+    // where it is, even empty at 0, rather than taking the saved offset when
+    // rows show. Drafts unmounts the list, so its offset is the saved one.
+    placed.current = scroller.current;
   }
   const [drafts, setDrafts] = useState(false);
   // A shortcut's open carries filters; a plain open carries none and changes nothing.
@@ -415,7 +441,11 @@ function InboxList({
     () => selections.get(session)?.target,
   );
   useEffect(() => {
-    selections.set(session, { opened, target: selectedTarget });
+    selections.set(session, {
+      ...selections.get(session),
+      opened,
+      target: selectedTarget,
+    });
   }, [session, opened, selectedTarget]);
   const fallbackRow = useRef<HTMLButtonElement | null>(null);
   const fallbackControl = useRef<HTMLButtonElement | null>(null);
@@ -623,6 +653,31 @@ function InboxList({
   const archiveView = useRef({ show, visible, selected, opened });
   useLayoutEffect(() => {
     archiveView.current = { show, visible, selected, opened };
+  });
+  useLayoutEffect(() => {
+    const list = scroller.current;
+    // A covered list skips layout: measuring it forces that layout, and
+    // revealing a row in it scrolls nothing. It is placed on the commit that
+    // uncovers it; what showed before it was covered still holds.
+    if (!list || covered(list)) return;
+    // Compositor scrolling may update the position before its scroll event.
+    if (placed.current !== list && visible.length && list.scrollTop === 0) {
+      const saved = selections.get(session);
+      if (saved?.scrollTop) list.scrollTop = saved.scrollTop;
+      if (saved?.selectedShown && selectedInView(list) === false)
+        list
+          .querySelector("li[data-selected]")
+          ?.scrollIntoView({ block: "nearest" });
+    }
+    if (visible.length) placed.current = list;
+    // Selecting a row, or rows arriving above it, moves nothing the scroll
+    // handler sees, so record whether it shows after each commit too.
+    const shown = selectedInView(list);
+    if (typeof shown === "boolean")
+      selections.set(session, {
+        ...selections.get(session),
+        selectedShown: shown,
+      });
   });
   const profileKey = [
     ...new Set([
@@ -987,7 +1042,23 @@ function InboxList({
         <div ref={workspace} className={styles.workspace}>
           <div className={styles.listPane}>
             {toolbar}
-            <div className={styles.scroll}>
+            <div
+              ref={scroller}
+              className={styles.scroll}
+              onScroll={(event) => {
+                // Saved as it moves, so any teardown keeps the last offset.
+                // Rows arriving above a covered list can still anchor it,
+                // which saves only the offset.
+                const list = event.currentTarget;
+                selections.set(session, {
+                  ...selections.get(session),
+                  scrollTop: list.scrollTop,
+                  ...(!covered(list) && {
+                    selectedShown: selectedInView(list),
+                  }),
+                });
+              }}
+            >
               {inbox.freshness === "stale" && !failure && (
                 <div className={styles.notice} role="status">
                   <span className="text-body text-subtle">

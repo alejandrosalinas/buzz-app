@@ -24,4 +24,4 @@ keyring = { version = "=3.6.3", default-features = false, features = ["windows-n
 tempfile = "3"
 
 [target.'cfg(unix)'.dependencies]
-nix = { version = "0.31", features = ["user"] }
+nix = { version = "0.31", features = ["user", "poll"] }

@@ -29,16 +29,187 @@ function rememberBestie(scope: string, pubkey: string) {
     writeView(scope, FORMER, [...seen, pubkey].slice(-20));
 }
 
+/** Hosted agents' instructions as last read from their provider, by pubkey,
+ * with the order the latest recorded read started in. Their config isn't on
+ * this device, so Former Bestie tells from these whether one still has a
+ * Bestie section on. `failed` means that latest read failed: what was read
+ * before it, if anything, may be out of date, as after a save whose read back
+ * failed, so it doesn't show that nothing is left on. */
+type HostedRead = Readonly<{
+  order: number;
+  instructions?: string;
+  failed: boolean;
+}>;
+const hostedRead = new Map<string, HostedRead>();
+/** The reads started for each hosted agent that haven't ended yet. */
+const hostedPending = new Map<string, Set<number>>();
+/** The latest answer an agent's reads gave while a later read was under
+ * way. It counts if every later read is abandoned, so abandoning one never
+ * loses what an earlier read found. */
+const hostedHeld = new Map<
+  string,
+  Readonly<{ order: number; read?: string }>
+>();
+const hostedListeners = new Set<() => void>();
+let hostedReads = 0;
+
+/** Records what the read started `order`th found, unless a later read is
+ * already recorded. `read` is absent for a failed read. */
+function recordHosted(pubkey: string, order: number, read?: string) {
+  const last = hostedRead.get(pubkey);
+  if (last && last.order > order) return;
+  const failed = read === undefined;
+  const instructions = failed ? last?.instructions : read;
+  hostedRead.set(pubkey, {
+    order,
+    failed,
+    ...(instructions !== undefined && { instructions }),
+  });
+  if (!last || last.instructions !== instructions || last.failed !== failed)
+    for (const listener of [...hostedListeners]) listener();
+}
+
+/** Starts recording one read of a hosted agent's instructions. Call it before
+ * asking the provider, then `read` or `failed` with what it answered. Only the
+ * latest read started counts: an earlier one ending first is held, and counts
+ * only if every later one is abandoned. So a slow background read never
+ * replaces what a later read or save leaves, and what shows stays until that
+ * later read ends. A read is abandoned the moment `signal` aborts, or by
+ * `cancel`, and nothing it answers afterwards counts. A failure keeps the
+ * instructions read before it but marks them uncertain until a later read
+ * succeeds. */
+export function startHostedRead(pubkey: string, signal?: AbortSignal) {
+  const order = ++hostedReads;
+  const pending = hostedPending.get(pubkey) ?? new Set<number>();
+  pending.add(order);
+  hostedPending.set(pubkey, pending);
+  const later = (than: number) => [...pending].some((other) => other > than);
+  function end() {
+    signal?.removeEventListener("abort", cancel);
+    pending.delete(order);
+    if (!pending.size && hostedPending.get(pubkey) === pending)
+      hostedPending.delete(pubkey);
+  }
+  function settle(read?: string) {
+    if (!pending.has(order)) return;
+    end();
+    const held = hostedHeld.get(pubkey);
+    if (later(order)) {
+      if (!held || held.order < order)
+        hostedHeld.set(pubkey, {
+          order,
+          ...(read !== undefined && { read }),
+        });
+      return;
+    }
+    if (held && held.order < order) hostedHeld.delete(pubkey);
+    recordHosted(pubkey, order, read);
+  }
+  function cancel() {
+    if (!pending.has(order)) return;
+    end();
+    const held = hostedHeld.get(pubkey);
+    if (!held || later(held.order)) return;
+    hostedHeld.delete(pubkey);
+    recordHosted(pubkey, held.order, held.read);
+  }
+  if (signal?.aborted) cancel();
+  else signal?.addEventListener("abort", cancel, { once: true });
+  return {
+    read: (instructions: string) => settle(instructions),
+    failed: () => settle(),
+    cancel,
+  };
+}
+
+/** Calls `listener` when a hosted agent's recorded instructions change. */
+export function subscribeHostedInstructions(listener: () => void) {
+  hostedListeners.add(listener);
+  return () => {
+    hostedListeners.delete(listener);
+  };
+}
+
+/** Forgets every hosted agent's recorded instructions, for tests. */
+export function forgetHostedInstructions() {
+  hostedRead.clear();
+  hostedPending.clear();
+  hostedHeld.clear();
+}
+
+/** Reads the instructions of each hosted agent this device saw as Bestie,
+ * once per connection, when its provider holds them. A former one then shows
+ * Former Bestie while its memory is on, before its tabs are opened. */
+export function readFormerHosted(
+  relay: RelayData,
+  agents: FeatureAgents & Pick<Agents, "snapshot" | "subscribe">,
+) {
+  const lifetime = new AbortController();
+  const { signal } = lifetime;
+  const tried = new Set<string>();
+  let session = relay.snapshot().session;
+  const reconcile = () => {
+    if (signal.aborted) return;
+    const { session: next, scope } = relay.snapshot();
+    if (next !== session) {
+      session = next;
+      tried.clear();
+    }
+    if (!scope) return;
+    const seen = seenAsBestie(scope);
+    for (const agent of agents.snapshot().agents) {
+      if (
+        agent.place !== "hosted" ||
+        tried.has(agent.pubkey) ||
+        !seen.includes(agent.pubkey)
+      )
+        continue;
+      const hosted = agents.hostedInstructions?.(agent.pubkey);
+      if (!hosted) continue;
+      tried.add(agent.pubkey);
+      // Abandoned as soon as the plugin stops.
+      const recording = startHostedRead(agent.pubkey, signal);
+      hosted.get(signal).then(
+        (instructions) => recording.read(instructions),
+        (error: unknown) => {
+          if (signal.aborted) return;
+          // Its Former Bestie tab then shows, and reads again with a Retry.
+          recording.failed();
+          console.warn("A former Bestie's instructions weren't read", error);
+        },
+      );
+    }
+  };
+  const stopAgents = agents.subscribe(reconcile);
+  const stopRelay = relay.subscribe(reconcile);
+  reconcile();
+  return () => {
+    lifetime.abort();
+    stopAgents();
+    stopRelay();
+  };
+}
+
 /** Whether `agent`, which isn't Bestie, was one and still has something on
  * that the Former Bestie tab can turn off. A Bestie section in its
  * instructions shows it was Bestie, on any device, and is on. Membership of
  * one of the viewer's private channels counts only for an agent this device
- * saw as Bestie: nothing records which channels Bestie's switches added. */
+ * saw as Bestie: nothing records which channels Bestie's switches added. A
+ * hosted agent's instructions are as last read from its provider; one whose
+ * latest read failed counts as on until a read succeeds. */
 export function formerWithSettings(
   agent: Agent,
   { session, scope }: RelaySnapshot,
 ) {
-  const instructions = instructionsOf(agent);
+  const hosted =
+    agent.place === "hosted" ? hostedRead.get(agent.pubkey) : undefined;
+  // After a failed read nothing shows that nothing is on, even over an
+  // earlier off, so the tab stays to read again.
+  if (hosted?.failed) return true;
+  const instructions =
+    agent.place === "hosted"
+      ? (hosted?.instructions ?? "")
+      : instructionsOf(agent);
   if (FEATURES.some((feature) => featureState(instructions, feature) !== "off"))
     return true;
   return (

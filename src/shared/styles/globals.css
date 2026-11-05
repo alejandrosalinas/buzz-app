@@ -195,6 +195,22 @@
     background-color: var(--bg-app);
     @apply texture-dots;
   }
+  /* Only while a plugin registers a backdrop: its layer paints above the
+     shell's own background and below every descendant. */
+  .shell-background:has(> .shell-backdrop) {
+    isolation: isolate;
+  }
+  .shell-backdrop,
+  .shell-backdrop-layer {
+    position: fixed;
+    inset: 0;
+    overflow: hidden;
+    pointer-events: none;
+  }
+  /* Fixed boxes are stacking contexts: each layer's own z-index stays inside it. */
+  .shell-backdrop {
+    z-index: -1;
+  }
 
   .shell-header {
     --interaction-hover: var(--affordance-backdrop-hover);
@@ -499,6 +515,18 @@
   .error,
   .danger {
     @apply text-danger;
+  }
+  /* Header controls keep the solid shell color beneath them and their focus
+     rings, so their ink and fills keep the pairing they were designed for. */
+  .shell-background:has(> .shell-backdrop) .shell-header > * {
+    border-radius: var(--radius-pill);
+    background: var(--bg-app);
+    box-shadow: 0 0 0 var(--space-2) var(--bg-app);
+  }
+  .shell-background:has(> .shell-backdrop)
+    .shell-body
+    hr[aria-orientation="vertical"]::after {
+    box-shadow: 0 0 0 var(--space-half) var(--bg-app);
   }
 }
 

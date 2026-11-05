@@ -6,6 +6,12 @@ import { objectBody } from "./body";
 export const CHANNEL_ROW_KINDS = [9, 40002, 40008, 40099, 48100, 48103];
 export const channelRowKind = (kind: number) =>
   CHANNEL_ROW_KINDS.includes(kind);
+/** A content row has one channel home; ambiguous tags are not membership evidence. */
+export function channelRowChannel(event: EventData): string | undefined {
+  if (!channelRowKind(event.kind)) return undefined;
+  const channels = event.tags.filter((tag) => tag[0] === "h");
+  return channels.length === 1 && channels[0]?.[1] ? channels[0][1] : undefined;
+}
 const pubkey = (value: unknown): value is string =>
   typeof value === "string" && /^[0-9a-f]{64}$/.test(value);
 

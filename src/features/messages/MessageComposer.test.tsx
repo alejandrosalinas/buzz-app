@@ -621,6 +621,41 @@ it.each([undefined, "thread-root"])(
   },
 );
 
+it("consumes a handled slash command without publishing it", async () => {
+  const onCommand = vi.fn((command: string) =>
+    command === "/leave" ? Promise.resolve(true) : false,
+  );
+  const h = mount({ onCommand });
+  h.fill("  /leave  ");
+  h.submit();
+  await waitFor(() => expect(h.input()).toHaveValue(""));
+  expect(onCommand).toHaveBeenCalledExactlyOnceWith(
+    "/leave",
+    expect.any(AbortSignal),
+  );
+  expect(h.messages.send).not.toHaveBeenCalled();
+
+  h.fill("/shrug");
+  h.submit();
+  await waitFor(() => expect(h.messages.send).toHaveBeenCalledOnce());
+  expect(h.messages.send).toHaveBeenCalledWith("channel", "/shrug", [], []);
+});
+
+it("keeps a slash command draft when its handler refuses", async () => {
+  const h = mount({
+    onCommand: async () => {
+      throw new Error("Transfer ownership before leaving the channel.");
+    },
+  });
+  h.fill("/leave");
+  h.submit();
+  expect(await screen.findByRole("alert")).toHaveTextContent(
+    "Transfer ownership before leaving the channel.",
+  );
+  expect(h.input()).toHaveValue("/leave");
+  expect(h.messages.send).not.toHaveBeenCalled();
+});
+
 it("publishes typing for text edits but not caret-driven token expansion", () => {
   const text = `[Honey](${profileTarget(first.pubkey)})`;
   writeView("scope", "draft:channel", text);

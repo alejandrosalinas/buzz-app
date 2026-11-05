@@ -1,6 +1,7 @@
 import { ModelDiscoveryRecovery } from "../../features/agents/ModelDiscoveryRecovery";
 import activityStyles from "../../features/agents/ActivityLayout.module.css";
 import { formatItemTimestamp } from "../../shared/datetime";
+import { useClockFormat } from "../../shared/clock-preference";
 import { InlineHeader } from "../../shared/design-system/ui/Header";
 import { IconButton } from "../../shared/design-system/ui/IconButton";
 import { ArrowsClockwiseIcon } from "../../shared/design-system/icons";
@@ -129,6 +130,34 @@ const effortsFor = (model: string, models: readonly ClaudeModel[]) => {
   return effortChoices(
     listed ? effortLevels(listed) : models.flatMap(effortLevels),
   );
+};
+/** New agents only offer levels Claude lists for the effective model. */
+const createEffortsFor = (model: string, models: readonly ClaudeModel[]) => {
+  const id = model || "default";
+  const listed = models.find(
+    (candidate) => candidate.value === id || candidate.resolvedModel === id,
+  );
+  return effortChoices(listed ? effortLevels(listed) : []);
+};
+const thinkingOptions = (
+  efforts: ReturnType<typeof effortChoices>,
+  models: readonly ClaudeModel[],
+  effort: string,
+) => {
+  return [
+    { value: "", label: "Automatic · Default" },
+    ...(effort && !efforts.some((level) => level.id === effort)
+      ? [
+          {
+            value: effort,
+            label: models.length
+              ? `${effortLabel(effort)} (unavailable)`
+              : effortLabel(effort),
+          },
+        ]
+      : []),
+    ...efforts.map(({ id, label }) => ({ value: id, label })),
+  ];
 };
 const SCOPES = options([
   ["thread", "One session per thread"],
@@ -387,7 +416,7 @@ export function createTabs({
         error={state.modelsError}
         retry={() => void setup.loadModels(true)}
         onChange={(model) => {
-          const efforts = effortsFor(
+          const efforts = createEffortsFor(
             model || providerDefaults.model,
             state.models,
           );
@@ -401,6 +430,79 @@ export function createTabs({
                 : "",
           });
         }}
+      />
+    );
+  }
+
+  function CreateThinking({
+    agent,
+    config,
+    onChange,
+    disabled,
+  }: AgentCreateProps<Config>) {
+    const current = readConfig(config);
+    const { effort, model } = current;
+    const state = useSetupCatalog();
+    const providerDefaults = useSyncExternalStore(
+      defaults.subscribe,
+      defaults.snapshot,
+    );
+    useEffect(() => {
+      if (
+        agent ||
+        disabled ||
+        state.checking ||
+        state.status?.state !== "ready" ||
+        state.running ||
+        state.modelsChecking ||
+        state.modelsError ||
+        !state.models.length ||
+        !effort
+      )
+        return;
+      const efforts = createEffortsFor(
+        model || providerDefaults.model,
+        state.models,
+      );
+      if (!efforts.some((level) => level.id === effort))
+        onChange(readConfig({ ...config, effort: "" }));
+    }, [
+      agent,
+      config,
+      disabled,
+      effort,
+      model,
+      onChange,
+      providerDefaults.model,
+      state.checking,
+      state.models,
+      state.modelsChecking,
+      state.modelsError,
+      state.running,
+      state.status?.state,
+    ]);
+    const effortOptions = thinkingOptions(
+      createEffortsFor(model || providerDefaults.model, state.models),
+      state.models,
+      current.effort,
+    );
+    return (
+      <Select
+        label="Thinking"
+        valueLabel={current.effort ? undefined : "Automatic"}
+        valueSuffix={current.effort ? undefined : " · Default"}
+        variant="compact"
+        value={current.effort}
+        groups={[{ label: "", options: effortOptions }]}
+        disabled={
+          disabled ||
+          state.status?.state !== "ready" ||
+          Boolean(state.running) ||
+          state.modelsChecking ||
+          Boolean(state.modelsError) ||
+          state.models.length === 0
+        }
+        onValueChange={(effort) => onChange({ ...current, effort })}
       />
     );
   }
@@ -815,6 +917,7 @@ export function createTabs({
     close?: AgentViewProps<Config>["close"];
     openConversation?: AgentViewProps<Config>["openConversation"];
   }) {
+    useClockFormat();
     const sessions = useSyncExternalStore(
       (listener) => runtime.subscribe(listener),
       () => runtime.sessions(agent.key),
@@ -972,25 +1075,11 @@ export function createTabs({
         setSaving(false);
       }
     };
-    const efforts = effortsFor(
-      draft.model || providerDefaults.model,
+    const effortOptions = thinkingOptions(
+      effortsFor(draft.model || providerDefaults.model, setupState.models),
       setupState.models,
+      draft.effort,
     );
-    const effortOptions = [
-      { value: "", label: "Automatic · Default" },
-      // A saved level the model does not list; without Claude's list, it may.
-      ...(draft.effort && !efforts.some((level) => level.id === draft.effort)
-        ? [
-            {
-              value: draft.effort,
-              label: setupState.models.length
-                ? `${effortLabel(draft.effort)} (unavailable)`
-                : effortLabel(draft.effort),
-            },
-          ]
-        : []),
-      ...efforts.map(({ id, label }) => ({ value: id, label })),
-    ];
     const modelControl = (
       <>
         <ModelPicker
@@ -1101,6 +1190,7 @@ export function createTabs({
 
   return {
     CreateModel,
+    CreateThinking,
     Create,
     ProviderDialogBody,
     DefaultControl,

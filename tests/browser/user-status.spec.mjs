@@ -237,6 +237,16 @@ test("statuses edit, synchronize, clear, reject stale traffic and retain failed 
       "Working remotely",
     );
     await expect(bobByline.locator("[tabindex]")).toHaveCount(0);
+    // Where the full status is shown, hovering the emoji names it, as
+    // reaction previews do.
+    const profileStatus = page.getByRole("region", {
+      name: "Profile",
+      exact: true,
+    });
+    await profileStatus.getByText("🏠", { exact: true }).hover();
+    await expect(page.locator('[role="tooltip"][data-open]')).toHaveText(
+      ":house:",
+    );
     await page.getByRole("button", { name: "Replay older Bob" }).click();
     await expect(
       page
@@ -252,6 +262,12 @@ test("statuses edit, synchronize, clear, reject stale traffic and retain failed 
     await expect(
       bobByline.getByRole("img", { name: ":party: Celebrating", exact: true }),
     ).toBeVisible();
+    await profileStatus
+      .getByRole("img", { name: ":party:", exact: true })
+      .hover();
+    await expect(page.locator('[role="tooltip"][data-open]')).toHaveText(
+      ":party:",
+    );
     // A code missing from the catalog keeps compact slots at emoji size and
     // reads as status text where the full status is shown.
     await page

@@ -31,6 +31,10 @@ import { MessageComposer } from "../messages/MessageComposer";
 import { mentionDraft, type MentionDraft } from "../messages/mention-draft";
 import { clearView, readView, writeView } from "../../shared/view-state";
 import { Button } from "../../shared/design-system/ui/Button";
+import {
+  useVerifiedNames,
+  withVerifiedNames,
+} from "../profiles/useVerifiedNames";
 import { RecipientPicker } from "./RecipientPicker";
 import type { Recipient } from "./usePeople";
 import styles from "./NewMessage.module.css";
@@ -153,7 +157,29 @@ export function NewMessage({
   const [recipients, setRecipients] = useState(() =>
     savedRecipients(scope, session.viewer),
   );
-  const recipientNames = recipients.map((person) => person.name).join(", ");
+  // Recipients keep the facts they were chosen with; their labels follow the
+  // current verification and otherwise the current profile name, falling back
+  // to those facts.
+  const verified = useVerifiedNames(session, recipients);
+  const profiles = useSyncExternalStore(
+    session.profiles.subscribe,
+    session.profiles.snapshot,
+  );
+  const named = useMemo(
+    () =>
+      withVerifiedNames(
+        recipients.map((person) => {
+          const current = profiles.get(person.pubkey);
+          return current && !current.verified
+            ? { ...person, name: current.name }
+            : person;
+        }),
+        verified,
+        profiles,
+      ),
+    [recipients, verified, profiles],
+  );
+  const recipientNames = named.map((person) => person.name).join(", ");
   const roster = useMemo(() => ({ recipients }), [recipients]);
   // Text still in the To field may be a recipient not chosen yet, so Send
   // waits for it to become one or be cleared.
@@ -448,6 +474,7 @@ export function NewMessage({
         session={session}
         scope={scope}
         selected={recipients}
+        labels={named}
         disabled={locked}
         onChange={change}
         onComplete={focusComposer}
@@ -473,7 +500,7 @@ export function NewMessage({
               animateEntrance
               size="hero-large"
               max={5}
-              items={recipients.map((person) => ({
+              items={named.map((person) => ({
                 id: person.pubkey,
                 name: person.name,
                 src: avatarMedia(person.picture, session.media),

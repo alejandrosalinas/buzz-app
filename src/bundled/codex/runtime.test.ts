@@ -23,6 +23,7 @@ import {
 } from "../../features/agent-protection/service";
 import type { RelayData } from "../../features/relay/service";
 import type { EventData } from "../../features/relay/events";
+import type { Profile } from "../../features/relay/contracts";
 import { eventDto } from "../../features/relay/events";
 import { keypair, signed } from "../../features/relay/testing";
 import type {
@@ -317,6 +318,7 @@ function fixture(
       workflowAuthority: undefined as string | undefined,
       profiles: {
         ensure: vi.fn(async () => {}),
+        snapshot: vi.fn(() => new Map<string, Profile>()),
         event: vi.fn(
           (_key: string): ReturnType<typeof eventDto> | undefined => undefined,
         ),
@@ -2210,7 +2212,7 @@ it("serializes owner follow-ups and routes tool replies to the latest accepted r
     tags: expect.arrayContaining([["e", "c".repeat(64), "", "reply"]]),
   });
 });
-it("cuts delayed history off before the request, including same-second messages and edits", async () => {
+it("cuts delayed history messages off before the request while applying current edits", async () => {
   const f = fixture();
   const first = f.delivery("CURRENT_REQUEST");
   if (!("event" in first.trigger)) throw new Error("Expected a mention");
@@ -2273,7 +2275,7 @@ it("cuts delayed history off before the request, including same-second messages 
     JSON.parse(history ?? "{}").messages.map(
       (message: { content: string }) => message.content,
     ),
-  ).toEqual(["EARLIER_EDIT", "TIE_BEFORE"]);
+  ).toEqual(["FUTURE_EDIT", "TIE_BEFORE"]);
   expect(
     JSON.stringify(f.sent.find((wire) => wire.method === "turn/steer")?.params),
   ).toContain("LATER_REQUEST");
@@ -2984,6 +2986,51 @@ it("gives a fresh wake the thread's earlier messages of its same second, and non
       (message: { content: string }) => message.content,
     ),
   ).toEqual(["ORIGINAL_REQUEST", "EARLIER_REPLY"]);
+});
+it("names each message's author beside their pubkey", async () => {
+  const f = fixture();
+  f.snapshot.session.profiles.snapshot.mockReturnValue(
+    new Map([
+      [
+        owner,
+        {
+          name: "Sal M",
+          verified: { displayName: "Sal M", username: "sal" },
+        } as Profile,
+      ],
+    ]),
+  );
+  const delivery = f.delivery("@Codex look");
+  if (!("event" in delivery.trigger)) throw new Error("Expected a mention");
+  const trigger = delivery.trigger.event as EventData;
+  f.read.mockResolvedValueOnce([
+    {
+      ...trigger,
+      id: "d".repeat(64),
+      content: "EARLIER",
+      created_at: trigger.created_at - 1,
+      tags: trigger.tags.filter(([key]) => key !== "ms"),
+    },
+    trigger,
+  ]);
+  await f.runtime.run(delivery);
+  await vi.waitFor(() => expect(f.starts()).toHaveLength(1));
+  const params = f.starts()[0]?.params as { input: { text: string }[] };
+  const text = params.input.map((item) => item.text).join("\n");
+  const history = text.match(
+    /<thread-context>\n([\s\S]*?)\n<\/thread-context>/,
+  )?.[1];
+  expect(JSON.parse(history ?? "{}").messages).toMatchObject([
+    {
+      pubkey: owner,
+      username: "sal",
+      display_name: "Sal M",
+      content: "EARLIER",
+    },
+  ]);
+  expect(text.match(/<buzz-event[^>]*>\n([^\n]*)/)?.[1] ?? "").toContain(
+    `"pubkey":"${owner}","username":"sal","display_name":"Sal M"`,
+  );
 });
 it("sets no deadline of its own on a turn", async () => {
   // Any deadline Buzz set would already have passed.
@@ -5036,10 +5083,13 @@ it("method calls: a thread and a turn make no relay-session call beyond the turn
     1,
   );
   // A thread/start and its first turn: only the deliberate message-context
-  // read of the triggering conversation.
+  // read of the triggering conversation, and its authors' profiles, so the
+  // turn can name them beside their pubkeys.
+  const turnReads = ["session.read", "profiles.ensure"];
   expect(Object.keys(started)).toEqual(
-    Object.keys(started).filter((name) => name === "session.read"),
+    Object.keys(started).filter((name) => turnReads.includes(name)),
   );
+  expect(session.profiles.ensure).toHaveBeenCalledWith([owner], "foreground");
   // Those reads are message history in the triggering channel, nothing else.
   const context = () =>
     (f.read.mock.calls as unknown as [readonly Record<string, unknown>[]][])
@@ -5068,7 +5118,7 @@ it("method calls: a thread and a turn make no relay-session call beyond the turn
   );
   expect(
     Object.entries(turn).filter(
-      ([name, count]) => count > 0 && name !== "session.read",
+      ([name, count]) => count > 0 && !turnReads.includes(name),
     ),
   ).toEqual([]);
   expect(context()).toBe(true);

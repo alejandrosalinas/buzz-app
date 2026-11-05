@@ -2,10 +2,14 @@ import { afterEach, expect, it, vi } from "vitest";
 import { getLogger, logLevel, setLogLevel } from "../developer/logging";
 import {
   createMediaPreparation,
+  decodedImageCapture,
+  hasDecodedImage,
   openingFrame,
   openingFrameCapture,
   rememberOpeningFrame,
+  retainDecodedImage,
   saveData,
+  takeDecodedImage,
 } from "./media";
 
 afterEach(() => {
@@ -147,4 +151,39 @@ it("bounds opening frames by encoded size and forgets them with session media", 
   expect(openingFrame("late")).toBeUndefined();
   rememberOpeningFrame("current", frame(10), openingFrameCapture());
   expect(openingFrame("current")).toBeDefined();
+});
+
+it("bounds decoded images by size and owner and forgets them with session media", () => {
+  // 64 MiB decoded each, the largest retained; the 512 MiB budget holds eight.
+  const image = (side = 4096) =>
+    ({ naturalWidth: side, naturalHeight: side }) as HTMLImageElement;
+  const owner = {};
+  createMediaPreparation().dispose();
+  const capture = decodedImageCapture();
+  retainDecodedImage(owner, "oversized", image(4097), capture);
+  retainDecodedImage(owner, "empty", image(0), capture);
+  expect(hasDecodedImage(owner, "oversized")).toBe(false);
+  expect(hasDecodedImage(owner, "empty")).toBe(false);
+  const images = Array.from({ length: 10 }, () => image());
+  for (const [i, item] of images.entries())
+    retainDecodedImage(owner, `image-${i}`, item, capture);
+  expect(hasDecodedImage(owner, "image-1")).toBe(false);
+  expect(hasDecodedImage(owner, "image-2")).toBe(true);
+  expect(takeDecodedImage({}, "image-9")).toBeUndefined();
+  const claimed = takeDecodedImage(owner, "image-9");
+  expect(claimed).toBe(images[9]);
+  expect(takeDecodedImage(owner, "image-9")).toBeUndefined();
+  // Claiming frees its budget; re-retaining makes the source newest.
+  if (claimed) retainDecodedImage(owner, "image-9", claimed, capture);
+  retainDecodedImage(owner, "image-10", image(), capture);
+  expect(hasDecodedImage(owner, "image-2")).toBe(false);
+  expect(hasDecodedImage(owner, "image-3")).toBe(true);
+  expect(hasDecodedImage(owner, "image-9")).toBe(true);
+
+  createMediaPreparation().dispose();
+  expect(hasDecodedImage(owner, "image-9")).toBe(false);
+  retainDecodedImage(owner, "late", image(), capture);
+  expect(hasDecodedImage(owner, "late")).toBe(false);
+  retainDecodedImage(owner, "current", image(), decodedImageCapture());
+  expect(hasDecodedImage(owner, "current")).toBe(true);
 });

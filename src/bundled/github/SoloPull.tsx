@@ -14,6 +14,7 @@ import { ownSolo } from "../../features/solo/labels";
 import { writeLink, type SoloPulls } from "./solo-pull";
 import { describePull, pullTone, stateIcons } from "./pull-state-view";
 import styles from "./GitHub.module.css";
+import { useOpenGitHubLinksInBuzz } from "./link-preference";
 
 /** A Solo chat's linked pull request in place of its chat icon. */
 export function SoloPullIcon({
@@ -73,6 +74,7 @@ export function SessionPullLauncher({
   open(target: string): boolean;
   canOpen(target: string): boolean;
 }) {
+  const inBuzz = useOpenGitHubLinksInBuzz();
   const pull = useSoloPull(pulls, channelId);
   if (!pull) return null;
   const label = `Open linked ${describePull(pull).toLowerCase()}`;
@@ -83,9 +85,22 @@ export function SessionPullLauncher({
       variant="ghost"
       aria-label={label}
       title={label}
-      disabled={!canOpen(pull.url)}
+      disabled={inBuzz && !canOpen(pull.url)}
       icon={<Icon size="1rem" aria-hidden="true" />}
-      onClick={() => open(pull.url)}
+      {...(inBuzz
+        ? { onClick: () => open(pull.url) }
+        : {
+            nativeButton: false,
+            role: "link",
+            render: (props) => (
+              <a
+                {...props}
+                href={pull.url}
+                target="_blank"
+                rel="noopener noreferrer"
+              />
+            ),
+          })}
     />
   );
 }

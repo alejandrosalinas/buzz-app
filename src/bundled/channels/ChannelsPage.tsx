@@ -41,6 +41,7 @@ import type { ChannelLifecycleAction } from "../../features/relay/channel-lifecy
 import type { CommunityMembership } from "../moderation/membership";
 import { SoloHeading, SoloToolbar, useSoloMoveRecovery } from "./SoloHeading";
 import { NewMessage } from "../../features/direct-messages/NewMessage";
+import { ForwardMessageProvider } from "../../features/messages/ForwardMessage";
 import { Panel } from "../../shared/design-system/ui/Panel";
 import { Button } from "../../shared/design-system/ui/Button";
 import { IconButton } from "../../shared/design-system/ui/IconButton";
@@ -801,6 +802,27 @@ function ChannelWorkspace({
           );
       },
     });
+  };
+  const handleCommand = (command: string, signal: AbortSignal) => {
+    if (command.toLowerCase() !== "/leave" || !current || solo) return false;
+    return (async () => {
+      const permissions = await queries.channelLifecycle.load(
+        current.id,
+        signal,
+      );
+      signal.throwIfAborted();
+      if (!permissions.canLeave)
+        throw new Error(
+          permissions.leaveReason ??
+            "You can’t leave this channel with your current permissions.",
+        );
+      const trigger =
+        document.activeElement instanceof HTMLElement
+          ? document.activeElement
+          : undefined;
+      chooseLifecycle(current, "leave", trigger);
+      return true;
+    })();
   };
   // A Solo start that fails leaves its chat for New chat only while this
   // workspace still shows that chat.
@@ -1997,6 +2019,7 @@ function ChannelWorkspace({
               ) : undefined
             }
             onSend={onComposerSend}
+            onCommand={handleCommand}
             focusRequest={composerFocus}
           />
         )}
@@ -2460,7 +2483,14 @@ function ChannelWorkspace({
           }
         }
       >
-        {workspace}
+        <ForwardMessageProvider
+          session={queries}
+          scope={scope}
+          navigation={navigator}
+          renderDialog
+        >
+          {workspace}
+        </ForwardMessageProvider>
       </ConversationChannel>
       {soloMoveNotices}
     </LinkThreadTabContext>

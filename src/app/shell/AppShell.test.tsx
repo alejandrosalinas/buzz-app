@@ -8,6 +8,7 @@ import {
 // @vitest-environment jsdom
 import "@testing-library/jest-dom/vitest";
 import {
+  act,
   cleanup,
   fireEvent,
   render,
@@ -23,6 +24,9 @@ import { createServices, type AppServices } from "../services";
 import { ToastProvider } from "../../shared/design-system/ui/Toast";
 import { AppShell } from "./AppShell";
 import { createAppearance } from "../../shared/theme/service";
+import { Context } from "@deepseek-ai/cordis";
+import { BackdropsService } from "../../features/backdrops/service";
+import { ShellBackdrops } from "../../features/backdrops/ShellBackdrops";
 
 const testAppearance = createAppearance(window);
 
@@ -235,6 +239,56 @@ it("does not make a non-primary plugin page's sidebar collapsible", () => {
   expect(
     screen.queryByRole("button", { name: "Hide sidebar" }),
   ).not.toBeInTheDocument();
+});
+
+it("renders the default shell unchanged until a plugin registers a backdrop, and again after", async () => {
+  const current = createServices();
+  services = current;
+  const root = new Context();
+  root.provide("pluginStatus", {
+    isActive: () => true,
+    subscribe: () => () => {},
+  });
+  const backdrops = new BackdropsService(root);
+  const shell = (backdrop?: ReactNode) => (
+    <ToastProvider>
+      <AppShell
+        pages={[]}
+        selected="buzz.channels/channels"
+        navigationAttempt=""
+        onSelect={() => {}}
+        tone="default"
+        communities={current.communities}
+        accountActions={current.accountActions}
+        appearance={testAppearance}
+        backdrop={backdrop}
+      >
+        content
+      </AppShell>
+    </ToastProvider>
+  );
+  const view = render(shell());
+  const baseline = view.container.innerHTML;
+  view.rerender(shell(<ShellBackdrops backdrops={backdrops} />));
+  expect(view.container.innerHTML).toBe(baseline);
+
+  const fiber = root
+    .extend({ pluginOwner: { id: "example.plugin", revision: "one" } })
+    .plugin((ctx) =>
+      ctx.backdrops?.register({
+        id: "glow",
+        component: () => <canvas data-testid="glow" />,
+      }),
+    );
+  await act(() => fiber.await());
+  const layer = screen.getByTestId("glow").closest(".shell-backdrop");
+  expect(layer?.parentElement).toHaveClass("shell-background");
+  expect(layer).toHaveAttribute("aria-hidden", "true");
+  expect(layer).toHaveAttribute("inert");
+
+  await act(() => fiber.dispose());
+  expect(view.container.innerHTML).toBe(baseline);
+  await root.fiber.dispose();
 });
 
 it("keeps built-in sidebar controls available before page contributions load", () => {

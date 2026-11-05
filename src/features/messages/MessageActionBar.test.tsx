@@ -33,6 +33,43 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 
+it.each([true, false])(
+  "offers forwarding in the toolbar and menu with link available=%s",
+  async (available) => {
+    pointerMedia(false);
+    const user = userEvent.setup();
+    const forward = vi.fn();
+    render(
+      <Row
+        copyText={() => "Message"}
+        link={available ? "buzz://message?channel=alpha&id=abc" : undefined}
+        onForward={forward}
+      />,
+    );
+    fireEvent.pointerEnter(screen.getByTestId("message"));
+    const button = await screen.findByRole("button", {
+      name: "Forward message",
+    });
+    expect((button as HTMLButtonElement).disabled).toBe(!available);
+    if (available) {
+      await user.click(button);
+      expect(forward).toHaveBeenCalledTimes(1);
+    }
+    await user.click(
+      screen.getByRole("button", { name: "More message actions" }),
+    );
+    const item = await screen.findByRole("menuitem", {
+      name: "Forward message",
+    });
+    expect(item.hasAttribute("data-disabled")).toBe(!available);
+    if (available) {
+      await user.click(item);
+      await waitFor(() => expect(forward).toHaveBeenCalledTimes(2));
+      expect(screen.queryByRole("menu")).toBeNull();
+    }
+  },
+);
+
 function Row(props: ComponentProps<typeof MessageActionBar>) {
   const rowRef = useRef<HTMLDivElement>(null);
   return (

@@ -708,6 +708,86 @@ it("opens removed Messages settings links at Appearance without adding a navigat
   expect(screen.queryByRole("button", { name: "Messages" })).toBeNull();
 });
 
+it("keeps a return path for addressed plugin settings and retires it on Close", async () => {
+  vi.stubGlobal(
+    "ResizeObserver",
+    class {
+      observe() {}
+      unobserve() {}
+      disconnect() {}
+    },
+  );
+  activation.release();
+  const current = createServices();
+  services = current;
+  render(<App services={current} />);
+  await waitFor(() =>
+    expect(current.navigation.snapshot().status).not.toBe("pending"),
+  );
+  const target = {
+    version: 1,
+    kind: "settings",
+    section: "plugins",
+    pluginId: "buzz.pairing",
+    scope: null,
+  } as const;
+  const list = {
+    version: 1,
+    kind: "settings",
+    section: "plugins",
+    scope: null,
+  } as const;
+  void current.navigation.open(list);
+  await screen.findByRole("dialog", { name: "Settings" });
+  await waitFor(() =>
+    expect(current.navigation.snapshot().status).toBe("opened"),
+  );
+  void current.navigation.open(target);
+  expect(
+    await screen.findByRole("complementary", { name: "Pair mobile details" }),
+  ).toBeVisible();
+  current.navigation.back();
+  await waitFor(() =>
+    expect(current.navigation.snapshot().entry.target).toEqual(list),
+  );
+  await waitFor(() =>
+    expect(
+      screen.queryByRole("complementary", { name: "Pair mobile details" }),
+    ).not.toBeInTheDocument(),
+  );
+  current.navigation.forward();
+  expect(
+    await screen.findByRole("complementary", { name: "Pair mobile details" }),
+  ).toBeVisible();
+  const appearance = { ...list, section: "appearance" };
+  void current.navigation.open(appearance);
+  await waitFor(() =>
+    expect(current.navigation.snapshot().status).toBe("opened"),
+  );
+  void current.navigation.open(target);
+  await screen.findByRole("complementary", { name: "Pair mobile details" });
+  fireEvent.click(screen.getByRole("button", { name: "Close plugin details" }));
+  await waitFor(() =>
+    expect(current.navigation.snapshot().entry.target).toEqual({
+      version: 1,
+      kind: "settings",
+      section: "plugins",
+      scope: null,
+    }),
+  );
+  current.navigation.back();
+  await waitFor(() =>
+    expect(current.navigation.snapshot().entry.target).toEqual(appearance),
+  );
+  current.navigation.back();
+  await waitFor(() =>
+    expect(current.navigation.snapshot().entry.target).toEqual(list),
+  );
+  expect(
+    screen.queryByRole("complementary", { name: "Pair mobile details" }),
+  ).not.toBeInTheDocument();
+});
+
 it("Back closes Settings onto the view beneath and Forward reopens it; other shortcuts stay blocked", async () => {
   vi.stubGlobal(
     "ResizeObserver",

@@ -131,8 +131,32 @@ function SidebarWorkIcon() {
   return <FolderOpenIcon aria-hidden="true" />;
 }
 
+// Full-window paint, so any pixel the shell leaves uncovered shows which wins.
+const fill = (background: string, zIndex?: number) => () => (
+  <div style={{ position: "absolute", inset: 0, background, zIndex }} />
+);
+
 export const fixturePlugins: readonly BundledPlugin[] = [
   soloRegionFixture,
+  {
+    manifest: {
+      id: "fixture.backdrops",
+      name: "Backdrop fixture",
+      apiVersion: 1,
+    },
+    enabledByDefault: false,
+    module: {
+      apply(ctx) {
+        const backdrops = ctx.reflect.get("backdrops");
+        // The earlier layer raises its content; the later one must still win.
+        backdrops?.register({
+          id: "under",
+          component: fill("rgb(255 0 0)", 1),
+        });
+        backdrops?.register({ id: "over", component: fill("rgb(0 0 255)") });
+      },
+    },
+  },
   {
     manifest: {
       id: "fixture.provider",

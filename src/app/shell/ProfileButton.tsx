@@ -1,4 +1,4 @@
-import { RecommendationCount } from "../RecommendationCount";
+import { PluginUpdatesMenu } from "../PluginUpdates";
 import { formatPublicKey } from "../../shared/identity/public-key";
 import { usePresenceStatus } from "../../features/presence/react";
 import { useRelayConnection } from "../../features/relay/react";
@@ -25,7 +25,6 @@ import {
   GearIcon,
   UserIcon,
   PlugIcon,
-  SquaresFourIcon,
   SunIcon,
   MoonIcon,
   MonitorIcon,
@@ -432,6 +431,7 @@ export function ProfileButton({
                       session={session}
                       value={status.emoji}
                       url={status.emojiUrl}
+                      hint
                     />
                     <span className="min-w-0 truncate text-body-sm">
                       {status.text}
@@ -500,22 +500,13 @@ export function ProfileButton({
               )}
             </MenuSubmenuPopup>
           </MenuSubmenu>
-          <MenuItem
-            onClick={() => {
+          <PluginUpdatesMenu
+            recommendations={pluginRecommendations}
+            onManage={() => {
               handoff.current = true;
               onSettings("plugins");
             }}
-          >
-            <MenuIcon>
-              <SquaresFourIcon aria-hidden="true" size={16} />
-            </MenuIcon>
-            Plugins
-            {pluginRecommendations > 0 && (
-              <MenuTrailing>
-                <RecommendationCount count={pluginRecommendations} />
-              </MenuTrailing>
-            )}
-          </MenuItem>
+          />
           <MenuItem
             aria-current={settingsSelected ? "page" : undefined}
             onClick={() => {

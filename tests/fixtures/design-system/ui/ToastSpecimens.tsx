@@ -11,6 +11,7 @@ import { Button } from "../../../../src/shared/design-system/ui/Button";
 export function ToastSpecimens() {
   const [saved, setSaved] = useState(false);
   const [failed, setFailed] = useState(false);
+  const [linked, setLinked] = useState(false);
   const [recoveries, setRecoveries] = useState<number[]>([]);
   const [modal, setModal] = useState(false);
   const modalTrigger = useRef<HTMLButtonElement>(null);
@@ -21,6 +22,7 @@ export function ToastSpecimens() {
   <div className="flex max-w-sm flex-wrap gap-3">
     <Button onClick={() => setSaved(true)}>Show confirmation</Button>
     <Button onClick={() => setFailed(true)}>Show recovery</Button>
+    <Button onClick={() => setLinked(true)}>Show linked notice</Button>
     <Button onClick={() => setRecoveries([1, 2, 3, 4, 5, 6])}>
       Show recovery stack
     </Button>
@@ -35,6 +37,12 @@ export function ToastSpecimens() {
       timeout={5000}
       onDismiss={() => setSaved(false)}
     />
+  )}
+  {linked && (
+    <ToastNotice title="Plugin update available" description="Save your drafts before you update."
+      navigation={{label:"Open related dialog",open:()=>{setLinked(false);setModal(true);}}}>
+      <Button onClick={()=>setLinked(false)}>Update</Button>
+    </ToastNotice>
   )}
   {failed && (
     <ToastNotice
@@ -82,6 +90,9 @@ export function ToastSpecimens() {
                   Show confirmation
                 </Button>
                 <Button onClick={() => setFailed(true)}>Show recovery</Button>
+                <Button onClick={() => setLinked(true)}>
+                  Show linked notice
+                </Button>
                 <Button onClick={() => setRecoveries([1, 2, 3, 4, 5, 6])}>
                   Show recovery stack
                 </Button>
@@ -97,6 +108,21 @@ export function ToastSpecimens() {
                   timeout={5000}
                   onDismiss={() => setSaved(false)}
                 />
+              )}
+              {linked && (
+                <ToastNotice
+                  title="Plugin update available"
+                  description="Save your drafts before you update."
+                  navigation={{
+                    label: "Open related dialog",
+                    open: () => {
+                      setLinked(false);
+                      setModal(true);
+                    },
+                  }}
+                >
+                  <Button onClick={() => setLinked(false)}>Update</Button>
+                </ToastNotice>
               )}
               {failed && (
                 <ToastNotice

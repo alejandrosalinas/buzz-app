@@ -4,6 +4,7 @@ export type PluginInfo = {
   manifest: PluginManifest;
   source: "bundled" | "external";
   enabled: boolean;
+  updateChecks?: boolean | null;
   revision: string;
   previous: string | null;
   hasSignature?: boolean;
@@ -24,7 +25,13 @@ export type Catalog = {
   location: string;
   plugins: PluginInfo[];
 };
-export type ManagementAction = "enable" | "disable" | "remove" | "rollback";
+export type ManagementAction =
+  | "enable"
+  | "disable"
+  | "remove"
+  | "rollback"
+  | "enable-update-checks"
+  | "disable-update-checks";
 
 export type ManagedState = "missing" | "current" | "outdated" | "other";
 export type ManagedEntry = {

@@ -86,6 +86,22 @@ export function createMessages(
     validateMentions(channelId, unique);
     return unique.map((key) => ["p", key]);
   };
+  /** A one-to-one DM's agent partner must be `p`-tagged: a hosted agent is
+   * woken only by a `p` tag naming it, and local agents already treat any
+   * 1:1 DM message as addressed. Never a human partner: a `p` tag is a
+   * mention and would bypass their mute. "Agent" is the profile's `isAgent`
+   * (a NIP-OA `auth` tag or a declared agent flag), the app's shared agent
+   * signal. Only new messages and replies call this; edits and reactions
+   * are not new turns. */
+  const withDmAgents = (channelId: string, mentions: readonly string[]) => {
+    const profileMap = profiles?.snapshot();
+    return [
+      ...mentions,
+      ...unmentionedRecipients(channelId).filter(
+        (key) => profileMap?.get(key)?.isAgent,
+      ),
+    ];
+  };
   const referenceTags = (pubkeys: readonly string[]) => {
     if (
       pubkeys.length > 32 ||
@@ -297,7 +313,7 @@ export function createMessages(
           content: text(message.content),
           tags: [
             ["h", channelId],
-            ...mentionTags(channelId, mentions),
+            ...mentionTags(channelId, withDmAgents(channelId, mentions)),
             ...referenceTags(references),
             ...pickTags(channelId, mentions, picks),
             ...emojiTags(content),
@@ -413,7 +429,7 @@ export function createMessages(
           ["h", channelId],
           ...(parentId === rootId ? [] : [["e", rootId, "", "root"]]),
           ["e", parentId, "", "reply"],
-          ...mentionTags(channelId, mentions),
+          ...mentionTags(channelId, withDmAgents(channelId, mentions)),
           ...referenceTags(references),
           ...pickTags(channelId, mentions, picks),
           ...emojiTags(content),

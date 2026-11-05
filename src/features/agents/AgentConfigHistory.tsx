@@ -3,6 +3,7 @@ import {
   formatFullTimestamp,
   formatItemTimestamp,
 } from "../../shared/datetime";
+import { useClockFormat } from "../../shared/clock-preference";
 import { relativeTimestamp } from "../../shared/relative-timestamp";
 import type { RelayEvent } from "../relay/events";
 import { Dialog } from "../../shared/design-system/ui/Dialog";
@@ -367,6 +368,7 @@ export function AgentConfigVersionRow({
   label?: string;
   onSelect(): void;
 }) {
+  useClockFormat();
   const operation = artifactOp(event);
   const invalid =
     operation !== "delete" && revisionProblem(expected, event, settings);

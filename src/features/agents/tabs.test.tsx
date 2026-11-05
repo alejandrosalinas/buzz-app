@@ -133,15 +133,20 @@ it("moves both synced histories into a collapsed Settings disclosure", async () 
   ).toBeInTheDocument();
 });
 
-it("adds plugin tabs to local agents only, alongside Settings and Memory", () => {
-  const added = {
-    id: "watching",
-    key: "buzz.watching/watching",
-    pluginId: "buzz.watching",
+it("adds plugin tabs to each agent shown unless their `when` says otherwise, alongside Settings and Memory", () => {
+  const tab = (id: string, when?: (agent: Agent) => boolean) => ({
+    id,
+    key: `buzz.example/${id}`,
+    pluginId: "buzz.example",
     revision: "1",
-    title: "Watching",
-    component: ({ agent }: { agent: Agent }) => <p>Watching {agent.name}</p>,
-  };
+    title: id,
+    component: ({ agent }: { agent: Agent }) => (
+      <p>
+        {id} {agent.name}
+      </p>
+    ),
+    ...(when && { when }),
+  });
   const agents = {
     save: async () => {},
     subscribe: () => () => {},
@@ -151,7 +156,10 @@ it("adds plugin tabs to local agents only, alongside Settings and Memory", () =>
       sides: [],
       revise: async () => ({ ok: true }),
     }),
-    addedTabs: () => [added],
+    addedTabs: () => [
+      tab("every"),
+      tab("local", (shown) => shown.place === "here"),
+    ],
     registerTab: () => {},
     controlAttention: () => {},
   } as unknown as Agents;
@@ -164,17 +172,22 @@ it("adds plugin tabs to local agents only, alongside Settings and Memory", () =>
     }).map((tab) => tab.value);
   expect(values("here")).toEqual([
     "agent:settings",
-    "agent:added:buzz.watching/watching",
+    "agent:added:buzz.example/every",
+    "agent:added:buzz.example/local",
     "agent:memory",
   ]);
-  expect(values("hosted")).not.toContain("agent:added:buzz.watching/watching");
+  // Settings (version history) stays local; a tab without `when` is for hosted agents too.
+  expect(values("hosted")).toEqual([
+    "agent:added:buzz.example/every",
+    "agent:memory",
+  ]);
   expect(values("elsewhere")).toEqual([]);
   render(
     agentSections({ agents, agent, type: undefined, memories: undefined })
-      .find((tab) => tab.value === "agent:added:buzz.watching/watching")
+      .find((tab) => tab.value === "agent:added:buzz.example/every")
       ?.render(),
   );
-  expect(screen.getByText("Watching Ada")).toBeInTheDocument();
+  expect(screen.getByText("every Ada")).toBeInTheDocument();
 });
 
 it("adds a plugin tab only to the agents its `when` accepts", () => {

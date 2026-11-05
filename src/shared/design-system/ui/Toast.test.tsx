@@ -81,6 +81,33 @@ it("finishes toast removal after the exit animation while the host stays mounted
   view.unmount();
 });
 
+it("keeps notice navigation separate from its explicit actions", async () => {
+  const open = vi.fn();
+  const update = vi.fn();
+  const dismiss = vi.fn();
+  render(
+    <ToastProvider>
+      <ToastNotice
+        title="Update Notes"
+        navigation={{ label: "Manage update checks", open }}
+        onDismiss={dismiss}
+      >
+        <Button onClick={update}>Update</Button>
+      </ToastNotice>
+    </ToastProvider>,
+  );
+  fireEvent.click(
+    await screen.findByRole("button", { name: "Manage update checks" }),
+  );
+  expect(open).toHaveBeenCalledTimes(1);
+  fireEvent.click(screen.getByRole("button", { name: "Update" }));
+  expect(update).toHaveBeenCalledTimes(1);
+  expect(open).toHaveBeenCalledTimes(1);
+  fireEvent.click(screen.getByRole("button", { name: "Dismiss notification" }));
+  await waitFor(() => expect(dismiss).toHaveBeenCalledTimes(1));
+  expect(open).toHaveBeenCalledTimes(1);
+});
+
 it("keeps startup notices inside the inert toast host", async () => {
   const host = document.createElement("div");
   host.id = "buzz-toast-root";

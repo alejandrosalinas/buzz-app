@@ -297,6 +297,11 @@ export type MessageComposerProps = {
   trailingTool?: ReactNode;
   inviteAgents?: boolean | undefined;
   onSend?: (id: string) => void;
+  /** A plain slash command with no recipients or attachments may be consumed by
+   * its conversation owner. Return false to send it as an ordinary message. */
+  onCommand?:
+    | ((command: string, signal: AbortSignal) => boolean | Promise<boolean>)
+    | undefined;
   /** Inbox may retire only after saving the replacement or confirming no draft remains. */
   onDraftSaved?: (() => void) | undefined;
   /** Before a focused form detaches, its host can hand focus to retained content. */
@@ -481,6 +486,7 @@ function Composer({
   label: customLabel,
   placeholder,
   onSend,
+  onCommand,
   onDraftSaved,
   onFocusedRemoval,
   editMessages,
@@ -2529,6 +2535,16 @@ function Composer({
     const capturedRunPicks = stickyPicks
       ? { ...(choicesNow?.value ?? {}) }
       : { ...capturedPicks, ...(choicesNow?.value ?? {}) };
+    const command =
+      onCommand &&
+      !captured.recipients.length &&
+      !captured.pending?.length &&
+      !captured.chatCards?.length &&
+      !captured.gifs?.length &&
+      !capturedAttachments.length &&
+      captured.text.trim().startsWith("/")
+        ? captured.text.trim()
+        : undefined;
     // A send is an agent follow-up unless it addresses a confirmed person
     // (a loaded, non-agent profile). Those, and untagged conversation in a
     // shared chat, go out now; recipients still being classified keep the
@@ -2551,6 +2567,30 @@ function Composer({
         agentKeys,
       );
     try {
+      if (command && onCommand) {
+        const handled = onCommand(command, attempt.signal);
+        if (handled !== false) {
+          setSending(true);
+          if (await handled) {
+            attempt.signal.throwIfAborted();
+            if (valueRef.current !== captured) return;
+            if (viewRevision(scope, draftKey) !== savedRevision) {
+              setConflict(true);
+              return;
+            }
+            const next = mentionDraft("");
+            saveDraft(next);
+            completion.invalidate();
+            caret.current = undefined;
+            input.current?.reset(next);
+            input.current?.focus();
+            setError(undefined);
+            automaticTag.current = undefined;
+            seedClosed.current = false;
+            return;
+          }
+        }
+      }
       const bringable = new Set(
         (agents?.joinable() ?? []).map((agent) => agent.pubkey),
       );

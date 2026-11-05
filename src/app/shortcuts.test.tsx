@@ -54,10 +54,17 @@ function harness(platform = "Win32") {
   const bindings = createShortcutBindings(window);
   const shortcuts = new ShortcutsService(ctx, window, bindings);
   const appearance = createAppearance(window);
-  const remove = registerAppShortcuts(shortcuts, appearance, vi.fn(), true);
+  const openSettings = vi.fn();
+  const remove = registerAppShortcuts(
+    shortcuts,
+    appearance,
+    openSettings,
+    true,
+  );
   return {
     ctx,
     shortcuts,
+    openSettings,
     bindings,
     remove,
     async dispose() {
@@ -597,6 +604,27 @@ it.each([
     }
   },
 );
+
+it("the macOS Settings menu request opens Settings, not behind a modal", async () => {
+  const h = harness("MacIntel");
+  const request = () => window.dispatchEvent(new Event("buzz:open-settings"));
+  const confirmation = document.createElement("div");
+  confirmation.setAttribute("role", "alertdialog");
+  confirmation.setAttribute("aria-modal", "true");
+  try {
+    document.body.append(confirmation);
+    request();
+    expect(h.openSettings).not.toHaveBeenCalled();
+    confirmation.remove();
+    request();
+    expect(h.openSettings).toHaveBeenCalledOnce();
+  } finally {
+    confirmation.remove();
+    await h.dispose();
+  }
+  request();
+  expect(h.openSettings).toHaveBeenCalledOnce();
+});
 
 it("mouse back/forward requests run the Back/Forward shortcuts, not behind a modal", async () => {
   const h = harness("MacIntel");

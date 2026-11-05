@@ -1,4 +1,4 @@
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { watchSlug } from "../../features/agents/attention";
 import type {
   Agent,
@@ -31,7 +31,12 @@ import {
   featureState,
   restoredFeature,
 } from "./features";
-import { formerWithSettings, subscribePrivateMembers } from "./former";
+import {
+  formerWithSettings,
+  startHostedRead,
+  subscribeHostedInstructions,
+  subscribePrivateMembers,
+} from "./former";
 import { PrivateChannels } from "./PrivateChannels";
 import {
   cannotEdit,
@@ -52,7 +57,9 @@ export function bestieTab(relay: RelayData, agents: TabAgents): AgentAddedTab {
   return {
     id: "bestie",
     title: "Bestie",
+    // Not on another device: its instructions can't be edited from here.
     when: (agent) =>
+      (agent.place === "here" || agent.place === "hosted") &&
       agent.pubkey === bestie.snapshot() &&
       inCommunity(agent, relay.snapshot()),
     subscribe: bestie.subscribe,
@@ -77,7 +84,11 @@ export function formerBestieTab(
     when: (agent) => {
       const current = bestie.snapshot();
       const snapshot = relay.snapshot();
+      // A hosted agent whose provider holds no instructions may still be in
+      // private channels to take it out of; its memory switches say they
+      // aren't available.
       return (
+        (agent.place === "here" || agent.place === "hosted") &&
         (!!current || (bestie.known() && bestie.recorded())) &&
         !!snapshot.session.mainAgent &&
         agent.pubkey !== current &&
@@ -88,14 +99,72 @@ export function formerBestieTab(
     subscribe(listener) {
       const stopBestie = bestie.subscribe(listener);
       const stopMembers = subscribePrivateMembers(relay, listener);
+      const stopHosted = subscribeHostedInstructions(listener);
       return () => {
         stopBestie();
         stopMembers();
+        stopHosted();
       };
     },
     component: ({ agent }) => (
       <BestieTab relay={relay} agents={agents} agent={agent} former />
     ),
+  };
+}
+
+/** A hosted agent's instructions, as its provider holds them: read when the
+ * tab opens, and again by `read` after each save. `shown` is the agent
+ * carrying them as a local agent's config does; `hosted` is absent for an
+ * agent that isn't hosted or whose provider offers none. */
+function useHostedInstructions(agents: FeatureAgents, agent: Agent) {
+  const capable =
+    agent.place === "hosted" && !!agents.hostedInstructions?.(agent.pubkey);
+  const [text, setText] = useState<{ text: string } | { error: string }>();
+  // Only the latest read started shows: an earlier one ending later is old.
+  const latest = useRef(0);
+  const read = async (signal?: AbortSignal) => {
+    const hosted = agents.hostedInstructions?.(agent.pubkey);
+    if (!hosted) return;
+    const order = ++latest.current;
+    // Abandoned as soon as the tab closes, before its provider answers.
+    const recording = startHostedRead(agent.pubkey, signal);
+    try {
+      const next = await hosted.get(signal);
+      recording.read(next);
+      if (order === latest.current) setText({ text: next });
+    } catch (cause) {
+      if (signal?.aborted) return;
+      recording.failed();
+      if (order === latest.current)
+        setText({
+          error: cause instanceof Error ? cause.message : String(cause),
+        });
+    }
+  };
+  // biome-ignore lint/correctness/useExhaustiveDependencies: reads again only for another agent
+  useEffect(() => {
+    if (!capable) return;
+    setText(undefined);
+    const controller = new AbortController();
+    void read(controller.signal);
+    return () => controller.abort();
+  }, [agent.pubkey, capable]);
+  if (!capable) return { shown: agent };
+  const instructions = text && "text" in text ? text.text : undefined;
+  return {
+    shown:
+      instructions === undefined
+        ? agent
+        : { ...agent, config: { instructions } },
+    hosted: {
+      loaded: instructions !== undefined,
+      error: text && "error" in text ? text.error : undefined,
+      read,
+      retry() {
+        setText(undefined);
+        void read();
+      },
+    },
   };
 }
 
@@ -120,6 +189,7 @@ function BestieTab({
   // One save at a time: each switch saves from the instructions it shows.
   const [saving, setSaving] = useState(false);
   const [removing, setRemoving] = useState(false);
+  const { shown, hosted } = useHostedInstructions(agents, agent);
   const others = bestie.choices.selectable.filter(
     (choice) => choice.pubkey !== agent.pubkey,
   );
@@ -129,7 +199,8 @@ function BestieTab({
       <FeatureSwitch
         key={feature.id}
         agents={agents}
-        agent={agent}
+        agent={shown}
+        hosted={hosted}
         session={session}
         feature={feature}
         former={former}
@@ -289,6 +360,7 @@ function RemoveBestie({
 function FeatureSwitch({
   agents,
   agent,
+  hosted,
   session,
   feature,
   former,
@@ -297,6 +369,8 @@ function FeatureSwitch({
 }: {
   agents: FeatureAgents;
   agent: Agent;
+  /** A hosted agent's instructions, which are read through its provider. */
+  hosted: ReturnType<typeof useHostedInstructions>["hosted"];
   session: RelaySession;
   feature: Feature;
   former: boolean;
@@ -304,9 +378,23 @@ function FeatureSwitch({
   setSaving(saving: boolean): void;
 }) {
   const [error, setError] = useState<string>();
-  const problem = cannotEdit(agents, agent);
+  const problem = cannotEdit(agents, agent, feature);
   if (problem)
     return <PreferenceRow title={feature.title} subtitle={problem} />;
+  if (hosted && !hosted.loaded)
+    return (
+      <PreferenceRow
+        title={feature.title}
+        subtitle={hosted.error ?? "Reading its instructions…"}
+        trailing={
+          hosted.error ? (
+            <Button variant="outline" onClick={hosted.retry}>
+              Retry
+            </Button>
+          ) : undefined
+        }
+      />
+    );
   const instructions = instructionsOf(agent);
   const timer = feature.timer && agent.attention[watchSlug(feature.timer.id)];
   const required = FEATURES.find(({ id }) => id === feature.requires);
@@ -321,6 +409,9 @@ function FeatureSwitch({
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : String(cause));
     } finally {
+      // The provider's copy is the one the switch shows next, after a failed
+      // save too: one refused as changed elsewhere then shows the change.
+      await hosted?.read();
       setSaving(false);
     }
   };

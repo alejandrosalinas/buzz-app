@@ -1,6 +1,11 @@
 // FOUNDATION: Shared conversation UI and plugin-owned tools/renderers; never another data owner.
 import type { ComponentType, ReactNode } from "react";
-import { EmbeddedThread, type EmbeddedThreadProps } from "./EmbeddedThread";
+import {
+  EmbeddedConversation,
+  EmbeddedThread,
+  type EmbeddedConversationProps,
+  type EmbeddedThreadProps,
+} from "./EmbeddedThread";
 import { Service, type Context } from "@deepseek-ai/cordis";
 import { createContributions } from "../../plugins/contributions";
 import {
@@ -73,6 +78,9 @@ export type Conversation = {
   registerMessageAction(action: MessageAction): void;
   ui: {
     Thread: (props: EmbeddedThreadProps) => ReactNode;
+    /** One channel's message management, edit target and overlays for a page's
+     * own `Message` rows and `Composer`, without visiting the channel. */
+    Conversation: (props: EmbeddedConversationProps) => ReactNode;
     Composer: (props: Omit<MessageComposerProps, "extensions">) => ReactNode;
     Message: (props: Omit<MessageRowProps, "extensions">) => ReactNode;
     /** The page's content as the first tab, beside conversations it opens;
@@ -221,6 +229,9 @@ export class ConversationService extends Service implements Conversation {
     this.ui = {
       Thread: (props: EmbeddedThreadProps) => (
         <EmbeddedThread {...props} host={this.ctx} extensions={this} />
+      ),
+      Conversation: (props: EmbeddedConversationProps) => (
+        <EmbeddedConversation {...props} host={this.ctx} extensions={this} />
       ),
       Composer: (props: Omit<MessageComposerProps, "extensions">) => (
         <MessageComposer {...props} extensions={this} />

@@ -32,8 +32,13 @@ import {
   signed,
 } from "../../features/relay/testing";
 import type { LiveCallbacks } from "../../features/relay/live";
+import {
+  readJournal,
+  type ReadJournal,
+} from "../../features/relay/read-state-storage";
 import type { AppServices } from "../services";
 import type { SearchGroup } from "./SearchChoices";
+import { setUnreadFirstPreference } from "../../features/search/unread-first-preference";
 import { SearchResults } from "./SearchResults";
 import { useSearchSettings } from "./SearchSettings";
 import {
@@ -167,6 +172,215 @@ it("opens with a conversation action and recent channels in activity order", asy
     expect(second).toHaveTextContent("older");
     fireEvent.click(action);
     expect(changeScope).toHaveBeenCalledExactlyOnceWith("older");
+  } finally {
+    cleanup();
+    owner.dispose();
+  }
+});
+
+it("leads an empty search with other unmuted unread channels and DMs, selecting the first for Enter", async () => {
+  const relay = keypair();
+  const viewer = keypair();
+  const friend = keypair();
+  let journal: ReadJournal | undefined;
+  const wire = scriptedTransport(viewer.pubkey, relay.pubkey);
+  const discovery = ["alpha", "dm", "muted", "other", "quiet", "read"].flatMap(
+    (id) => [
+      metadata(relay, id, id, undefined, id === "dm" ? [["t", "dm"]] : []),
+      roster(
+        relay,
+        id,
+        id === "dm" ? [viewer.pubkey, friend.pubkey] : [viewer.pubkey],
+      ),
+    ],
+  );
+  const owner = createRelaySession(
+    {
+      ...wire.transport,
+      query(filters) {
+        return Promise.resolve(
+          discovery.filter((event) =>
+            filters.some((filter) => filter.kinds?.includes(event.kind)),
+          ),
+        );
+      },
+      decodeSidebarPreferences: async () => ({
+        sections: [],
+        assignments: {},
+        starred: [],
+        muted: ["muted"],
+      }),
+    },
+    {
+      readStateFloor: () => 0,
+      readPublisherLock: async (_signal, work) => work(),
+      readStateStorage: {
+        close() {},
+        async update(change) {
+          journal = readJournal(change(journal), viewer.pubkey);
+          return journal;
+        },
+      },
+    },
+  );
+  const open = vi.fn();
+  const props = {
+    session: owner.session,
+    onQueryChange() {},
+    input: createRef<HTMLInputElement>(),
+    pages: [],
+    currentChannelId: "read",
+    onScopeChange() {},
+    openConversation: open,
+  };
+  const markUnread = (channelId: string) =>
+    act(async () => {
+      await owner.session.unread.markUnreadLocal({
+        kind: "channel",
+        channelId,
+      });
+    });
+  const rowsOf = (group: string) =>
+    within(screen.getByRole("group", { name: group })).getAllByRole("option");
+  try {
+    await owner.session.sidebarPreferences.refresh();
+    const first = render(<SearchResults {...props} query="" />);
+    await waitFor(() => expect(rowsOf("Recent activity")).toHaveLength(4));
+    // Nothing unread: the suggestions are unchanged and Enter opens nothing.
+    const idle = screen.getByRole("combobox", { name: "Search Buzz" });
+    expect(screen.queryByRole("group", { name: "Unread" })).toBeNull();
+    expect(idle).not.toHaveAttribute("aria-activedescendant");
+    fireEvent.keyDown(idle, { key: "Enter" });
+    expect(open).not.toHaveBeenCalled();
+    first.unmount();
+    // The conversation already open is not somewhere to jump to.
+    for (const id of ["other", "muted", "dm", "read"]) await markUnread(id);
+    const mounted = render(<SearchResults {...props} query="" />);
+    const input = screen.getByRole("combobox", { name: "Search Buzz" });
+    await waitFor(() => expect(rowsOf("Unread")).toHaveLength(2));
+    const rows = rowsOf("Unread");
+    expect(rows.map((row) => row.textContent)).toEqual([
+      expect.stringContaining("Direct message"),
+      expect.stringMatching(/^other/),
+    ]);
+    // Unread leads, before the conversation action, and is not repeated.
+    expect(
+      screen
+        .getAllByRole("group")
+        .map((group) => group.getAttribute("aria-label")),
+    ).toEqual(["Unread", "This conversation", "Recent activity"]);
+    expect(rowsOf("Recent activity").map((row) => row.textContent)).toEqual([
+      expect.stringMatching(/^alpha/),
+      expect.stringMatching(/^muted/),
+      expect.stringMatching(/^quiet/),
+      expect.stringMatching(/^read/),
+    ]);
+    expect(input).toHaveAttribute("aria-activedescendant", rows[0]?.id);
+    // An unread arriving above while open does not redirect Enter.
+    await markUnread("alpha");
+    expect(rowsOf("Unread")[0]).toHaveTextContent(/^alpha/);
+    expect(input).toHaveAttribute("aria-activedescendant", rows[0]?.id);
+    fireEvent.keyDown(input, { key: "ArrowDown" });
+    fireEvent.keyDown(input, { key: "Enter" });
+    expect(open).toHaveBeenCalledExactlyOnceWith("other");
+    // Typed text searches as before, without an Unread group.
+    mounted.rerender(<SearchResults {...props} query="other" />);
+    await screen.findByRole("group", { name: "Channels" });
+    expect(screen.queryByRole("group", { name: "Unread" })).toBeNull();
+    // Turned off in Settings, an empty search is unread-blind again.
+    act(() => setUnreadFirstPreference(false));
+    mounted.rerender(<SearchResults {...props} query="" />);
+    await waitFor(() => expect(rowsOf("Recent activity")).toHaveLength(4));
+    expect(screen.queryByRole("group", { name: "Unread" })).toBeNull();
+    expect(input).not.toHaveAttribute("aria-activedescendant");
+  } finally {
+    setUnreadFirstPreference(true);
+    cleanup();
+    owner.dispose();
+  }
+});
+
+it("shows the first six unread conversations ahead of the rest", async () => {
+  const relay = keypair();
+  const viewer = keypair();
+  let journal: ReadJournal | undefined;
+  const wire = scriptedTransport(viewer.pubkey, relay.pubkey);
+  const ids = [
+    ...Array.from({ length: 8 }, (_, index) => `unread-${index}`),
+    "read",
+  ];
+  const discovery = ids.flatMap((id) => [
+    metadata(relay, id, id),
+    roster(relay, id, [viewer.pubkey]),
+  ]);
+  const owner = createRelaySession(
+    {
+      ...wire.transport,
+      query(filters) {
+        return Promise.resolve(
+          discovery.filter((event) =>
+            filters.some((filter) => filter.kinds?.includes(event.kind)),
+          ),
+        );
+      },
+    },
+    {
+      readStateFloor: () => 0,
+      readPublisherLock: async (_signal, work) => work(),
+      readStateStorage: {
+        close() {},
+        async update(change) {
+          journal = readJournal(change(journal), viewer.pubkey);
+          return journal;
+        },
+      },
+    },
+  );
+  const rowsOf = (group: string) =>
+    within(screen.getByRole("group", { name: group })).getAllByRole("option");
+  try {
+    owner.session.channels.ensureList();
+    await waitFor(() =>
+      expect(owner.session.channels.list().channels).toHaveLength(9),
+    );
+    for (const id of ids.slice(0, 8))
+      await owner.session.unread.markUnreadLocal({
+        kind: "channel",
+        channelId: id,
+      });
+    render(
+      <SearchResults
+        session={owner.session}
+        query=""
+        onQueryChange={() => {}}
+        input={createRef()}
+        pages={[]}
+        openConversation={() => {}}
+      />,
+    );
+    await waitFor(() => expect(rowsOf("Unread")).toHaveLength(6));
+    const rows = rowsOf("Unread");
+    expect(rows[0]).toHaveTextContent(/^unread-0/);
+    // Only six rows exist, so the group does not announce a larger set.
+    expect(rows[0]).not.toHaveAttribute("aria-setsize");
+    expect(
+      screen.getByRole("combobox", { name: "Search Buzz" }),
+    ).toHaveAttribute("aria-activedescendant", rows[0]?.id);
+    // Unread rows past the first six are not repeated as recent activity.
+    expect(rowsOf("Recent activity").map((row) => row.textContent)).toEqual([
+      expect.stringMatching(/^read/),
+    ]);
+    // With every conversation unread, Recent activity does not claim none.
+    await owner.session.unread.markUnreadLocal({
+      kind: "channel",
+      channelId: "read",
+    });
+    await waitFor(() =>
+      expect(
+        screen.queryByRole("group", { name: "Recent activity" }),
+      ).toBeNull(),
+    );
+    expect(screen.queryByText("No recent activity yet.")).toBeNull();
   } finally {
     cleanup();
     owner.dispose();

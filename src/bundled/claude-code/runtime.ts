@@ -47,6 +47,7 @@ import {
   READ_TIMEOUT_MS,
   recentNotesSection,
 } from "../../features/agent-harness/core-memory";
+import { readAuthorNames } from "../../features/agent-harness/author-names";
 import { readProject } from "../../features/agent-harness/project";
 import { SessionControls } from "../../features/agent-harness/session-control";
 import type {
@@ -890,7 +891,15 @@ export class ClaudeRuntime {
       (item) =>
         item.created_at > seen && (!seen || item.pubkey !== agent.pubkey),
     );
-    const project = await reading;
+    const signingAuthority = reads?.workflowAuthority();
+    const [names, project] = await Promise.all([
+      readAuthorNames(
+        reads,
+        [event, ...unseen.slice(-CONTEXT_LIMIT)],
+        signingAuthority,
+      ),
+      reading,
+    ]);
     // An unread Canvas keeps the folders the chat had, not restarting it.
     if (project?.directories.length)
       entry.directories.set(key, project.directories);
@@ -909,6 +918,8 @@ export class ClaudeRuntime {
       context: unseen,
       contextRoot,
       total: earlier.length + 1,
+      names,
+      ...(signingAuthority ? { signingAuthority } : {}),
       ...(project?.section ? { project: project.section } : {}),
     };
   }

@@ -90,7 +90,7 @@ pub(crate) struct Paths {
     key_lock: PathBuf,
     /// Agent ownership locks; an erase waits until none is held.
     ownership: PathBuf,
-    app_data: PathBuf,
+    pub(crate) app_data: PathBuf,
     backups: PathBuf,
     /// Other app-owned folders: local data and WebView storage, caches.
     others: Vec<PathBuf>,

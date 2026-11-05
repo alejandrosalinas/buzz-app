@@ -23,13 +23,19 @@ afterEach(() => {
 });
 it.each([
   ["Authorize", true],
+  ["Create", true],
   ["Deny", true],
   ["unavailable runtime", false],
   ["custody lost", true],
   ["disabled community", true],
 ] as const)(
   "handles %s without an unintended authorization",
-  async (action, runtimeReady) => {
+  async (requestedAction, runtimeReady) => {
+    const action = requestedAction === "Create" ? "Authorize" : requestedAction;
+    const scopes =
+      requestedAction === "Create"
+        ? (["read", "post", "create"] as const)
+        : (["read", "post"] as const);
     const user = userEvent.setup();
     const key = "a".repeat(64),
       secondKey = "c".repeat(64),
@@ -90,7 +96,7 @@ it.each([
         client: "Test app",
         callback: "http://127.0.0.1:1234/buzz/authorize",
         state: "A".repeat(43),
-        scope: ["read", "post"],
+        scope: scopes,
         code_challenge: "A".repeat(43),
         code_challenge_method: "S256",
       },
@@ -125,6 +131,12 @@ it.each([
     ).toBeVisible();
     expect(connect).not.toHaveBeenCalled();
     expect(deny).not.toHaveBeenCalled();
+    const access = screen.getByText(/Requested access:/);
+    if (requestedAction === "Create")
+      expect(access).toHaveTextContent(
+        "create private Solo chats with you, the selected agent and your saved Bestie",
+      );
+    else expect(access).not.toHaveTextContent("create private Solo chats");
     if (action === "disabled community") {
       expect(screen.queryByRole("button", { name: "Authorize" })).toBeNull();
       expect(
@@ -174,7 +186,7 @@ it.each([
           secondKey,
           expect.any(AbortSignal),
           expect.any(Function),
-          ["read", "post"],
+          scopes,
         );
       }
       cleanup();
@@ -191,7 +203,7 @@ it.each([
         key,
         expect.any(AbortSignal),
         expect.any(Function),
-        ["read", "post"],
+        scopes,
       );
     } else {
       await waitFor(() => expect(deny).toHaveBeenCalledOnce());

@@ -2,19 +2,32 @@ import { useConversationPresentation } from "../conversation/ConversationPresent
 import { prepareReviewEntrance } from "./use-review-entrance";
 import { useMediaCorners } from "./use-media-corners";
 import { MediaViewer } from "./MediaAttachment";
-import { useCallback, useEffect, useRef, useState } from "react";
+import {
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useRef,
+  useState,
+} from "react";
 import { createPortal } from "react-dom";
 import type { Attachment } from "../relay/contracts";
 import type { RelaySession } from "../relay/session";
 import { imageDimensions, rememberImageDimensions } from "./image-dimensions";
 import { validatedBlurhash } from "../relay/blurhash";
 import { BLURHASH_SIZE, paintBlurhash } from "./blurhash";
+import {
+  decodedImageCapture,
+  hasDecodedImage,
+  retainDecodedImage,
+  takeDecodedImage,
+} from "../relay/media";
 import styles from "./Messages.module.css";
 
 export function AttachmentImage({
   attachment,
   session,
   source,
+  thumbnail,
   cached = false,
   compact = false,
   overlayCount = 0,
@@ -27,6 +40,7 @@ export function AttachmentImage({
   attachment: Attachment;
   session?: RelaySession | undefined;
   source: string | undefined;
+  thumbnail?: string | undefined;
   cached?: boolean;
   /** Square thumbnail geometry for a condensed image group. */
   compact?: boolean;
@@ -144,7 +158,9 @@ export function AttachmentImage({
           {source && (
             <ImagePixels
               key={JSON.stringify([source, attachment.blurhash])}
+              session={session}
               source={source}
+              thumbnail={thumbnail}
               blurhash={attachment.blurhash}
               onDecoded={onDecoded}
             />
@@ -183,21 +199,48 @@ export function AttachmentImage({
 }
 
 function ImagePixels({
+  session,
   source,
+  thumbnail,
   blurhash,
   onDecoded,
 }: {
+  session: RelaySession | undefined;
   source: string;
+  thumbnail: string | undefined;
   blurhash: string | undefined;
   onDecoded: (dimensions: NonNullable<Attachment["dimensions"]>) => void;
 }) {
   const image = useRef<HTMLImageElement>(null);
   const canvas = useRef<HTMLCanvasElement>(null);
+  const host = useRef<HTMLSpanElement>(null);
+  // Only peeks: the layout effect claims the element before paint, and a
+  // concurrent mount of the same source falls back to its own original.
+  const [retained, setRetained] = useState(
+    () => !!session && hasDecodedImage(session, source),
+  );
   const [ready, setReady] = useState(false);
+  const [thumbnailLoaded, setThumbnailLoaded] = useState(false);
   const hash = validatedBlurhash(blurhash);
+  useLayoutEffect(() => {
+    if (!retained) return;
+    const capture = decodedImageCapture();
+    const original = session && takeDecodedImage(session, source);
+    if (!original) {
+      setRetained(false);
+      return;
+    }
+    host.current?.append(original);
+    onDecoded({ width: original.naturalWidth, height: original.naturalHeight });
+    return () => {
+      original.remove();
+      retainDecodedImage(session, source, original, capture);
+    };
+  }, [retained, session, source, onDecoded]);
   useEffect(() => {
     const original = image.current;
-    if (!original) return;
+    if (retained || !original) return;
+    const capture = decodedImageCapture();
     let active = true;
     let decoded = false;
     let painted = false;
@@ -249,8 +292,17 @@ function ImagePixels({
       active = false;
       original.removeEventListener("load", loaded);
       observer?.disconnect();
+      // Only a deleted row detaches its original; a rerun keeps it mounted.
+      // Unparent it so the pool retains the element, not the deleted row, and
+      // show it: the row can unmount before its ready state commits.
+      if (session && decoded && !original.isConnected) {
+        original.remove();
+        original.style.visibility = "visible";
+        retainDecodedImage(session, source, original, capture);
+      }
     };
-  }, [hash, onDecoded]);
+  }, [retained, session, source, hash, onDecoded]);
+  if (retained) return <span ref={host} />;
   return (
     <>
       {hash && !ready && (
@@ -269,6 +321,17 @@ function ImagePixels({
         loading="lazy"
         style={{ visibility: ready ? "visible" : "hidden" }}
       />
+      {/* After the original, so preview queries still find the original first. */}
+      {thumbnail && !ready && (
+        <img
+          src={thumbnail}
+          alt=""
+          loading="lazy"
+          data-thumbnail=""
+          style={{ visibility: thumbnailLoaded ? "visible" : "hidden" }}
+          onLoad={() => setThumbnailLoaded(true)}
+        />
+      )}
     </>
   );
 }

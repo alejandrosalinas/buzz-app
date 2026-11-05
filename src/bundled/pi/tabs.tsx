@@ -39,6 +39,7 @@ import { Field } from "../../shared/design-system/ui/Field";
 import { Input } from "../../shared/design-system/ui/Input";
 import { Select } from "../../shared/design-system/ui/Select";
 import { formatItemTimestamp } from "../../shared/datetime";
+import { useClockFormat } from "../../shared/clock-preference";
 import { InlineHeader } from "../../shared/design-system/ui/Header";
 import { SettingsGroup } from "../../shared/design-system/ui/SettingsGroup";
 import { effortLabel } from "../claude-code/runtime";
@@ -783,6 +784,7 @@ export function createTabs({
     working: readonly number[];
     openConversation: AgentViewProps<Config>["openConversation"];
   }) {
+    useClockFormat();
     const { session: here } = useOpenedSession(
       places,
       conversation,

@@ -1301,3 +1301,53 @@ test("profile preview fits enlarged text and stops its status with reduced motio
     )
     .toEqual({ inside: true, truncated: true });
 });
+
+// Browser-only: the preview paints in the native top layer, above any z-index,
+// so only a rendering engine shows whether its hints paint above it.
+test("profile preview names its status emoji above the card and stays open over the hint", async ({
+  page,
+}) => {
+  // Hold the status ticker still under the pointer.
+  await page.emulateMedia({ reducedMotion: "reduce" });
+  await page.goto("/tests/fixtures/profiles.html?long-status");
+  const avatar = page.getByRole("button", {
+    name: "View Viewer profile",
+    exact: true,
+  });
+  await expect(avatar).toBeVisible();
+  await page.clock.install();
+  await avatar.hover();
+  await page.clock.runFor(600);
+  const preview = page.getByRole("dialog", { name: "Viewer profile preview" });
+  await expect(preview).toBeVisible();
+  await preview.getByText("🇺🇸", { exact: true }).first().hover();
+  await page.clock.runFor(300);
+  const hint = page.locator(".buzz-tooltip[data-open]");
+  await expect(hint).toHaveText(":us:");
+  // The hint covers the card's name row. Assert paint order, not visibility:
+  // Base UI makes a non-hoverable hint pass the pointer through, so restore
+  // hit testing only to ask what is topmost at the hint's center.
+  await expect
+    .poll(() =>
+      hint.evaluate((tip) => {
+        const positioner = tip.parentElement;
+        const rect = tip.getBoundingClientRect();
+        const pointerEvents = positioner.style.pointerEvents;
+        positioner.style.pointerEvents = "auto";
+        const hit = document.elementFromPoint(
+          rect.left + rect.width / 2,
+          rect.top + rect.height / 2,
+        );
+        positioner.style.pointerEvents = pointerEvents;
+        return tip.contains(hit);
+      }),
+    )
+    .toBe(true);
+  // Moving onto the hint stays over the card, so the preview does not close.
+  const box = await hint.boundingBox();
+  await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2, {
+    steps: 4,
+  });
+  await page.clock.runFor(600);
+  await expect(preview).toHaveAttribute("data-open", "");
+});

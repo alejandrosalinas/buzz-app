@@ -79,6 +79,54 @@ it("leaves roster errors transient for their existing recovery owner", async () 
   expect(h.query).toHaveBeenCalledOnce();
 });
 
+/** The full roster scan: every roster naming the viewer, not a system or exact pass. */
+const fullRoster = (filters: readonly ReadFilter[]) =>
+  !!filters[0]?.kinds?.includes(39002) &&
+  !!filters[0]["#p"] &&
+  !filters[0]["#t"] &&
+  !filters[0]["#d"];
+it("lets a slow full roster page finish instead of retrying it forever", async () => {
+  const h = setup();
+  let respond!: (events: RelayEvent[]) => void;
+  h.query.mockImplementation(async (filters) =>
+    fullRoster(filters)
+      ? new Promise<RelayEvent[]>((resolve) => {
+          respond = resolve;
+        })
+      : [],
+  );
+  h.owner.session.channels.refreshList?.();
+  // Past the ordinary ten-second read deadline: a large roster page is still
+  // downloading, not stalled.
+  await vi.advanceTimersByTimeAsync(15_000);
+  expect(h.owner.session.live.snapshot().roster.state).not.toBe("error");
+  respond([]);
+  await vi.advanceTimersByTimeAsync(0);
+  expect(h.owner.session.live.snapshot().roster.state).toBe("verified");
+  expect(
+    h.query.mock.calls.filter(([filters]) => fullRoster(filters)),
+  ).toHaveLength(1);
+});
+
+it("still bounds a stalled full roster page", async () => {
+  const h = setup();
+  h.query.mockImplementation(async (filters, signal) =>
+    fullRoster(filters)
+      ? new Promise<RelayEvent[]>((_resolve, reject) =>
+          signal?.addEventListener("abort", () => reject(signal.reason)),
+        )
+      : [],
+  );
+  h.owner.session.channels.refreshList?.();
+  await vi.advanceTimersByTimeAsync(29_999);
+  expect(h.owner.session.live.snapshot().roster.state).not.toBe("error");
+  await vi.advanceTimersByTimeAsync(1);
+  expect(h.owner.session.live.snapshot().roster).toMatchObject({
+    state: "error",
+    transient: true,
+  });
+});
+
 it.each(["caller", "clearCache", "dispose"] as const)(
   "%s cancels a finite public read's backoff",
   async (action) => {

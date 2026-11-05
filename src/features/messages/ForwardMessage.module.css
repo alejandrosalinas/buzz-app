@@ -1,0 +1,18 @@
+@reference "../../shared/styles/globals.css";
+
+.form {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+  margin-top: calc(-1 * var(--space-3));
+}
+
+.preview {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  padding: var(--space-3);
+  border: 1px solid var(--border-standard);
+  border-radius: var(--radius-lg);
+  background: var(--surface-inset);
+}

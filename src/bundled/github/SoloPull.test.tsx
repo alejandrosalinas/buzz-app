@@ -9,6 +9,7 @@ import type { RelaySession } from "../../features/relay/session";
 import type { AddedTool } from "../../buzz-mcp/session-tools";
 import type { BuzzClient } from "../../buzz-mcp/client";
 import { apply } from "./index";
+import { setOpenGitHubLinksInBuzz } from "./link-preference";
 import type { SoloPull, SoloPulls } from "./solo-pull";
 import {
   SoloPullIcon,
@@ -18,7 +19,10 @@ import {
   SoloPullLauncher,
 } from "./SoloPull";
 
-afterEach(cleanup);
+afterEach(() => {
+  cleanup();
+  localStorage.clear();
+});
 
 const chat = "11111111-1111-4111-8111-111111111111";
 const team = "22222222-2222-4222-8222-222222222222";
@@ -325,6 +329,29 @@ it("opens the current linked PR from the header and removes the shortcut on unli
   expect(screen.getByRole("button")).toBeDisabled();
   act(() => pulls.linked(chat, null));
   expect(screen.queryByRole("button")).not.toBeInTheDocument();
+});
+
+it("keeps the linked PR shortcut usable in browser mode and switches back live", () => {
+  setOpenGitHubLinksInBuzz(false);
+  const open = vi.fn(() => true);
+  render(
+    <SessionPullLauncher
+      pulls={fakePulls({ [chat]: { url: pull } })}
+      channelId={chat}
+      open={open}
+      canOpen={() => true}
+    />,
+  );
+  const link = screen.getByRole("link", { name: "Open linked pull request" });
+  expect(link).toHaveAttribute("href", pull);
+  expect(link).toHaveAttribute("target", "_blank");
+  expect(link).toHaveAttribute("rel", "noopener noreferrer");
+  expect(open).not.toHaveBeenCalled();
+  act(() => setOpenGitHubLinksInBuzz(true));
+  expect(screen.queryByRole("link")).not.toBeInTheDocument();
+  expect(
+    screen.getByRole("button", { name: "Open linked pull request" }),
+  ).toBeEnabled();
 });
 
 it("only mounts the PR shortcut for a Solo in the current community", () => {

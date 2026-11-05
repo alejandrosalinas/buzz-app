@@ -129,6 +129,21 @@ export type McpAuthorization = Readonly<{
   callback: string;
   state: string;
   code_challenge: string;
+  approval?: McpApproval;
+  resume?: Readonly<{ id: string; counter: number; proof: string }>;
+  durable_client?: string;
+}>;
+export type McpApproval = Readonly<{
+  client: string;
+  viewer: string;
+  agent: string;
+  community: string;
+  scopes: readonly ("read" | "post" | "create")[];
+}>;
+export type McpPairing = Readonly<{
+  id: string;
+  approval: McpApproval;
+  expires_at: number;
 }>;
 type McpEvent =
   | { type: "message"; request: number; body: string }
@@ -138,6 +153,10 @@ type McpEvent =
  * itself and grant every client the same authority. Defaults to false. */
 export type HostMcpOptions = Readonly<{ sharedSession?: boolean }>;
 export interface Host {
+  externalMcpPairing?(
+    operation: "get" | "resume" | "revoke",
+    request?: McpAuthorization,
+  ): Promise<McpPairing | null>;
   denyMcpAuthorization?(request: McpAuthorization): Promise<void>;
   runCommand(id: string, input?: string): Promise<string | null>;
   /** Starts a process the manifest declares in `host.processes`. It lives until
@@ -465,6 +484,12 @@ export class HostService extends Service implements Host {
   }
 
   async denyMcpAuthorization(request: McpAuthorization) {
+    const {
+      durable_client: _client,
+      approval: _approval,
+      resume: _resume,
+      ...callback
+    } = request;
     const owner = this.ctx.pluginOwner;
     if (!owner || !isTauri())
       throw new Error("External authorization requires Buzz desktop");
@@ -472,7 +497,22 @@ export class HostService extends Service implements Host {
       id: owner.id,
       revision: owner.revision,
       handle: null,
-      request,
+      request: callback,
+    }).catch(rethrow);
+  }
+
+  async externalMcpPairing(
+    operation: "get" | "resume" | "revoke",
+    request?: McpAuthorization,
+  ): Promise<McpPairing | null> {
+    const owner = this.ctx.pluginOwner;
+    if (!owner || !isTauri())
+      throw new Error("External approval requires Buzz desktop");
+    return invoke<McpPairing | null>("plugin_host_mcp_pairing", {
+      id: owner.id,
+      revision: owner.revision,
+      operation,
+      request: request ?? null,
     }).catch(rethrow);
   }
 

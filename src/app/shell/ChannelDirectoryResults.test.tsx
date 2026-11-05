@@ -25,6 +25,7 @@ import {
 } from "../../features/relay/testing";
 import { createShortcutBindings } from "../../features/shortcuts/preferences";
 import { ShortcutsService } from "../../features/shortcuts/service";
+import { setUnreadFirstPreference } from "../../features/search/unread-first-preference";
 import { PageSearch, type SearchServices } from "./PageSearch";
 
 // jsdom lacks scrollIntoView; the palette reveals its typed-text selection.
@@ -587,6 +588,79 @@ it("reopens where it was left after opening a channel, and fresh after Escape or
     expect(field()).toHaveValue("");
   } finally {
     now.mockRestore();
+    await t.dispose();
+  }
+});
+
+it("reopens an empty All view fresh, so it leads with what is unread now", async () => {
+  const t = connected();
+  try {
+    t.render();
+    await openSearch();
+    const recent = await screen.findByRole("group", {
+      name: "Recent activity",
+    });
+    await waitFor(() =>
+      expect(within(recent).getAllByRole("option")).not.toHaveLength(0),
+    );
+    await userEvent.keyboard("{ArrowDown}");
+    expect(within(recent).getAllByRole("option")[0]).toHaveAttribute(
+      "aria-selected",
+      "true",
+    );
+    await userEvent.keyboard("{Enter}");
+    await waitFor(() =>
+      expect(screen.queryByRole("dialog", { name: "Search Buzz" })).toBeNull(),
+    );
+    await openSearch();
+    const reopened = await screen.findByRole("group", {
+      name: "Recent activity",
+    });
+    await waitFor(() =>
+      expect(within(reopened).getAllByRole("option")).not.toHaveLength(0),
+    );
+    expect(field()).not.toHaveAttribute("aria-activedescendant");
+  } finally {
+    await t.dispose();
+  }
+});
+
+it("keeps an empty All view's place only while unread does not lead it", async () => {
+  const t = connected();
+  const recentRows = async () => {
+    const recent = await screen.findByRole("group", {
+      name: "Recent activity",
+    });
+    await waitFor(() =>
+      expect(within(recent).getAllByRole("option")).not.toHaveLength(0),
+    );
+    return within(recent).getAllByRole("option");
+  };
+  const closed = () =>
+    waitFor(() =>
+      expect(screen.queryByRole("dialog", { name: "Search Buzz" })).toBeNull(),
+    );
+  try {
+    setUnreadFirstPreference(false);
+    t.render();
+    await openSearch();
+    await recentRows();
+    await userEvent.keyboard("{ArrowDown}");
+    await userEvent.keyboard("{Enter}");
+    await closed();
+    // Off, an empty search reopens where it was left.
+    await openSearch();
+    const kept = (await recentRows())[0];
+    expect(field()).toHaveAttribute("aria-activedescendant", kept?.id);
+    await userEvent.keyboard("{Enter}");
+    await closed();
+    // Turned back on, that place is not restored over what is unread now.
+    setUnreadFirstPreference(true);
+    await openSearch();
+    await recentRows();
+    expect(field()).not.toHaveAttribute("aria-activedescendant");
+  } finally {
+    setUnreadFirstPreference(true);
     await t.dispose();
   }
 });

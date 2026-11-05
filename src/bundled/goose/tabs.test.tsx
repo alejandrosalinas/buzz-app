@@ -36,7 +36,10 @@ const unused = {
   history: new GooseHistory(undefined),
 };
 
-vi.mock("@tauri-apps/api/core", () => ({ isTauri: () => true }));
+vi.mock("@tauri-apps/api/core", () => ({
+  isTauri: () => true,
+  invoke: async () => null,
+}));
 
 beforeEach(() => {
   // jsdom has no layout observers; the model picker sizes itself with one.
