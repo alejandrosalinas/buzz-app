@@ -203,6 +203,14 @@ describe("an FI build", () => {
       "Secure storage is busy. Close another Buzz instance and try again.",
     ],
     [
+      "the browser step outlasts native's wait",
+      (fi: ReturnType<typeof federatedFixture>) =>
+        vi
+          .mocked(fi.service.signIn)
+          .mockRejectedValueOnce(new Error("sign-in-timed-out")),
+      "Sign-in timed out. Try again.",
+    ],
+    [
       "the account read is not JSON",
       (fi: ReturnType<typeof federatedFixture>) =>
         fi.request.mockResolvedValueOnce({

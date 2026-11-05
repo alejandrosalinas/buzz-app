@@ -320,10 +320,7 @@ async fn abandoned_listener_expires_and_can_be_replaced() {
     let id = start(&state, options("/oauth2redirect/provider"))
         .unwrap()
         .id;
-    assert_eq!(
-        state.wait(&id).await,
-        Err("Sign-in timed out. Try again.".into())
-    );
+    assert_eq!(state.wait(&id).await, Err(TIMED_OUT.into()));
     let next = start(&state, options("/oauth2redirect/provider"))
         .unwrap()
         .id;

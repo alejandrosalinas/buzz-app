@@ -90,6 +90,19 @@ async fn restored_snapshots_do_not_wait_for_an_interactive_operation() {
     drop(operation);
 }
 
+#[test]
+fn a_callback_timeout_keeps_its_own_failure_code() {
+    assert_eq!(callback_failure("Sign-in canceled."), "sign-in-canceled");
+    assert_eq!(
+        callback_failure(crate::oauth_callback::TIMED_OUT),
+        "sign-in-timed-out"
+    );
+    assert_eq!(
+        callback_failure("Sign-in listener failed"),
+        "callback-refused"
+    );
+}
+
 #[tokio::test]
 async fn cancel_releases_the_native_callback_before_a_replacement_login() {
     let owner = host(Arc::new(Memory::default()));

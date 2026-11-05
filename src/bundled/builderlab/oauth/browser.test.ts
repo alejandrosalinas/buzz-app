@@ -350,6 +350,19 @@ it.each([
     });
   },
 );
+it("keeps native's timeout apart from other browser failures", async () => {
+  const { host, bridge, controller } = fixture();
+  // Native rejects with this exact string (`oauth_callback::TIMED_OUT`).
+  vi.mocked(bridge.wait).mockRejectedValue("Sign-in timed out. Try again.");
+  await expect(
+    browserCredential(host, controller.signal, bridge),
+  ).rejects.toThrow(/^Sign-in timed out\. Try again\.$/);
+  vi.mocked(bridge.wait).mockRejectedValue("Sign-in listener failed");
+  await expect(
+    browserCredential(host, controller.signal, bridge),
+  ).rejects.toThrow("Could not complete");
+});
+
 it("does not cancel an unknown attempt when begin rejects", async () => {
   const { host, bridge, controller } = fixture();
   vi.mocked(bridge.begin).mockRejectedValue("listener unavailable");

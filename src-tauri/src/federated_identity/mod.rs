@@ -743,7 +743,7 @@ impl FederatedIdentity {
         drop(operation);
         let response = tokio::select! {
             _ = cancel.cancelled() => Err(Failure::from("sign-in-canceled")),
-            result = callback.wait(&attempt.id) => result.map_err(|error| Failure::from(if error == "Sign-in canceled." { "sign-in-canceled" } else { "callback-refused" })),
+            result = callback.wait(&attempt.id) => result.map_err(|error| Failure::from(callback_failure(&error))),
         };
         {
             let mut state = self.state();
@@ -947,6 +947,16 @@ impl FederatedIdentity {
             self.change_current(&revision, Status::Unavailable, Some(failure.code));
         }
         self.snapshot()
+    }
+}
+
+/// The failure code for a browser callback that did not arrive. A timeout keeps
+/// its own code: the person may still be signing up or verifying their email.
+fn callback_failure(error: &str) -> &'static str {
+    match error {
+        "Sign-in canceled." => "sign-in-canceled",
+        crate::oauth_callback::TIMED_OUT => "sign-in-timed-out",
+        _ => "callback-refused",
     }
 }
 

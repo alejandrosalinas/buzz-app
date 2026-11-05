@@ -33,6 +33,7 @@ import { PrivateKey } from "./PrivateKey";
 import { SignOutDialog, WIPE_PHRASE } from "./SignOut";
 import { Welcome } from "./Welcome";
 import { requestSignIn, takeSignInRequest } from "./sign-in-requests";
+import { SIGN_IN_TIMED_OUT } from "../federated-identity/CommunitySignIn";
 import { federatedFixture } from "../federated-identity/testing";
 import { ProfileStep } from "./ProfileStep";
 import { OnboardingScreen } from "./OnboardingScreen";
@@ -964,6 +965,68 @@ it("Open Buzz that launched the app signs in once the landing shows", async () =
     </Welcome>,
   );
   await waitFor(() => expect(connect).toHaveBeenCalledTimes(1));
+  identity.dispose();
+});
+
+it("a timed-out browser wait asks to finish in the browser, and Continue restarts the same choice", async () => {
+  missingKey();
+  const connect = vi
+    .fn<(signal: AbortSignal, signup?: boolean) => Promise<Credential>>()
+    .mockRejectedValueOnce(new Error(SIGN_IN_TIMED_OUT))
+    .mockReturnValue(new Promise<Credential>(() => {}));
+  const identity = createIdentity();
+  const user = userEvent.setup();
+  render(
+    <Welcome
+      identity={identity}
+      communities={noJoin}
+      invites={invites}
+      account={unlinked}
+      connect={connect}
+    >
+      <p>Signed in</p>
+    </Welcome>,
+  );
+  await user.click(
+    await screen.findByRole("button", { name: "Create account" }),
+  );
+  const heading = await screen.findByRole("heading", {
+    name: "Finish in your browser",
+  });
+  await waitFor(() => expect(heading).toHaveFocus());
+  // Not a failure: nothing alerts, and no "Couldn't sign in".
+  expect(screen.queryByRole("alert")).toBeNull();
+  await user.click(screen.getByRole("button", { name: "Continue" }));
+  expect(connect).toHaveBeenCalledTimes(2);
+  expect(connect.mock.calls[1]?.[1]).toBe(true);
+  expect(
+    screen.queryByRole("heading", { name: "Finish in your browser" }),
+  ).toBeNull();
+  identity.dispose();
+});
+
+it("Back from Finish in your browser returns to the landing", async () => {
+  missingKey();
+  const connect = vi.fn().mockRejectedValue(new Error(SIGN_IN_TIMED_OUT));
+  const identity = createIdentity();
+  const user = userEvent.setup();
+  render(
+    <Welcome
+      identity={identity}
+      communities={noJoin}
+      invites={invites}
+      account={unlinked}
+      connect={connect}
+    >
+      <p>Signed in</p>
+    </Welcome>,
+  );
+  await user.click(
+    await screen.findByRole("button", { name: "Create account" }),
+  );
+  await screen.findByRole("heading", { name: "Finish in your browser" });
+  await user.click(screen.getByRole("button", { name: "Back" }));
+  expect(welcomeHeading()).toBeVisible();
   identity.dispose();
 });
 

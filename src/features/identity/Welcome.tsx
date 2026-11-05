@@ -31,6 +31,7 @@ import {
 } from "../communities/join";
 import { createJoinJournal, JournalError } from "../communities/join-journal";
 import type { Communities, PersonalProfile } from "../communities/service";
+import { SIGN_IN_TIMED_OUT } from "../federated-identity/CommunitySignIn";
 import { readErrorKind } from "../relay/errors";
 import { Button } from "../../shared/design-system/ui/Button";
 import { BackupError } from "./backup";
@@ -290,11 +291,13 @@ export function Welcome({
         : progress.status === "idle"
           ? state.status === "ready" && !relaunch
             ? undefined
-            : auth.error
-              ? "auth-error"
-              : discovering
-                ? "discover"
-                : "landing"
+            : auth.error === SIGN_IN_TIMED_OUT
+              ? "auth-timeout"
+              : auth.error
+                ? "auth-error"
+                : discovering
+                  ? "discover"
+                  : "landing"
           : progress.status === "done"
             ? profileStep
               ? "done:profile"
@@ -439,6 +442,20 @@ export function Welcome({
       },
     ]);
   };
+  /** Starts sign-in in a fresh browser tab, replacing one still waiting. */
+  const start = (create: boolean) => {
+    if (login.snapshot().status === "pending") {
+      cancels.current++;
+      login.cancel();
+    }
+    void signIn(create);
+  };
+  /**
+   * Picks up a sign-in the browser hasn't finished, keeping Create account or
+   * Sign in. The browser remembers the account, so a verified one finishes
+   * without a password, and an unverified one returns to Verify your email.
+   */
+  const resumeSignIn = () => start(signup.current);
   /** Between pauses nothing runs: no key exists until a choice resumes setup. */
   const pause = (at: SetupPause) =>
     void setup.start([], { status: "paused", at });
@@ -876,12 +893,8 @@ export function Welcome({
       ? undefined
       : () => {
           if (progress.status !== "idle" || discovering) return;
-          if (login.snapshot().status === "pending") {
-            cancels.current++;
-            login.cancel();
-          }
           setOtherOptions(false);
-          void signIn(signup.current);
+          resumeSignIn();
         };
   if (state.status === "loading" || state.status === "error")
     return (
@@ -961,13 +974,6 @@ export function Welcome({
   // A device set up through Builderlab before leads with Sign in; a new
   // one with Create account, which opens the account page's sign-up form.
   const returning = relaunch || setUpWithBuilderlab();
-  const start = (create: boolean) => {
-    if (login.snapshot().status === "pending") {
-      cancels.current++;
-      login.cancel();
-    }
-    void signIn(create);
-  };
   if (progress.status === "idle" && !auth.error && !discovering)
     return (
       <OnboardingScreen
@@ -1154,6 +1160,8 @@ export function Welcome({
               : undefined
           }
         />
+      ) : auth.error === SIGN_IN_TIMED_OUT ? (
+        <FinishInBrowser onContinue={resumeSignIn} onBack={backToLanding} />
       ) : auth.error ? (
         <Failure
           title="Couldn’t sign in"
@@ -1173,6 +1181,40 @@ export function Welcome({
         />
       ) : null}
     </WireframeScreen>
+  );
+}
+
+/**
+ * The app stopped waiting on the browser, though the person may still be
+ * signing up or verifying their email there: not a failure.
+ */
+function FinishInBrowser({
+  onContinue,
+  onBack,
+}: {
+  onContinue: () => void;
+  onBack: () => void;
+}) {
+  return (
+    <>
+      <h1
+        id="welcome-title"
+        tabIndex={-1}
+        className="text-heading text-standard"
+      >
+        Finish in your browser
+      </h1>
+      <p className="text-body text-subtle">
+        Use the newest browser tab. Continue picks up where you left off.
+      </p>
+      {/* Footer order: secondary first, primary last. */}
+      <div data-onboarding-actions="">
+        <OnboardingBack onClick={onBack} aria-label="Back" />
+        <Button variant="prominent" size="lg" onClick={onContinue}>
+          Continue
+        </Button>
+      </div>
+    </>
   );
 }
 

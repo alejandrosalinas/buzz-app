@@ -1,4 +1,5 @@
 import { invoke, isTauri } from "@tauri-apps/api/core";
+import { SIGN_IN_TIMED_OUT } from "../../../features/federated-identity/CommunitySignIn";
 import type { Host } from "../../../features/host/service";
 
 export const browserLoginAvailable = () => isTauri();
@@ -177,7 +178,9 @@ export async function browserCredential(
     });
   } catch (error) {
     if (signal.aborted) throw new Error("Sign-in canceled.");
-    // Native errors are strings. Never forward provider bodies or credentials.
+    // Native errors are strings. Never forward provider bodies or credentials;
+    // a timeout keeps its message so the person can pick up where they left off.
+    if (error === SIGN_IN_TIMED_OUT) throw new Error(SIGN_IN_TIMED_OUT);
     throw error instanceof Error
       ? error
       : new Error("Could not complete Builderlab sign-in. Try again.");
