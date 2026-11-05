@@ -5,11 +5,18 @@ import { join, relative } from "node:path";
 import { fileURLToPath } from "node:url";
 import test from "node:test";
 import {
+  bestRoute,
   browserShards,
+  capRelated,
   classify,
   hunkRanges,
   listBrowser,
   listVitest,
+  moduleGraph,
+  moduleName,
+  namesake,
+  patchedPackage,
+  reachesTests,
   repeatableLines,
   selectTests,
   testBodies,
@@ -442,4 +449,180 @@ test("browser repetitions get one shard per five journeys, at most sixteen", () 
     [0, 1, 5, 6, 18, 40, 41, 80, 81, 200].map(browserShards),
     [1, 1, 1, 2, 4, 8, 9, 16, 16, 16],
   );
+});
+
+test("source, helper, fixture and patch changes can reach tests; root configuration and docs cannot", () => {
+  for (const file of [
+    "src/bundled/emoji/CustomEmoji.tsx",
+    "src/features/messages/Messages.module.css",
+    "tests/browser/timeline.mjs",
+    "tests/fixtures/emoji.html",
+    "browser-host/runtime.mjs",
+    "patches/@base-ui__react@1.9.0.patch",
+  ])
+    assert.equal(reachesTests(file), true, file);
+  for (const file of [
+    "package.json",
+    "vite.config.ts",
+    "docs/buzz-help.md",
+    // Test files are selected by their own hunks.
+    "src/App.test.tsx",
+    "tests/browser/layout.spec.mjs",
+  ])
+    assert.equal(reachesTests(file), false, file);
+  assert.equal(
+    patchedPackage("patches/@base-ui__react@1.9.0.patch"),
+    "@base-ui/react",
+  );
+  assert.equal(patchedPackage("patches/sonner@2.0.8.patch"), "sonner");
+  assert.equal(patchedPackage("patches/README.md"), undefined);
+});
+
+test("journeys reach product, stylesheet, package and helper changes through fixture pages and imports", async () => {
+  const [reactions, overlays] = [
+    "tests/browser/reactions-polish.spec.mjs",
+    "tests/browser/message-overlays.spec.mjs",
+  ];
+  const graph = await moduleGraph([reactions, overlays]);
+  // Page scripts resolve relative to the page or, with a leading slash, the
+  // repository root.
+  assert.equal(
+    graph.pages.get("tests/fixtures/emoji.html"),
+    "tests/fixtures/emoji.tsx",
+  );
+  assert.equal(
+    graph.pages.get("tests/fixtures/conversation.html"),
+    "tests/fixtures/conversation.tsx",
+  );
+  for (const changed of [
+    "src/bundled/emoji/CustomEmoji.tsx",
+    // emoji.tsx imports globals.css, which @imports the tokens.
+    "src/shared/design-system/styles/tokens.css",
+    "npm:@base-ui/react",
+  ]) {
+    const route = bestRoute(graph, reactions, [changed]);
+    assert.equal(route?.via, "tests/fixtures/emoji.html", changed);
+    assert.deepEqual(route.files, [changed]);
+  }
+  // A helper reaches the specs importing it through their own graph.
+  assert.equal(
+    bestRoute(graph, overlays, ["tests/browser/timeline.mjs"])?.via,
+    overlays,
+  );
+  assert.equal(bestRoute(graph, reactions, ["docs/buzz-help.md"]), undefined);
+});
+
+test("the best route is the smallest graph holding a changed file", () => {
+  const graph = {
+    edges: new Map([
+      ["spec", new Set(["helper", "small.html", "large.html"])],
+      ["small", new Set(["a"])],
+      ["large", new Set(["a", "b", "c"])],
+    ]),
+    pages: new Map([
+      ["small.html", "small"],
+      ["large.html", "large"],
+    ]),
+  };
+  // The small page holds less of the change but is more specific to it.
+  assert.deepEqual(bestRoute(graph, "spec", ["a", "b"]), {
+    files: ["a"],
+    size: 3,
+    via: "small.html",
+  });
+  assert.deepEqual(bestRoute(graph, "spec", ["b"]), {
+    files: ["b"],
+    size: 5,
+    via: "large.html",
+  });
+  assert.deepEqual(bestRoute(graph, "spec", ["helper"]), {
+    files: ["helper"],
+    size: 4,
+    via: "spec",
+  });
+  assert.equal(bestRoute(graph, "spec", ["d"]), undefined);
+});
+
+test("a test is named after a changed module by its whole name or leading words", () => {
+  assert.equal(moduleName("src/bundled/emoji/CustomEmoji.tsx"), "custom-emoji");
+  assert.equal(
+    moduleName("src/features/messages/Messages.module.css"),
+    "messages",
+  );
+  assert.equal(
+    moduleName("src/features/messages/use-file-drop.test.tsx"),
+    "use-file-drop",
+  );
+  assert.equal(
+    moduleName("tests/browser/custom-emoji-authoring.spec.mjs"),
+    "custom-emoji-authoring",
+  );
+  const changed = [
+    "src/features/messages/ComposerAttachments.tsx",
+    "src/bundled/emoji/CustomEmoji.tsx",
+    "src/features/messages/Messages.module.css",
+  ];
+  assert.equal(
+    namesake("tests/browser/composer-attachments.spec.mjs", changed),
+    changed[0],
+  );
+  assert.equal(
+    namesake("tests/browser/custom-emoji-authoring.spec.mjs", changed),
+    changed[1],
+  );
+  assert.equal(
+    namesake("tests/browser/messages.spec.mjs", changed),
+    changed[2],
+  );
+  assert.equal(
+    namesake("src/bundled/emoji/CustomEmoji.test.tsx", changed),
+    changed[1],
+  );
+  // Leading words only: a shared prefix inside a word is not a name.
+  assert.equal(
+    namesake("tests/browser/message-overlays.spec.mjs", changed),
+    undefined,
+  );
+  assert.equal(
+    namesake("tests/browser/composer-attachments-extra.spec.mjs", changed),
+    changed[0],
+  );
+  assert.equal(namesake("tests/browser/emoji.spec.mjs", changed), undefined);
+});
+
+test("related files run whole, named after a changed module first, then smallest route, until the cap; the one crossing it still runs", () => {
+  const candidate = (file, size, cost) => ({
+    file,
+    route: { files: ["x"], size },
+    cost,
+  });
+  const candidates = [
+    candidate("wide", 900, 1),
+    candidate("mid-cheap", 500, 3),
+    candidate("mid", 500, 10),
+    candidate("narrow", 100, 2),
+    // Vitest relates it, but the static graph found no route.
+    { file: "unrouted", cost: 1 },
+    // Named after a changed module: a naming heuristic ranks it ahead of
+    // every route.
+    { ...candidate("named", 700, 2), namesake: "src/Named.tsx" },
+  ];
+  const order = ({ taken, dropped }) => [
+    taken.map(({ file }) => file),
+    dropped.map(({ file }) => file),
+  ];
+  assert.deepEqual(order(capRelated(candidates, Infinity)), [
+    ["named", "narrow", "mid-cheap", "mid", "wide", "unrouted"],
+    [],
+  ]);
+  // "mid-cheap" crosses the cap of 6 and runs; nothing after it does, even
+  // when it would fit.
+  assert.deepEqual(order(capRelated(candidates, 6)), [
+    ["named", "narrow", "mid-cheap"],
+    ["mid", "wide", "unrouted"],
+  ]);
+  assert.deepEqual(order(capRelated(candidates, 0)), [
+    [],
+    ["named", "narrow", "mid-cheap", "mid", "wide", "unrouted"],
+  ]);
 });

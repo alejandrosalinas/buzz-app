@@ -1,10 +1,19 @@
 // Advisory pull-request flake check. `select` maps a diff to the Vitest tests
-// and Playwright journeys it changed; `vitest` repeats a selection and reports
-// every iteration. Playwright repeats natively with --repeat-each.
+// and Playwright journeys it changed, plus the test files its other changes
+// reach through imports; `vitest` repeats a selection and reports every
+// iteration. Playwright repeats natively with --repeat-each.
 import { spawnSync } from "node:child_process";
 import { appendFileSync, mkdirSync, readFileSync, rmSync } from "node:fs";
-import { extname, relative } from "node:path";
+import {
+  basename,
+  dirname,
+  extname,
+  isAbsolute,
+  join,
+  relative,
+} from "node:path";
 import { fileURLToPath } from "node:url";
+import { rolldown } from "rolldown";
 import { parseAst } from "rolldown/parseAst";
 import { parseVitest } from "./ci-test-report.mjs";
 
@@ -22,6 +31,11 @@ export const browserShards = (journeys) =>
 // Journeys that need their own project or platform: the measurements job and
 // the macOS recorder own them, so the engine lanes never repeat them.
 const excludedTags = ["classic-scrollbars", "local-webkit", "media-recorder"];
+// Test files a pull request reaches without editing run whole, most specific
+// first, up to about eight shards of journeys. One heavy Vitest file can take
+// 140 s per iteration on CI, so few related Vitest files fit the batch budget.
+export const RELATED_JOURNEYS = 40;
+export const RELATED_VITEST_FILES = 20;
 
 // Mirrors vitest.config.ts `include` and the Playwright testDir/testMatch.
 // Paths are later split on whitespace in a shell, so admit only plain names.
@@ -243,7 +257,206 @@ export function listBrowser(files) {
   return specs;
 }
 
-function select(base = "HEAD^1", head = "HEAD") {
+// Changed files that can reach a test through imports. Root configuration
+// would relate every Vitest file and no fixture page loads it; the regular
+// lanes cover it.
+export const reachesTests = (file) =>
+  /^(?:src|browser-host|scripts|tests|patches)\//.test(file) && !classify(file);
+
+// The package a pnpm patch changes, from its `@scope__name@1.0.0.patch` name.
+export const patchedPackage = (file) =>
+  /^patches\/(.+)@[^@/]+\.patch$/.exec(file)?.[1].replace("__", "/");
+
+const packageName = (specifier) => {
+  const parts = specifier.split("?")[0].split("/");
+  return parts.slice(0, parts[0].startsWith("@") ? 2 : 1).join("/");
+};
+
+// Journeys open fixture pages by URL.
+const pageUrl = /tests\/fixtures\/[\w-]+\.html/g;
+
+// The import graph of the entry modules and every fixture page, by repository
+// path; rolldown builds it and writes nothing. Packages stay external as
+// `npm:<name>` nodes, so a patch reaches their importers. Other non-JavaScript
+// imports are leaves, except that a stylesheet's @imports are its edges. A
+// browser module links to each fixture page it names, and `pages` maps a page
+// to its module script.
+export async function moduleGraph(entries) {
+  const edges = new Map();
+  const link = (from, to) => {
+    if (!edges.has(from)) edges.set(from, new Set());
+    edges.get(from).add(to);
+  };
+  const file = (id) => relative(root, id.split("?")[0]);
+  const pages = new Map();
+  for (const page of git("ls-files", "-z", "tests/fixtures/*.html").split("\0"))
+    if (page) {
+      const src = /<script[^>]*\ssrc="([^"]+)"/.exec(
+        readFileSync(`${root}${page}`, "utf8"),
+      )?.[1];
+      if (src)
+        pages.set(
+          page,
+          src.startsWith("/") ? src.slice(1) : join(dirname(page), src),
+        );
+    }
+  const bundle = await rolldown({
+    input: [...new Set([...entries, ...pages.values()])].map(
+      (entry) => `${root}${entry}`,
+    ),
+    cwd: root,
+    logLevel: "silent",
+    // Stubbed imports export nothing; the graph needs every module.
+    shimMissingExports: true,
+    treeshake: false,
+    plugins: [
+      {
+        name: "flake-check-graph",
+        async resolveId(source, importer) {
+          if (!importer) return null;
+          if (!/^[./]/.test(source)) {
+            link(file(importer), `npm:${packageName(source)}`);
+            return { id: source, external: true };
+          }
+          // Vite serves `/path` from the repository root.
+          const [path, query] = source.split("?");
+          const resolved = await this.resolve(
+            path.startsWith("/") ? join(root, path) : path,
+            importer,
+            { skipSelf: true },
+          );
+          if (!resolved) return { id: source, external: true };
+          return query === undefined
+            ? resolved
+            : { id: `${resolved.id}?${query}` };
+        },
+        load(id) {
+          const [path, query] = id.split("?");
+          if (query === undefined && /\.(?:[cm]?[jt]sx?|json)$/.test(path))
+            return null;
+          const imports =
+            query === undefined && path.endsWith(".css")
+              ? readFileSync(path, "utf8").matchAll(
+                  /@import\s+(?:url\()?["']([^"']+)["']/g,
+                )
+              : [];
+          return {
+            code: [...imports]
+              .map(([, source]) => `import ${JSON.stringify(source)};`)
+              .join("\n"),
+            moduleType: "js",
+          };
+        },
+        transform(code, id) {
+          if (file(id).startsWith("tests/browser/"))
+            for (const [page] of code.matchAll(pageUrl))
+              if (pages.has(page)) link(file(id), page);
+          return null;
+        },
+        moduleParsed({ id, importedIds, dynamicallyImportedIds }) {
+          for (const imported of [...importedIds, ...dynamicallyImportedIds])
+            if (isAbsolute(imported)) link(file(id), file(imported));
+        },
+      },
+    ],
+  });
+  try {
+    await bundle.generate();
+  } finally {
+    await bundle.close();
+  }
+  return { edges, pages };
+}
+
+// Nodes reachable from `start`. Fixture pages are leaves; their scripts start
+// routes of their own.
+function reach(edges, start) {
+  const seen = new Set([start]);
+  for (const node of seen)
+    for (const next of edges.get(node) ?? []) seen.add(next);
+  return seen;
+}
+
+// A test's most specific route to the change: the smallest graph holding a
+// changed node, either the test's own module graph or the graph of a fixture
+// page it opens. Fewer files on the route mean the change is a larger part of
+// what the test exercises.
+export function bestRoute(
+  { edges, pages },
+  test,
+  changed,
+  pageGraphs = new Map(),
+) {
+  const own = reach(edges, test);
+  let best;
+  for (const via of [test, ...[...own].filter((node) => pages.has(node))]) {
+    if (via !== test && !pageGraphs.has(via))
+      pageGraphs.set(via, reach(edges, pages.get(via)).add(via));
+    const nodes = via === test ? own : pageGraphs.get(via);
+    const files = changed.filter((node) => nodes.has(node));
+    if (files.length > 0 && (!best || nodes.size < best.size))
+      best = { files, size: nodes.size, via };
+  }
+  return best;
+}
+
+// The name a test shares with the module it is named after: the basename
+// before its first dot, PascalCase split into kebab-case.
+export const moduleName = (file) =>
+  basename(file)
+    .split(".")[0]
+    .replace(/([a-z0-9])([A-Z])/g, "$1-$2")
+    .toLowerCase();
+
+// The changed module a test is named after, by whole name or leading words
+// (`CustomEmoji` names `custom-emoji-authoring`). A naming convention, not
+// graph evidence: it only reorders tests the graph already reaches.
+export const namesake = (test, changed) => {
+  const name = moduleName(test);
+  return changed.find((file) => {
+    const named = moduleName(file);
+    return name === named || name.startsWith(`${named}-`);
+  });
+};
+
+// Takes whole candidates, named after a changed module first, then smallest
+// route first (a candidate without one last) and cheaper first among equal
+// routes, until their cost reaches the cap; the one that crosses it still
+// runs, so the cap is never met by skipping a more specific candidate.
+export function capRelated(candidates, cap) {
+  const size = ({ route }) => route?.size ?? Infinity;
+  const named = ({ namesake }) => (namesake ? 0 : 1);
+  const ranked = [...candidates].sort(
+    (a, b) =>
+      named(a) - named(b) ||
+      size(a) - size(b) ||
+      a.cost - b.cost ||
+      a.file.localeCompare(b.file),
+  );
+  let used = 0;
+  let end = 0;
+  while (end < ranked.length && used < cap) used += ranked[end++].cost;
+  return { taken: ranked.slice(0, end), dropped: ranked.slice(end) };
+}
+
+// Vitest files that import a changed file, by the module graph the pre-push
+// hook's `vitest related` walks (scripts/check-push.mjs).
+async function relatedVitest(files) {
+  const { createVitest } = await import("vitest/node");
+  const vitest = await createVitest("test", {
+    root,
+    related: files.map((file) => `${root}${file}`),
+    watch: false,
+  });
+  try {
+    const specs = await vitest.getRelevantTestSpecifications();
+    return [...new Set(specs.map((spec) => relative(root, spec.moduleId)))];
+  } finally {
+    await vitest.close();
+  }
+}
+
+async function select(base = "HEAD^1", head = "HEAD") {
   const changed = git(
     "diff",
     "--name-status",
@@ -256,20 +469,57 @@ function select(base = "HEAD^1", head = "HEAD") {
   ).split("\0");
   const files = { vitest: [], browser: [] };
   const added = new Set();
+  const sources = [];
   for (let i = 0; i + 1 < changed.length; i += 2) {
     const [status, file] = [changed[i], changed[i + 1]];
     const runner = classify(file);
     if (runner) files[runner].push(file);
+    else if (reachesTests(file)) sources.push(file);
     if (status === "A") added.add(file);
+  }
+  // Test files the other changes reach. Vitest decides which of its files
+  // relate; the static graph finds journeys and ranks both by specificity.
+  const related = { vitest: [], browser: [] };
+  if (sources.length) {
+    const modules = sources.filter((file) => !patchedPackage(file));
+    const vitestFiles = modules.length
+      ? (await relatedVitest(modules)).filter(
+          (file) => classify(file) === "vitest",
+        )
+      : [];
+    const specs = git("ls-files", "-z", "tests/browser")
+      .split("\0")
+      .filter((file) => classify(file) === "browser");
+    const graph = await moduleGraph([...specs, ...vitestFiles]);
+    const nodes = sources.map((file) =>
+      patchedPackage(file) ? `npm:${patchedPackage(file)}` : file,
+    );
+    const pageGraphs = new Map();
+    for (const file of specs) {
+      const route = bestRoute(graph, file, nodes, pageGraphs);
+      if (route)
+        related.browser.push({
+          file,
+          route,
+          namesake: namesake(file, modules),
+        });
+    }
+    for (const file of vitestFiles)
+      related.vitest.push({
+        file,
+        route: bestRoute(graph, file, nodes),
+        namesake: namesake(file, modules),
+      });
   }
   const vitestStarts = files.vitest.length
     ? listVitest(files.vitest)
     : new Map();
-  const browserSpecs = files.browser.length
-    ? listBrowser(files.browser)
-    : new Map();
-  const outputs = { vitest: [], browser: [] };
-  const rows = [];
+  const listed = [
+    ...new Set([...files.browser, ...related.browser.map(({ file }) => file)]),
+  ];
+  const browserSpecs = listed.length ? listBrowser(listed) : new Map();
+  // Selections by runner and file, in summary order.
+  const selected = { vitest: new Map(), browser: new Map() };
   for (const runner of ["vitest", "browser"]) {
     for (const file of files[runner]) {
       const specs = browserSpecs.get(file) ?? [];
@@ -293,40 +543,101 @@ function select(base = "HEAD^1", head = "HEAD") {
             : testCalls(git("show", `${base}:${file}`), lang),
         },
       );
-      let entries;
-      let note;
       if (runner === "vitest") {
-        entries = vitestFilters(file, selection);
-        note = selection.whole
-          ? `whole file (${selection.reason})`
-          : `${selection.lines.length} changed test(s)`;
+        selected.vitest.set(file, {
+          whole: selection.whole,
+          entries: vitestFilters(file, selection),
+          note: selection.whole
+            ? `whole file (${selection.reason})`
+            : `${selection.lines.length} changed test(s)`,
+        });
       } else {
         const repeatable = repeatableLines(specs);
         const lines = selection.whole
           ? repeatable
           : selection.lines.filter((line) => repeatable.includes(line));
-        entries = lines.map((line) => `${file}:${line}`);
-        note =
-          lines.length === 0
-            ? "excluded (measurement or tagged journeys only)"
-            : selection.whole
-              ? `whole file (${selection.reason}): ${lines.length} journey(s)`
-              : `${lines.length} changed journey(s)`;
+        selected.browser.set(file, {
+          lines,
+          entries: lines.map((line) => `${file}:${line}`),
+          note:
+            lines.length === 0
+              ? "excluded (measurement or tagged journeys only)"
+              : selection.whole
+                ? `whole file (${selection.reason}): ${lines.length} journey(s)`
+                : `${lines.length} changed journey(s)`,
+        });
       }
-      outputs[runner].push(...entries);
-      rows.push(`| ${cell(file)} | ${runner} | ${cell(note)} |`);
     }
   }
+  const via = ({ file, route, namesake }) =>
+    (namesake
+      ? `named after ${namesake}, a naming heuristic rather than graph evidence; `
+      : "") +
+    (route
+      ? `${route.files.join(", ")} via ${route.via === file ? "imports" : route.via}, ${route.size} files`
+      : "Vitest module graph");
+  const totals = [];
+  if (sources.length) {
+    const vitest = capRelated(
+      related.vitest
+        .filter(({ file }) => !selected.vitest.get(file)?.whole)
+        .map((candidate) => ({ ...candidate, cost: 1 })),
+      RELATED_VITEST_FILES,
+    );
+    for (const candidate of vitest.taken)
+      selected.vitest.set(candidate.file, {
+        whole: true,
+        entries: [candidate.file],
+        note: `related, whole file (${via(candidate)})`,
+      });
+    const browser = capRelated(
+      related.browser
+        .map((candidate) => {
+          const lines = repeatableLines(browserSpecs.get(candidate.file) ?? []);
+          const done = selected.browser.get(candidate.file)?.lines ?? [];
+          const cost = lines.filter((line) => !done.includes(line)).length;
+          return { ...candidate, lines, cost };
+        })
+        .filter(({ cost }) => cost > 0),
+      RELATED_JOURNEYS,
+    );
+    for (const candidate of browser.taken)
+      selected.browser.set(candidate.file, {
+        lines: candidate.lines,
+        entries: candidate.lines.map((line) => `${candidate.file}:${line}`),
+        note: `related, whole file: ${candidate.lines.length} journey(s) (${via(candidate)})`,
+      });
+    const journeys = (candidates) =>
+      candidates.reduce((sum, { cost }) => sum + cost, 0);
+    totals.push(
+      `Related Vitest files: ${vitest.taken.length} selected, ${vitest.dropped.length} dropped (cap ${RELATED_VITEST_FILES}).`,
+      "",
+      `Related journeys: ${journeys(browser.taken)} selected in ${browser.taken.length} spec(s), ${journeys(browser.dropped)} dropped in ${browser.dropped.length} spec(s) (cap ${RELATED_JOURNEYS}).`,
+      "",
+    );
+  }
+  const rows = ["vitest", "browser"].flatMap((runner) =>
+    [...selected[runner]].map(
+      ([file, { note }]) => `| ${cell(file)} | ${runner} | ${cell(note)} |`,
+    ),
+  );
   summarize(
     [
       "## Flake check selection",
       "",
       ...(rows.length
         ? ["| File | Runner | Selection |", "| --- | --- | --- |", ...rows]
-        : ["No Vitest or Playwright test files changed."]),
+        : ["No Vitest or Playwright test files changed or reached."]),
       "",
+      ...totals,
       "",
     ].join("\n"),
+  );
+  const outputs = Object.fromEntries(
+    Object.entries(selected).map(([runner, selections]) => [
+      runner,
+      [...selections.values()].flatMap(({ entries }) => entries),
+    ]),
   );
   const shards = browserShards(outputs.browser.length);
   const text = [
@@ -430,4 +741,4 @@ function main() {
   );
 }
 
-if (process.argv[1] === fileURLToPath(import.meta.url)) main();
+if (process.argv[1] === fileURLToPath(import.meta.url)) await main();
