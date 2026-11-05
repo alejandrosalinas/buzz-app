@@ -602,6 +602,30 @@ html[data-keyboard-navigation]
   overflow-wrap: anywhere;
 }
 @layer components {
+  .buzz-toast:has(.buzz-toast-open) {
+    position: relative;
+    isolation: isolate;
+  }
+  .buzz-toast-open {
+    position: absolute;
+    inset: 0;
+    border: 0;
+    border-radius: inherit;
+    background: none;
+    cursor: pointer;
+  }
+  .buzz-toast-open:hover {
+    box-shadow: inset 0 0 0 1px var(--border-prominent);
+  }
+  html[data-keyboard-navigation] .buzz-toast-open:focus-visible {
+    outline: 2px solid var(--border-focus);
+    outline-offset: 2px;
+  }
+  .buzz-toast:has(.buzz-toast-open)
+    :is(.buzz-toast-dismiss, .buzz-toast-actions > *) {
+    position: relative;
+    z-index: 1;
+  }
   .buzz-toast-heading {
     display: flex;
     align-items: start;

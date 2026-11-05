@@ -27,6 +27,7 @@ export type OpenTarget =
       provider?: string;
       scope?: NavigationScope | null;
       pluginImport?: GitPluginSource;
+      pluginId?: string;
     }>
   | Readonly<{
       version: 1;
@@ -240,10 +241,15 @@ export function parseOpenTarget(input: unknown): OpenTarget {
           "provider",
           "scope",
           "pluginImport",
+          "pluginId",
         ]);
         if (value.provider !== undefined && value.section !== "agents")
           throw invalid();
         if (value.pluginImport !== undefined && value.section !== "plugins")
+          throw invalid();
+        if (value.pluginId !== undefined && value.section !== "plugins")
+          throw invalid();
+        if (value.pluginId !== undefined && value.pluginImport !== undefined)
           throw invalid();
         target = {
           version: 1,
@@ -259,6 +265,9 @@ export function parseOpenTarget(input: unknown): OpenTarget {
             : {}),
           ...(value.pluginImport !== undefined
             ? { pluginImport: parseGitPluginSource(value.pluginImport) }
+            : {}),
+          ...(value.pluginId !== undefined
+            ? { pluginId: text(value.pluginId) }
             : {}),
         };
         break;

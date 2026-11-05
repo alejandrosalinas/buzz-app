@@ -1418,6 +1418,10 @@ keep it in the conversation flow immediately above the composer, with bounded
 overflow, so Send and companion-panel controls remain usable. Its retry policy
 and diagnostics belong to Channels; it does not enter the floating toast stack.
 
+A notice can make its body open a related destination with `navigation`. The
+body has a hover state and a keyboard action. Its explicit buttons and Dismiss
+keep their own hit areas and actions. The destination stays feature-owned.
+
 Use `useToastNotification` for completed-action feedback that must outlive its
 source row (such as copying profile metadata); the host stack owns its finite
 expiry. Keep source-owned recovery on ToastNotice.

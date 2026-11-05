@@ -171,7 +171,7 @@ export const COMPONENTS: readonly ComponentDefinition[] = [
       "Compact feedback without moving the page or hiding recovery actions.",
     behavior:
       "Sonner owns bottom-right placement, announcements, expiry and swipe dismissal. Buzz supplies themed content and an expanded, scrollable recovery stack. F6 focuses notifications.",
-    variants: ["transient", "actionable", "dismissible"],
+    variants: ["transient", "actionable", "dismissible", "navigable"],
     status: "core",
     collection: "components",
     source: "shared/design-system/ui/Toast.tsx",

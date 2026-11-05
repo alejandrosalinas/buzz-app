@@ -22,6 +22,7 @@ export function PluginMenu({
   label = "More plugin actions",
   toggle,
   onRemoved,
+  openUpdateSettings = false,
 }: {
   plugin: PluginInfo;
   plugins: PluginManager;
@@ -29,9 +30,11 @@ export function PluginMenu({
   label?: string;
   onRemoved?: () => void;
   toggle?: { label: string; disabled: boolean; run(): void };
+  openUpdateSettings?: boolean;
 }) {
   const deleteTrigger = useRef<HTMLButtonElement>(null);
   const cancelDelete = useRef<HTMLButtonElement>(null);
+  const updateChoice = useRef<HTMLDivElement>(null);
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [deleting, setDeleting] = useState(false);
   const [deleteError, setDeleteError] = useState<string | null>(null);
@@ -42,7 +45,7 @@ export function PluginMenu({
   if (plugin.source !== "external") return null;
   return (
     <>
-      <MenuRoot>
+      <MenuRoot defaultOpen={openUpdateSettings}>
         <MenuTrigger
           render={
             <IconButton
@@ -57,6 +60,7 @@ export function PluginMenu({
         <MenuPopup
           align="end"
           aria-label="Plugin actions"
+          initialFocus={openUpdateSettings ? updateChoice : undefined}
           finalFocus={
             confirmDelete || confirmRollback || showAccess
               ? false
@@ -68,6 +72,7 @@ export function PluginMenu({
             plugin.updateSource &&
             "repository" in plugin.updateSource && (
               <MenuCheckboxItem
+                ref={updateChoice}
                 checked={
                   plugin.updateChecks ?? plugin.manifest.updates.defaultEnabled
                 }

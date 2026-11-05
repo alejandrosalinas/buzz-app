@@ -50,11 +50,13 @@ export function PluginUpdates({
   plugins,
   relay,
   installRequests,
+  navigation,
   children,
 }: {
   plugins: PluginManager;
   relay: AppServices["relay"];
   installRequests: PluginInstallRequests;
+  navigation: Pick<AppServices["navigation"], "open">;
   children: ReactNode;
 }) {
   const [store, setStore] = useState<Updates>();
@@ -152,6 +154,16 @@ export function PluginUpdates({
               tone={update.error ? "error" : "info"}
               onDismiss={() => store?.later(update)}
               closeLabel="Dismiss plugin update notice"
+              navigation={{
+                label: `Manage ${plugin?.manifest.name ?? update.id} update checks`,
+                open: () =>
+                  void navigation.open({
+                    version: 1,
+                    kind: "settings",
+                    section: "plugins",
+                    pluginId: update.id,
+                  }),
+              }}
             >
               <Button
                 size="sm"

@@ -120,6 +120,7 @@ function ConnectedApp({ services }: { services: AppServices }) {
           plugins={services.plugins}
           relay={services.relay}
           installRequests={services.pluginInstallRequests}
+          navigation={services.navigation}
         >
           <ConnectedAppContent services={services} />
         </PluginUpdates>
@@ -796,6 +797,9 @@ function ConnectedAppContent({ services }: { services: AppServices }) {
                   onSection={openSettingsSection}
                   onPluginImportClosed={() =>
                     route.dismissPluginImport(route.request)
+                  }
+                  onPluginDetailsClosed={() =>
+                    route.dismissPluginDetails(route.request)
                   }
                   onProvider={route.setSettingsProvider}
                   onUnsavedChange={setSettingsUnsaved}

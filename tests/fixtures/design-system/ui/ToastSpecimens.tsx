@@ -40,6 +40,7 @@ export function ToastSpecimens() {
     <ToastNotice
       title="Changes weren’t saved"
       description="Your choices still apply for this session. Retry to save them on this device."
+      navigation={{ label: "Open related dialog", open: () => { setFailed(false); setModal(true); } }}
     >
       <Button size="sm" onClick={() => setFailed(false)}>
         Retry saving
@@ -102,6 +103,13 @@ export function ToastSpecimens() {
                 <ToastNotice
                   title="Changes weren’t saved"
                   description="Your choices still apply for this session. Retry to save them on this device."
+                  navigation={{
+                    label: "Open related dialog",
+                    open: () => {
+                      setFailed(false);
+                      setModal(true);
+                    },
+                  }}
                 >
                   <Button size="sm" onClick={() => setFailed(false)}>
                     Retry saving

@@ -96,12 +96,16 @@ function fixture() {
       };
     },
   } as unknown as PluginManager;
+  const navigation = {
+    open: vi.fn(async () => ({ status: "opened" as const })),
+  };
   const relay = { snapshot: () => ({ session: {} }) } as AppServices["relay"];
   const mount = () =>
     render(
       <ToastProvider>
         <PluginUpdates
           plugins={manager}
+          navigation={navigation}
           relay={relay}
           installRequests={createPluginInstallRequests()}
         >
@@ -123,6 +127,7 @@ function fixture() {
     fresh,
     imports,
     installImport,
+    navigation,
     manager,
     state: () => snapshot,
     emit(next: Partial<ReturnType<PluginManager["snapshot"]>>) {
@@ -180,6 +185,21 @@ it("removes a pending update action when the user turns off checks", async () =>
       screen.queryByRole("button", { name: "Update and reload" }),
     ).not.toBeInTheDocument(),
   );
+  expect(f.installImport).not.toHaveBeenCalled();
+});
+
+it("opens the plugin's update settings from the notice body", async () => {
+  const f = fixture();
+  f.mount();
+  fireEvent.click(
+    await screen.findByRole("button", { name: "Manage Notes update checks" }),
+  );
+  expect(f.navigation.open).toHaveBeenCalledWith({
+    version: 1,
+    kind: "settings",
+    section: "plugins",
+    pluginId: "example.notes",
+  });
   expect(f.installImport).not.toHaveBeenCalled();
 });
 

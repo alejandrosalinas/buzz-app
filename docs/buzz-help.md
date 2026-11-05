@@ -446,6 +446,8 @@ confirmation.
   sources at startup and once per hour while the app is visible. Checks do not
   install or reload plugins. A notice
   offers **Update and reload**, or **Review permissions** when access increases.
+  Click the notice body to open that plugin’s update checkbox in Manage plugins.
+  Its Update, Later, and Dismiss controls keep their own actions.
   Save unfinished forms and stop active plugin workers before you update.
   **Later** hides the notice for this candidate until the next app run. The
   update stays in the profile menu under **Plugins**. A newer candidate can show
