@@ -1,5 +1,5 @@
 import { OnboardingBack } from "./OnboardingBack";
-import { useState } from "react";
+import { type ReactNode, useState } from "react";
 import { enteredRelayOrigin } from "../communities/destination";
 import { parsePastedInvite } from "../communities/invite-link";
 import { Button } from "../../shared/design-system/ui/Button";
@@ -36,6 +36,7 @@ export function CommunityUrlField({
   onSubmit,
   disabled = false,
   onBack,
+  alternative,
 }: {
   url: string;
   onUrlChange: (url: string) => void;
@@ -43,6 +44,8 @@ export function CommunityUrlField({
   onSubmit: (origin: string, code: string) => void;
   disabled?: boolean;
   onBack?: () => void;
+  /** Sits where Back would, across from Continue: another way forward, such as Create a community. */
+  alternative?: ReactNode;
 }) {
   const [invalid, setInvalid] = useState(false);
   const entered = enteredCommunity(url);
@@ -82,7 +85,9 @@ export function CommunityUrlField({
           </Field>
         </div>
         <div className="flex flex-wrap items-center justify-between gap-2">
-          <div>{onBack && <OnboardingBack onClick={onBack} />}</div>
+          <div>
+            {onBack ? <OnboardingBack onClick={onBack} /> : alternative}
+          </div>
           <Button
             size="lg"
             variant="prominent"

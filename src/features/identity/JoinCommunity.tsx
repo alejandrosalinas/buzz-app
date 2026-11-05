@@ -7,7 +7,7 @@ import { OnboardingScreen } from "./OnboardingScreen";
 /**
  * First-run landing after setup. The community URL is the live action; a
  * linked account's owned communities are offered as rows that take the same
- * path with their address, and, with `onCreate`, a new one can be created.
+ * path with their address, and, with `onCreate`, Create a community sits across from Continue.
  */
 export function JoinCommunity({
   url,
@@ -69,21 +69,24 @@ export function JoinCommunity({
               url={url}
               onUrlChange={onUrlChange}
               onSubmit={onFind}
+              alternative={
+                onCreate && (
+                  <Button
+                    size="lg"
+                    variant="ghost"
+                    data-return-focus="create"
+                    onClick={onCreate}
+                  >
+                    Create a community
+                  </Button>
+                )
+              }
             />
           </div>
         </>
       }
     >
-      {onCreate && (
-        <Button
-          size="lg"
-          variant="subtle"
-          data-return-focus="create"
-          onClick={onCreate}
-        >
-          Create a community
-        </Button>
-      )}
+      {null}
     </OnboardingScreen>
   );
 }
