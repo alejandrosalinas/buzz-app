@@ -3,6 +3,7 @@ import { usePagePresentation } from "./BestieNavigation";
 import {
   useCallback,
   useEffect,
+  useMemo,
   useRef,
   useState,
   useSyncExternalStore,
@@ -119,6 +120,10 @@ export function PageSearch({
     openRef.current = next;
     if (next) setContentPresent(true);
     setOpen(next);
+  }, []);
+  const changeTab = useCallback((next: SearchView) => {
+    place.current = { top: 0, key: "" };
+    setTab(next);
   }, []);
   const begin = useCallback(() => {
     composerChannel.current = undefined;
@@ -301,10 +306,7 @@ export function PageSearch({
           (services ? (
             <CommunitySearch
               tab={tab}
-              onTabChange={(next) => {
-                place.current = { top: 0, key: "" };
-                setTab(next);
-              }}
+              onTabChange={changeTab}
               place={place.current}
               services={services}
               pages={destinations}
@@ -407,6 +409,36 @@ function CommunitySearch({
   // the row keeps focus there; any other switch returns it to the field.
   const pointer = useRef(false);
   const focusTab = useRef(false);
+  // Keystrokes re-render the palette; the tab row depends only on the view.
+  const tabs = useMemo(
+    () => (
+      // A pointer switch returns to the field: typing usually follows.
+      <div
+        onPointerDown={() => {
+          pointer.current = true;
+        }}
+      >
+        <Tabs
+          variant="panel"
+          label="Search in"
+          value={view}
+          items={SEARCH_VIEWS}
+          onValueChange={(next) => {
+            focusTab.current =
+              !pointer.current &&
+              document.activeElement?.getAttribute("role") === "tab";
+            pointer.current = false;
+            onTabChange(next);
+          }}
+          onReselect={() => {
+            pointer.current = false;
+            input.current?.focus();
+          }}
+        />
+      </div>
+    ),
+    [view, onTabChange, input],
+  );
   const switchView = (delta: 1 | -1) => {
     focusTab.current = false;
     const index = SEARCH_VIEWS.findIndex(({ value }) => value === view);
@@ -524,32 +556,7 @@ function CommunitySearch({
           panelId: `search-view-${view}`,
           onSwitch: switchView,
           place,
-          tabs: (
-            // A pointer switch returns to the field: typing usually follows.
-            <div
-              onPointerDown={() => {
-                pointer.current = true;
-              }}
-            >
-              <Tabs
-                variant="panel"
-                label="Search in"
-                value={view}
-                items={SEARCH_VIEWS}
-                onValueChange={(next) => {
-                  focusTab.current =
-                    !pointer.current &&
-                    document.activeElement?.getAttribute("role") === "tab";
-                  pointer.current = false;
-                  onTabChange(next);
-                }}
-                onReselect={() => {
-                  pointer.current = false;
-                  input.current?.focus();
-                }}
-              />
-            </div>
-          ),
+          tabs,
         }
       : undefined;
   if (views && view === "channels")
