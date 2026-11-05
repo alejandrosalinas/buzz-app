@@ -164,16 +164,14 @@ esac
 
     fs::write(
         &helper,
-        format!(
-            r##"#!/bin/sh
+        r##"#!/bin/sh
 [ "$#" = 4 ] && [ "$1" = --session-store ] || exit 12
 case "$2" in
   read) [ -f "$0.record" ] || exit 10; /bin/cat "$0.record" ;;
   replace) /bin/cat <&1 > "$0.record"; exit 1 ;;
   delete) /bin/rm -f "$0.record"; exit 1 ;;
 esac
-"##
-        ),
+"##,
     )
     .unwrap();
     compare_session(service, &account, None, Some(b"committed")).unwrap();
