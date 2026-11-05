@@ -618,14 +618,12 @@ export function AgentDetails({
           </section>
           <div ref={setSaveFooter} className={styles.saveFooter} />
         </div>
-        {(type?.PanelFooter || panelNotice) && (
-          <div ref={setPanelFooter} className={styles.panelFooter}>
-            <AnimatePresence mode="wait">
-              {panelNotice ??
-                (type?.PanelFooter && <type.PanelFooter key="notice" />)}
-            </AnimatePresence>
-          </div>
-        )}
+        <div ref={setPanelFooter} className={styles.panelFooter}>
+          <AnimatePresence mode="wait">
+            {panelNotice ??
+              (type?.PanelFooter && <type.PanelFooter key="notice" />)}
+          </AnimatePresence>
+        </div>
       </div>
     </AgentSaveFooter>
   );

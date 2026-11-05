@@ -5,6 +5,7 @@ stubAvatarBrowserApis();
 import {
   act,
   cleanup,
+  fireEvent,
   render,
   screen,
   waitFor,
@@ -383,6 +384,29 @@ it.each([
       expect(
         screen.queryByRole("dialog", { name: "Change avatar" }),
       ).toBeNull();
+      if (recovery) {
+        canUseRemoteAgents = false;
+        await act(() => session.signIn());
+        const sheet = await screen.findByRole("region", {
+          name: "Try another Builderlab account",
+        });
+        const footer = sheet.parentElement?.parentElement;
+        if (!footer) throw new Error("Missing pane notice host");
+        // An entrance still at opacity 0 can correctly finish exit immediately.
+        await waitFor(() =>
+          expect(sheet.parentElement).toHaveStyle({ opacity: "1" }),
+        );
+        const memory = screen.getByRole("tab", { name: "Memory" });
+        act(() => memory.focus());
+        fireEvent.click(memory);
+        // The host must survive clearing the notice so Motion can finish exit.
+        expect(footer).toBeInTheDocument();
+        expect(sheet).toBeInTheDocument();
+        expect(sheet.closest("[inert]")).toHaveAttribute("aria-hidden", "true");
+        await waitFor(() => expect(sheet).not.toBeInTheDocument());
+        expect(footer).toBeEmptyDOMElement();
+        expect(screen.getByRole("tab", { name: "Memory" })).toHaveFocus();
+      }
     } finally {
       view.unmount();
       session.dispose();
