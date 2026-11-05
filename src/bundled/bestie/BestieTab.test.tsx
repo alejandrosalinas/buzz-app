@@ -1051,6 +1051,51 @@ it("keeps a hosted former Bestie's tab while a newer read is under way, whatever
   stop?.();
 });
 
+it("shows a Former Bestie tab for a hosted agent its provider holds no instructions for, while it is in a private channel", async () => {
+  const { relay } = community(bea.pubkey);
+  const remote = {
+    ...ada,
+    place: "hosted",
+    type: "block.builderlab/builderlab",
+  } as Agent;
+  const { agents } = host(["block.builderlab/builderlab"], [remote, bea]);
+  const { session } = relay.snapshot() as unknown as {
+    session: { channels: { list: () => unknown } };
+  };
+  // One list per change, as a session's channel list is.
+  const listed = (members: readonly string[]) => ({
+    channels: [
+      {
+        id: "c1",
+        name: "plans",
+        channelType: "stream",
+        private: true,
+        members,
+      },
+    ],
+  });
+  let list = listed([OWNER, remote.pubkey]);
+  session.channels.list = () => list;
+  writeView(SCOPE, "bestie:former", [ada.pubkey]);
+  const tab = formerBestieTab(relay, agents);
+  const stop = tab.subscribe?.(() => {});
+  await vi.waitFor(() => expect(tab.when?.(remote)).toBe(true));
+  const Tab = tab.component;
+  render(<Tab agent={remote} />);
+  // Its memory can't be changed from here, but its channels can.
+  expect(await screen.findByText("Remembers you")).toBeVisible();
+  expect(screen.queryAllByRole("switch")).toEqual([]);
+  expect(
+    screen.getAllByText("Not available with remote agents yet.").length,
+  ).toBeGreaterThan(0);
+  expect(
+    screen.getByRole("button", { name: "Remove Ada from #plans" }),
+  ).toBeVisible();
+  list = listed([OWNER]);
+  expect(tab.when?.(remote)).toBe(false);
+  stop?.();
+});
+
 it("keeps a hosted former Bestie's tab after a failed read, until a read shows nothing is on", async () => {
   const user = userEvent.setup();
   const { relay } = community(bea.pubkey);

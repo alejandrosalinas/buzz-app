@@ -84,10 +84,11 @@ export function formerBestieTab(
     when: (agent) => {
       const current = bestie.snapshot();
       const snapshot = relay.snapshot();
+      // A hosted agent whose provider holds no instructions may still be in
+      // private channels to take it out of; its memory switches say they
+      // aren't available.
       return (
-        (agent.place === "here" ||
-          (agent.place === "hosted" &&
-            !!agents.hostedInstructions?.(agent.pubkey))) &&
+        (agent.place === "here" || agent.place === "hosted") &&
         (!!current || (bestie.known() && bestie.recorded())) &&
         !!snapshot.session.mainAgent &&
         agent.pubkey !== current &&
