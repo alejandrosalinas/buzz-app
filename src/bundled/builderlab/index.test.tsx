@@ -1026,22 +1026,21 @@ it.for([
           ).toHaveTextContent("Browser could not open.");
           expect(create).toBeDisabled();
           expect(name).toHaveValue("Browser");
-          // The inline action shows progress and cannot start another attempt.
+          // Pending browser login shows a cancellable spinner.
           loginCallback = deferred();
           await user.click(signIn());
           const progress = await within(createDialog).findByRole("button", {
-            name: "Sign in to Builderlab",
+            name: "Cancel sign-in",
           });
           expect(progress).toHaveAttribute("aria-busy", "true");
           expect(
-            progress.querySelector(".buzz-button-spinner"),
+            progress.querySelector('[class~="motion-safe:animate-spin"]'),
           ).toBeInTheDocument();
           expect(create).toBeDisabled();
           await waitFor(() =>
             expect(loginWaits()).toHaveLength(beforeCreateLogin + 2),
           );
-          await user.click(progress);
-          expect(loginWaits()).toHaveLength(beforeCreateLogin + 2);
+          expect(progress).toBeEnabled();
           // Browser cancellation still returns to a retryable form.
           loginCallback.reject(new Error("Sign-in canceled."));
           await within(createDialog).findByRole("button", {

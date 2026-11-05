@@ -64,9 +64,18 @@ export function ModelSettings({
     | { pending: boolean; error: unknown; retry(): void };
 }) {
   const login = useSyncExternalStore(session.subscribe, session.snapshot);
-  const signIn = <SignInAction session={session} automatic />;
+  const [retrySignIn, setRetrySignIn] = useState<"waiting" | "ready">();
   const reducedMotion = useReducedMotion();
   const signedIn = login.status === "signed-in";
+  useEffect(() => {
+    if (signedIn) {
+      setRetrySignIn(undefined);
+      return;
+    }
+    if (retrySignIn !== "waiting") return;
+    const timer = setTimeout(() => setRetrySignIn("ready"), 3000);
+    return () => clearTimeout(timer);
+  }, [signedIn, retrySignIn]);
   const agent = "agent" in settings ? settings.agent : undefined;
   const subject = "subject" in settings ? settings.subject : undefined;
   const mismatch =
@@ -247,6 +256,7 @@ export function ModelSettings({
       <AccountRecoverySheet
         session={session}
         active={accountProblem}
+        onSwitchAccount={() => setRetrySignIn("waiting")}
         email={email}
         mismatch={mismatch}
         detail={accessError ? message(accessError) : undefined}
@@ -289,20 +299,42 @@ export function ModelSettings({
           </p>
         )}
         <SettingsGroup>
-          {harnessControl?.(signIn) ?? (
-            <PreferenceRow
-              title="Harness"
-              trailing={
-                <div className="flex min-w-0 flex-wrap items-center justify-end gap-2">
-                  <span className="flex min-w-0 items-center gap-2">
-                    <BuilderlabLogoIcon size={20} aria-hidden="true" />
-                    Builderlab
-                  </span>
-                  {signIn}
-                </div>
-              }
-            />
-          )}
+          <SignInAction
+            session={session}
+            automatic
+            retry={
+              retrySignIn
+                ? {
+                    waiting: retrySignIn === "waiting",
+                    cancel: () => setRetrySignIn("ready"),
+                  }
+                : undefined
+            }
+            render={(action, feedback) => (
+              <div>
+                {harnessControl?.(action) ?? (
+                  <PreferenceRow
+                    title="Harness"
+                    trailing={
+                      <div className="flex min-w-0 flex-wrap items-center justify-end gap-2">
+                        <span className="flex min-w-0 items-center gap-2">
+                          <BuilderlabLogoIcon size={20} aria-hidden="true" />
+                          Builderlab
+                        </span>
+                        {action}
+                      </div>
+                    }
+                  />
+                )}
+                {login.status === "signed-out" && retrySignIn !== "waiting" && (
+                  <p className="m-0 pb-3 text-body-sm text-secondary">
+                    Sign in to edit settings. You can still message this agent.
+                  </p>
+                )}
+                {feedback && <div className="pb-3">{feedback}</div>}
+              </div>
+            )}
+          />
           <ModelFamilyMenu
             label="Model"
             align="end"

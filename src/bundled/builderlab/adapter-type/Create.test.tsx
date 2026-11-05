@@ -381,7 +381,7 @@ it("waits for explicit sign-in before loading the creation catalog", async () =>
   expect(screen.getByRole("combobox", { name: "Thinking" })).toBeDisabled();
 });
 
-it("shares the compact sign-in action: spinner first, then browser guidance and cancellation after three seconds", async () => {
+it("shares the cancellable spinner without browser-return guidance", async () => {
   vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
   const login = deferred<Credential>();
   let aborted = false;
@@ -417,15 +417,17 @@ it("shares the compact sign-in action: spinner first, then browser guidance and 
     signingIn = session.signIn();
   });
   const progress = screen.getByRole("button", {
-    name: "Sign in to Builderlab",
+    name: "Cancel sign-in",
   });
   expect(progress).toHaveAttribute("aria-busy", "true");
-  expect(progress).toHaveAttribute("data-loading", "true");
-  expect(progress.querySelector(".buzz-button-spinner")).toBeInTheDocument();
+  expect(progress).toHaveAttribute("data-button-shape", "icon");
+  expect(
+    progress.querySelector('[class~="motion-safe:animate-spin"]'),
+  ).toBeInTheDocument();
   expect(
     screen.queryByRole("button", { name: "Cancel sign-in" }),
-  ).not.toBeInTheDocument();
-  fireEvent.click(progress);
+  ).toBeInTheDocument();
+  expect(progress).toBeEnabled();
   expect(aborted).toBe(false);
   expect(session.snapshot().status).toBe("pending");
   expect(
@@ -436,15 +438,15 @@ it("shares the compact sign-in action: spinner first, then browser guidance and 
   expect(progress).toHaveAttribute("aria-busy", "true");
   expect(
     screen.queryByRole("button", { name: "Cancel sign-in" }),
-  ).not.toBeInTheDocument();
+  ).toBeInTheDocument();
   expect(screen.queryByText(/Finish signing in/)).not.toBeInTheDocument();
   await act(() => vi.advanceTimersByTimeAsync(1));
-  expect(screen.getByRole("status")).toHaveTextContent(
-    "Finish signing in to Builderlab in your browser, then return to Buzz.",
-  );
+  expect(screen.queryByText(/Finish signing in/)).not.toBeInTheDocument();
   const cancel = screen.getByRole("button", { name: "Cancel sign-in" });
   expect(cancel).toBeEnabled();
-  expect(cancel.querySelector(".buzz-button-spinner")).not.toBeInTheDocument();
+  expect(
+    cancel.querySelector('[class~="motion-safe:animate-spin"]'),
+  ).toBeInTheDocument();
   fireEvent.click(cancel);
   expect(aborted).toBe(true);
   expect(session.snapshot().status).toBe("signed-out");

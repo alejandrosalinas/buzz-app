@@ -184,7 +184,7 @@ it("automatically signs in on Identity without provider reads before verificatio
   expect(screen.getByRole("button", { name: "Model:" })).toBeDisabled();
   expect(screen.queryByRole("textbox", { name: "Instructions" })).toBeNull();
   const inlineSignIn = screen.getByRole("button", {
-    name: "Sign in to Builderlab",
+    name: "Cancel sign-in",
   });
   expect(inlineSignIn.parentElement).toBe(
     harness.closest(".buzz-select")?.parentElement,
@@ -237,6 +237,9 @@ it.each(["cancel", "timeout"] as const)(
         harness.closest(".buzz-select")?.parentElement,
       );
       expect(screen.queryByRole("region")).toBeNull();
+      const row = harness.closest(".buzz-preference-row");
+      expect(screen.queryByText(/Finish signing in/)).toBeNull();
+      expect(screen.queryByText(/Sign in to edit settings/)).toBeNull();
       if (outcome === "cancel") fireEvent.click(cancel);
       else
         await act(async () =>
@@ -247,6 +250,11 @@ it.each(["cancel", "timeout"] as const)(
         name: "Sign in to Builderlab",
       });
       expect(retry).toBeEnabled();
+      const guidance = screen.getByText(
+        "Sign in to edit settings. You can still message this agent.",
+      );
+      expect(row).not.toContainElement(guidance);
+      expect(row?.parentElement).toContainElement(guidance);
       expect(screen.queryByRole("region")).toBeNull();
       expect(h.acquire).toHaveBeenCalledOnce();
       expect(h.request).not.toHaveBeenCalled();
@@ -528,9 +536,8 @@ it.each([
       expect(h.release).toHaveBeenCalledTimes(releases + 1);
       expect(h.release).toHaveBeenLastCalledWith(credential);
       expect(h.acquire).toHaveBeenCalledTimes(attempts);
-      expect(
-        screen.getByRole("button", { name: "Sign in to Builderlab" }),
-      ).toBeEnabled();
+      await user.click(screen.getByRole("button", { name: "Cancel sign-in" }));
+      expect(screen.getByRole("button", { name: "Retry" })).toBeEnabled();
       expect(
         screen.queryByRole("button", { name: "Use another account" }),
       ).toBeNull();
@@ -543,9 +550,7 @@ it.each([
         email: "a@example.com",
         canUseRemoteAgents: true,
       });
-      await user.click(
-        screen.getByRole("button", { name: "Sign in to Builderlab" }),
-      );
+      await user.click(screen.getByRole("button", { name: "Retry" }));
       const restored = await loadedInstructions();
       expect(h.acquire).toHaveBeenCalledTimes(attempts + 1);
       expect(restored).toHaveValue("First instructions. Draft");
@@ -553,6 +558,70 @@ it.each([
       expect(screen.getByRole("button", { name: "Save" })).toBeEnabled();
     } finally {
       browser.stop();
+    }
+  },
+);
+
+it.each(["deadline", "cancel"] as const)(
+  "shows a spinner after browser logout, then Retry on %s before checking the new account",
+  async (finish) => {
+    const h = await fixture(false);
+    h.prepareAccount({
+      subject: "wrong",
+      email: "wrong@example.com",
+      canUseRemoteAgents: false,
+    });
+    renderTabs(h);
+    const recovery = await screen.findByRole("button", {
+      name: "Use another account",
+    });
+    const browser = observeLogout(h.session);
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    try {
+      fireEvent.click(recovery);
+      const spinner = screen.getByRole("button", { name: "Cancel sign-in" });
+      expect(spinner).toHaveAttribute("aria-busy", "true");
+      expect(spinner).toHaveAttribute("data-button-shape", "icon");
+      expect(spinner.textContent).toBe("");
+      expect(screen.queryByRole("button", { name: "Retry" })).toBeNull();
+      expect(browser.opened).toEqual([
+        { url: "https://builderlab.example/logout", status: "signed-out" },
+      ]);
+      await act(() => vi.advanceTimersByTimeAsync(2999));
+      expect(screen.queryByRole("button", { name: "Retry" })).toBeNull();
+      if (finish === "cancel") fireEvent.click(spinner);
+      else await act(() => vi.advanceTimersByTimeAsync(1));
+      const retry = screen.getByRole("button", { name: "Retry" });
+      expect(retry).toBe(spinner);
+      expect(retry).toBeEnabled();
+      expect(h.acquire).toHaveBeenCalledOnce();
+      expect(h.request).not.toHaveBeenCalled();
+      vi.useRealTimers();
+      h.prepareAccount({
+        subject: "correct",
+        email: "correct@example.com",
+        canUseRemoteAgents: true,
+      });
+      const acquire = h.acquire.getMockImplementation();
+      if (!acquire) throw new Error("Missing login fixture");
+      const held = deferred<Awaited<ReturnType<typeof h.acquire>>>();
+      h.acquire.mockReturnValueOnce(held.promise);
+      fireEvent.click(retry);
+      expect(screen.getByRole("button", { name: "Cancel sign-in" })).toBe(
+        retry,
+      );
+      expect(h.acquire).toHaveBeenCalledTimes(2);
+      await act(async () => held.resolve(await acquire()));
+      await screen.findByRole("textbox", { name: "Instructions" });
+      expect(await loadedInstructions()).toHaveValue("First instructions.");
+      expect(screen.queryByRole("button", { name: "Retry" })).toBeNull();
+      act(() => h.session.signOut());
+      expect(
+        screen.getByRole("button", { name: "Sign in to Builderlab" }),
+      ).toBeEnabled();
+    } finally {
+      browser.stop();
+      h.session.dispose();
     }
   },
 );
@@ -592,29 +661,25 @@ it("recovers an unloaded no-access account through logout and normal sign-in, re
     expect(h.release).toHaveBeenCalledTimes(1);
     expect(() => h.session.credential()).toThrow();
     expect(h.acquire).toHaveBeenCalledTimes(1);
-    expect(
-      screen.getByRole("button", { name: "Sign in to Builderlab" }),
-    ).toBeEnabled();
+    await user.click(screen.getByRole("button", { name: "Cancel sign-in" }));
+    expect(screen.getByRole("button", { name: "Retry" })).toBeEnabled();
     // Returning the same browser account still offers recovery.
-    await user.click(
-      screen.getByRole("button", { name: "Sign in to Builderlab" }),
-    );
+    await user.click(screen.getByRole("button", { name: "Retry" }));
     expect(h.acquire).toHaveBeenCalledTimes(2);
     await user.click(
       await screen.findByRole("button", { name: "Use another account" }),
     );
     expect(browser.opened).toHaveLength(2);
+    await user.click(screen.getByRole("button", { name: "Cancel sign-in" }));
     expect(h.request).not.toHaveBeenCalled();
     const held = deferred<ReturnType<typeof h.session.credential>>();
     h.acquire.mockImplementationOnce(() => held.promise);
     h.request.mockResolvedValueOnce({ ...response(), status: 400 });
     try {
-      await user.click(
-        screen.getByRole("button", { name: "Sign in to Builderlab" }),
-      );
+      await user.click(screen.getByRole("button", { name: "Retry" }));
       expect(h.acquire).toHaveBeenCalledTimes(3);
       expect(
-        screen.getByRole("button", { name: "Sign in to Builderlab" }),
+        screen.getByRole("button", { name: "Cancel sign-in" }),
       ).toHaveAttribute("aria-busy", "true");
       expect(h.session.snapshot().status).toBe("pending");
       expect(screen.queryByRole("alert")).toBeNull();
@@ -677,9 +742,8 @@ it.each(["forbidden", "missing-agent"])(
       expect(browser.opened).toEqual([
         { url: "https://builderlab.example/logout", status: "signed-out" },
       ]);
-      await user.click(
-        screen.getByRole("button", { name: "Sign in to Builderlab" }),
-      );
+      await user.click(screen.getByRole("button", { name: "Cancel sign-in" }));
+      await user.click(screen.getByRole("button", { name: "Retry" }));
       expect(await loadedInstructions()).toHaveValue("First instructions.");
       expect(screen.queryByRole("alert")).toBeNull();
     } finally {

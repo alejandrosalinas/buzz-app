@@ -392,17 +392,20 @@ available rather than silently discarding it.
   to edit the retained draft.
   When signed out of Builderlab, use **Sign in** beside Harness first.
   Model, Thinking and Create agent stay disabled until sign-in completes.
-  Sign in shows a loading spinner, then browser guidance and **Cancel sign-in**
-  after three seconds. Account verification keeps the spinner until it finishes.
+  During browser sign-in, click the loading spinner to cancel. Account verification
+  cannot be cancelled.
   Opening an existing Builderlab agent’s **Identity** automatically attempts
-  sign-in if needed. The compact **Sign in** action beside Harness shows progress
-  and offers **Cancel sign-in** after three seconds. Cancelled, timed-out or failed
-  attempts wait for you to retry there. Model and Thinking stay disabled, and
+  sign-in if needed. The compact action beside Harness shows a clickable loading
+  spinner that cancels browser sign-in. Cancelled, timed-out or failed attempts
+  wait for you to retry there. A signed-out hint explains that messaging still works
+  and sign-in enables editing. Model and Thinking stay disabled, and
   Instructions appear after sign-in. Sheets appear for settings or account-access
   errors. Account-access errors offer **Use another account**, which ends
   the Builderlab sign-in and opens its browser logout page; FI builds also end
-  the shared organization sign-in. Chat, Memory and Activity use your Buzz
-  community connection and do not require this Builderlab sign-in.
+  the shared organization sign-in. After signing in with another account in the
+  browser, return to Buzz and click **Retry** beside Harness. A spinner appears
+  for three seconds before Retry becomes available; click it to end the wait early.
+  Chat, Memory and Activity use your Buzz community connection and do not require this Builderlab sign-in.
   Builderlab agents work from your phone even when your desktop is off, and
   cannot open files on your computer. Their Settings hint appears only while
   signed in, beside a cloud. Local agents have no execution hint.

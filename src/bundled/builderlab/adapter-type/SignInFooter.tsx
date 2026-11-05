@@ -164,12 +164,14 @@ export function AccountRecoverySheet({
   email,
   mismatch,
   detail,
+  onSwitchAccount,
 }: {
   session: BuilderlabSession;
   active: boolean;
   email?: string | undefined;
   mismatch: boolean;
   detail?: string | undefined;
+  onSwitchAccount?: () => void;
 }) {
   return (
     <SettingsErrorSheet
@@ -188,7 +190,10 @@ export function AccountRecoverySheet({
       action={{
         label: "Use another account",
         href: active ? new URL("/logout", oauthTarget()).href : undefined,
-        run: () => session.signOut(),
+        run: () => {
+          onSwitchAccount?.();
+          session.signOut();
+        },
       }}
     />
   );

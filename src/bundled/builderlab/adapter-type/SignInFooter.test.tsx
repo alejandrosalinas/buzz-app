@@ -97,7 +97,7 @@ it("automatically starts once, keeps slow login inline, and does not loop after 
   await act(() => vi.advanceTimersByTimeAsync(2999));
   expect(screen.queryByRole("region")).toBeNull();
   await act(() => vi.advanceTimersByTimeAsync(1));
-  expect(screen.getByRole("status")).toHaveTextContent(/Finish signing in/);
+  expect(screen.queryByRole("status")).toBeNull();
   expect(screen.queryByRole("region")).toBeNull();
   fireEvent.click(screen.getByRole("button", { name: "Cancel sign-in" }));
   expect(acquire.mock.calls[0]?.[0].aborted).toBe(true);
@@ -249,7 +249,7 @@ it("keeps Message independent of the compact sign-in action and gates profile ed
   expect(screen.queryByText(/Offline|Signed out of Builderlab/)).toBeNull();
   await waitFor(() => expect(signIn).toBeVisible());
   expect(signIn).toHaveAttribute("aria-busy", "true");
-  expect(screen.queryByRole("button", { name: "Cancel sign-in" })).toBeNull();
+  expect(screen.getByRole("button", { name: "Cancel sign-in" })).toBeEnabled();
   await act(async () => held.resolve(credential));
   expect(
     await screen.findByRole("button", { name: "Edit profile" }),
@@ -267,34 +267,45 @@ it("keeps Message independent of the compact sign-in action and gates profile ed
   session.dispose();
 });
 
-it("keeps keyboard focus while sign-in is pending and blocks repeat activation", async () => {
+it("keeps keyboard focus as the spinner cancels login and permits an explicit retry", async () => {
   const held = deferred<Credential>();
-  const acquire = vi.fn(() => held.promise);
+  const acquire = vi.fn((_signal: AbortSignal) => held.promise);
   const session = createOAuthSession(acquire);
-  const Footer = signInControl(session);
-  render(<Footer />);
+  render(<SignInAction session={session} />);
   const user = userEvent.setup();
   const signIn = screen.getByRole("button", { name: "Sign in to Builderlab" });
   try {
     await user.tab();
-    expect(signIn).toHaveFocus();
     await user.keyboard("{Enter}");
-    expect(signIn).toHaveAttribute("aria-busy", "true");
-    expect(signIn).toHaveAttribute("aria-disabled", "true");
-    expect(signIn).not.toHaveAttribute("disabled");
+    const cancel = screen.getByRole("button", { name: "Cancel sign-in" });
+    expect(cancel).toBe(signIn);
+    expect(cancel).toHaveFocus();
+    expect(cancel).toHaveAttribute("aria-busy", "true");
+    expect(cancel).toHaveAttribute("data-button-shape", "icon");
+    expect(cancel).toHaveTextContent("");
+    expect(
+      cancel.querySelector('[class~="motion-safe:animate-spin"]'),
+    ).toBeInTheDocument();
+    expect(cancel).toBeEnabled();
+    await user.keyboard(" ");
+    expect(acquire.mock.calls[0]?.[0].aborted).toBe(true);
+    expect(session.snapshot().status).toBe("signed-out");
     expect(signIn).toHaveFocus();
-    await user.keyboard("{Enter} ");
-    await user.click(signIn);
-    expect(signIn).toHaveFocus();
-    expect(acquire).toHaveBeenCalledTimes(1);
+    expect(signIn).toHaveAccessibleName("Sign in to Builderlab");
+    expect(acquire).toHaveBeenCalledOnce();
+    await user.keyboard("{Enter}");
+    expect(acquire).toHaveBeenCalledTimes(2);
+    await user.click(screen.getByRole("button", { name: "Cancel sign-in" }));
+    expect(acquire.mock.calls[1]?.[0].aborted).toBe(true);
   } finally {
     await act(async () => held.resolve(credential));
+    expect(session.snapshot().status).toBe("signed-out");
     session.dispose();
   }
 });
 
-it("keeps early sign-in passive, then offers guidance and cancellation without accepting late results", async () => {
-  // Control browser-guidance deadlines without replacing Motion's frame clock.
+it("offers spinner cancellation without accepting late results", async () => {
+  // Advance time to prove the cancelled attempt stays retired.
   vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
   const old = deferred<Credential>();
   const next = deferred<Credential>();
@@ -309,27 +320,22 @@ it("keeps early sign-in passive, then offers guidance and cancellation without a
   expect(screen.queryByRole("dialog")).toBeNull();
   const signIn = screen.getByRole("button", { name: "Sign in to Builderlab" });
   fireEvent.click(signIn);
-  fireEvent.click(signIn);
   expect(acquire).toHaveBeenCalledTimes(1);
   expect(signIn).toHaveAttribute("aria-busy", "true");
-  expect(signIn).toHaveAttribute("aria-disabled", "true");
+  expect(signIn).toBeEnabled();
   expect(signIn).not.toHaveAttribute("disabled");
   expect(session.snapshot().status).toBe("pending");
   expect(acquire.mock.calls[0]?.[0].aborted).toBe(false);
   expect(screen.queryByRole("status")).toBeNull();
-  expect(screen.queryByRole("button", { name: "Cancel sign-in" })).toBeNull();
+  expect(screen.getByRole("button", { name: "Cancel sign-in" })).toBeEnabled();
   await act(() => vi.advanceTimersByTimeAsync(2999));
   expect(screen.queryByText(/Finish signing in/)).toBeNull();
   expect(signIn).toHaveAttribute("aria-busy", "true");
-  expect(signIn).toHaveAttribute("aria-disabled", "true");
-  expect(screen.queryByRole("button", { name: "Cancel sign-in" })).toBeNull();
+  expect(signIn).toBeEnabled();
+  expect(screen.getByRole("button", { name: "Cancel sign-in" })).toBeEnabled();
   await act(() => vi.advanceTimersByTimeAsync(1));
-  const subtitle = screen.getByRole("status");
-  expect(subtitle).toHaveTextContent(
-    "Finish signing in to Builderlab in your browser, then return to Buzz.",
-  );
-  expect(screen.getAllByRole("status")).toEqual([subtitle]);
-  expect(screen.queryByText(/Use your Builderlab account/)).toBeNull();
+  expect(screen.queryByRole("status")).toBeNull();
+  expect(screen.queryByText(/Finish signing in/)).toBeNull();
   expect(screen.getByRole("button", { name: "Cancel sign-in" })).toBeEnabled();
   fireEvent.click(screen.getByRole("button", { name: "Cancel sign-in" }));
   expect(acquire.mock.calls[0]?.[0].aborted).toBe(true);
@@ -341,7 +347,7 @@ it("keeps early sign-in passive, then offers guidance and cancellation without a
   expect(acquire).toHaveBeenCalledTimes(2);
   expect(signIn).toHaveAttribute("aria-busy", "true");
   expect(screen.queryByRole("status")).toBeNull();
-  expect(screen.queryByRole("button", { name: "Cancel sign-in" })).toBeNull();
+  expect(screen.getByRole("button", { name: "Cancel sign-in" })).toBeEnabled();
   vi.useRealTimers();
   await act(async () => {
     old.resolve(credential);
@@ -387,9 +393,9 @@ it("observes an existing attempt and leaves it running when the pane closes", as
   const Footer = signInControl(session);
   const mounted = render(<Footer />, { wrapper: StrictMode });
   expect(
-    screen.getByRole("button", { name: "Sign in to Builderlab" }),
+    screen.getByRole("button", { name: "Cancel sign-in" }),
   ).toHaveAttribute("aria-busy", "true");
-  expect(screen.queryByRole("button", { name: "Cancel sign-in" })).toBeNull();
+  expect(screen.getByRole("button", { name: "Cancel sign-in" })).toBeEnabled();
   mounted.unmount();
   expect(session.snapshot().status).toBe("pending");
   expect(acquire).toHaveBeenCalledTimes(1);
@@ -475,14 +481,12 @@ it("loads the pane after a late browser callback and verified exchange without w
     await callbackStarted.promise;
   });
   await act(() => vi.advanceTimersByTimeAsync(30_000));
-  expect(screen.getByRole("status")).toHaveTextContent(
-    "Finish signing in to Builderlab in your browser, then return to Buzz.",
-  );
+  expect(screen.queryByText(/Finish signing in/)).toBeNull();
   await act(async () => {
     callback.resolve({ parameters: [["code", "late-code"]] });
     await accountStarted.promise;
   });
-  // A code alone is not a verified account. The pending card stays actionable.
+  // A code alone is not a verified account. The pending control stays actionable.
   expect(session.snapshot().status).toBe("pending");
   expect(screen.getByRole("button", { name: "Cancel sign-in" })).toBeEnabled();
   vi.useRealTimers();

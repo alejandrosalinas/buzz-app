@@ -8,7 +8,7 @@ One Builderlab account for communities and agents that Builderlab hosts for you,
 2. To host a community, choose **Create community** under **Communities**, then **Copy address**, open the community picker and choose **Join a community**.
 3. To host an agent, in **Agents** choose **New agent** and pick **Builderlab** under **Remote** in the **Harness** menu. It can answer while your desktop is off, but cannot open files on your computer.
 4. If signed out, choose the small **Sign in** button beside Harness. Model, Thinking and Create agent stay disabled until sign-in completes. Choose a model and thinking level, optionally add instructions, then choose **Create agent**. Review the introduction and choose **Let’s go** to create it.
-5. Edit model settings and instructions later in **Identity**. Opening it attempts sign-in automatically if needed. The compact Sign in action beside Harness shows progress and offers Cancel sign-in after three seconds. Cancellation, timeout and login failures wait for an explicit inline retry. Sheets are reserved for settings or account-access errors. Instructions appear after sign-in. Account-access errors offer **Use another account**, which ends the Builderlab session and opens `/logout` in your browser. In FI builds this also ends the shared organization sign-in. Browser logout still requires returning to Buzz to retry.
+5. Edit model settings and instructions later in **Identity**. Opening it attempts sign-in automatically if needed. The compact action beside Harness shows a spinner that cancels browser sign-in on click. The resting signed-out hint explains that sign-in enables editing while messaging still works. Cancellation, timeout and login failures wait for an explicit inline retry. Sheets are reserved for settings or account-access errors. Instructions appear after sign-in. Account-access errors offer **Use another account**, which ends the Builderlab session and opens `/logout` in your browser. In FI builds this also ends the shared organization sign-in. After Use another account, a cancellable spinner waits three seconds before showing **Retry** beside Harness. Sign in with the other account in the browser, return to Buzz, then click Retry to check access.
 
 While signed in, Identity shows a cloud beside “Remote agent”, with “Runs on a
 Builderlab machine” underneath. Workspace in Settings explains that the remote
@@ -85,9 +85,8 @@ the runtime-tagged community registration; the provider keeps the key and runs
 the agent even while Buzz is closed. On desktop, creation has a small Sign in
 action beside Harness. Create agent stays disabled until sign-in completes;
 Model and Thinking remain visible but disabled while signed out. The Sign in
-action shows a loading spinner first; after three seconds it offers browser
-guidance and Cancel sign-in, matching the agent pane. Account verification keeps
-the spinner without cancellation. Login errors stay in the form;
+action shows a clickable loading spinner that cancels browser sign-in, matching
+the agent pane. Account verification keeps the spinner without cancellation. Login errors stay in the form;
 failed or cancelled browser sign-in preserves the draft for retry. Confirmed deletion still
 starts sign-in when needed and continues after it succeeds. Both flows share an
 existing Settings sign-in attempt. Deletion's wait has no cancellation control;
