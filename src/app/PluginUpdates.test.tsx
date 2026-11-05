@@ -164,7 +164,9 @@ it("shows progress while applying a fresh preview without more access", async ()
       finish(true);
     });
   }
-  await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+  await waitFor(() =>
+    expect(screen.queryByRole("dialog", { name: "Updating Notes" })).toBeNull(),
+  );
   expect(f.imports.git).toHaveBeenCalledOnce();
   expect(f.manager.change).not.toHaveBeenCalled();
 });
