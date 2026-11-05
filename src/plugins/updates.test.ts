@@ -198,6 +198,63 @@ it("keeps a useful authentication error and retries discovery without installati
   updates.dispose();
 });
 
+it("retains an explicit retry while another repository is pending", async () => {
+  const f = fixture();
+  const configuration = f.get();
+  if (configuration.status !== "ready") throw new Error("Expected catalog");
+  const other = {
+    ...f.plugin,
+    manifest: { ...f.plugin.manifest, id: "example.other" },
+    updateSource: {
+      repository: "https://example.com/other.git",
+      reference: "main",
+      path: ".",
+    },
+  };
+  f.preview.candidates.push({
+    path: ".",
+    manifest: other.manifest,
+    revision: "new",
+  });
+  f.set({
+    ...configuration,
+    catalog: { ...configuration.catalog, plugins: [f.plugin, other] },
+  });
+  f.authorize.mockRejectedValueOnce(new Error("SSH authentication failed"));
+  let started!: () => void;
+  const discovery = new Promise<void>((resolve) => {
+    started = resolve;
+  });
+  let finish!: (preview: ImportPreview) => void;
+  f.checkGit.mockImplementationOnce(() => {
+    started();
+    return new Promise((resolve) => {
+      finish = resolve;
+    });
+  });
+  const updates = createPluginUpdates(f.manager, f.authorize);
+  const running = updates.check();
+  await discovery;
+  let retried: ReturnType<typeof updates.check> | undefined;
+  try {
+    expect(updates.snapshot()[0]?.error).toBe("SSH authentication failed");
+    retried = updates.check(true);
+    expect(f.checkGit).toHaveBeenCalledTimes(1);
+  } finally {
+    finish(f.preview);
+    await running;
+    await retried;
+    updates.dispose();
+  }
+  expect(f.checkGit).toHaveBeenCalledTimes(3);
+  const retriedUpdate = updates
+    .snapshot()
+    .find((update) => update.id === f.plugin.manifest.id);
+  expect(retriedUpdate?.candidate?.revision).toBe("new");
+  expect(retriedUpdate?.error).toBeUndefined();
+  expect(f.imports.install).not.toHaveBeenCalled();
+});
+
 it("requires the managed commit and removes a candidate when its source changes", async () => {
   const f = fixture();
   const config = f.get();
@@ -260,11 +317,12 @@ it("discards late discovery after disposal or removal and prevents overlapping c
   const updates = createPluginUpdates(f.manager, f.authorize);
   const pending = updates.check();
   await Promise.resolve();
-  await updates.check(true);
+  const retried = updates.check(true);
   expect(f.checkGit).toHaveBeenCalledTimes(1);
   updates.dispose();
   resolve(f.preview);
   await pending;
+  await retried;
   expect(updates.snapshot()).toEqual([]);
 });
 

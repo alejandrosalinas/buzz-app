@@ -76,15 +76,27 @@ export function PluginUpdates({
         (await relay.snapshot().session.authorizeGit?.(repository)) ?? null,
     );
     setStore(updates);
-    const check = () => {
-      if (document.visibilityState !== "hidden") void updates.check();
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    let disposed = false;
+    const check = async () => {
+      clearTimeout(timer);
+      if (document.visibilityState === "hidden") return;
+      const delay = await updates.check();
+      if (
+        delay === undefined ||
+        disposed ||
+        document.visibilityState === "hidden"
+      )
+        return;
+      clearTimeout(timer);
+      timer = setTimeout(check, delay);
     };
-    check();
+    void check();
     const unsubscribe = plugins.subscribe(check);
-    const timer = setInterval(check, 3_600_000);
     document.addEventListener("visibilitychange", check);
     return () => {
-      clearInterval(timer);
+      disposed = true;
+      clearTimeout(timer);
       document.removeEventListener("visibilitychange", check);
       unsubscribe();
       updates.dispose();

@@ -23,7 +23,10 @@ import type { ImportPreview, PluginInfo } from "../plugins/types";
 import type { AppServices } from "./services";
 import { createPluginInstallRequests } from "../plugins/installer";
 
-afterEach(cleanup);
+afterEach(() => {
+  cleanup();
+  vi.useRealTimers();
+});
 
 function fixture() {
   const source = {
@@ -137,6 +140,66 @@ function fixture() {
     mount,
   };
 }
+
+it("checks one hour after configuration becomes ready", async () => {
+  vi.useFakeTimers();
+  const visibility = vi
+    .spyOn(document, "visibilityState", "get")
+    .mockReturnValue("visible");
+  const f = fixture();
+  const ready = f.state().configuration;
+  f.candidate.revision = f.plugin.revision;
+  f.emit({ configuration: { status: "loading" } });
+  const view = f.mount();
+  try {
+    await act(() => vi.advanceTimersByTimeAsync(1_000));
+    await act(async () => f.emit({ configuration: ready }));
+    expect(f.imports.checkGit).toHaveBeenCalledTimes(1);
+    await act(() => vi.advanceTimersByTimeAsync(3_599_999));
+    expect(f.imports.checkGit).toHaveBeenCalledTimes(1);
+    await act(() => vi.advanceTimersByTimeAsync(1));
+    expect(f.imports.checkGit).toHaveBeenCalledTimes(2);
+  } finally {
+    view.unmount();
+    visibility.mockRestore();
+  }
+});
+
+it("stops scheduling during configuration recovery after pending discovery", async () => {
+  vi.useFakeTimers();
+  const visibility = vi
+    .spyOn(document, "visibilityState", "get")
+    .mockReturnValue("visible");
+  const f = fixture();
+  const ready = f.state().configuration;
+  f.candidate.revision = f.plugin.revision;
+  let finish!: (preview: ImportPreview) => void;
+  f.imports.checkGit.mockImplementationOnce(
+    () =>
+      new Promise((resolve) => {
+        finish = resolve;
+      }),
+  );
+  const snapshot = vi.spyOn(f.manager, "snapshot");
+  const view = f.mount();
+  try {
+    await act(async () => {});
+    expect(f.imports.checkGit).toHaveBeenCalledTimes(1);
+    await act(async () => f.emit({ configuration: { status: "loading" } }));
+    await act(() => vi.advanceTimersByTimeAsync(3_600_000));
+    await act(async () => finish(f.discovered));
+    const reads = snapshot.mock.calls.length;
+    await act(() => vi.advanceTimersByTimeAsync(100));
+    expect(snapshot).toHaveBeenCalledTimes(reads);
+    await act(async () => f.emit({ configuration: ready }));
+    expect(f.imports.checkGit).toHaveBeenCalledTimes(2);
+  } finally {
+    finish(f.discovered);
+    view.unmount();
+    visibility.mockRestore();
+    snapshot.mockRestore();
+  }
+});
 
 it.each([true, false])(
   "lets the user override the plugin's default check policy (%s)",
