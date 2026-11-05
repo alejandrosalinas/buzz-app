@@ -188,18 +188,15 @@
       background: var(--affordance-subtle-pressed);
     }
   }
-  /* Proposed clear glass: the most translucent fill, for a secondary action over
-     a bright brand surface where the backdrop should stay visible through it. */
+  /* Proposed clear glass: primary glass, the most translucent material, for a
+     secondary action over a bright brand surface where the backdrop should stay
+     visible through it. Interaction moves one step up the ramp. */
   .buzz-button[data-variant="glass-clear"] {
-    background: var(--glass-1);
-    backdrop-filter: blur(var(--blur-md));
-    box-shadow:
-      inset 0 1px 0 var(--rim-lit),
-      inset 0 -1px 0 var(--rim-shade);
+    @apply glass-primary;
   }
   @media (hover: hover) and (pointer: fine) {
     .buzz-button[data-variant="glass-clear"]:hover:not([data-disabled]) {
-      background: var(--bg-glass-primary);
+      background: var(--bg-glass-primary-hover);
     }
   }
   .buzz-button[data-variant="glass-clear"]:is(
