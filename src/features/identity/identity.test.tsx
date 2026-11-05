@@ -1951,6 +1951,36 @@ it.each([
   },
 );
 
+it("Open Buzz restarts a sign-in from a landing URL that timed out waiting on the browser", async () => {
+  const relay = landingRelay("https://relay.example.com");
+  relay.info.resolve();
+  const connect = vi
+    .fn<(signal: AbortSignal) => Promise<Credential>>()
+    .mockRejectedValueOnce(new Error(SIGN_IN_TIMED_OUT))
+    .mockReturnValue(new Promise<Credential>(() => {}));
+  const identity = createIdentity();
+  const user = userEvent.setup();
+  render(
+    <Welcome
+      identity={identity}
+      communities={noJoin}
+      invites={invites}
+      account={unlinked}
+      connect={connect}
+    >
+      <p>Signed in</p>
+    </Welcome>,
+  );
+  await screen.findByRole("button", { name: SIGN_IN });
+  await user.type(urlField(), "relay.example.com{Enter}");
+  await screen.findByRole("heading", { name: "Connect to your community" });
+  await user.click(connectButton());
+  await screen.findByRole("heading", { name: "Finish in your browser" });
+  act(() => requestSignIn());
+  await waitFor(() => expect(connect).toHaveBeenCalledTimes(2));
+  identity.dispose();
+});
+
 it("canceling or failing sign-in after a landing URL returns to the landing with the address kept and no second lookup", async () => {
   const relay = landingRelay("https://relay.example.com");
   relay.info.resolve();

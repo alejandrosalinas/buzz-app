@@ -909,12 +909,13 @@ export function Welcome({
   };
   // Restart sign-in in place of one waiting on an earlier browser tab: the
   // browser's account session finishes it. Setup already under way, or a
-  // community-link route, has no sign-in to restart.
+  // community-link lookup, has no sign-in to restart; one that timed out does.
   requestedSignIn.current =
     state.status === "loading" || state.status === "error"
       ? undefined
       : () => {
-          if (progress.status !== "idle" || discovering) return;
+          if (progress.status !== "idle" || (discovering && !auth.error))
+            return;
           setOtherOptions(false);
           resumeSignIn();
         };
@@ -1227,7 +1228,7 @@ function FinishInBrowser({
         Finish in your browser
       </h1>
       <p className="text-body text-subtle">
-        Use the newest browser tab. Continue picks up where you left off.
+        Finish signing in there, then come back and choose Continue.
       </p>
       {/* Footer order: secondary first, primary last. */}
       <div data-onboarding-actions="">

@@ -137,7 +137,7 @@ async function federatedCredential(
     }
     // A renewal that is canceled (in the browser, by Cancel, or by a newer
     // sign-in's callback) answers with the session it would have replaced:
-    // never continue as it. One that times out rejects (`callback-refused`).
+    // never continue as it. One that times out rejects (`sign-in-timed-out`).
     if (before.status === "signed-in" && session.revision === before.revision)
       throw new Error(recoveryMessage("sign-in-canceled"));
     if (session.status !== "signed-in")
