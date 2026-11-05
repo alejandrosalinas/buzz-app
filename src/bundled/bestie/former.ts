@@ -29,20 +29,38 @@ function rememberBestie(scope: string, pubkey: string) {
     writeView(scope, FORMER, [...seen, pubkey].slice(-20));
 }
 
-/** Hosted agents' instructions as last read from their provider, by pubkey.
- * Their config isn't on this device, so Former Bestie tells from these whether
- * one still has a Bestie section on. */
-const hostedRead = new Map<string, string>();
+/** Hosted agents' instructions as last read from their provider, by pubkey,
+ * with the order the read started in. Their config isn't on this device, so
+ * Former Bestie tells from these whether one still has a Bestie section on.
+ * No `instructions` means a read failed before any succeeded: nothing shows
+ * that the agent has nothing left on. */
+type HostedRead = Readonly<{ order: number; instructions?: string }>;
+const hostedRead = new Map<string, HostedRead>();
 const hostedListeners = new Set<() => void>();
+let hostedReads = 0;
 
-/** Records a hosted agent's instructions as its provider just returned them. */
-export function rememberHostedInstructions(
-  pubkey: string,
-  instructions: string,
-) {
-  if (hostedRead.get(pubkey) === instructions) return;
-  hostedRead.set(pubkey, instructions);
-  for (const listener of [...hostedListeners]) listener();
+/** Starts recording one read of a hosted agent's instructions. Call it before
+ * asking the provider, then `read` or `failed` with what it answered. A read
+ * started before the one last recorded changes nothing when it ends, so a
+ * slow background read never replaces what a later save left. A failure never
+ * replaces instructions already read. */
+export function startHostedRead(pubkey: string) {
+  const order = ++hostedReads;
+  const record = (instructions?: string) => {
+    const last = hostedRead.get(pubkey);
+    if (last && last.order > order) return;
+    if (instructions === undefined && last?.instructions !== undefined) return;
+    hostedRead.set(pubkey, {
+      order,
+      ...(instructions !== undefined && { instructions }),
+    });
+    if (!last || last.instructions !== instructions)
+      for (const listener of [...hostedListeners]) listener();
+  };
+  return {
+    read: (instructions: string) => record(instructions),
+    failed: () => record(),
+  };
 }
 
 /** Calls `listener` when a hosted agent's recorded instructions change. */
@@ -88,14 +106,16 @@ export function readFormerHosted(
       const hosted = agents.hostedInstructions?.(agent.pubkey);
       if (!hosted) continue;
       tried.add(agent.pubkey);
+      const recording = startHostedRead(agent.pubkey);
       hosted.get(signal).then(
         (instructions) => {
-          if (!signal.aborted)
-            rememberHostedInstructions(agent.pubkey, instructions);
+          if (!signal.aborted) recording.read(instructions);
         },
         (error: unknown) => {
-          if (!signal.aborted)
-            console.warn("A former Bestie's instructions weren't read", error);
+          if (signal.aborted) return;
+          // Its Former Bestie tab then shows, and reads again with a Retry.
+          recording.failed();
+          console.warn("A former Bestie's instructions weren't read", error);
         },
       );
     }
@@ -115,14 +135,20 @@ export function readFormerHosted(
  * instructions shows it was Bestie, on any device, and is on. Membership of
  * one of the viewer's private channels counts only for an agent this device
  * saw as Bestie: nothing records which channels Bestie's switches added. A
- * hosted agent's instructions are as last read from its provider. */
+ * hosted agent's instructions are as last read from its provider; one whose
+ * read failed counts as on until a read succeeds. */
 export function formerWithSettings(
   agent: Agent,
   { session, scope }: RelaySnapshot,
 ) {
+  const hosted =
+    agent.place === "hosted" ? hostedRead.get(agent.pubkey) : undefined;
+  // A failed read doesn't show that nothing is on, so the tab stays to read
+  // again.
+  if (hosted && hosted.instructions === undefined) return true;
   const instructions =
     agent.place === "hosted"
-      ? (hostedRead.get(agent.pubkey) ?? "")
+      ? (hosted?.instructions ?? "")
       : instructionsOf(agent);
   if (FEATURES.some((feature) => featureState(instructions, feature) !== "off"))
     return true;

@@ -972,6 +972,79 @@ it("shows a hosted former Bestie's Former Bestie tab while its memory is on, rea
   stop?.();
 });
 
+/** Reads a hosted former Bestie's provider in the background, as the plugin
+ * does for each hosted agent this device saw as Bestie. */
+function readInBackground(
+  relay: RelayData,
+  agents: ReturnType<typeof hostedBestie>["agents"],
+  remote: Agent,
+) {
+  writeView(SCOPE, "bestie:former", [ada.pubkey]);
+  return readFormerHosted(relay, {
+    ...agents,
+    snapshot: () => ({ agents: [remote, bea] }),
+    subscribe: () => () => {},
+  } as unknown as Parameters<typeof readFormerHosted>[1]);
+}
+
+it("keeps a hosted former Bestie's tab when an older background read ends after a newer save", async () => {
+  const user = userEvent.setup();
+  const { relay } = community(bea.pubkey);
+  const { remote, agents, get } = hostedBestie("Be brief.");
+  const tab = formerBestieTab(relay, agents);
+  const stop = tab.subscribe?.(() => {});
+  await vi.waitFor(() => expect(tab.when?.(bea)).toBe(false));
+  // The background read starts while memory is off, and answers late.
+  let answer = (_text: string) => {};
+  get.mockImplementationOnce(
+    () =>
+      new Promise<string>((resolve) => {
+        answer = resolve;
+      }),
+  );
+  const stopReading = readInBackground(relay, agents, remote);
+  expect(get).toHaveBeenCalledTimes(1);
+  // Meanwhile the owner turns memory on, and the tab reads it back.
+  const Tab = tab.component;
+  render(<Tab agent={remote} />);
+  await user.click(
+    await screen.findByRole("switch", { name: "Remembers you" }),
+  );
+  await vi.waitFor(() => expect(tab.when?.(remote)).toBe(true));
+  // The older answer, from before the save, changes nothing.
+  answer("Be brief.");
+  await Promise.resolve();
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  expect(tab.when?.(remote)).toBe(true);
+  expect(screen.getByRole("switch", { name: "Remembers you" })).toBeChecked();
+  stopReading();
+  stop?.();
+});
+
+it("keeps a hosted former Bestie's tab after a failed read, until a read shows nothing is on", async () => {
+  const user = userEvent.setup();
+  const { relay } = community(bea.pubkey);
+  const { remote, agents, get } = hostedBestie("Be brief.");
+  const tab = formerBestieTab(relay, agents);
+  const stop = tab.subscribe?.(() => {});
+  await vi.waitFor(() => expect(tab.when?.(bea)).toBe(false));
+  get.mockRejectedValueOnce(new Error("Builderlab is down."));
+  const stopReading = readInBackground(relay, agents, remote);
+  // Nothing shows it has nothing on, so its tab stays to read again.
+  await vi.waitFor(() => expect(tab.when?.(remote)).toBe(true));
+  get.mockRejectedValueOnce(new Error("Builderlab is down."));
+  const Tab = tab.component;
+  render(<Tab agent={remote} />);
+  await user.click(await screen.findByRole("button", { name: "Retry" }));
+  expect(
+    await screen.findByRole("switch", { name: "Remembers you" }),
+  ).not.toBeChecked();
+  // A read that succeeds and shows nothing on lets the tab go.
+  await vi.waitFor(() => expect(tab.when?.(remote)).toBe(false));
+  stopReading();
+  stop?.();
+});
+
 it("shows no Former Bestie tab while the account's choice is unread or unreadable", async () => {
   const { relay, mainAgent } = community(undefined);
   mainAgent.read.mockRejectedValueOnce(new Error("offline"));

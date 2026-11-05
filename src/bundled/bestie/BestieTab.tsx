@@ -33,7 +33,7 @@ import {
 } from "./features";
 import {
   formerWithSettings,
-  rememberHostedInstructions,
+  startHostedRead,
   subscribeHostedInstructions,
   subscribePrivateMembers,
 } from "./former";
@@ -119,14 +119,21 @@ function useHostedInstructions(agents: FeatureAgents, agent: Agent) {
   const capable =
     agent.place === "hosted" && !!agents.hostedInstructions?.(agent.pubkey);
   const [text, setText] = useState<{ text: string } | { error: string }>();
+  // Only the latest read started shows: an earlier one ending later is old.
+  const latest = useRef(0);
   const read = async (signal?: AbortSignal) => {
+    const hosted = agents.hostedInstructions?.(agent.pubkey);
+    if (!hosted) return;
+    const order = ++latest.current;
+    const recording = startHostedRead(agent.pubkey);
     try {
-      const next = await agents.hostedInstructions?.(agent.pubkey)?.get(signal);
-      if (next === undefined) return;
-      setText({ text: next });
-      rememberHostedInstructions(agent.pubkey, next);
+      const next = await hosted.get(signal);
+      recording.read(next);
+      if (order === latest.current) setText({ text: next });
     } catch (cause) {
-      if (!signal?.aborted)
+      if (signal?.aborted) return;
+      recording.failed();
+      if (order === latest.current)
         setText({
           error: cause instanceof Error ? cause.message : String(cause),
         });

@@ -57,7 +57,9 @@ Attention timers; a hosted agent whose provider holds no instructions shows
 both rows as unavailable. A remote Bestie doesn't start with Remembers you
 on. Once it is no longer Bestie, its provider is read once per connection if
 this device saw it as Bestie, and it shows **Former Bestie** while its memory
-section is on or it is in one of your private channels. **Remove as Bestie** asks,
+section is on or it is in one of your private channels. If that read fails,
+the tab stays until a read succeeds, so its Retry can read again; a read that
+started before the newest one recorded never replaces it. **Remove as Bestie** asks,
 then saves no Bestie to your account: the agent stays, its check-ins stop, and
 its memory section and private channels stay, which its Former Bestie tab can
 turn off.
