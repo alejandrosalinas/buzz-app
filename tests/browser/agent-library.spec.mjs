@@ -1,6 +1,95 @@
 import { pauseClock } from "./clock.mjs";
 import { test, expect } from "./source-fixture.mjs";
 
+test("create-time Thinking uses each provider control in the Agents shell", async ({
+  page,
+}, info) => {
+  await page.setViewportSize({ width: 1280, height: 950 });
+  await page.goto("/tests/fixtures/agent-library.html?harness");
+  await page.getByRole("button", { name: "New agent" }).click();
+  await page
+    .getByRole("menuitem", { name: "Create a new agent", exact: true })
+    .click();
+  const baselineDialog = page.getByRole("dialog", { name: "Create agent" });
+  await expect(
+    baselineDialog.getByRole("combobox", { name: "Thinking" }),
+  ).toHaveCount(0);
+  await page.screenshot({ path: info.outputPath("thinking-before.png") });
+
+  for (const provider of ["claude", "codex"]) {
+    for (const dark of [false, true]) {
+      for (const width of [1280, 390]) {
+        await page.setViewportSize({ width, height: 950 });
+        await page.goto(
+          `/tests/fixtures/agent-library.html?thinking=${provider}`,
+        );
+        await page.evaluate(
+          ({ dark, fontSize }) => {
+            document.documentElement.classList.toggle("dark", dark);
+            document.documentElement.style.fontSize = fontSize;
+          },
+          { dark, fontSize: width === 390 ? "20px" : "16px" },
+        );
+
+        await page.getByRole("button", { name: "New agent" }).click();
+        await page
+          .getByRole("menuitem", { name: "Create a new agent", exact: true })
+          .click();
+        const dialog = page.getByRole("dialog", { name: "Create agent" });
+        await expect(dialog).toBeVisible();
+        const thinking = dialog.getByRole("combobox", { name: "Thinking" });
+        await expect(thinking).toBeVisible();
+        await expect(thinking).toBeEnabled();
+        await expect(thinking).toContainText(
+          provider === "codex" ? "Low · Default" : "Automatic · Default",
+        );
+
+        await thinking.focus();
+        await expect(thinking).toBeFocused();
+        const clearsStickyFooter = await thinking.evaluate((element) => {
+          const footer = element
+            .closest(".buzz-dialog")
+            ?.querySelector(".buzz-dialog-actions");
+          return (
+            footer != null &&
+            element.getBoundingClientRect().bottom <=
+              footer.getBoundingClientRect().top
+          );
+        });
+        expect(clearsStickyFooter).toBe(true);
+        await page.keyboard.press("Enter");
+        const defaultOption =
+          provider === "codex" ? "Low · Default" : "Automatic · Default";
+        await expect(
+          page.getByRole("option", { name: defaultOption }),
+        ).toBeFocused();
+        await page.keyboard.press("ArrowDown");
+        await expect(
+          page.getByRole("option", { name: "Low", exact: true }),
+        ).toBeFocused();
+        await page.keyboard.press("ArrowDown");
+        await expect(
+          page.getByRole("option", { name: "High", exact: true }),
+        ).toBeFocused();
+        await page.keyboard.press("Enter");
+        await expect(thinking).toContainText("High");
+        if (
+          (provider === "claude" && dark === false && width === 1280) ||
+          (provider === "claude" && dark === true && width === 390) ||
+          (provider === "codex" && dark === false && width === 390) ||
+          (provider === "codex" && dark === true && width === 1280)
+        ) {
+          await page.screenshot({
+            path: info.outputPath(
+              `thinking-${provider}-${dark ? "dark" : "light"}-${width}.png`,
+            ),
+          });
+        }
+      }
+    }
+  }
+});
+
 // Real grid/flex sizing decides whether the slug truncates; jsdom cannot measure it.
 test("long memory labels truncate within the agent pane", async ({ page }) => {
   const slug = `mem/${Array.from({ length: 3 }, () => "long-memory-label".repeat(3)).join("/")}`;

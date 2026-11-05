@@ -24,10 +24,12 @@ import { MigrationPreview } from "./AgentSettingsHost";
 
 const message = (error: unknown) =>
   error instanceof Error ? error.message : String(error);
-// A failed save's error sits below the whole form, often out of view.
+// Focused controls and save errors must clear the dialog's sticky chrome.
 const reveal = (element: HTMLElement | null) => {
   if (!element) return;
-  element.scrollIntoView({ block: "nearest" });
+  if (typeof element.scrollIntoView === "function") {
+    element.scrollIntoView({ block: "nearest" });
+  }
   const popup = element.closest<HTMLElement>(".buzz-dialog");
   const footer = popup?.querySelector<HTMLElement>(".buzz-dialog-actions");
   if (!popup || !footer) return;
@@ -138,6 +140,7 @@ export function AgentCreateDialog({
   const Create = type?.Create;
   const Model = type?.CreateModel;
   const Configuration = type?.CreateConfiguration;
+  const Thinking = type?.CreateThinking;
   useEffect(() => {
     if (restoreHarnessFocus.current !== type?.key) return;
     restoreHarnessFocus.current = null;
@@ -330,6 +333,9 @@ export function AgentCreateDialog({
           <section
             aria-label="AI configuration"
             className={styles.configuration}
+            onFocusCapture={(event) =>
+              reveal(event.target instanceof HTMLElement ? event.target : null)
+            }
           >
             {Configuration ? (
               <Configuration
@@ -349,6 +355,20 @@ export function AgentCreateDialog({
                     trailing={
                       <Model
                         key={type.key}
+                        config={config}
+                        disabled={pending}
+                        onChange={(next) => chooseModel(type, next)}
+                      />
+                    }
+                  />
+                )}
+                {Thinking && (
+                  <PreferenceRow
+                    title="Thinking"
+                    trailing={
+                      <Thinking
+                        key={type.key}
+                        {...(edited ? { agent: edited } : {})}
                         config={config}
                         disabled={pending}
                         onChange={(next) => chooseModel(type, next)}

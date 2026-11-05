@@ -22,9 +22,14 @@ import type { RelayData } from "../../src/features/relay/service";
 import { AgentInstructions } from "../../src/features/agents/AgentInstructions";
 import { CreateModelChoices } from "../../src/features/agents/CreateModelChoices";
 import { ModelPicker } from "../../src/features/agents/ModelPicker";
+import { createTabs as createClaudeTabs } from "../../src/bundled/claude-code/tabs";
+import { DEFAULT_CONFIG as claudeDefaults } from "../../src/bundled/claude-code/runtime";
+import { createTabs as createCodexTabs } from "../../src/bundled/codex/tabs";
+import { defaults as codexDefaults } from "../../src/bundled/codex/config";
 import "../../src/shared/styles/globals.css";
 
 const harness = new URLSearchParams(location.search).get("harness");
+const thinkingHarness = new URLSearchParams(location.search).get("thinking");
 const importing = new URLSearchParams(location.search).has("import");
 const teamImport = new URLSearchParams(location.search).has("teamImport");
 if (importing || teamImport) createAppearance();
@@ -128,6 +133,93 @@ const type: RegisteredAgentType = {
       />
     ),
 };
+const staticStore = <T,>(state: T) => ({
+  snapshot: () => state,
+  subscribe: () => () => {},
+});
+const thinkingTypes: Record<string, RegisteredAgentType> = {};
+if (thinkingHarness === "claude") {
+  const setup = staticStore({
+    status: { state: "ready", version: "fixture" },
+    running: undefined,
+    checking: false,
+    models: [
+      {
+        value: "default",
+        resolvedModel: "claude-fixture-model",
+        displayName: "Fictional Claude model",
+        supportedEffortLevels: ["low", "high"],
+      },
+      {
+        value: "claude-fixture-model",
+        displayName: "Fictional Claude model",
+        supportedEffortLevels: ["low", "high"],
+      },
+    ],
+    modelsChecking: false,
+    modelsError: "",
+  });
+  const defaults = staticStore({ model: "", effort: "" });
+  const tabs = createClaudeTabs({
+    setup: setup as never,
+    defaults: defaults as never,
+    runtime: {} as never,
+  });
+  thinkingTypes.claude = {
+    ...type,
+    key: "fixture/claude",
+    id: "claude",
+    title: "Claude",
+    defaults: () => ({ config: { ...claudeDefaults } }),
+    CreateModel: tabs.CreateModel,
+    CreateThinking: tabs.CreateThinking,
+  };
+} else if (thinkingHarness === "codex") {
+  const model = {
+    model: "codex-fixture-model",
+    displayName: "Fictional Codex model",
+    description: "Synthetic browser fixture",
+    isDefault: true,
+    defaultReasoningEffort: "low",
+    supportedReasoningEfforts: [
+      { reasoningEffort: "low", description: "" },
+      { reasoningEffort: "high", description: "" },
+    ],
+  };
+  const providerState = {
+    readiness: "ready",
+    checking: false,
+    data: { models: [model] },
+    error: "",
+    defaults: { model: "", effort: "" },
+  };
+  const provider = {
+    ...staticStore(providerState),
+    resolve: (value: unknown) => ({
+      ...codexDefaults,
+      ...(value as Partial<typeof codexDefaults>),
+    }),
+  };
+  const setup = staticStore({
+    status: { state: "ready", version: "fixture" },
+    running: undefined,
+  });
+  const tabs = createCodexTabs(
+    provider as never,
+    {} as never,
+    (() => Promise.resolve(undefined)) as never,
+    setup as never,
+  );
+  thinkingTypes.codex = {
+    ...type,
+    key: "fixture/codex",
+    id: "codex",
+    title: "Codex",
+    defaults: () => ({ config: { ...codexDefaults } }),
+    CreateModel: tabs.CreateModel,
+    CreateThinking: tabs.CreateThinking,
+  };
+}
 const snapshot = {
   status: "ready" as const,
   running: [] as Agent[],
@@ -160,6 +252,13 @@ const snapshot = {
       }) as Agent,
   ),
 };
+const fixtureThinkingType = thinkingTypes[thinkingHarness ?? ""];
+if (fixtureThinkingType) {
+  snapshot.agents = snapshot.agents.map((agent) => ({
+    ...agent,
+    type: fixtureThinkingType.key,
+  }));
+}
 const joining = [4, 5].map(
   (n) =>
     ({
@@ -207,16 +306,18 @@ if (harness === "hosted") {
 }
 const reviewing = new URLSearchParams(location.search).has("review");
 const changing = new URLSearchParams(location.search).has("change");
-const types = harness
-  ? [type, other, hosted]
-  : importing
-    ? [
-        { ...type, title: "Alternative" },
-        { ...other, title: "Claude Code", icon: ClaudeLogoIcon },
-      ]
-    : changing
-      ? [type, other]
-      : [type];
+const types = thinkingTypes[thinkingHarness ?? ""]
+  ? [thinkingTypes[thinkingHarness ?? ""]]
+  : harness
+    ? [type, other, hosted]
+    : importing
+      ? [
+          { ...type, title: "Alternative" },
+          { ...other, title: "Claude Code", icon: ClaudeLogoIcon },
+        ]
+      : changing
+        ? [type, other]
+        : [type];
 if (changing) snapshot.running = snapshot.agents;
 let updates: readonly AgentUpdateRequest[] = changing
   ? [

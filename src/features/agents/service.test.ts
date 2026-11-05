@@ -5179,7 +5179,7 @@ it("creates an agent with the config it was given, not its type's defaults, and 
     type: "example/echo",
     name: " Echo ",
     picture,
-    config: { reply: "chosen" },
+    config: { reply: "chosen", model: "model-b", effort: "high" },
   });
   expect(native.create).toHaveBeenCalledWith(
     "https://relay.example.test",
@@ -5192,17 +5192,23 @@ it("creates an agent with the config it was given, not its type's defaults, and 
     picture,
   );
   expect(agent).toMatchObject({ pubkey: bot, name: "Echo", picture });
-  expect(agent.config).toEqual({ reply: "chosen" });
+  expect(agent.config).toEqual({
+    reply: "chosen",
+    model: "model-b",
+    effort: "high",
+  });
   expect(service.find(bot)).toMatchObject({
     picture,
-    config: { reply: "chosen" },
+    config: { reply: "chosen", model: "model-b", effort: "high" },
   });
   // Everything but the config still starts from the type's defaults.
   expect(Object.keys(service.find(bot)?.attention ?? {})).toEqual([
     "interest/default",
     "watch/channel",
   ]);
-  expect(storage.getItem(`buzz.agent.v1:${bot}`)).toContain("chosen");
+  expect(
+    JSON.parse(storage.getItem(`buzz.agent.v1:${bot}`) ?? "null").config,
+  ).toEqual({ reply: "chosen", model: "model-b", effort: "high" });
 });
 
 it("keeps a new agent whose picture could not be set", async () => {

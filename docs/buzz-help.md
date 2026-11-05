@@ -373,11 +373,14 @@ available rather than silently discarding it.
   open an agent there and use **Identity → Instructions**. Opening its avatar or
   name in a conversation shows its profile, where **Settings → Instructions**
   offers the same edit. Model, workspace, and other runtime options depend on
-  its type. Do not assume someone can edit another person's agent.
+  its type. Where offered, **Create agent** also lets people choose Thinking
+  before the first config is saved; **Default** follows the provider's setting.
+  Do not assume someone can edit another person's agent.
 - A desktop plugin can run native Codex on another computer. The plugin manages the target, workspace, credentials, and expiry. A saved
   remote choice stays remote after an app restart. If the target cannot be
   restored, Buzz shows an error and requires a new session.
-  The model control on a remote Codex card opens that agent's Settings.
+  The model control on a remote Codex card opens that agent's Settings. In update
+  reviews, its Thinking choice is read-only rather than using this computer's options.
 - When creating a Builderlab agent, sign in, choose a model from its family menu,
   then choose a supported **Thinking** level. Both choices are required; changing
   the model clears the thinking choice. Instructions are optional. **Create agent**
