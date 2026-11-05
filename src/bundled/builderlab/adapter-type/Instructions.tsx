@@ -53,10 +53,7 @@ export function createSettingsTab(
         if (session.credential() !== credential)
           throw new DOMException("Builderlab session changed.", "AbortError");
         if (!remote)
-          throw Object.assign(
-            new Error("Agent not found in this Builderlab account."),
-            { status: 403 },
-          );
+          throw new Error("Agent not found in this Builderlab account.");
         if (remote.status !== "Active")
           throw new Error("Only Active agents can have their settings edited.");
         setLoaded({

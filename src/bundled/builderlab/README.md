@@ -114,7 +114,8 @@ Builderlab sign-in. Opening Identity attempts sign-in once if needed. Click the
 compact spinner beside Harness to cancel browser sign-in; its tooltip and
 accessible name are “Cancel sign-in”. Cancellation and failures leave an explicit
 Sign in action instead of starting another attempt. Account recovery and
-settings failures retain the host-owned notice surface. Slow settings/catalog
+settings failures retain the host-owned notice surface. If an agent is missing
+from the current list, Retry reloads it without signing out. Slow settings/catalog
 reads offer a scoped retry after three seconds.
 The Identity tab also loads a separate model catalog from Builderlab. Choose a
 model and one of that model's thinking levels, then save the pair for new tasks.

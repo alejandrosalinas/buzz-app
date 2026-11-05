@@ -400,7 +400,8 @@ available rather than silently discarding it.
   wait for you to retry there. A signed-out hint explains that messaging still works
   and sign-in enables editing. Model and Thinking stay disabled, and
   Instructions appear after sign-in. Sheets appear for settings or account-access
-  errors. Account-access errors offer **Use another account**, which ends
+  errors. If the agent cannot be found, **Retry** reloads it without signing you out.
+  Account-access errors offer **Use another account**, which ends
   the Builderlab sign-in and opens its browser logout page; FI builds also end
   the shared organization sign-in. After signing in with another account in the
   browser, return to Buzz and click **Retry** beside Harness. A spinner appears

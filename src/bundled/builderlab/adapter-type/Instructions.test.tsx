@@ -716,42 +716,67 @@ it("recovers an unloaded no-access account through logout and normal sign-in, re
   }
 });
 
-it.each(["forbidden", "missing-agent"])(
-  "offers account recovery instead of Retry when settings are inaccessible (%s)",
-  async (failure) => {
-    const h = await fixture();
-    h.request.mockResolvedValueOnce(
-      failure === "forbidden"
-        ? { status: 403, headers: {}, body: "{}" }
-        : { status: 200, headers: {}, body: '{"status":1,"agents":[]}' },
-    );
-    render(<h.Tab agent={agent()} save={vi.fn()} />);
+it("offers account recovery instead of Retry when settings return HTTP 403", async () => {
+  const h = await fixture();
+  h.request.mockResolvedValueOnce({ status: 403, headers: {}, body: "{}" });
+  render(<h.Tab agent={agent()} save={vi.fn()} />);
+  expect(await screen.findByRole("alert")).toHaveTextContent(
+    "This Builderlab account cannot manage remote agents.",
+  );
+  const action = screen.getByRole("button", { name: "Use another account" });
+  expect(action).toHaveAttribute("href", "https://builderlab.example/logout");
+  expect(screen.queryByRole("button", { name: "Retry" })).toBeNull();
+  expect(h.request).toHaveBeenCalledOnce();
+  const browser = observeLogout(h.session);
+  try {
+    const user = userEvent.setup();
+    await user.click(action);
+    expect(browser.opened).toEqual([
+      { url: "https://builderlab.example/logout", status: "signed-out" },
+    ]);
+    await user.click(screen.getByRole("button", { name: "Cancel sign-in" }));
+    await user.click(screen.getByRole("button", { name: "Retry" }));
+    expect(await loadedInstructions()).toHaveValue("First instructions.");
+    expect(screen.queryByRole("alert")).toBeNull();
+  } finally {
+    browser.stop();
+    h.session.dispose();
+  }
+});
+
+it("retries an agent missing from the list without ending the account session", async () => {
+  const h = await fixture();
+  const missing = {
+    status: 200,
+    headers: {},
+    body: '{"status":1,"agents":[]}',
+  };
+  h.request.mockResolvedValueOnce(missing).mockResolvedValueOnce(missing);
+  renderTabs(h);
+  const user = userEvent.setup();
+  try {
     expect(await screen.findByRole("alert")).toHaveTextContent(
-      failure === "forbidden"
-        ? "This Builderlab account cannot manage remote agents."
-        : "Agent not found in this Builderlab account.",
+      "Agent not found in this Builderlab account.",
     );
-    const action = screen.getByRole("button", { name: "Use another account" });
-    expect(action).toHaveAttribute("href", "https://builderlab.example/logout");
-    expect(screen.queryByRole("button", { name: "Retry" })).toBeNull();
-    expect(h.request).toHaveBeenCalledOnce();
-    const browser = observeLogout(h.session);
-    try {
-      const user = userEvent.setup();
-      await user.click(action);
-      expect(browser.opened).toEqual([
-        { url: "https://builderlab.example/logout", status: "signed-out" },
-      ]);
-      await user.click(screen.getByRole("button", { name: "Cancel sign-in" }));
-      await user.click(screen.getByRole("button", { name: "Retry" }));
-      expect(await loadedInstructions()).toHaveValue("First instructions.");
-      expect(screen.queryByRole("alert")).toBeNull();
-    } finally {
-      browser.stop();
-      h.session.dispose();
-    }
-  },
-);
+    expect(
+      screen.queryByRole("button", { name: "Use another account" }),
+    ).toBeNull();
+    await user.click(screen.getByRole("button", { name: "Retry" }));
+    await waitFor(() => expect(h.request).toHaveBeenCalledTimes(2));
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      "Agent not found in this Builderlab account.",
+    );
+    expect(screen.getByRole("button", { name: "Retry" })).toBeEnabled();
+    expect(h.session.snapshot().status).toBe("signed-in");
+    await user.click(screen.getByRole("button", { name: "Retry" }));
+    expect(await loadedInstructions()).toHaveValue("First instructions.");
+    expect(screen.queryByRole("alert")).toBeNull();
+    expect(h.acquire).toHaveBeenCalledOnce();
+    expect(h.release).not.toHaveBeenCalled();
+  } finally {
+    h.session.dispose();
+  }
+});
 
 it("retries a failed load and refuses to save a draft through another account", async () => {
   const h = await fixture();
