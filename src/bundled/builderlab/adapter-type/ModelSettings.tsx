@@ -6,6 +6,7 @@ import {
   useSyncExternalStore,
   type ReactNode,
 } from "react";
+import { AnimatePresence, motion, useReducedMotion } from "motion/react";
 import { AgentSaveButton } from "../../../features/agents/AgentSaveButton";
 import { ModelFamilyMenu } from "../../../features/agents/ModelFamilyMenu";
 import { BuilderlabLogoIcon } from "../../../shared/design-system/icons";
@@ -27,6 +28,7 @@ import {
 import type { BuilderlabSession } from "../session";
 import { AccountRecoverySheet, SettingsErrorSheet } from "./SignInFooter";
 import { effortLabel, modelChoice } from "./models";
+import { SignInAction } from "./SignInAction";
 
 const statuses = {
   "setup-required": "Choose a model and thinking level to finish setup.",
@@ -52,12 +54,13 @@ export function ModelSettings({
   client: AgentClient;
   session: BuilderlabSession;
   openIdentity?: (() => void) | undefined;
-  harnessControl?: ReactNode;
+  harnessControl?: (action: ReactNode) => ReactNode;
   settings:
     | { agent: RemoteAgent; subject: string; email?: string }
     | { pending: boolean; error: string; retry(): void };
 }) {
   const login = useSyncExternalStore(session.subscribe, session.snapshot);
+  const reducedMotion = useReducedMotion();
   const signedIn = login.status === "signed-in";
   const agent = "agent" in settings ? settings.agent : undefined;
   const subject = "subject" in settings ? settings.subject : undefined;
@@ -66,6 +69,7 @@ export function ModelSettings({
   const accountProblem =
     signedIn && (mismatch || login.account?.canUseRemoteAgents === false);
   const hasAccess = signedIn && !accountProblem;
+  const signInAction = <SignInAction session={session} />;
   const email = mismatch && "email" in settings ? settings.email : undefined;
   const form = useId();
   const notify = useToastNotification();
@@ -276,14 +280,17 @@ export function ModelSettings({
           </p>
         )}
         <SettingsGroup>
-          {harnessControl ?? (
+          {harnessControl?.(signInAction) ?? (
             <PreferenceRow
               title="Harness"
               trailing={
-                <span className="flex min-w-0 items-center gap-2">
-                  <BuilderlabLogoIcon size={20} aria-hidden="true" />
-                  Builderlab
-                </span>
+                <div className="flex min-w-0 flex-wrap items-center justify-end gap-2">
+                  <span className="flex min-w-0 items-center gap-2">
+                    <BuilderlabLogoIcon size={20} aria-hidden="true" />
+                    Builderlab
+                  </span>
+                  {signInAction}
+                </div>
               }
             />
           )}
@@ -328,24 +335,38 @@ export function ModelSettings({
             No models are available. Retry when the catalog is available.
           </p>
         )}
-        <Field
-          label="Instructions"
-          error={
-            hasAccess && !validInstructions(instructions)
-              ? "Use text or leave this empty."
-              : undefined
-          }
-        >
-          <Textarea
-            appearance="outlined"
-            value={instructions}
-            onChange={(event) => setInstructions(event.target.value)}
-            disabled={!saved || saving || !hasAccess}
-            placeholder={!saved ? placeholder : undefined}
-            rows={8}
-            maxLength={MAX_INSTRUCTIONS_LENGTH}
-          />
-        </Field>
+        <AnimatePresence initial={false}>
+          {signedIn && (
+            <motion.div
+              key="instructions"
+              initial={{
+                opacity: reducedMotion ? 1 : 0,
+                y: reducedMotion ? 0 : 8,
+              }}
+              animate={{ opacity: 1, y: 0 }}
+              transition={{ duration: reducedMotion ? 0 : 0.22 }}
+            >
+              <Field
+                label="Instructions"
+                error={
+                  hasAccess && !validInstructions(instructions)
+                    ? "Use text or leave this empty."
+                    : undefined
+                }
+              >
+                <Textarea
+                  appearance="outlined"
+                  value={instructions}
+                  onChange={(event) => setInstructions(event.target.value)}
+                  disabled={!saved || saving || !hasAccess}
+                  placeholder={!saved ? placeholder : undefined}
+                  rows={8}
+                  maxLength={MAX_INSTRUCTIONS_LENGTH}
+                />
+              </Field>
+            </motion.div>
+          )}
+        </AnimatePresence>
         <AgentSaveButton
           form={form}
           saving={saving}

@@ -394,6 +394,10 @@ available rather than silently discarding it.
   Model, Thinking and Create agent stay disabled until sign-in completes.
   Sign in shows a loading spinner, then browser guidance and **Cancel sign-in**
   after three seconds. Account verification keeps the spinner until it finishes.
+  For an existing Builderlab agent, **Identity** offers the same compact **Sign in**
+  beside Harness. Model and Thinking stay disabled, and Instructions appear after
+  sign-in. Chat, Memory and Activity use your Buzz community connection and do not
+  require this Builderlab sign-in.
   Builderlab agents work from your phone even when your desktop is off, and
   cannot open files on your computer. Their Settings hint appears only while
   signed in, beside a cloud. Local agents have no execution hint.

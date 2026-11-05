@@ -106,11 +106,15 @@ account before saving. A different signed-in account locks the fields and shows
 that requirement instead of the previous account's errors and retries. Signed-out
 panes hide stale settings errors and retries while retaining the draft.
 Empty instructions can be saved to clear them.
-Signed-out agent panes show a pinned sign-in card across every tab, including
-relay-backed Memory and Activity. Opening the pane does not start browser login;
-Sign in starts it, and Cancel sign-in cancels the shared account attempt.
-The card reserves its measured height for scrolling and clears once sign-in is
-verified. Slow settings/catalog reads offer a scoped retry after three seconds.
+Signed-out agent panes offer the same compact Sign in action as creation, beside
+Harness in Identity. Model and Thinking remain visible and disabled. Instructions
+are absent while signed out and animate in after sign-in, respecting reduced
+motion. The draft survives sign-out and returning to its original account.
+Message, Memory and Activity use the Buzz community connection independently of
+Builderlab sign-in. Opening the pane does not start browser login; Sign in starts
+it, and Cancel sign-in cancels the shared account attempt. Account recovery and
+settings failures retain the host-owned notice surface. Slow settings/catalog
+reads offer a scoped retry after three seconds.
 The Identity tab also loads a separate model catalog from Builderlab. Choose a
 model and one of that model's thinking levels, then save the pair for new tasks.
 There is no default or fallback selection. Missing or unavailable saved choices

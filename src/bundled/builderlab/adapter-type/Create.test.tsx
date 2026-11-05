@@ -381,7 +381,7 @@ it("waits for explicit sign-in before loading the creation catalog", async () =>
   expect(screen.getByRole("combobox", { name: "Thinking" })).toBeDisabled();
 });
 
-it("matches pane sign-in: spinner first, then browser guidance and cancellation after three seconds", async () => {
+it("shares the compact sign-in action: spinner first, then browser guidance and cancellation after three seconds", async () => {
   vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
   const login = deferred<Credential>();
   let aborted = false;

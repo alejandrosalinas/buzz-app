@@ -269,8 +269,9 @@ export type AgentChange<Config = unknown> = Readonly<{
 /** What a type's read-only peek receives. */
 export type AgentPeekProps<Config = unknown> = { agent: Agent<Config> };
 export type AgentSettingsHost = Readonly<{
-  /** A labelled Type control supplied only by the Agents build view. */
-  typeControl?: (dirty: boolean) => ReactNode;
+  /** A labelled Type control supplied only by the Agents build view.
+   * An optional provider action sits beside the harness choice. */
+  typeControl?: (dirty: boolean, action?: ReactNode) => ReactNode;
   /** Host-owned type change committed with the target type's settings draft. */
   pendingSave?: (config?: unknown) => Promise<void>;
 }>;
@@ -792,17 +793,22 @@ export type AgentType<Config = unknown> = {
     disabled: boolean;
     onReadyChange(ready: boolean): void;
   }>;
-  /** Provider-owned account notice, pinned across the agent's tabs.
+  /** Provider-owned account notice, pinned outside the agent's tab content.
    * Return null when no account notice is needed. The active settings view may
    * replace this slot through the AgentSaveFooter context's setPanelNotice(content),
+   * including when the type does not supply a PanelFooter.
    * clearing it with null on cleanup; the host retains outgoing content through exit.
    * By default a notice dims identity artwork and closes name/avatar editors.
    * Ordinary load/save notices must set data-agent-access-required="false" on
    * their outer DOM element to opt out of those access effects. Both kinds share
    * host-owned placement and measured scroll space. */
   PanelFooter?: ComponentType;
-  /** Provider-owned sign-in gate for messaging and name/avatar editing actions. */
-  ProfileActions?: ComponentType<{ children: ReactNode }>;
+  /** Provider-owned gate for name/avatar editing, independent of messaging.
+   * Report unavailable access so the host can retire open profile editors. */
+  ProfileActions?: ComponentType<{
+    children: ReactNode;
+    onUnavailable?: () => void;
+  }>;
   /** Compact model field for creation and library cards; the type owns discovery and configuration. */
   CreateModel?: ComponentType<AgentCreateProps<Config>>;
   /** Device-wide readiness and management. Agents supplies the menu row,

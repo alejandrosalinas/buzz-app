@@ -11,6 +11,8 @@ import {
 import { afterEach, expect, it, vi } from "vitest";
 import userEvent from "@testing-library/user-event";
 import { StrictMode } from "react";
+import { SignInAction } from "./SignInAction";
+import type { BuilderlabSession } from "../session";
 import { createOAuthSession } from "../oauth/session";
 import {
   browserCredential,
@@ -23,16 +25,16 @@ import type { Host, HostResponse } from "../../../features/host/service";
 import { createAgentClient } from "../agents/client";
 import { createSettingsTab } from "./Instructions";
 import { deferred } from "../test-helpers";
-import {
-  AccountRecoverySheet,
-  createProfileActions,
-  createSignInFooter,
-} from "./SignInFooter";
+import { AccountRecoverySheet, createProfileActions } from "./SignInFooter";
 
 vi.mock("../oauth/browser", async (original) => ({
   ...(await original<typeof import("../oauth/browser")>()),
   browserLoginAvailable: () => true,
 }));
+const signInControl = (session: BuilderlabSession) => () => (
+  <SignInAction session={session} />
+);
+
 const credential: Credential = {
   value: "private-credential",
   account: {
@@ -52,7 +54,7 @@ it("keeps account verification non-cancellable after the browser guidance deadli
   vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
   const session = createOAuthSession(async () => credential);
   const cancel = vi.fn();
-  const Footer = createSignInFooter({
+  const Footer = signInControl({
     ...session,
     snapshot: () => checking,
     cancel,
@@ -93,16 +95,16 @@ it("sends FI account recovery to Identity without ending the shared session", ()
   session.dispose();
 });
 
-it("shows account status with one footer sign-in action and restores profile controls after authentication", async () => {
+it("keeps Message independent of the compact sign-in action and gates profile edits", async () => {
   const held = deferred<Credential>();
   const acquire = vi.fn(() => held.promise);
   const session = createOAuthSession(acquire);
   const ProfileActions = createProfileActions(session);
-  const Footer = createSignInFooter(session);
+  const Footer = signInControl(session);
   render(
     <>
+      <button type="button">Message</button>
       <ProfileActions>
-        <button type="button">Message</button>
         <button type="button">Edit profile</button>
       </ProfileActions>
       <Footer />
@@ -110,15 +112,15 @@ it("shows account status with one footer sign-in action and restores profile con
     { wrapper: StrictMode },
   );
   expect(screen.queryByRole("button", { name: "Edit profile" })).toBeNull();
-  expect(screen.queryByRole("button", { name: "Message" })).toBeNull();
-  expect(screen.getByText("Signed out of Builderlab")).toBeVisible();
+  expect(screen.getByRole("button", { name: "Message" })).toBeVisible();
+  expect(screen.queryByText(/Offline|Signed out of Builderlab/)).toBeNull();
   expect(acquire).not.toHaveBeenCalled();
   const signIn = screen.getByRole("button", {
     name: "Sign in to Builderlab",
   });
   fireEvent.click(signIn);
   expect(acquire).toHaveBeenCalledTimes(1);
-  expect(screen.getByText("Signed out of Builderlab")).toBeVisible();
+  expect(screen.queryByText(/Offline|Signed out of Builderlab/)).toBeNull();
   await waitFor(() => expect(signIn).toBeVisible());
   expect(signIn).toHaveAttribute("aria-busy", "true");
   expect(screen.queryByRole("button", { name: "Cancel sign-in" })).toBeNull();
@@ -132,7 +134,7 @@ it("shows account status with one footer sign-in action and restores profile con
   ).toBeNull();
   act(() => session.signOut());
   expect(screen.queryByRole("button", { name: "Edit profile" })).toBeNull();
-  expect(screen.queryByRole("button", { name: "Message" })).toBeNull();
+  expect(screen.getByRole("button", { name: "Message" })).toBeVisible();
   expect(
     screen.getAllByRole("button", { name: "Sign in to Builderlab" }),
   ).toHaveLength(1);
@@ -143,7 +145,7 @@ it("keeps keyboard focus while sign-in is pending and blocks repeat activation",
   const held = deferred<Credential>();
   const acquire = vi.fn(() => held.promise);
   const session = createOAuthSession(acquire);
-  const Footer = createSignInFooter(session);
+  const Footer = signInControl(session);
   render(<Footer />);
   const user = userEvent.setup();
   const signIn = screen.getByRole("button", { name: "Sign in to Builderlab" });
@@ -175,12 +177,11 @@ it("keeps early sign-in passive, then offers guidance and cancellation without a
     .mockImplementationOnce(() => old.promise)
     .mockImplementationOnce(() => next.promise);
   const session = createOAuthSession(acquire);
-  const Footer = createSignInFooter(session);
+  const Footer = signInControl(session);
   render(<Footer />, { wrapper: StrictMode });
   expect(acquire).not.toHaveBeenCalled();
   expect(screen.queryByRole("dialog")).toBeNull();
   const signIn = screen.getByRole("button", { name: "Sign in to Builderlab" });
-  const subtitle = screen.getByRole("status");
   fireEvent.click(signIn);
   fireEvent.click(signIn);
   expect(acquire).toHaveBeenCalledTimes(1);
@@ -189,9 +190,7 @@ it("keeps early sign-in passive, then offers guidance and cancellation without a
   expect(signIn).not.toHaveAttribute("disabled");
   expect(session.snapshot().status).toBe("pending");
   expect(acquire.mock.calls[0]?.[0].aborted).toBe(false);
-  expect(subtitle).toHaveTextContent(
-    "Use your Builderlab account to access this agent.",
-  );
+  expect(screen.queryByRole("status")).toBeNull();
   expect(screen.queryByRole("button", { name: "Cancel sign-in" })).toBeNull();
   await act(() => vi.advanceTimersByTimeAsync(2999));
   expect(screen.queryByText(/Finish signing in/)).toBeNull();
@@ -199,6 +198,7 @@ it("keeps early sign-in passive, then offers guidance and cancellation without a
   expect(signIn).toHaveAttribute("aria-disabled", "true");
   expect(screen.queryByRole("button", { name: "Cancel sign-in" })).toBeNull();
   await act(() => vi.advanceTimersByTimeAsync(1));
+  const subtitle = screen.getByRole("status");
   expect(subtitle).toHaveTextContent(
     "Finish signing in to Builderlab in your browser, then return to Buzz.",
   );
@@ -214,9 +214,7 @@ it("keeps early sign-in passive, then offers guidance and cancellation without a
   );
   expect(acquire).toHaveBeenCalledTimes(2);
   expect(signIn).toHaveAttribute("aria-busy", "true");
-  expect(subtitle).toHaveTextContent(
-    "Use your Builderlab account to access this agent.",
-  );
+  expect(screen.queryByRole("status")).toBeNull();
   expect(screen.queryByRole("button", { name: "Cancel sign-in" })).toBeNull();
   vi.useRealTimers();
   await act(async () => {
@@ -236,7 +234,7 @@ it("shows failure inline and leaves retry user-started", async () => {
   const held = deferred<Credential>();
   const acquire = vi.fn(() => held.promise);
   const session = createOAuthSession(acquire);
-  const Footer = createSignInFooter(session);
+  const Footer = signInControl(session);
   render(<Footer />);
   fireEvent.click(
     screen.getByRole("button", { name: "Sign in to Builderlab" }),
@@ -250,9 +248,7 @@ it("shows failure inline and leaves retry user-started", async () => {
   expect(
     screen.getByRole("button", { name: "Sign in to Builderlab" }),
   ).toBeEnabled();
-  expect(screen.getByRole("status")).toHaveTextContent(
-    "Use your Builderlab account to access this agent.",
-  );
+  expect(screen.queryByRole("status")).toBeNull();
   expect(acquire).toHaveBeenCalledTimes(1);
   session.dispose();
 });
@@ -262,7 +258,7 @@ it("observes an existing attempt and leaves it running when the pane closes", as
   const acquire = vi.fn(() => held.promise);
   const session = createOAuthSession(acquire);
   const pending = session.signIn();
-  const Footer = createSignInFooter(session);
+  const Footer = signInControl(session);
   const mounted = render(<Footer />, { wrapper: StrictMode });
   expect(
     screen.getByRole("button", { name: "Sign in to Builderlab" }),
@@ -280,7 +276,7 @@ it("observes an existing attempt and leaves it running when the pane closes", as
 it("stays absent for an existing account and returns on explicit sign-out", async () => {
   const session = createOAuthSession(async () => credential);
   await session.signIn();
-  const Footer = createSignInFooter(session);
+  const Footer = signInControl(session);
   render(<Footer />);
   expect(screen.queryByRole("button")).toBeNull();
   act(() => session.signOut());
@@ -345,16 +341,10 @@ it("loads the pane after a late browser callback and verified exchange without w
     undefined,
     { request: (input) => host.request(input) },
   );
-  const Footer = createSignInFooter(session);
   const Settings = createSettingsTab(createAgentClient(session), session);
   const agent = { pubkey, name: "Helper" } as Agent;
   vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
-  render(
-    <>
-      <Footer />
-      <Settings agent={agent} save={vi.fn()} settingsSection="identity" />
-    </>,
-  );
+  render(<Settings agent={agent} save={vi.fn()} settingsSection="identity" />);
   await act(async () => {
     fireEvent.click(
       screen.getByRole("button", { name: "Sign in to Builderlab" }),

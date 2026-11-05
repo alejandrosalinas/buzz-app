@@ -28,8 +28,8 @@ import { createOAuthSession } from "../builderlab/oauth/session";
 import {
   AccountRecoverySheet,
   createProfileActions,
-  createSignInFooter,
 } from "../builderlab/adapter-type/SignInFooter";
+import { SignInAction } from "../builderlab/adapter-type/SignInAction";
 import { deferred } from "../builderlab/test-helpers";
 
 vi.mock("../builderlab/oauth/browser", async (original) => ({
@@ -128,12 +128,7 @@ it("keeps one provider footer across tabs and measures its changing height for t
     />,
   );
   const card = screen.getByRole("region", { name: "Account access" });
-  expect(
-    within(screen.getByRole("region", { name: "Profile editing" })).getByRole(
-      "button",
-      { name: "Message" },
-    ),
-  ).toBeVisible();
+  expect(screen.getByRole("button", { name: "Message" })).toBeVisible();
   expect(
     within(screen.getByRole("region", { name: "Profile editing" })).getByRole(
       "button",
@@ -247,14 +242,17 @@ it.each([
     function RecoverySettings() {
       const login = useSyncExternalStore(session.subscribe, session.snapshot);
       return (
-        <AccountRecoverySheet
-          session={session}
-          mismatch={false}
-          active={
-            login.status === "signed-in" &&
-            login.account?.canUseRemoteAgents === false
-          }
-        />
+        <>
+          <SignInAction session={session} />
+          <AccountRecoverySheet
+            session={session}
+            mismatch={false}
+            active={
+              login.status === "signed-in" &&
+              login.account?.canUseRemoteAgents === false
+            }
+          />
+        </>
       );
     }
     const type = {
@@ -264,7 +262,6 @@ it.each([
       id: "hosted",
       title: "Hosted",
       defaults: () => ({ config: {} }),
-      PanelFooter: createSignInFooter(session),
       ProfileActions: createProfileActions(session),
       tabs: [
         {
@@ -297,6 +294,8 @@ it.each([
     );
     try {
       const user = userEvent.setup();
+      if (!recovery)
+        await user.click(screen.getByRole("tab", { name: "Memory" }));
       await user.click(
         screen.getByRole("button", { name: "Agent profile actions" }),
       );
@@ -340,6 +339,12 @@ it.each([
           screen.queryByRole("button", { name: "Sign in to Builderlab" }),
         ).toBeNull();
       }
+      expect(screen.getByRole("button", { name: "Message" })).toBeVisible();
+      expect(screen.queryByText("Offline")).toBeNull();
+      if (!recovery)
+        expect(
+          screen.queryByRole("button", { name: "Sign in to Builderlab" }),
+        ).toBeNull();
       const attempts = signIn.mock.calls.length;
       act(() => screen.getByRole("tab", { selected: true }).focus());
       await user.keyboard("{Enter}");
@@ -354,7 +359,8 @@ it.each([
         const reconnect = await screen.findByRole("button", {
           name: "Sign in to Builderlab",
         });
-        await waitFor(() => expect(reconnect).toHaveFocus());
+        expect(reconnect).toBeEnabled();
+        expect(screen.getByRole("tab", { selected: true })).toHaveFocus();
         expect(session.snapshot().status).toBe("signed-out");
         expect(signIn).toHaveBeenCalledTimes(attempts);
         const selected = screen.getByRole("tab", { selected: true });
