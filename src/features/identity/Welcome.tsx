@@ -86,6 +86,7 @@ import {
   unlinkKey,
 } from "./setup";
 import { SetupProgress } from "./SetupProgress";
+import { onSignInRequest, takeSignInRequest } from "./sign-in-requests";
 import { WelcomeBack } from "./WelcomeBack";
 import { WireframeScreen } from "./Wireframe";
 
@@ -252,6 +253,18 @@ export function Welcome({
     },
     [login],
   );
+  // "Open Buzz" after email verification (`sign-in-requests.ts`). Each render
+  // sets what a request does now; while it can't act yet, it stays queued.
+  const requestedSignIn = useRef<(() => void) | undefined>(undefined);
+  // biome-ignore lint/correctness/useExhaustiveDependencies: the landing appearing lets a queued request act.
+  useEffect(() => {
+    const handle = () => {
+      const run = requestedSignIn.current;
+      if (run && takeSignInRequest()) run();
+    };
+    handle();
+    return onSignInRequest(handle);
+  }, [state.status]);
   const discovering = finding && auth.status === "signed-out";
   /**
    * The page rendered below, keyed in the order the JSX decides it, so a
@@ -326,13 +339,16 @@ export function Welcome({
     identity,
     page === "landing" && !relaunch && auth.status !== "pending",
   );
-  if (state.status === "ready" && progress.status === "idle" && !relaunch)
+  if (state.status === "ready" && progress.status === "idle" && !relaunch) {
+    // Already in the app: a request has nothing to finish, so drop it.
+    requestedSignIn.current = () => {};
     return (
       <>
         {children}
         <BackupConsent identity={identity} communities={communities} />
       </>
     );
+  }
   // The linked key is backed up: Welcome back offers a restore, and an
   // import of it skips another backup.
   const backedUp = !!linked && !!backups?.includes(linked);
@@ -840,6 +856,21 @@ export function Welcome({
         ) : null;
     }
   };
+  // Restart sign-in in place of one waiting on an earlier browser tab: the
+  // browser's account session finishes it. Setup already under way, or a
+  // community-link route, has no sign-in to restart.
+  requestedSignIn.current =
+    state.status === "loading" || state.status === "error"
+      ? undefined
+      : () => {
+          if (progress.status !== "idle" || discovering) return;
+          if (login.snapshot().status === "pending") {
+            cancels.current++;
+            login.cancel();
+          }
+          setOtherOptions(false);
+          void signIn(signup.current);
+        };
   if (state.status === "loading" || state.status === "error")
     return (
       <OnboardingScreen
@@ -961,7 +992,11 @@ export function Welcome({
           </Button>
         ) : (
           <>
-            <Button size="lg" variant="glass-clear" onClick={() => start(returning)}>
+            <Button
+              size="lg"
+              variant="glass-clear"
+              onClick={() => start(returning)}
+            >
               {returning ? "Create account" : "Sign in"}
             </Button>
             <Button

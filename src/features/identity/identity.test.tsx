@@ -32,6 +32,7 @@ import { IdentitySetup } from "./IdentitySetup";
 import { PrivateKey } from "./PrivateKey";
 import { SignOutDialog, WIPE_PHRASE } from "./SignOut";
 import { Welcome } from "./Welcome";
+import { requestSignIn, takeSignInRequest } from "./sign-in-requests";
 import { federatedFixture } from "../federated-identity/testing";
 import { ProfileStep } from "./ProfileStep";
 import { OnboardingScreen } from "./OnboardingScreen";
@@ -188,6 +189,7 @@ function communitiesFor(identity: Identity, openRelay = "") {
   );
 }
 afterEach(async () => {
+  takeSignInRequest();
   cleanup();
   for (const root of roots.splice(0)) await root.fiber.dispose();
   vi.resetAllMocks();
@@ -896,6 +898,60 @@ it("Create account signs in with signup and Sign in without it", async () => {
   await user.click(screen.getByRole("button", { name: SIGN_IN }));
   expect(connect).toHaveBeenCalledTimes(2);
   expect(connect.mock.calls[1]?.[1]).toBeFalsy();
+  identity.dispose();
+});
+
+it("Open Buzz restarts a waiting sign-in with the same choice", async () => {
+  missingKey();
+  const signals: AbortSignal[] = [];
+  const connect = vi.fn((signal: AbortSignal, _signup?: boolean) => {
+    signals.push(signal);
+    return new Promise<Credential>(() => {});
+  });
+  const identity = createIdentity();
+  const user = userEvent.setup();
+  render(
+    <Welcome
+      identity={identity}
+      communities={noJoin}
+      invites={invites}
+      account={unlinked}
+      connect={connect}
+    >
+      <p>Signed in</p>
+    </Welcome>,
+  );
+  await user.click(
+    await screen.findByRole("button", { name: "Create account" }),
+  );
+  expect(connect).toHaveBeenCalledTimes(1);
+  act(() => requestSignIn());
+  await waitFor(() => expect(connect).toHaveBeenCalledTimes(2));
+  expect(signals[0]?.aborted).toBe(true);
+  expect(connect.mock.calls[1]?.[1]).toBe(true);
+  identity.dispose();
+});
+
+it("Open Buzz that launched the app signs in once the landing shows", async () => {
+  missingKey();
+  const connect = vi.fn(
+    (_signal: AbortSignal, _signup?: boolean) =>
+      new Promise<Credential>(() => {}),
+  );
+  requestSignIn();
+  const identity = createIdentity();
+  render(
+    <Welcome
+      identity={identity}
+      communities={noJoin}
+      invites={invites}
+      account={unlinked}
+      connect={connect}
+    >
+      <p>Signed in</p>
+    </Welcome>,
+  );
+  await waitFor(() => expect(connect).toHaveBeenCalledTimes(1));
   identity.dispose();
 });
 

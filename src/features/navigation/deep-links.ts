@@ -14,6 +14,7 @@ import {
   parseExternalAuthorization,
   type ExternalAuthorization,
 } from "../agents/external-connection";
+import { isSignInLink, requestSignIn } from "../identity/sign-in-requests";
 
 export type DeepLinkStep =
   | Readonly<{ open: OpenTarget }>
@@ -276,6 +277,12 @@ export function bindDeepLinks(
           }
         }
         if (url === undefined) continue;
+        // `buzz://sign-in` names no destination: first-run signs in again
+        // (`identity/sign-in-requests.ts`). Never held, bound or rejected.
+        if (isSignInLink(url)) {
+          requestSignIn();
+          continue;
+        }
         const plugin = parseBuzzLink(url)?.format === "plugin-install";
         if (epoch !== clientEpoch && !plugin) continue;
         const client = communities.snapshot();

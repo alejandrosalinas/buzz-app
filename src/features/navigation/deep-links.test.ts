@@ -1,3 +1,4 @@
+import { takeSignInRequest } from "../identity/sign-in-requests";
 import { afterEach, expect, it, vi } from "vitest";
 import type { ClientSnapshot } from "../communities/service";
 import {
@@ -381,6 +382,17 @@ it("drains the shell at startup and opens a held link only once the client is re
   expect(t.log).toEqual([]);
   t.become({ status: "ready", viewer, selected: origin });
   expect(t.log).toEqual([channelOpen]);
+  t.stop();
+});
+it("hands the sign-in link to first-run without holding, binding or rejecting it", async () => {
+  const t = harness(loading, ["buzz://sign-in"]);
+  await settle();
+  expect(takeSignInRequest()).toBe(true);
+  t.become(ready);
+  await settle();
+  expect(t.log).toEqual([]);
+  expect(t.host.rejected).not.toHaveBeenCalled();
+  expect(t.host.fail).not.toHaveBeenCalled();
   t.stop();
 });
 it("holds a malformed cold-start link until Inbox can open, then explains it once", async () => {
