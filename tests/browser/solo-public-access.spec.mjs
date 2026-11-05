@@ -58,8 +58,33 @@ async function capture(surface, info, name) {
     await surface.screenshot({ path: info.outputPath(`${name}.png`) });
 }
 
-// These preserve the two browser journeys: actual routing, signed discovery,
-// broker save/readback, focus and responsive overlays. Role matrices stay in Vitest.
+function accessControls(page) {
+  const dialog = page.getByRole("dialog", {
+    name: "Share access",
+    exact: true,
+  });
+  return {
+    dialog,
+    audience: dialog.getByRole("combobox", { name: "General access" }),
+    confirm: page.getByRole("alertdialog", {
+      name: "Change general access?",
+    }),
+    async openAccess() {
+      // Cached startup renders Share access too. Its local dialog is replaced
+      // with the live session; Chat actions exists only on the live header.
+      await expect(
+        page.getByRole("button", { name: "Chat actions", exact: true }),
+      ).toBeVisible();
+      await page
+        .getByRole("button", { name: "Share access", exact: true })
+        .last()
+        .click();
+    },
+  };
+}
+
+// These preserve actual routing, signed discovery, broker save/readback,
+// focus and responsive overlays. Role matrices stay in Vitest.
 test.describe("owner", () => {
   test.use({
     channelIds: [own],
@@ -74,25 +99,7 @@ test.describe("owner", () => {
   }, info) => {
     await openChat(page, app, own);
     const row = page.locator(`[data-solo-channel-id="${own}"]`);
-    const access = page
-      .getByRole("button", { name: "Share access", exact: true })
-      .last();
-    const dialog = page.getByRole("dialog", {
-      name: "Share access",
-      exact: true,
-    });
-    const audience = dialog.getByRole("combobox", { name: "General access" });
-    const openAccess = async () => {
-      // Cached startup renders Share access too. Its local dialog is replaced
-      // with the live session; Chat actions exists only on the live header.
-      await expect(
-        page.getByRole("button", { name: "Chat actions", exact: true }),
-      ).toBeVisible();
-      await access.click();
-    };
-    const confirm = page.getByRole("alertdialog", {
-      name: "Change general access?",
-    });
+    const { dialog, audience, openAccess, confirm } = accessControls(page);
     let saves = 0;
     for (const presentation of presentations) {
       const suffix = `${presentation.mode}_${presentation.width}`;
@@ -217,6 +224,18 @@ test.describe("owner", () => {
       ).toBeInViewport({ ratio: 1 });
       await page.keyboard.press("Escape");
     }
+    expect(app.report.detailsPublications.map(({ kind }) => kind)).toEqual(
+      Array(8).fill(9002),
+    );
+    expect(app.report.lifecyclePublications ?? []).toEqual([]);
+    expect(app.report.publications).toEqual([]);
+  });
+  test("reviews retained-access warnings without changing access", async ({
+    page,
+    app,
+  }, info) => {
+    await openChat(page, app, own);
+    const { dialog, audience, openAccess, confirm } = accessControls(page);
     // The longer conditional descriptions need real modal geometry and focus
     // coverage. Guest/status matrices remain in the component/session tests.
     const guest = app.serveProfile(generateSecretKey(), {
@@ -301,9 +320,7 @@ test.describe("owner", () => {
       await expect(audience).toBeFocused();
       await page.keyboard.press("Escape");
     }
-    expect(app.report.detailsPublications.map(({ kind }) => kind)).toEqual(
-      Array(8).fill(9002),
-    );
+    expect(app.report.detailsPublications ?? []).toEqual([]);
     expect(app.report.lifecyclePublications ?? []).toEqual([]);
     expect(app.report.publications).toEqual([]);
   });
