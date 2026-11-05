@@ -134,7 +134,7 @@ that agent in Buzz; they do not notify the external app through this connection.
   inviting them requires an explicit decision from someone with permission.
 - **Workspaces** group Solo chats and provide starting folders and instructions.
   With Nexus enabled, each workspace also contains its tasks. Creating one selects
-  it so you can start a conversation with its optional Lead. The title opens
+  it so you can start a conversation with its optional Lead. The title or blank row area opens
   its optional lead task, or a task composer if it has no lead; sending from
   that composer establishes the lead. Only the chevron expands or collapses
   the workspace. Hover Solo or a workspace and use **New task**, beside **…**, for another task. The button also appears with keyboard focus. Chat creation

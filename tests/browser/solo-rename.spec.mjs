@@ -23,6 +23,115 @@ const input = (page) =>
 const composer = (page) =>
   page.getByRole("textbox", { name: "Message your agents", exact: true });
 
+// Real hit testing proves the stretched primary target excludes sibling controls.
+// jsdom cannot establish this geometry or the positioned buttons' stacking order.
+for (const variant of [
+  { name: "light-wide", theme: "light", width: 1280, scale: 1 },
+  { name: "dark-narrow", theme: "dark", width: 640, scale: 2 },
+])
+  test(`workspace blank space selects independently of its controls ${variant.name}`, async ({
+    page,
+    app,
+  }) => {
+    await page.setViewportSize({ width: variant.width, height: 1000 });
+    await page.addInitScript(({ theme, scale }) => {
+      localStorage.setItem("buzz-appearance.v1", theme);
+      localStorage.setItem("buzz-font-scale.v1", String(scale));
+    }, variant);
+    await page.goto(
+      `${app.origin}/?solo-region-fixture&compose-workspaces&workspace-hit-targets`,
+    );
+    await newChat(page);
+    await page.evaluate(() => window.fixtureSoloRegion.createWorkspace());
+    const show = page.getByRole("button", {
+      name: "Show navigation",
+      exact: true,
+    });
+    if (await show.isVisible()) await show.click();
+    const title = sidebar(page).getByRole("button", {
+      name: "Work",
+      exact: true,
+    });
+    await expect(title).toBeVisible();
+    const header = title.locator("xpath=ancestor::*[@data-solo-menu-id][1]");
+    await header
+      .getByRole("button", { name: "Hide tasks and chats in Work" })
+      .click();
+    await expect(title).not.toHaveAttribute("aria-current", "page");
+    await expect(
+      sidebar(page).getByRole("button", { name: "Workspace task" }),
+    ).toBeHidden();
+    await header.scrollIntoViewIfNeeded();
+    const toggle = header.getByRole("button", {
+      name: "Show tasks and chats in Work",
+    });
+    const newTask = header.getByRole("button", { name: "New task in Work" });
+    const point = await header.evaluate((row) => {
+      const bounds = row.getBoundingClientRect();
+      const buttons = [...row.querySelectorAll("button")].map((button) =>
+        button.getBoundingClientRect(),
+      );
+      const caret = row
+        .querySelector("[data-solo-disclosure]")
+        .getBoundingClientRect();
+      const xs = [
+        ...new Set([
+          bounds.left,
+          bounds.right,
+          ...buttons.flatMap((box) => [box.left, box.right]),
+        ]),
+      ].sort((a, b) => a - b);
+      const ys = [
+        ...new Set([
+          bounds.top,
+          bounds.bottom,
+          ...buttons.flatMap((box) => [box.top, box.bottom]),
+        ]),
+      ].sort((a, b) => a - b);
+      const points = xs
+        .slice(1)
+        .flatMap((x, i) =>
+          ys
+            .slice(1)
+            .map((y, j) => ({ x: (xs[i] + x) / 2, y: (ys[j] + y) / 2 })),
+        );
+      // Prefer space after the caret. With enlarged text, the only free space
+      // may be above it. Exclude actual buttons and clipped scrollbar gutters.
+      return [...points.filter((p) => p.x >= caret.right), ...points].find(
+        (p) =>
+          !buttons.some(
+            (b) =>
+              p.x >= b.left &&
+              p.x <= b.right &&
+              p.y >= b.top &&
+              p.y <= b.bottom,
+          ) && row.contains(document.elementFromPoint(p.x, p.y)),
+      );
+    });
+    if (!point)
+      throw new Error("Workspace header must have visible blank space");
+    await page.mouse.click(point.x, point.y);
+    await expect(title).toHaveAttribute("aria-current", "page");
+    await expect(toggle).toHaveAttribute("aria-expanded", "false");
+    await newTask.click();
+    await expect(title).not.toHaveAttribute("aria-current", "page");
+    await toggle.click();
+    await expect(
+      sidebar(page).getByRole("button", { name: "Workspace task" }),
+    ).toBeVisible();
+    await expect(title).not.toHaveAttribute("aria-current", "page");
+    await header.getByRole("button", { name: "Actions for Work" }).click();
+    await expect(
+      page.getByRole("menuitem", { name: "Workspace settings" }),
+    ).toBeVisible();
+    await page.keyboard.press("Escape");
+    await expect(title).not.toHaveAttribute("aria-current", "page");
+    await title.focus();
+    await page.keyboard.press("Enter");
+    await expect(title).toHaveAttribute("aria-current", "page");
+    expect(app.report.unexpected).toEqual([]);
+  });
+
 // These exercise native focus loss, actual drawer hit targets and signed live
 // metadata. DOM-only tests cannot establish these browser/host contracts.
 async function holdDetails(page) {

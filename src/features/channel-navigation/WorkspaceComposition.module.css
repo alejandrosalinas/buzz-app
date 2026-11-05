@@ -12,4 +12,12 @@
   min-width: 0;
   padding-inline-end: var(--space-half);
   margin: 0;
+  overflow: visible;
+}
+/* The positioned workspace header extends the primary button's hit area.
+   Its later, positioned disclosure and action buttons keep their own targets. */
+.heading > :first-child::after {
+  content: "";
+  position: absolute;
+  inset: 0;
 }

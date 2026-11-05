@@ -366,6 +366,7 @@ it("shares a workspace frame while keeping lead selection, disclosure and chat c
   const h = fixture();
   const store = h.store();
   const onTask = vi.fn();
+  const onSelect = vi.fn();
   await store.queries.ensure();
   await store.queries.assign("chat", "work");
   function View() {
@@ -380,7 +381,10 @@ it("shares a workspace frame while keeping lead selection, disclosure and chat c
           <RegionWorkspace
             id="work"
             selected={selected}
-            onSelect={() => select(true)}
+            onSelect={() => {
+              onSelect();
+              select(true);
+            }}
             onNewTask={onTask}
           >
             <button type="button">Workspace task</button>
@@ -400,7 +404,9 @@ it("shares a workspace frame while keeping lead selection, disclosure and chat c
     );
     expect(screen.queryByRole("button", { name: "Workspace task" })).toBeNull();
     expect(screen.queryByRole("button", { name: "Planning" })).toBeNull();
+    expect(onSelect).not.toHaveBeenCalled();
     await user.click(title);
+    expect(onSelect).toHaveBeenCalledOnce();
     expect(title).toHaveAttribute("aria-current", "page");
     expect(
       screen.getByRole("button", { name: "Show tasks and chats in Work" }),
@@ -421,6 +427,7 @@ it("shares a workspace frame while keeping lead selection, disclosure and chat c
     await user.click(screen.getByRole("button", { name: "Actions for Work" }));
     expect(screen.queryByRole("menuitem", { name: "New task" })).toBeNull();
     await user.keyboard("{Escape}");
+    expect(onSelect).toHaveBeenCalledOnce();
     expect(
       screen.queryByRole("button", { name: "New chat in Work" }),
     ).toBeNull();
