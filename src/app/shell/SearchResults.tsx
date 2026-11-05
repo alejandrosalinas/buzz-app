@@ -119,10 +119,18 @@ const isSearchAction = (key: string) =>
 
 function useDelayedSearch(pending: boolean) {
   const [slow, setSlow] = useState(false);
+  const shown = useRef(false);
   useEffect(() => {
-    setSlow(false);
+    // Even a no-op set re-renders, and re-ranks, the results on every key.
+    if (shown.current) {
+      shown.current = false;
+      setSlow(false);
+    }
     if (!pending) return;
-    const timer = setTimeout(() => setSlow(true), 1000);
+    const timer = setTimeout(() => {
+      shown.current = true;
+      setSlow(true);
+    }, 1000);
     return () => clearTimeout(timer);
   }, [pending]);
   return pending && slow;
