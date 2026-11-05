@@ -536,3 +536,26 @@ it("offers rename only for saved sections with a rename writer", async () => {
   await screen.findByRole("menuitem", { name: "Move up" });
   expect(screen.queryByRole("menuitem", { name: "Rename section" })).toBeNull();
 });
+
+it("keeps the actions menu closed after it is hidden and shown again", async () => {
+  const user = userEvent.setup();
+  const section = (hideMoreActions: boolean) => (
+    <SidebarSection
+      sectionKey="channels"
+      title="Channels"
+      open
+      onToggle={vi.fn()}
+      hideMoreActions={hideMoreActions}
+    >
+      <p>Rows</p>
+    </SidebarSection>
+  );
+  const { rerender } = render(section(false));
+  await user.click(
+    screen.getByRole("button", { name: "More actions for Channels" }),
+  );
+  await screen.findByRole("menu", { name: "More actions for Channels" });
+  rerender(section(true));
+  rerender(section(false));
+  expect(screen.queryByRole("menu")).not.toBeInTheDocument();
+});

@@ -341,6 +341,22 @@ it("collapses the Solo and Team inventories independently in All", async () => {
   expect(section("team").panel).toHaveAttribute("hidden");
 });
 
+it("mounts no actions menu for the Solo and Team group headers", async () => {
+  vi.useFakeTimers();
+  try {
+    fixture(true);
+    await act(() => vi.advanceTimersByTimeAsync(SIDEBAR_REVEAL_BUDGET_MS));
+    const more = (title: string) =>
+      document.querySelector(`button[aria-label="More actions for ${title}"]`);
+    // Both headers hide their actions, yet each channel update re-rendered a menu.
+    expect(more("Channels")).not.toBeNull();
+    expect(more("Solo")).toBeNull();
+    expect(more("Team")).toBeNull();
+  } finally {
+    vi.useRealTimers();
+  }
+});
+
 it("expands Team when navigation selects one of its conversations", async () => {
   vi.useFakeTimers();
   try {
