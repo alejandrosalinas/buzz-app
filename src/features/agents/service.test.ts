@@ -73,6 +73,7 @@ import { memoryStorage } from "./test-fakes";
 import { SyncedTeams } from "./team-config";
 import { STANDALONE_DEADLINE_MS } from "../agent-harness/standalone";
 import { readTeams, writeTeams, type AgentRecord } from "./store";
+import { createPluginRequests } from "../../plugins/requests";
 import {
   bot,
   channel,
@@ -14716,4 +14717,71 @@ it("keeps reviewed settings when native port persists the identity then rejects"
   ).rejects.toThrow("Native installation reported failure");
   await service.refresh();
   expect(service.find(sibling)?.config).toEqual({ reply: "Reviewed" });
+});
+
+it("gives a run this device's plugins as the agent, and refuses a request its removal overtakes", async () => {
+  const { service, run, emit, ctx } = await setup();
+  let release!: () => void;
+  const reading = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  const checkGit = vi.fn(async () => {
+    await reading;
+    return {
+      token: "",
+      source: "owner/plugins",
+      commit: "c".repeat(40),
+      warnings: [],
+      candidates: [
+        {
+          path: ".",
+          revision: "one",
+          manifest: {
+            id: "example.tasks",
+            name: "Tasks",
+            apiVersion: 1 as const,
+          },
+        },
+      ],
+    };
+  });
+  const requests = createPluginRequests({
+    catalog: () => ({ profile: "test", location: "test", plugins: [] }),
+    imports: { checkGit } as never,
+    change: vi.fn(async () => true),
+    error: () => null,
+  });
+  ctx.provide("pluginRequests", requests);
+  try {
+    await service.create({ type: "example/echo", name: "Echo" });
+    const { plugins } = await handleOf(run, emit);
+    const input = {
+      action: "install",
+      repository: "owner/plugins",
+      reason: "Tracks the board",
+    } as const;
+    release();
+    await plugins?.request(input);
+    expect(requests.pending()).toMatchObject([
+      { requester: { pubkey: bot, name: "Echo" }, pluginId: "example.tasks" },
+    ]);
+    requests.settle(requests.pending()[0]?.id ?? "", "declined");
+    let resume!: () => void;
+    checkGit.mockImplementationOnce(async () => {
+      await new Promise<void>((resolve) => {
+        resume = resolve;
+      });
+      return checkGit.getMockImplementation()?.() as never;
+    });
+    const overtaken = plugins?.request(input);
+    await vi.waitFor(() => expect(checkGit).toHaveBeenCalledTimes(2));
+    await service.remove(bot);
+    resume();
+    await expect(overtaken).rejects.toThrow(
+      "The requesting agent is no longer available",
+    );
+    expect(requests.pending()).toEqual([]);
+  } finally {
+    await ctx.fiber.dispose();
+  }
 });

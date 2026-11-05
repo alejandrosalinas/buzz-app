@@ -4,6 +4,7 @@ import type { ProtectionAction } from "../features/agent-protection/service";
 // The tools never see the key itself.
 import type { GitAuth } from "../features/agents/native";
 import type { AgentAttention } from "../features/agents/service";
+import type { AgentPlugins } from "../plugins/requests";
 
 export type BuzzEvent = Readonly<{
   id: string;
@@ -105,6 +106,9 @@ export interface BuzzClient {
       picture?: () => Promise<string>;
     }>,
   ): Promise<Readonly<{ requestId: string; saved: false }>>;
+  /** This device's plugins, where the host has them: read directly, changed
+   * by owner-confirmed request. */
+  plugins?: AgentPlugins;
   /** Wakes the agent in another of its conversations here, `from` this one. */
   handoff?(
     handoff: Readonly<{

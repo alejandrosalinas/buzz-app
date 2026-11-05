@@ -218,7 +218,7 @@ type Review =
 const entryKey = ({ repository, reference, commit, path }: ManagedEntry) =>
   [repository, reference, commit, path].join("\n");
 
-function ManagedPluginReview({
+export function ManagedPluginReview({
   plugins,
   catalog,
   busy: managing,
@@ -226,7 +226,10 @@ function ManagedPluginReview({
   entry,
   authorizeGit,
   holdReview,
+  requestedBy,
+  recheck,
   returnFocus,
+  onInstalled,
   onClose,
 }: {
   plugins: PluginManager;
@@ -237,7 +240,12 @@ function ManagedPluginReview({
   entry: ManagedEntry | undefined;
   authorizeGit?: Authorize | undefined;
   holdReview?: (() => () => void) | undefined;
+  /** An agent's request, reviewed in place of a recommendation. */
+  requestedBy?: Readonly<{ name: string; reason: string }> | undefined;
+  /** Run as the owner confirms; a returned reason refuses the install. */
+  recheck?: (() => string | undefined) | undefined;
   returnFocus: () => HTMLElement | null;
+  onInstalled?: () => void;
   onClose: () => void;
 }) {
   const imports = plugins.imports;
@@ -355,6 +363,11 @@ function ManagedPluginReview({
       entryKey(wanted) !== review.key
     )
       return;
+    const refusal = recheck?.();
+    if (refusal) {
+      setReview({ status: "error", reason: refusal });
+      return;
+    }
     const alreadyInstalled = latest.current.catalog.plugins.some(
       (plugin) => plugin.manifest.id === wanted.id,
     );
@@ -382,6 +395,7 @@ function ManagedPluginReview({
       await imports?.discard(value).catch(() => {});
       if (!alreadyInstalled && enable)
         await plugins.change("enable", wanted.id);
+      onInstalled?.();
       onClose();
     } finally {
       working.current = false;
@@ -406,7 +420,7 @@ function ManagedPluginReview({
       }
       description={
         ready && !updating
-          ? `Recommended by ${source}. Only install code you trust.`
+          ? `${requestedBy ? `Requested by ${requestedBy.name}` : `Recommended by ${source}`}. Only install code you trust.`
           : undefined
       }
       size={ready && updating ? "compact" : "wide"}
@@ -463,6 +477,12 @@ function ManagedPluginReview({
       )}
       {ready && candidate && entry && (
         <section aria-label="Managed plugin source" className="text-body-sm">
+          {requestedBy && (
+            <p className="mb-4 mt-0 break-words">
+              {updating && `${requestedBy.name}: `}
+              {requestedBy.reason}
+            </p>
+          )}
           <code className={`${importStyles.sourcePath} break-all`}>
             {location(entry)}
           </code>

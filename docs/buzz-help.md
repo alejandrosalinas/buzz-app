@@ -427,6 +427,12 @@ confirmation.
   folder. After that the agent can reload it from that folder. A reload that
   fails to start restores the previous version. Changed host access still needs
   the person's review through the plugin's **Update**.
+- In the desktop app, agents can list this device's plugins and disable one.
+  Installing, updating, enabling or removing a plugin is a request: the agent's
+  message in the conversation shows a card with **Review** and **Decline**, and the
+  change waits until the person reviews and confirms it there (or under **Requested
+  by agents** in **Settings → Plugins → Manage plugins**). A restart discards it. An agent cannot
+  install plugin code by itself.
 - **Focus**, when its optional plugin is on, is in the profile menu. For a
   chosen time it shows only Solo chats in the sidebar and lets only Solo chats
   in the selected community show banners, play sounds or light the Dock dot. Links and search still open

@@ -1,5 +1,6 @@
 import { Service, type Context } from "@deepseek-ai/cordis";
 import type { PluginManager } from "./manager";
+import { providePluginReviewHold } from "./review-access";
 
 export type PluginInstallSource = Readonly<{
   repository: string;
@@ -263,6 +264,7 @@ export function createPluginInstallCore({
   openPlugins,
 }: InstallHost) {
   return {
+    holdReview: requests.holdReview,
     async submit(
       source: PluginInstallSource,
       caller: Readonly<{
@@ -346,5 +348,6 @@ export function createPluginInstallerService(
     }
   }
 
+  providePluginReviewHold(ctx, host.core.holdReview);
   return new PluginInstallerService();
 }

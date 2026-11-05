@@ -138,6 +138,9 @@ export type ChannelMessage = Readonly<{
     truncated: boolean;
   }>;
   membership?: MembershipChange;
+  /** Signed `plugin-request` tag: an agent's plugin change request, by id.
+   * Untrusted display metadata; the device that holds the request decides. */
+  pluginRequest?: Readonly<{ id: string }>;
   huddle?: Readonly<{
     room: string;
     state: "started" | "ended";

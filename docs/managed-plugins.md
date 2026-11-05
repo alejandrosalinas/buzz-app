@@ -151,8 +151,8 @@ open, the review reads the new entry again, and it closes if the entry is remove
 entry's `commit` when you intend a branch to advance. Because only the reference's tip is
 fetched, a commit that is no longer the tip of its reference cannot be installed.
 
-Only an install or update from a recommendation records `commit` in the plugin's saved
-source in the profile registry. Older Buzz versions reject that field and offer settings
+Only an install or update from a recommendation or an agent's request records `commit`
+in the plugin's saved source in the profile registry. Older Buzz versions reject that field and offer settings
 recovery, so downgrading after installing from a recommendation is not supported, as
 with other registry additions. Plugins added through the Add dialog are unaffected.
 

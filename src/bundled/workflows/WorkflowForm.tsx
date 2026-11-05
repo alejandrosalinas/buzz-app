@@ -27,7 +27,7 @@ import {
 import { NavigationItem } from "../../shared/design-system/ui/NavigationItem";
 import { Select } from "../../shared/design-system/ui/Select";
 import { Switch } from "../../shared/design-system/ui/Switch";
-import { Textarea } from "../../shared/design-system/ui/Textarea";
+import { WorkflowMessageText } from "./WorkflowMessageText";
 import { WorkflowConditions } from "./WorkflowConditions";
 import { WorkflowWebhookFields } from "./WorkflowWebhookFields";
 import { WorkflowScheduleFields } from "./WorkflowScheduleFields";
@@ -532,12 +532,12 @@ function StepFields({
           error={error("text")}
           description="Messages post to the workflow channel unless a destination is set below."
         >
-          <Textarea
+          <WorkflowMessageText
             id={`${id}-text`}
             value={step.text ?? ""}
             rows={4}
             autoCapitalize="off"
-            onChange={(event) => update({ text: event.currentTarget.value })}
+            onValueChange={(text) => update({ text })}
           />
         </Field>
       ) : (

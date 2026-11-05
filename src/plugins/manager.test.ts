@@ -541,3 +541,13 @@ it("loads an enabled external plugin regardless of its id", async () => {
   expect(plugins.startup()).toBe("ready");
   expect(installation.readModule).toHaveBeenCalledWith("monitor", "one");
 });
+
+it("offers agents the plugins it reads, through the context", async () => {
+  const { root } = harness();
+  const agent = root.pluginRequests?.forAgent({ pubkey: "a", name: "A" });
+  await expect(agent?.list()).rejects.toThrow("Plugin settings are not ready");
+  await vi.advanceTimersByTimeAsync(0);
+  expect(await agent?.list()).toMatchObject({
+    plugins: [{ id: "example", enabled: true, bundled: true }],
+  });
+});

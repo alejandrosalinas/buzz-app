@@ -276,10 +276,17 @@ export function useFloatingActionBar(
     // Returns whether the row shows as revealed. Positioning defers that row
     // write until the bar is placed, so an offscreen frame writes nothing.
     const updateVisibility = (reveal = true) => {
-      const blocked = behindActiveOverlay(row);
-      const ownsPopup = !!bar.querySelector(
+      const trigger = bar.querySelector(
         '[aria-haspopup][aria-expanded="true"]',
       );
+      const ownsPopup = !!trigger;
+      // The bar's own menu opens beside its trigger, so the bar stays to show
+      // what the menu acts on. Pickers, modals and other popups still cover it.
+      const menu =
+        trigger?.getAttribute("aria-haspopup") === "menu"
+          ? document.getElementById(trigger.getAttribute("aria-controls") ?? "")
+          : null;
+      const blocked = behindActiveOverlay(row, menu);
       // The toolbar yields, but its popup must still identify the target message.
       const revealed = !blocked || ownsPopup;
       if (reveal) row.toggleAttribute("data-actions-revealed", revealed);

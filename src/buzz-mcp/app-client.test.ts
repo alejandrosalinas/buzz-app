@@ -308,3 +308,32 @@ it("proposes no picture for a turn stopped during its upload", async () => {
   release();
   await expect(picture).rejects.toThrow("Turn ended");
 });
+
+it("refuses plugin calls after the calling turn ends", async () => {
+  const plugins = {
+    list: vi.fn(async () => ({ plugins: [] })),
+    discover: vi.fn(),
+    disable: vi.fn(),
+    request: vi.fn(),
+    status: vi.fn(),
+  };
+  const controller = new AbortController();
+  const client = appClient({ plugins } as unknown as AgentHandle, {
+    read: vi.fn(),
+    signal: controller.signal,
+    memories: async () => ({ entries: [], partial: false }),
+  });
+  expect(await client.plugins?.list()).toEqual({ plugins: [] });
+  controller.abort(new Error("Turn ended"));
+  await expect(async () => client.plugins?.list()).rejects.toThrow(
+    "Turn ended",
+  );
+  expect(() => client.plugins?.status("r")).toThrow("Turn ended");
+  expect(plugins.list).toHaveBeenCalledOnce();
+  expect(
+    appClient({} as AgentHandle, {
+      read: vi.fn(),
+      memories: async () => ({ entries: [], partial: false }),
+    }).plugins,
+  ).toBeUndefined();
+});

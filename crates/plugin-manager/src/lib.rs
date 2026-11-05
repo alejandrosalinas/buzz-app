@@ -530,7 +530,7 @@ fn enabled_by_default(id: &str) -> bool {
 /// Bundled ids that older profiles may still hold as installed plugins.
 const FORMERLY_INSTALLED: &[&str] = &["buzz.claude-code", "buzz.codex"];
 /// Host-owned features stay reserved even though they have no catalog entries.
-const BUILT_IN: &[&str] = &["buzz.emoji", "buzz.mentions"];
+const BUILT_IN: &[&str] = &["buzz.emoji", "buzz.mentions", "buzz.plugin-requests"];
 fn is_bundled(id: &str) -> bool {
     bundled_manifests().iter().any(|manifest| manifest.id == id)
 }
@@ -1703,17 +1703,27 @@ mod tests {
         let mut host_ids: Vec<_> = features
             .split("manifest: { ...")
             .skip(1)
-            .map(|entry| manifests[entry.split(',').next().unwrap()].as_str())
+            .map(|entry| manifests[entry.split(',').next().unwrap()].to_string())
             .collect();
+        // A feature whose manifest is written out names its id by a constant.
+        let constants = fs::read_to_string(format!("{root}/../plugins/review-access.ts")).unwrap();
+        host_ids.extend(features.lines().filter_map(|line| {
+            let constant = line.trim().strip_prefix("id: ")?.trim_end_matches(',');
+            let declaration = format!("export const {constant} = \"");
+            let value = constants
+                .lines()
+                .find_map(|line| line.strip_prefix(&declaration))?;
+            Some(value.trim_end_matches("\";").to_string())
+        }));
         host_ids.sort_unstable();
-        let mut reserved_ids = super::BUILT_IN.to_vec();
+        let mut reserved_ids: Vec<_> = super::BUILT_IN.iter().map(|id| id.to_string()).collect();
         reserved_ids.sort_unstable();
         assert_eq!(reserved_ids, host_ids);
     }
 
     #[test]
     fn prebuilt_artifacts_cannot_claim_built_in_conversation_ids() {
-        for id in ["buzz.emoji", "buzz.mentions"] {
+        for id in ["buzz.emoji", "buzz.mentions", "buzz.plugin-requests"] {
             let release = Release {
                 bytes: serde_json::to_vec(&serde_json::json!({
                     "manifest": { "id": id, "name": "Reserved feature", "apiVersion": 1 },

@@ -1691,6 +1691,17 @@ access and reports the previous and updated declarations. Rejected builds leave
 the installed revision unchanged. Replacing an active plugin ends its in-memory
 work, including a voice call. This is a host-management capability, since an
 external plugin cannot manage other installations or add CLI commands.
+Agents reach management through the host's own tools: they read the catalog and
+disable directly, and every install, update, enable or removal waits for the person
+to confirm it on a card in the agent's conversation, or in Settings; see
+[managing plugins from a conversation](agents.md#managing-plugins-from-a-conversation).
+The request service is provided on the root context (`pluginRequests`) so agent
+runs can reach it, which also makes it reachable from plugin scopes; plugins remain
+trusted code. The card is a built-in feature (`buzz.plugin-requests`) that registers a
+message renderer for messages with a `plugin-request` tag. Two services,
+`pluginManagement` and `pluginReviewHold`, give the plugin manager and the open-review
+hold to that feature alone, so asking cannot install or delete another plugin's code
+without the review.
 
 Opening an installed plugin's details checks its remembered folder. A matching
 package shows Up to date in the pane. Local folders are checked every five seconds

@@ -23,6 +23,38 @@ const relay = keypair(),
 const channel = "chan-1";
 
 describe("message fold", () => {
+  it("reads the id of a plugin request from the signed tag", () => {
+    const content = "Requested: install Browser — Check the staging site";
+    const id = "5d1f0b8e-8c2a-4a39-9a54-0f6a4e7e6c11";
+    const [row] = foldMessages(channel, relay.pubkey, [
+      signed(alice, {
+        kind: 9,
+        content,
+        tags: [
+          ["h", channel],
+          ["plugin-request", id],
+        ],
+      }),
+    ]);
+    expect(row).toMatchObject({ content, pluginRequest: { id } });
+    for (const tags of [
+      [["h", channel]],
+      [
+        ["h", channel],
+        ["plugin-request", ""],
+      ],
+      [
+        ["h", channel],
+        ["plugin-request", "not an id!"],
+      ],
+    ]) {
+      const [plain] = foldMessages(channel, relay.pubkey, [
+        signed(alice, { kind: 9, content, tags }),
+      ]);
+      expect(plain?.pluginRequest).toBeUndefined();
+    }
+  });
+
   it("preserves diff patch bytes and signed metadata without Markdown attachment projection", () => {
     const content =
       "@@ -1 +1 @@\n-![old](https://example.com/old.png)\n+<script>alert(1)</script>  \n";

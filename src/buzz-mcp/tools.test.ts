@@ -14,6 +14,7 @@ import { ATTENTION_TOOLS } from "./attention";
 import { createHash } from "node:crypto";
 import { callTool, memoryVersion, TOOLS } from "./tools";
 import { callSessionTool, sessionTools } from "./session-tools";
+import { PLUGIN_TOOLS } from "./plugins";
 import { SOLO_WORKER_TOOLS } from "./solo-worker";
 import { Context } from "@deepseek-ai/cordis";
 import { AgentProtectionService } from "../features/agent-protection/service";
@@ -1206,9 +1207,12 @@ it("lists its tools before it can call them", async () => {
       method: "tools/list",
     },
   )) as { result: { tools: unknown[] } };
-  // Every app session lists the same tools: the Buzz, attention and Solo worker tools.
+  // Every app session lists the same tools: the Buzz, attention, Solo worker and plugin tools.
   expect(list.result.tools).toHaveLength(
-    TOOLS.length + ATTENTION_TOOLS.length + SOLO_WORKER_TOOLS.length,
+    TOOLS.length +
+      ATTENTION_TOOLS.length +
+      SOLO_WORKER_TOOLS.length +
+      PLUGIN_TOOLS.length,
   );
   await expect(
     respond(

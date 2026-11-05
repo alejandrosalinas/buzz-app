@@ -46,6 +46,7 @@ export function appClient(
     return found;
   };
   const handoff = agent.handoff;
+  const plugins = agent.plugins;
   return {
     ...(agent.protection
       ? {
@@ -197,6 +198,30 @@ export function appClient(
         throw new Error("Agent changes are unavailable on this host");
       return agent.updateAgent(input);
     },
+    ...(plugins && {
+      plugins: {
+        list: () => {
+          check();
+          return plugins.list();
+        },
+        discover: (repository, reference) => {
+          check();
+          return plugins.discover(repository, reference);
+        },
+        disable: (id) => {
+          check();
+          return plugins.disable(id);
+        },
+        request: (input) => {
+          check();
+          return plugins.request(input);
+        },
+        status: (requestId) => {
+          check();
+          return plugins.status(requestId);
+        },
+      },
+    }),
     ...(handoff
       ? {
           handoff: (wake: AgentHandoff) => {
