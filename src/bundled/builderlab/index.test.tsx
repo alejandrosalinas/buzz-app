@@ -1243,13 +1243,13 @@ it.for([
     await user.click(await screen.findByRole("gridcell", { name: /^Browser/ }));
     phase = "await existing agent Identity";
     await user.click(await screen.findByRole("tab", { name: "Identity" }));
-    const instructions = await screen.findByRole("textbox", {
+    let instructions = await screen.findByRole("textbox", {
       name: "Instructions",
     });
     await waitFor(() => expect(instructions).toHaveValue("Be concise."));
     await user.clear(instructions);
     await user.type(instructions, "New direction.");
-    const save = screen.getByRole("button", { name: "Save" });
+    let save = screen.getByRole("button", { name: "Save" });
     instructionsSave = deferred();
     const updatesBeforeEdit = requestsTo("update-agent").length;
     try {
@@ -1284,14 +1284,16 @@ it.for([
     });
     // Sign-in stays user-started and the failed instructions draft survives it.
     expect(screen.queryByRole("button", { name: "Save" })).toBeNull();
+    expect(screen.queryByRole("textbox", { name: "Instructions" })).toBeNull();
     await user.click(
-      within(
-        screen.getByRole("region", { name: "Sign in to Builderlab" }),
-      ).getByRole("button", { name: "Sign in to Builderlab" }),
+      screen.getByRole("button", { name: "Sign in to Builderlab" }),
     );
     await waitFor(() =>
       expect(screen.getByRole("button", { name: "Sign out" })).toBeEnabled(),
     );
+    instructions = await screen.findByRole("textbox", { name: "Instructions" });
+    expect(instructions).toHaveValue("New direction.");
+    save = screen.getByRole("button", { name: "Save" });
     await user.click(save);
     await waitFor(() => expect(instructions).toBeEnabled());
     expect(save).toHaveAttribute("aria-disabled", "true");
