@@ -2158,6 +2158,7 @@ export function createRelaySession(
     () => liveRecoveryStatus(live.snapshot()),
     live.retry,
   );
+  let recoveryConnection: string | undefined;
   const recovery = transport
     ? createRecovery(
         [
@@ -2192,7 +2193,13 @@ export function createRelaySession(
           ),
         ],
         undefined,
-        { relay: transport.scope ?? "", connection: crypto.randomUUID() },
+        {
+          relay: transport.scope ?? "",
+          get connection() {
+            recoveryConnection ??= crypto.randomUUID();
+            return recoveryConnection;
+          },
+        },
       )
     : undefined;
   // A live stream that connects again proves the relay answers: retry the

@@ -165,7 +165,9 @@ export async function nativeRelayRequest(
       method: body === undefined ? "GET" : "POST",
       body: body === undefined ? null : JSON.stringify(body),
       ...(id ? { id } : {}),
-      diagnostic: diagnostic ? { operationId: diagnostic.operationId } : null,
+      ...(diagnostic
+        ? { diagnostic: { operationId: diagnostic.operationId } }
+        : {}),
     }).catch((error: unknown) => {
       metric?.(
         bounded.aborted

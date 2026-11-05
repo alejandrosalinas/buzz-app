@@ -5712,6 +5712,34 @@ it("ends a renewal's quiet state when an interest change replaces a carried batc
   }
 });
 
+it("starts without diagnostic random identities and captures on the existing socket when enabled", async () => {
+  networkRecorder.setEnabled(false);
+  networkRecorder.clear();
+  const identities = vi.spyOn(crypto, "randomUUID");
+  const h = setup([]);
+  try {
+    await h.first.auth();
+    expect(identities).not.toHaveBeenCalled();
+    expect(networkRecorder.snapshot().events).toEqual([]);
+    networkRecorder.setEnabled(true);
+    networkRecorder.configure("debug");
+    await h.first.receive(["NOTICE", "ready"]);
+    expect(h.sockets).toHaveLength(1);
+    expect(networkRecorder.snapshot().events).toContainEqual(
+      expect.objectContaining({
+        event: "ws.frame",
+        parentId: expect.stringMatching(/^live:/),
+        connection: expect.any(String),
+      }),
+    );
+  } finally {
+    h.owner.dispose();
+    identities.mockRestore();
+    networkRecorder.configure("info");
+    networkRecorder.clear();
+  }
+});
+
 it.each(["answered", "timeout"] as const)(
   "collects Info metrics for connection and existing probe %s without frame records",
   async (outcome) => {

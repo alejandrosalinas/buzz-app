@@ -25,6 +25,40 @@ afterEach(() => {
 });
 const filter = (id: string) => [{ kinds: [9], "#h": [id], limit: 80 }];
 
+it("starts capture on existing readers with distinct operation IDs and stage evidence", async () => {
+  networkRecorder.setEnabled(false);
+  networkRecorder.clear();
+  const identities = vi.spyOn(crypto, "randomUUID");
+  try {
+    const readers = [setup(), setup()];
+    const dormant = readers.map((reader) => reader.read(filter("a")));
+    for (const reader of readers) reader.next().respond([]);
+    await Promise.all(dormant);
+    expect(identities).not.toHaveBeenCalled();
+    expect(networkRecorder.snapshot().events).toEqual([]);
+
+    networkRecorder.setEnabled(true);
+    networkRecorder.configure("debug");
+    const captured = readers.map((reader) => reader.read(filter("a")));
+    for (const reader of readers) reader.next().respond([]);
+    await Promise.all(captured);
+    const events = networkRecorder.snapshot().events;
+    const finished = events.filter((event) => event.event === "read.finished");
+    expect(finished).toHaveLength(2);
+    expect(new Set(finished.map((event) => event.operationId)).size).toBe(2);
+    for (const event of finished)
+      expect(events).toContainEqual(
+        expect.objectContaining({
+          event: "read.stage",
+          phase: "read.fetch",
+          operationId: event.operationId,
+        }),
+      );
+  } finally {
+    identities.mockRestore();
+  }
+});
+
 it("shares equivalent concurrent filters but keeps each consumer's cancellation independent", async () => {
   networkMetrics.setEnabled(true);
   networkRecorder.configure("debug");

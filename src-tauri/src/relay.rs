@@ -824,6 +824,7 @@ fn read_cancels() -> &'static Uploads {
 }
 
 #[tauri::command]
+#[allow(clippy::too_many_arguments)] // Tauri passes each IPC field as an argument.
 pub(crate) async fn relay_http(
     host: tauri::State<'_, IdentityHost>,
     fi: tauri::State<'_, FederatedIdentity>,

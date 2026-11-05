@@ -432,7 +432,11 @@ export function subscribeRelayTraffic(
   let probeAt: number | undefined;
   let probeCapture: number | undefined;
   let attemptCapture: number | undefined;
-  const diagnosticId = crypto.randomUUID();
+  let identity: string | undefined;
+  const diagnosticId = () => {
+    identity ??= crypto.randomUUID();
+    return identity;
+  };
   let attemptDiagnosticId: string | undefined;
   const report = (
     event: string,
@@ -458,10 +462,14 @@ export function subscribeRelayTraffic(
       event,
       relay: url,
       connection: diagnosticConnection(),
-      operationId: `live:${diagnosticId}`,
+      operationId: `live:${diagnosticId()}`,
       ...fields,
     });
-  const diagnosticConnection = () => attemptDiagnosticId ?? diagnosticId;
+  const diagnosticConnection = () => {
+    if (!networkRecorder.collecting()) return;
+    attemptDiagnosticId ??= `${diagnosticId()}:${generation}`;
+    return attemptDiagnosticId;
+  };
   let closed = false;
   let socket: LiveSocket | undefined;
   let retryTimer: ReturnType<typeof setTimeout> | undefined;
@@ -642,7 +650,7 @@ export function subscribeRelayTraffic(
     if (owner && !owner.operationId)
       owner.operationId = `subscription:${crypto.randomUUID()}`;
     return {
-      parentId: `live:${diagnosticId}`,
+      parentId: `live:${diagnosticId()}`,
       operationId: owner?.operationId ?? `socket:${diagnosticConnection()}`,
       subscriptionId:
         owner || subscriptionId === probe || localOperation
@@ -1431,7 +1439,7 @@ export function subscribeRelayTraffic(
     const used = new Set([...routes.values()].flatMap(cursorKeys));
     for (const key of cursors.keys()) if (!used.has(key)) cursors.delete(key);
     const current = generation;
-    attemptDiagnosticId = `${diagnosticId}:${current}`;
+    attemptDiagnosticId = undefined;
     const valid = () => !closed && current === generation;
     heard = false;
     probe = undefined;

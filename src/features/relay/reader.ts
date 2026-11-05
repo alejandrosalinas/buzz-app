@@ -99,7 +99,11 @@ export function createRelayReader(
     throw new Error("Invalid relay read budget");
   let sequence = 0;
   let consumers = 0;
-  const readerId = crypto.randomUUID();
+  let identity: string | undefined;
+  const readerId = () => {
+    if (networkRecorder.collecting()) identity ??= crypto.randomUUID();
+    return identity;
+  };
   const jobs = new Map<string, Job>();
   let closed = false;
   let recovering = false;
@@ -124,7 +128,7 @@ export function createRelayReader(
         networkRecorder.record({
           level: "debug",
           event: "read.admission-resumed",
-          operationId: `reader:${readerId}`,
+          operationId: `reader:${readerId()}`,
           owner: "navigation",
           count: jobs.size,
         });
@@ -137,7 +141,7 @@ export function createRelayReader(
         networkRecorder.record({
           level: "debug",
           event: "read.admission-paused",
-          operationId: `reader:${readerId}`,
+          operationId: `reader:${readerId()}`,
           owner: "navigation",
           count: jobs.size,
         });
@@ -394,24 +398,31 @@ export function createRelayReader(
         return Promise.reject(
           new ReadError("unavailable", "Too many pending relay reads"),
         );
-      const id = `read:${readerId}:${++sequence}`;
+      const serial = ++sequence;
+      // Reads already in flight can acquire a unique namespace when capture starts.
+      const id = () => {
+        const namespace = readerId();
+        return namespace ? `read:${namespace}:${serial}` : `read:${serial}`;
+      };
       const parent = networkContext(signal);
       const controller = new AbortController();
       bindNetworkContext(controller.signal, {
-        operationId: id,
+        operationId: id(),
         parentId: parent?.operationId,
         owner:
           parent?.owner ??
           (snapshot ? "read-state" : profiles ? "profiles" : "reader"),
       });
       job = {
-        id,
+        get id() {
+          return id();
+        },
         metric: networkMetrics.enabled()
           ? networkMetrics
               .relay(transport.scope ?? "unknown-relay")
               .operation("read")
           : undefined,
-        queued: profiling.start("read.queue", id),
+        queued: profiling.start("read.queue", id()),
         key,
         filters: requestFilters,
         priority,
@@ -443,7 +454,7 @@ export function createRelayReader(
         networkRecorder.record({
           level: "debug",
           event: "read.started",
-          operationId: id,
+          operationId: id(),
           parentId: parent?.operationId,
           owner: job.owner,
           relay: transport.scope,
@@ -454,7 +465,7 @@ export function createRelayReader(
       job.priority = priority;
     const owned = job;
     const consumerId = networkRecorder.enabled("debug")
-      ? `${readerId}:consumer:${++consumers}`
+      ? `${readerId()}:consumer:${++consumers}`
       : undefined;
     if (networkRecorder.enabled("debug"))
       networkRecorder.record({
