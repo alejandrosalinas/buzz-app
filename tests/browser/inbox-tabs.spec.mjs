@@ -250,6 +250,14 @@ for (const variant of Object.keys(titles))
     const main = inbox.getByRole("tablist", { name: "Inbox tabs" });
     const listTab = main.getByRole("tab", { name: "Inbox", exact: true });
     if (variant === "covered") {
+      // Opening the thread reveals its message and focuses the row once the
+      // thread has loaded. Move the tab after that, or the late reveal takes
+      // focus from it.
+      await expect(
+        inbox
+          .getByRole("region", { name: "Thread messages", exact: true })
+          .locator("[data-message-id]", { hasText: "Beta mention 3" }),
+      ).toBeFocused();
       await inbox
         .getByRole("tablist", { name: "Panel tabs" })
         .getByRole("tab")
