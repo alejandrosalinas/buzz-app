@@ -1913,6 +1913,61 @@ it("applies a routed workflow once its channel is listed", async () => {
   }
 });
 
+it("holds a routed workflow whose channel a partial roster has not listed yet", async () => {
+  const route = {
+    channel: fixtureChannel,
+    owner: fixtureViewer,
+    workflow: fixtureDefinition.id,
+  };
+  const other = { id: "other-channel", name: "Other channel" };
+  const page = navigatedPage(route, fixtureViewer, {
+    status: "ready",
+    coverage: "partial",
+    channels: [other],
+  });
+  try {
+    expect(
+      await screen.findByText("The channel list is partial."),
+    ).toBeVisible();
+    act(() =>
+      page.setChannels({
+        status: "ready",
+        coverage: "partial",
+        channels: [other, { id: fixtureChannel, name: "Fixture channel" }],
+      }),
+    );
+    expect(
+      await screen.findByRole("tab", { name: "Message helper" }),
+    ).toBeVisible();
+    expect(
+      screen.queryByText("The linked workflow could not be read."),
+    ).toBeNull();
+  } finally {
+    page.dispose();
+  }
+  cleanup();
+  // A complete roster without the channel proves it absent.
+  const absent = navigatedPage(route, fixtureViewer, {
+    status: "ready",
+    coverage: "partial",
+    channels: [other],
+  });
+  try {
+    expect(
+      await screen.findByText("The channel list is partial."),
+    ).toBeVisible();
+    expect(
+      screen.queryByText("The linked workflow could not be read."),
+    ).toBeNull();
+    act(() => absent.setChannels({ status: "ready", channels: [other] }));
+    expect(
+      await screen.findByText("The linked workflow could not be read."),
+    ).toBeVisible();
+  } finally {
+    absent.dispose();
+  }
+});
+
 it("opens the channel and a posted message from the detail pane and reports refusals", async () => {
   const open = vi.fn<Navigation["open"]>(async () => ({ status: "opened" }));
   mount(fixtureYaml, fixtureViewer, true, {}, (session) => (

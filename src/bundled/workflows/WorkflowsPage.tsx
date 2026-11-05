@@ -173,13 +173,17 @@ export function WorkflowCommunity({
     () => page && (workflowsRoute(page.route?.params) ?? {}),
     [page],
   );
-  // The route applies once the channel list, and its channel, are read.
+  // The route applies once the channel list, and its channel, are read. Only a
+  // complete list proves its channel absent; a partial one may list it later.
+  const routeChannel =
+    params?.channel &&
+    channels.channels.find((channel) => channel.id === params.channel);
   const routePending =
     channels.status === "loading" ||
     channels.status === "idle" ||
-    channels.channels.some(
-      (channel) => channel.id === params?.channel && channel.metadataPending,
-    );
+    (routeChannel
+      ? routeChannel.metadataPending
+      : !!params?.channel && channels.coverage === "partial");
   const route = useMemo(
     () =>
       navigation && params && !routePending
