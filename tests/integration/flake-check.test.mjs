@@ -6,10 +6,13 @@ import { fileURLToPath } from "node:url";
 import test from "node:test";
 import {
   bestRoute,
+  browserLaneSeconds,
   browserShards,
-  capRelated,
   classify,
+  costModel,
+  costTable,
   hunkRanges,
+  LANE_BUDGET_MINUTES,
   listBrowser,
   listVitest,
   moduleGraph,
@@ -19,9 +22,11 @@ import {
   reachesTests,
   repeatableLines,
   selectTests,
+  takeRelated,
   testBodies,
   testCalls,
   vitestFilters,
+  vitestLaneSeconds,
 } from "../../scripts/flake-check.mjs";
 
 // A hunk writing new-side lines start..end; by default it removed nothing.
@@ -607,22 +612,214 @@ test("related files run whole, named after a changed module first, then smallest
     // every route.
     { ...candidate("named", 700, 2), namesake: "src/Named.tsx" },
   ];
-  const order = ({ taken, dropped }) => [
+  const order = ({ taken, overBudget, overCap }) => [
     taken.map(({ file }) => file),
-    dropped.map(({ file }) => file),
+    overBudget.map(({ file }) => file),
+    overCap.map(({ file }) => file),
   ];
-  assert.deepEqual(order(capRelated(candidates, Infinity)), [
+  assert.deepEqual(order(takeRelated(candidates, Infinity)), [
     ["named", "narrow", "mid-cheap", "mid", "wide", "unrouted"],
+    [],
     [],
   ]);
   // "mid-cheap" crosses the cap of 6 and runs; nothing after it does, even
   // when it would fit.
-  assert.deepEqual(order(capRelated(candidates, 6)), [
+  assert.deepEqual(order(takeRelated(candidates, 6)), [
     ["named", "narrow", "mid-cheap"],
+    [],
     ["mid", "wide", "unrouted"],
   ]);
-  assert.deepEqual(order(capRelated(candidates, 0)), [
+  assert.deepEqual(order(takeRelated(candidates, 0)), [
+    [],
     [],
     ["named", "narrow", "mid-cheap", "mid", "wide", "unrouted"],
   ]);
+});
+
+test("related files run in rank order while their lane fits the budget; edited tests alone never trim", () => {
+  const candidate = (file, size, seconds) => ({
+    file,
+    route: { files: ["x"], size },
+    cost: 1,
+    seconds,
+  });
+  const candidates = [
+    candidate("first", 100, 30),
+    candidate("heavy", 200, 120),
+    candidate("light", 300, 10),
+    candidate("last", 400, 10),
+  ];
+  // The lane already spends `edited` seconds on the tests the pull request
+  // edited.
+  const lane = (edited) => (taken) =>
+    taken.reduce((sum, { seconds }) => sum + seconds, edited);
+  const order = ({ taken, overBudget, overCap }) => [
+    taken.map(({ file }) => file),
+    overBudget.map(({ file }) => file),
+    overCap.map(({ file }) => file),
+  ];
+  // "heavy" would end the lane at 550 s. "light" would still fit, but taking
+  // it would run a less specific file in place of a more specific one.
+  assert.deepEqual(order(takeRelated(candidates, 3, 540, lane(400))), [
+    ["first"],
+    ["heavy", "light"],
+    ["last"],
+  ]);
+  // Ending exactly at the budget still fits.
+  assert.deepEqual(order(takeRelated(candidates, 3, 550, lane(400))), [
+    ["first", "heavy"],
+    ["light"],
+    ["last"],
+  ]);
+  // Edited tests over the budget run anyway; no related file joins them.
+  assert.deepEqual(order(takeRelated(candidates, 3, 540, lane(600))), [
+    [],
+    ["first", "heavy", "light"],
+    ["last"],
+  ]);
+  // A longer run that adds a shard can fit where a shorter one did not.
+  const sharded = (taken) => (taken.length === 1 ? 600 : 500);
+  assert.deepEqual(order(takeRelated(candidates, 3, 540, sharded)), [
+    ["first", "heavy", "light"],
+    [],
+    ["last"],
+  ]);
+});
+
+test("the cost table keeps each journey's and Vitest file's median passing time over the runs", () => {
+  const result = (status, duration) => ({ status, duration });
+  const spec = (file, title, chromium, webkit) => ({
+    file,
+    title,
+    tests: [
+      { projectName: "chromium", results: [chromium] },
+      { projectName: "webkit", results: [webkit] },
+      // Measurement projects have their own lanes.
+      { projectName: "webkit-measurements", results: [result("passed", 1)] },
+    ],
+  });
+  const playwright = (seconds) => ({
+    suites: [
+      {
+        title: "a.spec.mjs",
+        file: "a.spec.mjs",
+        specs: [
+          spec(
+            "a.spec.mjs",
+            "top",
+            result("passed", seconds * 1000),
+            result("passed", seconds * 2000),
+          ),
+        ],
+        suites: [
+          {
+            title: "group",
+            file: "a.spec.mjs",
+            specs: [
+              spec(
+                "a.spec.mjs",
+                "inner",
+                result("passed", 4000),
+                // A failed run says nothing about how long the journey takes.
+                result(seconds === 3 ? "failed" : "passed", 30_000),
+              ),
+            ],
+          },
+        ],
+      },
+      // A journey outside tests/browser that the flake check never selects.
+      {
+        title: "../../src/x.journey.mjs",
+        file: "../../src/x.journey.mjs",
+        specs: [
+          spec(
+            "../../src/x.journey.mjs",
+            "elsewhere",
+            result("passed", 1000),
+            result("passed", 1000),
+          ),
+        ],
+      },
+    ],
+  });
+  const vitest = (ms) => ({
+    testResults: [
+      {
+        name: "/home/runner/work/buzz-app/buzz-app/src/app/A.test.tsx",
+        status: "passed",
+        startTime: 100,
+        endTime: 100 + ms,
+      },
+      {
+        name: "/home/runner/work/buzz-app/buzz-app/src/app/B.test.tsx",
+        status: ms === 3000 ? "passed" : "failed",
+        startTime: 0,
+        endTime: 9000,
+      },
+    ],
+  });
+  const table = costTable({
+    playwright: [1, 2, 3].map(playwright),
+    vitest: [1000, 3000, 2500].map(vitest),
+  });
+  assert.deepEqual(table, {
+    browser: {
+      "tests/browser/a.spec.mjs": {
+        "group › inner": [4, 30],
+        top: [2, 4],
+      },
+    },
+    vitest: { "src/app/A.test.tsx": 2.5, "src/app/B.test.tsx": 9 },
+  });
+  // New and renamed tests take their file's median, then the median of every
+  // timed test.
+  const costs = costModel({
+    browser: {
+      "tests/browser/a.spec.mjs": { one: [1, 10], two: [3, null] },
+      "tests/browser/b.spec.mjs": { three: [5, 30], four: [7, 40] },
+    },
+    vitest: { "src/A.test.tsx": 1, "src/B.test.tsx": 2, "src/C.test.tsx": 6 },
+  });
+  const a = "tests/browser/a.spec.mjs";
+  assert.equal(costs.journey("webkit", a, "one"), 10);
+  assert.equal(costs.journey("chromium", a, "renamed"), 2);
+  assert.equal(costs.journey("webkit", a, "two"), 10);
+  assert.equal(costs.journey("webkit", "tests/browser/new.spec.mjs", "x"), 30);
+  assert.equal(costs.vitest("src/B.test.tsx"), 2);
+  assert.equal(costs.vitest("src/New.test.tsx"), 2);
+});
+
+test("listed journeys carry the titles the cost table keys them by", () => {
+  const file = "tests/browser/buzz-links.spec.mjs";
+  const titles = listBrowser([file])
+    .get(file)
+    .map(({ title }) => title);
+  assert.ok(
+    titles.some((title) => title.includes(" › ")),
+    "describe groups lead the title",
+  );
+  assert.equal(new Set(titles).size, titles.length);
+});
+
+test("predicted browser lane time is the slowest engine's slowest shard, with job overhead", () => {
+  const close = (actual, expected) =>
+    assert.ok(Math.abs(actual - expected) < 1e-9, `${actual} ≠ ${expected}`);
+  assert.equal(browserLaneSeconds([0, 0], 0), 0);
+  // One shard: 105 s, then ten repetitions of 20 s on two workers at 1.11×.
+  close(browserLaneSeconds([10, 20], 5), 105 + 1.11 * 100);
+  // A sixth journey adds a shard; the slowest runs 1.22× their mean.
+  close(browserLaneSeconds([10, 20], 6), 105 + 1.11 * 1.22 * 50);
+  // Shards stop at sixteen, so each takes more of a larger selection.
+  close(browserLaneSeconds([0, 160], 160), 105 + 1.11 * 1.22 * 50);
+});
+
+test("predicted Vitest lane time follows the summed files on two workers or the slowest file", () => {
+  const close = (actual, expected) =>
+    assert.ok(Math.abs(actual - expected) < 1e-9, `${actual} ≠ ${expected}`);
+  assert.equal(vitestLaneSeconds([]), 0);
+  close(vitestLaneSeconds([10, 10, 10, 10]), 26 + 5 * (5.7 + 0.72 * 20));
+  close(vitestLaneSeconds([143, 1]), 26 + 5 * (5.7 + 0.72 * 143));
+  // One 143 s file, as MessageComposer.test.tsx takes on CI, cannot join as a
+  // related pick within the default budget.
+  assert.ok(vitestLaneSeconds([143]) > LANE_BUDGET_MINUTES * 60);
 });

@@ -1,9 +1,20 @@
 // Advisory pull-request flake check. `select` maps a diff to the Vitest tests
 // and Playwright journeys it changed, plus the test files its other changes
-// reach through imports; `vitest` repeats a selection and reports every
-// iteration. Playwright repeats natively with --repeat-each.
+// reach through imports while the lanes' predicted time allows; `vitest`
+// repeats a selection and reports every iteration. Playwright repeats natively
+// with --repeat-each. `costs` regenerates the test durations the prediction
+// reads from green `main` runs.
 import { spawnSync } from "node:child_process";
-import { appendFileSync, mkdirSync, readFileSync, rmSync } from "node:fs";
+import {
+  appendFileSync,
+  mkdirSync,
+  mkdtempSync,
+  readdirSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
+import { tmpdir } from "node:os";
 import {
   basename,
   dirname,
@@ -32,8 +43,11 @@ export const browserShards = (journeys) =>
 // the macOS recorder own them, so the engine lanes never repeat them.
 const excludedTags = ["classic-scrollbars", "local-webkit", "media-recorder"];
 // Test files a pull request reaches without editing run whole, most specific
-// first, up to about eight shards of journeys. One heavy Vitest file can take
-// 140 s per iteration on CI, so few related Vitest files fit the batch budget.
+// first, while each flake lane's predicted wall time stays inside the budget.
+// Tests the pull request edited always run, even past it. The budget bounds
+// wall time, and shards grow with the selection, so these caps still bound
+// runner time: about eight shards of journeys, and few Vitest files.
+export const LANE_BUDGET_MINUTES = 9;
 export const RELATED_JOURNEYS = 40;
 export const RELATED_VITEST_FILES = 20;
 
@@ -220,6 +234,18 @@ export function listVitest(files) {
   return starts;
 }
 
+// Every spec of a Playwright JSON report, titled by its describe groups and
+// its own title. The top-level suites are files; Playwright requires titles to
+// be unique within one.
+function* reportSpecs(suites, groups) {
+  for (const suite of suites) {
+    const path = groups ? [...groups, suite.title] : [];
+    for (const spec of suite.specs ?? [])
+      yield { spec, title: [...path, spec.title].join(" › ") };
+    yield* reportSpecs(suite.suites ?? [], path);
+  }
+}
+
 // Specs per file as the CI engine project lists them. The engine projects
 // ignore measurement files, and Playwright reports a run selecting nothing as
 // an error, so a selection of only measurement files lists no specs.
@@ -243,18 +269,185 @@ export function listBrowser(files) {
       `playwright --list: ${report.errors.map((error) => error.message).join("\n")}`,
     );
   const specs = new Map(files.map((file) => [file, []]));
-  const collect = (suites) => {
-    for (const suite of suites) {
-      for (const spec of suite.specs ?? [])
-        if (spec.tests?.length)
-          specs
-            .get(`tests/browser/${spec.file}`)
-            ?.push({ line: spec.line, tags: spec.tags });
-      collect(suite.suites ?? []);
-    }
-  };
-  collect(empty ? [] : report.suites);
+  for (const { spec, title } of reportSpecs(empty ? [] : report.suites))
+    if (spec.tests?.length)
+      specs
+        .get(`tests/browser/${spec.file}`)
+        ?.push({ line: spec.line, tags: spec.tags, title });
   return specs;
+}
+
+const ENGINES = ["chromium", "webkit"];
+const costsFile = `${root}scripts/flake-check-costs.json`;
+
+const median = (values) => {
+  const sorted = [...values].sort((a, b) => a - b);
+  const middle = Math.floor(sorted.length / 2);
+  if (sorted.length === 0) return undefined;
+  return sorted.length % 2
+    ? sorted[middle]
+    : (sorted[middle - 1] + sorted[middle]) / 2;
+};
+
+// The cost table `costs` writes: the median passing seconds of each journey,
+// as [Chromium, WebKit] by spec file and title, and of each Vitest file, over
+// the required lanes of green `main` runs. Vitest reports absolute paths under
+// the CI checkout.
+export function costTable({ playwright = [], vitest = [] }) {
+  const samples = { browser: {}, vitest: {} };
+  for (const report of playwright)
+    for (const { spec, title } of reportSpecs(report.suites))
+      for (const { projectName, results } of spec.tests ?? []) {
+        const engine = ENGINES.indexOf(projectName);
+        const passed = results.find(({ status }) => status === "passed");
+        const file = `tests/browser/${spec.file}`;
+        if (engine < 0 || !passed || classify(file) !== "browser") continue;
+        samples.browser[file] ??= {};
+        samples.browser[file][title] ??= ENGINES.map(() => []);
+        samples.browser[file][title][engine].push(passed.duration / 1000);
+      }
+  for (const report of vitest)
+    for (const { name, status, startTime, endTime } of report.testResults) {
+      const parts = name.split("/");
+      const file = parts
+        .map((_, i) => parts.slice(i).join("/"))
+        .find((path) => classify(path) === "vitest");
+      if (!file || status !== "passed") continue;
+      samples.vitest[file] ??= [];
+      samples.vitest[file].push((endTime - startTime) / 1000);
+    }
+  const seconds = (values) =>
+    values.length ? Math.round(median(values) * 10) / 10 : null;
+  const sorted = (entries, value) =>
+    Object.fromEntries(
+      Object.keys(entries)
+        .sort()
+        .map((key) => [key, value(entries[key])]),
+    );
+  return {
+    browser: sorted(samples.browser, (titles) =>
+      sorted(titles, (engines) => engines.map(seconds)),
+    ),
+    vitest: sorted(samples.vitest, seconds),
+  };
+}
+
+// Seconds a test takes on CI: its own entry in the cost table, else the
+// median of its file's journeys on that engine, else the median of every
+// journey on that engine or of every Vitest file. New tests and renamed
+// journeys take the fallbacks.
+export function costModel(table) {
+  const medians = new Map();
+  const middle = (key, values) => {
+    if (!medians.has(key))
+      medians.set(key, median(values().filter(Number.isFinite)));
+    return medians.get(key);
+  };
+  return {
+    journey: (engine, file, title) => {
+      const index = ENGINES.indexOf(engine);
+      const timed = (titles = {}) =>
+        Object.values(titles).map((engines) => engines[index]);
+      return (
+        table.browser[file]?.[title]?.[index] ??
+        middle(`${engine} ${file}`, () => timed(table.browser[file])) ??
+        middle(engine, () => Object.values(table.browser).flatMap(timed))
+      );
+    },
+    vitest: (file) =>
+      table.vitest[file] ?? middle("vitest", () => Object.values(table.vitest)),
+  };
+}
+
+// Predicted flake-lane wall time in seconds, fit to hosted pull-request runs
+// of Nov 4–5, 2026 (median predicted ÷ actual 0.95 for the slowest browser
+// shard, 1.02 for a Vitest batch). ci.yml repeats each journey ITERATIONS
+// times per engine, over that engine's own shards; `seconds` holds one
+// repetition per engine, as [Chromium, WebKit]. A shard job spends 105 s outside its tests, and its
+// two workers take 1.11 × half its summed test time. Playwright splits
+// repetitions by count, so the slowest of several shards runs about 1.22 ×
+// their mean.
+export function browserLaneSeconds(seconds, journeys) {
+  if (journeys === 0) return 0;
+  const shards = browserShards(journeys);
+  const slowest = shards > 1 ? 1.22 : 1;
+  return Math.max(
+    ...seconds.map(
+      (total) => 105 + (1.11 / 2) * slowest * ((total * ITERATIONS) / shards),
+    ),
+  );
+}
+
+// Two Vitest batch jobs each run ITERATIONS / 2 iterations of the selection.
+// A job spends 26 s outside them, and each takes 5.7 s plus 0.72 × the larger
+// of half the summed file time (two workers) and the slowest file. A line
+// filter is charged its whole file.
+export function vitestLaneSeconds(files) {
+  if (files.length === 0) return 0;
+  const total = files.reduce((sum, seconds) => sum + seconds, 0);
+  return 26 + (ITERATIONS / 2) * (5.7 + 0.72 * Math.max(total / 2, ...files));
+}
+
+// Rewrites the cost table from green `main` CI runs, by default the latest
+// three. Artifacts expire after seven days.
+function writeCosts(runs) {
+  const ids = runs.length
+    ? runs
+    : JSON.parse(
+        run("gh", [
+          "run",
+          "list",
+          "--workflow=ci.yml",
+          "--branch=main",
+          "--event=push",
+          "--status=success",
+          "--limit=3",
+          "--json=databaseId",
+        ]).stdout,
+      ).map(({ databaseId }) => String(databaseId));
+  const dir = mkdtempSync(join(tmpdir(), "flake-check-costs-"));
+  const reports = { playwright: [], vitest: [] };
+  try {
+    for (const id of ids) {
+      const result = run("gh", [
+        "run",
+        "download",
+        id,
+        `--dir=${dir}/${id}`,
+        "--pattern=browser-journeys-*",
+        "--pattern=vitest-timing-*",
+      ]);
+      if (result.status !== 0)
+        throw new Error(`gh run download ${id}: ${result.stderr}`);
+      for (const artifact of readdirSync(`${dir}/${id}`)) {
+        const [kind, report] = artifact.startsWith("browser-journeys-")
+          ? ["playwright", "ci-report.json"]
+          : ["vitest", "vitest.json"];
+        reports[kind].push(
+          JSON.parse(
+            readFileSync(`${dir}/${id}/${artifact}/${report}`, "utf8"),
+          ),
+        );
+      }
+    }
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+  const table = { runs: ids, ...costTable(reports) };
+  writeFileSync(costsFile, JSON.stringify(table));
+  const format = run(pnpm, [
+    "--silent",
+    "exec",
+    "biome",
+    "format",
+    "--write",
+    costsFile,
+  ]);
+  if (format.status !== 0) throw new Error(`biome format: ${format.stderr}`);
+  const journeys = Object.values(table.browser).flatMap(Object.keys).length;
+  console.log(
+    `flake-check: timed ${journeys} journeys and ${Object.keys(table.vitest).length} Vitest files from runs ${ids.join(", ")}`,
+  );
 }
 
 // Changed files that can reach a test through imports. Root configuration
@@ -421,10 +614,19 @@ export const namesake = (test, changed) => {
 
 // Takes whole candidates, named after a changed module first, then smallest
 // route first (a candidate without one last) and cheaper first among equal
-// routes, until their cost reaches the cap; the one that crosses it still
-// runs, so the cap is never met by skipping a more specific candidate.
-export function capRelated(candidates, cap) {
-  const size = ({ route }) => route?.size ?? Infinity;
+// routes. Their cost counts toward the cap, and the one crossing it still
+// runs, so the cap is never met by skipping a more specific candidate. Inside
+// the cap, the longest run of candidates in that order whose lane `lane`
+// predicts inside `budget` seconds runs; nothing ranked after a dropped
+// candidate runs in its place. Browser shards grow with the selection, so a
+// longer run can predict a shorter lane than a run it extends.
+export function takeRelated(
+  candidates,
+  cap,
+  budget = Number.POSITIVE_INFINITY,
+  lane = () => 0,
+) {
+  const size = ({ route }) => route?.size ?? Number.POSITIVE_INFINITY;
   const named = ({ namesake }) => (namesake ? 0 : 1);
   const ranked = [...candidates].sort(
     (a, b) =>
@@ -434,9 +636,16 @@ export function capRelated(candidates, cap) {
       a.file.localeCompare(b.file),
   );
   let used = 0;
+  let capped = 0;
+  while (capped < ranked.length && used < cap) used += ranked[capped++].cost;
   let end = 0;
-  while (end < ranked.length && used < cap) used += ranked[end++].cost;
-  return { taken: ranked.slice(0, end), dropped: ranked.slice(end) };
+  for (let length = 1; length <= capped; length += 1)
+    if (lane(ranked.slice(0, length)) <= budget) end = length;
+  return {
+    taken: ranked.slice(0, end),
+    overBudget: ranked.slice(end, capped),
+    overCap: ranked.slice(capped),
+  };
 }
 
 // Vitest files that import a changed file, by the module graph the pre-push
@@ -456,7 +665,7 @@ async function relatedVitest(files) {
   }
 }
 
-async function select(base = "HEAD^1", head = "HEAD") {
+async function select(budget, base = "HEAD^1", head = "HEAD") {
   const changed = git(
     "diff",
     "--name-status",
@@ -545,6 +754,7 @@ async function select(base = "HEAD^1", head = "HEAD") {
       );
       if (runner === "vitest") {
         selected.vitest.set(file, {
+          tier: "1",
           whole: selection.whole,
           entries: vitestFilters(file, selection),
           note: selection.whole
@@ -557,6 +767,7 @@ async function select(base = "HEAD^1", head = "HEAD") {
           ? repeatable
           : selection.lines.filter((line) => repeatable.includes(line));
         selected.browser.set(file, {
+          tier: "1",
           lines,
           entries: lines.map((line) => `${file}:${line}`),
           note:
@@ -576,61 +787,137 @@ async function select(base = "HEAD^1", head = "HEAD") {
     (route
       ? `${route.files.join(", ")} via ${route.via === file ? "imports" : route.via}, ${route.size} files`
       : "Vitest module graph");
-  const totals = [];
+  // Tier 2 adds related files to tier 1's edited tests while each lane's
+  // predicted wall time stays inside the budget.
+  const costs = costModel(JSON.parse(readFileSync(costsFile, "utf8")));
+  const journeySeconds = (file, lines) =>
+    ENGINES.map((engine) =>
+      (browserSpecs.get(file) ?? [])
+        .filter(({ line }) => lines.includes(line))
+        .reduce(
+          (sum, { title }) => sum + costs.journey(engine, file, title),
+          0,
+        ),
+    );
+  const edited = {
+    browser: [...selected.browser].map(([file, { lines }]) => ({
+      seconds: journeySeconds(file, lines),
+      entries: lines.length,
+    })),
+    vitest: [...selected.vitest.keys()].map((file) => [
+      file,
+      costs.vitest(file),
+    ]),
+  };
+  const lane = {
+    browser: (taken) => {
+      const parts = [...edited.browser, ...taken];
+      return browserLaneSeconds(
+        ENGINES.map((_, i) =>
+          parts.reduce((sum, { seconds }) => sum + seconds[i], 0),
+        ),
+        parts.reduce((sum, { entries }) => sum + entries, 0),
+      );
+    },
+    vitest: (taken) =>
+      vitestLaneSeconds([
+        ...new Map([
+          ...edited.vitest,
+          ...taken.map(({ file, seconds }) => [file, seconds]),
+        ]).values(),
+      ]),
+  };
+  const none = { taken: [], overBudget: [], overCap: [] };
+  const take = { vitest: none, browser: none };
   if (sources.length) {
-    const vitest = capRelated(
+    take.vitest = takeRelated(
       related.vitest
         .filter(({ file }) => !selected.vitest.get(file)?.whole)
-        .map((candidate) => ({ ...candidate, cost: 1 })),
+        .map((candidate) => ({
+          ...candidate,
+          cost: 1,
+          seconds: costs.vitest(candidate.file),
+        })),
       RELATED_VITEST_FILES,
+      budget * 60,
+      lane.vitest,
     );
-    for (const candidate of vitest.taken)
+    for (const candidate of take.vitest.taken)
       selected.vitest.set(candidate.file, {
+        tier: selected.vitest.has(candidate.file) ? "1, 2" : "2",
         whole: true,
         entries: [candidate.file],
-        note: `related, whole file (${via(candidate)})`,
+        note: `whole file (${via(candidate)})`,
       });
-    const browser = capRelated(
+    take.browser = takeRelated(
       related.browser
         .map((candidate) => {
           const lines = repeatableLines(browserSpecs.get(candidate.file) ?? []);
           const done = selected.browser.get(candidate.file)?.lines ?? [];
-          const cost = lines.filter((line) => !done.includes(line)).length;
-          return { ...candidate, lines, cost };
+          const fresh = lines.filter((line) => !done.includes(line));
+          return {
+            ...candidate,
+            lines,
+            cost: fresh.length,
+            entries: lines.length - done.length,
+            seconds: journeySeconds(candidate.file, fresh),
+          };
         })
         .filter(({ cost }) => cost > 0),
       RELATED_JOURNEYS,
+      budget * 60,
+      lane.browser,
     );
-    for (const candidate of browser.taken)
+    for (const candidate of take.browser.taken)
       selected.browser.set(candidate.file, {
+        tier: selected.browser.has(candidate.file) ? "1, 2" : "2",
         lines: candidate.lines,
         entries: candidate.lines.map((line) => `${candidate.file}:${line}`),
-        note: `related, whole file: ${candidate.lines.length} journey(s) (${via(candidate)})`,
+        note: `whole file: ${candidate.lines.length} journey(s) (${via(candidate)})`,
       });
-    const journeys = (candidates) =>
-      candidates.reduce((sum, { cost }) => sum + cost, 0);
-    totals.push(
-      `Related Vitest files: ${vitest.taken.length} selected, ${vitest.dropped.length} dropped (cap ${RELATED_VITEST_FILES}).`,
-      "",
-      `Related journeys: ${journeys(browser.taken)} selected in ${browser.taken.length} spec(s), ${journeys(browser.dropped)} dropped in ${browser.dropped.length} spec(s) (cap ${RELATED_JOURNEYS}).`,
-      "",
-    );
   }
+  const minutes = (seconds) => `${(seconds / 60).toFixed(1)} min`;
+  const predicted = (runner) =>
+    `${minutes(lane[runner](take[runner].taken))} (edited tests alone ${minutes(lane[runner]([]))})`;
+  const journeys = (candidates) =>
+    candidates.reduce((sum, { cost }) => sum + cost, 0);
   const rows = ["vitest", "browser"].flatMap((runner) =>
     [...selected[runner]].map(
-      ([file, { note }]) => `| ${cell(file)} | ${runner} | ${cell(note)} |`,
+      ([file, { tier, note }]) =>
+        `| ${cell(file)} | ${runner} | ${tier} | ${cell(note)} |`,
     ),
   );
+  const totals = [
+    ...(rows.length
+      ? [
+          `Predicted lane wall time, budget ${budget} min: browser ${predicted("browser")}, Vitest ${predicted("vitest")}.`,
+          "",
+        ]
+      : []),
+    ...(sources.length
+      ? [
+          `Related journeys: ${journeys(take.browser.taken)} selected in ${take.browser.taken.length} spec(s); dropped ${journeys(take.browser.overBudget)} in ${take.browser.overBudget.length} spec(s) for time and ${journeys(take.browser.overCap)} in ${take.browser.overCap.length} spec(s) for the cap of ${RELATED_JOURNEYS}.`,
+          "",
+          `Related Vitest files: ${take.vitest.taken.length} selected; dropped ${take.vitest.overBudget.length} for time and ${take.vitest.overCap.length} for the cap of ${RELATED_VITEST_FILES}.`,
+          "",
+        ]
+      : []),
+  ];
   summarize(
     [
       "## Flake check selection",
       "",
       ...(rows.length
-        ? ["| File | Runner | Selection |", "| --- | --- | --- |", ...rows]
+        ? [
+            "Tier 1 repeats the tests this pull request edited. Tier 2 adds test files its other changes reach, most specific first, while each lane stays inside the time budget and count cap.",
+            "",
+            "| File | Runner | Tier | Selection |",
+            "| --- | --- | --- | --- |",
+            ...rows,
+          ]
         : ["No Vitest or Playwright test files changed or reached."]),
       "",
       ...totals,
-      "",
     ].join("\n"),
   );
   const outputs = Object.fromEntries(
@@ -725,19 +1012,25 @@ function repeatVitest(filters, iterations) {
 
 function main() {
   const [command, ...args] = process.argv.slice(2);
-  if (command === "select" && args.length <= 2) return select(...args);
-  if (command === "vitest") {
-    const iterations = Number(
+  const option = (name, fallback) =>
+    Number(
       args
-        .find((argument) => argument.startsWith("--iterations="))
-        ?.slice("--iterations=".length) ?? ITERATIONS,
+        .find((argument) => argument.startsWith(`--${name}=`))
+        ?.slice(`--${name}=`.length) ?? fallback,
     );
-    const filters = args.filter((argument) => !argument.startsWith("--"));
-    if (Number.isInteger(iterations) && iterations > 0 && filters.length > 0)
-      return repeatVitest(filters, iterations);
+  const operands = args.filter((argument) => !argument.startsWith("--"));
+  if (command === "select") {
+    const budget = option("budget", LANE_BUDGET_MINUTES);
+    if (budget > 0 && operands.length <= 2) return select(budget, ...operands);
   }
+  if (command === "vitest") {
+    const iterations = option("iterations", ITERATIONS);
+    if (Number.isInteger(iterations) && iterations > 0 && operands.length > 0)
+      return repeatVitest(operands, iterations);
+  }
+  if (command === "costs") return writeCosts(operands);
   throw new Error(
-    "usage: flake-check select [base] [head] | vitest [--iterations=N] <file[:line]…>",
+    "usage: flake-check select [--budget=minutes] [base] [head] | vitest [--iterations=N] <file[:line]…> | costs [run-id…]",
   );
 }
 

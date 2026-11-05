@@ -1,0 +1,4232 @@
+{
+  "runs": ["41990511962", "41980968364", "41979442279"],
+  "browser": {
+    "tests/browser/account-profile.spec.mjs": {
+      "account menu choices remain reachable across themes, widths and enlarged text": [
+        13.9, 26.2
+      ],
+      "profile Settings opens after a failed connection": [3.7, 13.5]
+    },
+    "tests/browser/activity-groups.spec.mjs": {
+      "Solo activity folds, stays expanded on append/prepend, and reveals exact visits": [
+        14.6, 17.5
+      ],
+      "activity details keep readable text through both handoffs and survive new updates": [
+        6.7, 8.4
+      ],
+      "fractional activity heights never rebound and detail collapse keeps its width": [
+        8.3, 6.2
+      ]
+    },
+    "tests/browser/activity-lifecycle.spec.mjs": {
+      "incoming activity follows the bottom and retains focus through append (channel)": [
+        7.3, 15.6
+      ],
+      "incoming activity follows the bottom and retains focus through append (thread)": [
+        6.7, 12.1
+      ]
+    },
+    "tests/browser/activity-navigation-focus.spec.mjs": {
+      "mark-read retains focus through a gated storage failure, working transitions, and last-item retry": [
+        4.9, 10.1
+      ],
+      "working off-window root returns focus to the originating sidebar row": [
+        10.2, 39.3
+      ],
+      "working reply returns focus to the originating sidebar row": [12.5, 40.4]
+    },
+    "tests/browser/agent-activity-overhaul.spec.mjs": {
+      "Activity alignment for incoming messages › activity follows the bubble edge in channels and threads": [
+        6, 10.8
+      ],
+      "Activity alignment for outgoing messages › activity follows the bubble edge in channels and threads": [
+        6, 10.3
+      ],
+      "activity avatar stack stays one height with overflow at every supported width": [
+        7.4, 14.6
+      ],
+      "message activity opens a grouped preview and the agent's profile without losing the thread": [
+        20.9, 41.1
+      ],
+      "removing a reaction from a tall message preserves the reading position": [
+        7, 20.2
+      ]
+    },
+    "tests/browser/agent-activity.spec.mjs": {
+      "channel activity consumes telemetry, opens each agent's profile, and resets on disable": [
+        19.3, 36.7
+      ],
+      "channel activity control fits wide and narrow layouts in dark": [
+        8.9, 16.1
+      ],
+      "channel activity control fits wide and narrow layouts in light": [
+        8.8, 17.4
+      ],
+      "mention picker demands the relay's protected archive snapshot": [
+        3.5, 6.3
+      ],
+      "sidebar activity opens the working agent's profile": [5.4, 12.6],
+      "thread activity › thread typing uses the existing route, stays isolated, and floats thread activity above the composer": [
+        22, 36.7
+      ],
+      "thread activity › thread working avatars deduplicate agents while preserving human typing and scope transitions": [
+        11.2, 23.7
+      ]
+    },
+    "tests/browser/agent-attention.spec.mjs": {
+      "The Attention tab fits both themes and sizes and manages existing watches by keyboard": [
+        5.4, 6.4
+      ],
+      "touch delete actions › keeps watch and Interest deletion available without hover": [
+        1.6, 1.6
+      ],
+      "watch and interest deletion restore focus without taking it from another control": [
+        3.2, 2.6
+      ]
+    },
+    "tests/browser/agent-avatar-edit.spec.mjs": {
+      "avatar editing shares the creation picker in responsive dialogs": [
+        8.6, 21.9
+      ]
+    },
+    "tests/browser/agent-avatar.spec.mjs": {
+      "agent initials retain shared avatar typography at DM and chat sizes": [
+        1.3, 1.6
+      ],
+      "cached agent artwork is visible immediately when avatars remount": [
+        1.3, 1.6
+      ]
+    },
+    "tests/browser/agent-creation-review.spec.mjs": {
+      "agent creation waits for owner review in the existing editable form": [
+        3.3, 6.4
+      ],
+      "failed agent creation keeps its error above sticky actions and allows retry": [
+        2.6, 3.7
+      ]
+    },
+    "tests/browser/agent-harness-menu.spec.mjs": {
+      "hosted harness help consumes Escape before its menu after pointer entry": [
+        3.1, 4.5
+      ],
+      "local harness help consumes Escape before its menu after pointer entry": [
+        2.8, 4.3
+      ]
+    },
+    "tests/browser/agent-library.spec.mjs": {
+      "agent cards expose selection and creation preserves focus and avatar choices": [
+        7.5, 10.1
+      ],
+      "card model and effort labels do not overlap": [6, 5.4],
+      "long memory labels truncate within the agent pane": [3.9, 3.7],
+      "opening Save keeps the active textarea line above the footer": [
+        4.8, 5.4
+      ],
+      "owner profile keeps its pane and caret stable during inline name editing": [
+        3.2, 6.6
+      ],
+      "scaled import controls keep pointer actions on their own agent": [
+        10.4, 13.9
+      ],
+      "settings footer opens and closes gradually without moving editing focus": [
+        2.7, 4
+      ],
+      "shared settings help and tab discards keep Memory scope clear": [4.2, 9],
+      "team imports explain scope before running and restore the trigger on cancellation": [
+        5, 6.9
+      ]
+    },
+    "tests/browser/agent-search-chat.spec.mjs": {
+      "search opens a new Solo chat with one of the viewer's agents": [3.7, 5.7]
+    },
+    "tests/browser/agent-share-card.spec.mjs": {
+      "the export card fits whole at 1280×900": [1.2, 7.1],
+      "the export card fits whole at 480×640": [1.1, 3.7],
+      "the export card fits whole at 600×600 with enlarged text": [1.1, 2.6],
+      "the export card fits whole at 600×600 with enlarged text after a save fails": [
+        1.2, 2.7
+      ]
+    },
+    "tests/browser/agent-update-review.spec.mjs": {
+      "agent changes wait for owner review in the agent's own settings form": [
+        6.5, 4.5
+      ]
+    },
+    "tests/browser/appearance.spec.mjs": {
+      "Appearance changes and restores both modes, shared keyboard controls, dialogs and narrow layout": [
+        20.2, 38.9
+      ],
+      "System appearance follows computer changes and keeps the selected choice after reload": [
+        11.1, 18.6
+      ],
+      "compiled host preserves compatibility utility meanings": [8.6, 16.2],
+      "production startup owns keyboard modality": [4.8, 5.9],
+      "saved dark document paints before the application module is allowed to execute": [
+        4.6, 5.8
+      ],
+      "saved vibe levels cannot tint the shell after choosing an accent or reloading": [
+        12.7, 22.6
+      ],
+      "storage denial is visible and retryable; another window updates a live conversation without remount": [
+        14.8, 23.4
+      ]
+    },
+    "tests/browser/apps-panel.spec.mjs": {
+      "Apps keeps its last native URL after Cordis rerenders and pool eviction": [
+        2.1, 2.1
+      ],
+      "hover hints stay readable beside an app (dark, 260px)": [3.4, 3.4],
+      "hover hints stay readable beside an app (dark, 420px)": [3.4, 3.6],
+      "hover hints stay readable beside an app (dark, 720px)": [3.4, 3.3],
+      "hover hints stay readable beside an app (light, 260px)": [3.3, 3.8],
+      "hover hints stay readable beside an app (light, 420px)": [3.1, 3.4],
+      "hover hints stay readable beside an app (light, 720px)": [3.1, 3.3]
+    },
+    "tests/browser/artifact-storage.spec.mjs": {
+      "aborts page and progress commits when the owner closes": [0.3, 0.4],
+      "accepts authoritative heads without ancestry and rejects retired captures": [
+        0.3, 0.4
+      ],
+      "applies explicit removals after missed revisions and rejects a failed page": [
+        0.2, 0.5
+      ],
+      "atomically indexes preference changes and preserves newer values during migration retries": [
+        0.4, 0.8
+      ],
+      "commits across windows and survives offline restart with isolated scopes": [
+        1.2, 1.1
+      ],
+      "commits delta progress without inferring absence and preserves device data": [
+        0.2, 0.4
+      ],
+      "continues indexed pages and raw ID pages through their final cursors": [
+        0.2, 0.4
+      ],
+      "direct reads do not wait for an index-only transaction": [0.2, 0.4],
+      "notifies another window when a committed writer closes": [0.3, 0.7],
+      "pages raw known IDs by channel without plugin index assumptions": [
+        0.2, 0.4
+      ],
+      "purges one identity and relay across collections": [0.3, 0.3],
+      "retries database opening with a new handle after a transient failure": [
+        0.2, 0.3
+      ],
+      "rolls back received batches and migration failures without publishing changes": [
+        0.2, 0.4
+      ],
+      "upgrades across windows and rejects stale writes and refresh completion": [
+        0.6, 0.5
+      ],
+      "upgrades saved device data and removes the obsolete membership store": [
+        0.3, 0.3
+      ]
+    },
+    "tests/browser/artifact-sync.spec.mjs": {
+      "syncs a follower-only collection and transfers a shared collection on window close": [
+        1.5, 2.2
+      ]
+    },
+    "tests/browser/audio-attachment.spec.mjs": {
+      "audio attachment errors keep the warning treatment in light and dark": [
+        9.9, 4.3
+      ],
+      "audio controls fit regular and narrow message widths": [2.1, 1.6],
+      "audio scrubber previews the hovered time without seeking": [2.6, 2.1]
+    },
+    "tests/browser/avatar-edit.spec.mjs": {
+      "avatar custom spectrum supports dragging, keyboard hue and return focus": [
+        5.2, 4.6
+      ],
+      "avatar image controls retain their hover fill and accessible URL label": [
+        7, 2.8
+      ],
+      "avatar picker previews pointer selections and respects reduced motion": [
+        4.9, 4.3
+      ],
+      "custom color and footer resize together without reversing direction": [
+        3.2, 3.1
+      ],
+      "emoji avatar artwork is centered and sized for faces, symbols, and joined glyphs": [
+        2.2, 1.5
+      ],
+      "emoji picker load failure fits above the footer and retries on reopen": [
+        5.2, 3.8
+      ],
+      "human avatar upload and scoped save": [3.4, 2.9]
+    },
+    "tests/browser/avatar-loading.spec.mjs": {
+      "shared avatars defer offscreen artwork, omit the referrer and recover from failure": [
+        1.8, 3.6
+      ]
+    },
+    "tests/browser/avatar-shapes.spec.mjs": {
+      "representative avatars preserve identity, inset artwork and profile controls": [
+        6.6, 11.3
+      ]
+    },
+    "tests/browser/bestie-tab.spec.mjs": {
+      "The bestie Bestie tab fits the side panel at every width and text size": [
+        2.5, 3.4
+      ],
+      "The edited Bestie tab fits the side panel at every width and text size": [
+        2.4, 2.6
+      ],
+      "The former Bestie tab fits the side panel at every width and text size": [
+        2.2, 2.2
+      ]
+    },
+    "tests/browser/builderlab-session.spec.mjs": {
+      "a late failed login response cannot overwrite another page's pending login": [
+        16, 20.7
+      ],
+      "a login POST rejected before broker admission recovers and can be retried": [
+        7.8, 7.8
+      ]
+    },
+    "tests/browser/builtin-conversation.spec.mjs": {
+      "old disabled flags cannot hide built-in emoji or mentions": [6.9, 13.4]
+    },
+    "tests/browser/buzz-links.spec.mjs": {
+      "Buzz channel and message links render, reveal verified targets, and preserve navigation history": [
+        13.9, 25
+      ],
+      "a hovered message preview survives scroll anchoring and closes when its link scrolls away": [
+        8.4, 16.2
+      ],
+      "a hovered message preview survives the timeline's scroll-time pointer-events and closes when the pointer leaves": [
+        9.6, 16.6
+      ],
+      "a message link's context menu opens its thread as a tab without leaving the channel": [
+        9.1, 16.3
+      ],
+      "a mixed-case Buzz scheme activates in-app instead of falling through to an external tab": [
+        6.2, 13.7
+      ],
+      "activating a panel from a linked thread retires the navigation-owned thread instead of splitting the rail": [
+        10.1, 15.8
+      ],
+      "links to channels the reader hasn't joined › link previews open above the message's hover actions": [
+        8.4, 16.1
+      ],
+      "links to channels the reader hasn't joined › name an open channel with a hover card, preview its messages and lock a withheld one": [
+        9.3, 15.7
+      ],
+      "thread and detail tabs preserve drafts, scroll, focus and local-detail lifetime": [
+        13.8, 27.8
+      ],
+      "unavailable messages fail honestly and legacy links still open when Links is disabled": [
+        10.9, 24.3
+      ]
+    },
+    "tests/browser/canvas-history.spec.mjs": {
+      "Canvas history previews and restores without losing the editor draft": [
+        5.7, 14.6
+      ],
+      "Canvas reconciliation preserves focus: failed after moving focus": [
+        4.6, 9.8
+      ],
+      "Canvas reconciliation preserves focus: saved": [4.3, 9.8]
+    },
+    "tests/browser/channel-access-layout.spec.mjs": {
+      "access rejected feedback stays full-width below the policy row": [
+        6.8, 12.5
+      ],
+      "access uncertain feedback stays full-width below the policy row": [
+        6.8, 13.6
+      ],
+      "general access starts the member list and footer actions stay reachable with enlarged text": [
+        15.5, 28.5
+      ]
+    },
+    "tests/browser/channel-archive-delete-pane.spec.mjs": {
+      "management archive › cancels to its pane trigger, reports pending in a toast, and preserves the confirmed destination on reload": [
+        14.7, 22.6
+      ],
+      "management delete › cancels to its pane trigger, reports pending in a toast, and preserves the confirmed destination on reload": [
+        8.5, 12
+      ],
+      "owner-profile retry focus › keeps keyboard recovery in Settings without stealing moved focus": [
+        6.9, 12.9
+      ],
+      "owner-role agent without direct ownership › offers Archive and Delete in both surfaces, retains a rejected channel, then confirms removal": [
+        7.3, 14.9
+      ]
+    },
+    "tests/browser/channel-completion.spec.mjs": {
+      "channel completion finds an open channel the viewer has not joined": [
+        10.9, 10.9
+      ],
+      "channel completion preserves native editing, focus, popup geometry and signed send/reply content": [
+        18, 18.8
+      ]
+    },
+    "tests/browser/channel-header-menu.spec.mjs": {
+      "dialog origin retirement › Canvas retires without reading the next channel or losing its original draft": [
+        6.6, 10.8
+      ],
+      "dialog origin retirement › header create keeps only sidebar-origin dialogs on browser Back": [
+        5.4, 9.3
+      ],
+      "dialog origin retirement › header delete keeps only sidebar-origin dialogs on browser Back": [
+        5.3, 9.4
+      ],
+      "dialog origin retirement › sidebar create keeps only sidebar-origin dialogs on browser Back": [
+        5.1, 9.5
+      ],
+      "dialog origin retirement › sidebar delete keeps only sidebar-origin dialogs on browser Back": [
+        5.2, 8.8
+      ],
+      "header actions use the full-size menu and retain pane/dialog focus owners": [
+        21.1, 31.8
+      ],
+      "sidebar actions in the header › shares move, mute and read actions without transferring focus to the sidebar": [
+        6.7, 13.2
+      ]
+    },
+    "tests/browser/channel-leave-pane.spec.mjs": {
+      "last visible channel › management completion selects the explicit empty route, not retained membership": [
+        6.9, 12.7
+      ],
+      "management Leave restores focus on cancel, holds pending, and completes through the shared sidebar owner": [
+        8.3, 11.8
+      ]
+    },
+    "tests/browser/channel-lifecycle.spec.mjs": {
+      "DM hide is per-viewer visibility, survives reload and never sends Leave or Delete": [
+        10.9, 13.7
+      ],
+      "Solo chat lifecycle › sidebar and header manage a Solo chat and recover it through name search": [
+        11.2, 23.1
+      ],
+      "archive confirmation returns focus on cancel and retains the conversation on completion": [
+        7.9, 13
+      ],
+      "delete confirmation without typing purges the selected channel and survives reload": [
+        6.8, 11.3
+      ],
+      "last visible row: archive › completion preserves the appropriate destination with no visible rows, including reload": [
+        11.2, 16.4
+      ],
+      "last visible row: hide › completion preserves the appropriate destination with no visible rows, including reload": [
+        10.5, 11.5
+      ],
+      "pending toast in narrow navigation preserves visible recovery after uncertainty": [
+        5, 8.6
+      ],
+      "remote Solo unarchive › retains history and outside focus when remote unarchive restores composition": [
+        4.5, 8.8
+      ],
+      "remote archive focus › remote archive preserves channel focus and offers active unsent text for copying": [
+        6.8, 14.8
+      ],
+      "remote archive focus › remote archive preserves thread focus and offers active unsent text for copying": [
+        8.1, 17.4
+      ]
+    },
+    "tests/browser/channel-members-errors.spec.mjs": {
+      "member action errors stay in view above a long roster": [6.3, 11.2]
+    },
+    "tests/browser/channel-members-focus.spec.mjs": {
+      "Solo adds an agent with pointer or Enter and retains the search focus": [
+        2.2, 3.4
+      ],
+      "final invitation expansion continues keyboard focus at the first new row": [
+        3.3, 4.6
+      ],
+      "identity menus preserve modal focus and addition returns focus only to its owner": [
+        3.6, 3.9
+      ],
+      "initial member spinner preserves list geometry at 1280px": [1.4, 1.4],
+      "initial member spinner preserves list geometry at 390px": [0.8, 1.3],
+      "large known-agent searches mount only the first invitation page": [
+        14.2, 19.5
+      ],
+      "member confirmation replaces one modal and reports only errors (rejected: false)": [
+        6, 10.6
+      ],
+      "member confirmation replaces one modal and reports only errors (rejected: true)": [
+        2.7, 4.4
+      ],
+      "member helper aligns with content and Owner stays beside a person's name": [
+        3.7, 4
+      ],
+      "member identity filter sits inside search and preserves modal focus": [
+        14.9, 18.7
+      ],
+      "member identity geometry and separate addition focus": [3.4, 5.3],
+      "member menus toggle and dismiss through shared owners": [2.1, 3.5],
+      "member search reuses unchanged rows and owner observations": [4.2, 5.2],
+      "multiword candidate Add actions stay clickable": [8, 9.2],
+      "overlapping idle additions restore focus when the suggestion list retires": [
+        3.3, 4.7
+      ],
+      "portaled menu focus keeps the identity centered": [2.3, 3.8],
+      "scrolling members dismisses button and context menus without jumping back": [
+        2, 3
+      ],
+      "touch identity actions › opens profiles from the member menu without hover": [
+        1.3, 1.5
+      ]
+    },
+    "tests/browser/channel-members-scale.spec.mjs": {
+      "large channel members stays usable while browsing and searching the roster": [
+        5.5, 9.4
+      ]
+    },
+    "tests/browser/channel-members.spec.mjs": {
+      "Members closes passively on Back, restores on Forward, and retires on explicit dismissal": [
+        5.9, 12.1
+      ],
+      "Members on an unsupported Solo chat destination › discards the unavailable panel while preserving message focus and history": [
+        6.1, 10.7
+      ],
+      "channel members opens from the header, fits each viewport, and returns keyboard focus": [
+        5.5, 12.2
+      ],
+      "scoped Members history › Members keeps modal focus above an exact timeline target": [
+        5.3, 11.4
+      ],
+      "scoped Members history › restores Members over a routed thread and respects account scope": [
+        6.5, 16.4
+      ]
+    },
+    "tests/browser/channel-modal-dismissal.spec.mjs": {
+      "Canvas confirmation backdrop dismisses only the top layer and retains the draft": [
+        5.5, 9.8
+      ]
+    },
+    "tests/browser/channel-permissions.spec.mjs": {
+      "Guest-default permalinks › a guest leaves and reopens both links as the same read-only preview": [
+        8.8, 19.3
+      ],
+      "Guest-default permalinks › nonmember › old message and nested reply links read without joining, then join explicitly": [
+        6.7, 16.9
+      ],
+      "a joined guest can read and leave without receiving a composer or Join prompt": [
+        4.2, 12.6
+      ]
+    },
+    "tests/browser/channel-settings.spec.mjs": {
+      "channel settings owns its responsive side panel and returns keyboard focus": [
+        6.6, 19.2
+      ],
+      "description links › an owner's description links open their targets, not the editor": [
+        3.9, 9.9
+      ]
+    },
+    "tests/browser/channel-tabs.spec.mjs": {
+      "Canvas opens once beside Thread and retains its channel draft": [
+        6.9, 12.8
+      ],
+      "Open in channel takes a content tab to its conversation with its composer focused": [
+        4, 7.5
+      ],
+      "archived Canvas › members can open Canvas and History in an archived channel": [
+        3.8, 5.7
+      ],
+      "content-opened tabs restore drafts without offering blank-tab creation": [
+        14.6, 25.2
+      ],
+      "crowded content tabs › tab overflow stays horizontal and keyboard navigation reveals its destination": [
+        7.5, 10.7
+      ],
+      "middle-click closes a content tab without selecting it": [5.5, 11]
+    },
+    "tests/browser/clock.spec.mjs": {
+      "a delayed pause sample preserves pending timers and Date advancement": [
+        0.2, 0.5
+      ]
+    },
+    "tests/browser/community-icon-congestion.spec.mjs": {
+      "held saved-community icons leave a connection for foreground traffic": [
+        2.5, 4.4
+      ]
+    },
+    "tests/browser/community-local-focus.spec.mjs": {
+      "local settings retain keyboard focus through save, recovery, cancel and reset without stealing it": [
+        2.8, 3.6
+      ]
+    },
+    "tests/browser/completion-layout.spec.mjs": {
+      "completion menu stays reachable in the production channel layout": [
+        4.2, 7.4
+      ],
+      "host shortcuts coexist with an open completion menu and preserve its draft": [
+        4.5, 8.1
+      ]
+    },
+    "tests/browser/completion-work.spec.mjs": {
+      "completed, dismissed and refuted mention searches stay closed while fresh triggers search": [
+        10.3, 9.9
+      ],
+      "mention typing does not repeat cold reads or create phantom popup layout after acceptance": [
+        20.1, 20.5
+      ],
+      "qualified names preserve keyboard selection and completed-name dismissal": [
+        7.7, 6.8
+      ]
+    },
+    "tests/browser/composer-attachments.spec.mjs": {
+      "PNG and JPEG preparation uploads metadata-free browser-encoded bytes": [
+        11.4, 11.4
+      ],
+      "a sent attachment keeps uploading after navigation and publishes to its original channel": [
+        10.4, 12.9
+      ],
+      "background Cancel focus handoff › focus after cancel": [7.8, 8.7],
+      "background Cancel focus handoff › focus after failure": [7.2, 8.2],
+      "background Cancel focus handoff › focus after success": [7.3, 8.4],
+      "background Cancel focus handoff › focus after typing elsewhere": [
+        8.5, 8.3
+      ],
+      "local previews stay interactive during eager upload and removal collapses the composer": [
+        19.2, 28.3
+      ],
+      "paperclip follows mentions and recipients, before the remaining tools": [
+        10.9, 11
+      ],
+      "picker, pane drop and clipboard files use the same attachment draft and existing Send": [
+        9, 14.3
+      ],
+      "preparation preserves snapshot/animation and uses lossless WebP for pixel cleanup": [
+        12.1, 12.4
+      ]
+    },
+    "tests/browser/composer-bold.spec.mjs": {
+      "bold mention completion keeps its identity and same-text replacement revokes it": [
+        5.7, 8.2
+      ],
+      "bold toolbar and shortcut share selection, continued typing, history and draft restore": [
+        6.9, 6.5
+      ],
+      "multiline bold copies and cuts the selected fragment without changing source": [
+        3, 2.6
+      ],
+      "typed **Hello** becomes bold on the closing delimiter, undoes to its source and sends as Markdown": [
+        3.1, 2.9
+      ]
+    },
+    "tests/browser/composer-focus.spec.mjs": {
+      "a conversation mounting behind an open menu keeps the menu open": [
+        6, 7.5
+      ],
+      "a focus between a keystroke and its read keeps the caret after the typed text": [
+        4.4, 4.9
+      ],
+      "a successful picker image upload returns focus with the existing caret": [
+        4.8, 7.1
+      ],
+      "retained agent focus › returning after a send appends after all retained agents with the same recipients": [
+        6.9, 10.4
+      ],
+      "selecting a channel or DM focuses its composer and retains drafts": [
+        6.9, 9.3
+      ],
+      "text field focus appearance › typing and caret navigation keep the dark composer free of an inner outline": [
+        6.5, 8.7
+      ],
+      "text field focus appearance › typing and caret navigation keep the light composer free of an inner outline": [
+        6, 9.1
+      ]
+    },
+    "tests/browser/composer-formats.spec.mjs": {
+      "a typed fence opens a code block at once, and the block sends fenced": [
+        4.7, 4.3
+      ],
+      "caret keys at the end of a composed message never insert a character": [
+        5.5, 5.2
+      ],
+      "caret keys at the end of a composed message never insert a character, and a caret key reported as a control character still moves the caret": [
+        5.1, 4.4
+      ],
+      "formatting keeps composer and send control geometry stable": [3.4, 3.3],
+      "list toolbar, native item splitting and indentation survive reload and send": [
+        7.4, 6.1
+      ],
+      "native code corrections preserve explicit mode but clearing the span exits it": [
+        5.1, 4.5
+      ],
+      "sent spoilers hide content and links behind a keyboard-accessible reduced-motion sparkle": [
+        4.2, 5.6
+      ],
+      "typed lists use Enter to split and exit, preserve mentions and send by button": [
+        4.5, 5.1
+      ]
+    },
+    "tests/browser/composer-links.spec.mjs": {
+      "Up and Down move one line at a time through links that wrap": [
+        35.6, 34.5
+      ],
+      "editable composer renders links and mentions while preserving source and notification intent": [
+        17.9, 20.2
+      ]
+    },
+    "tests/browser/composer-models.spec.mjs": {
+      "Solo choice initialization and first-send compare/clear commit atomically": [
+        1.3, 1.4
+      ],
+      "Solo choice purge waits for already queued saves": [1.7, 1.7],
+      "Solo first-send choices stay selected until explicit reset": [2.8, 4.3],
+      "Solo model persistence shares storage and lock ownership across pages": [
+        5.7, 5.9
+      ],
+      "effort picker opens, follows the keyboard and returns focus": [2.2, 2.1],
+      "entrance keeps the fill and delayed model button attached to the handle": [
+        2.4, 2.5
+      ],
+      "keyboard-opened picker stays settled when switching to the pointer": [
+        1.7, 1.9
+      ]
+    },
+    "tests/browser/composer-paste.spec.mjs": {
+      "Ctrl+Shift+V pastes plain text over the selection without sending": [
+        4.3, 6.2
+      ],
+      "a triple-clicked heading message pastes into the current line": [
+        3.8, 6.6
+      ],
+      "external linked text stays linked in the composer and sent message": [
+        3.7, 5.4
+      ],
+      "pasting a URL over selected text links it in the composer and sent message": [
+        4.5, 6.4
+      ],
+      "pasting copied messages into the composer restores chips, the recipient and links": [
+        6.2, 11.7
+      ]
+    },
+    "tests/browser/composer-recipients.spec.mjs": {
+      "recipient replacement keeps explicitly disabled bold typing": [4.5, 4.6],
+      "recipient replacement keeps explicitly enabled bold typing": [5.1, 4.9],
+      "recipient replacement preserves native selection, formatting, focus and undo": [
+        6.4, 6
+      ]
+    },
+    "tests/browser/composer-resources.spec.mjs": {
+      "a checked resource keeps focus in the picker, then lands in the draft": [
+        4.2, 7.1
+      ],
+      "a failed resource check keeps focus in the picker": [3.9, 6.2]
+    },
+    "tests/browser/conversation-name.spec.mjs": {
+      "a long channel name truncates beside a full-size icon in Activity": [
+        0.6, 0.8
+      ]
+    },
+    "tests/browser/conversation.spec.mjs": {
+      "independent packed author consumer and native-installed contribution survive removal, replacement and retarget": [
+        43, 41.7
+      ]
+    },
+    "tests/browser/custom-emoji-authoring.spec.mjs": {
+      "adds custom emoji through the production broker, then uses, replaces, retries and scopes them": [
+        16.8, 18.1
+      ]
+    },
+    "tests/browser/design-system.spec.mjs": {
+      "shared tokens reach app controls without history or chip overrides": [
+        10.7, 24.6
+      ]
+    },
+    "tests/browser/dialog-actions.spec.mjs": {
+      "community dialog keeps oversized actions intact, reachable and keyboard operable": [
+        5.2, 12.4
+      ],
+      "touch entry › community entry waits for a deliberate field tap": [
+        2.6, 3.9
+      ]
+    },
+    "tests/browser/diffs.spec.mjs": {
+      "diff preview expands in both layouts and keeps focus and scroll containment": [
+        11.9, 13.1
+      ]
+    },
+    "tests/browser/divider-resize.spec.mjs": {
+      "Resize main and secondary panels previews live wrapping and commits on release": [
+        8.8, 45.8
+      ],
+      "Resize sidebar previews live wrapping and commits on release": [
+        11.4, 49.5
+      ],
+      "clicking the thread divider preserves automatic sizing": [4.9, 8]
+    },
+    "tests/browser/dm-labels.spec.mjs": {
+      "DM names survive channel deletion with loaded profiles": [7.8, 8.5],
+      "DM names survive hidden channel deletion during a cold fetch": [7, 8.6],
+      "keyboard removal of the final DM moves focus to a surviving section": [
+        4.3, 7
+      ]
+    },
+    "tests/browser/emoji-completion-names.spec.mjs": {
+      "keyboard hints stay on the active emoji while scrolling under a resting pointer": [
+        7.2, 7.9
+      ],
+      "truncated emoji names reveal their full value without taking composer focus": [
+        11.3, 11.7
+      ]
+    },
+    "tests/browser/emoji.spec.mjs": {
+      "community picker uses keyboard, proxy thumbnails, event-local history and scoped send/reply tags": [
+        44.3, 45.7
+      ]
+    },
+    "tests/browser/entity-destinations.spec.mjs": {
+      "entity links open real repository content, history and responsive controls": [
+        5.2, 10.8
+      ]
+    },
+    "tests/browser/external-links.spec.mjs": {
+      "GitHub API errors offer prominent external opening before retry": [
+        4.8, 8
+      ],
+      "GitHub object identities use their intended artwork at one size": [
+        4.3, 7.2
+      ],
+      "GitHub owns status mappings while shared colors and accent stay independent": [
+        6.2, 13.3
+      ],
+      "PR Last updated remains relative in the built pane beside its checklist": [
+        3.9, 7.7
+      ],
+      "PR state, changes and branch links use shared roles in both themes": [
+        5.8, 10.2
+      ],
+      "message link context menus bypass the pane and return keyboard focus": [
+        5.6, 9.7
+      ],
+      "unhandled links open externally and disabling GitHub restores the fallback": [
+        9.8, 20.7
+      ]
+    },
+    "tests/browser/focus-navigation.spec.mjs": {
+      "companion overlays exclude the covered main focus targets": [6.8, 8],
+      "covered panes and notifications preserve focus and F6 recovery": [
+        5.2, 9
+      ],
+      "search, composer and split-pane keyboard focus preserve both drafts": [
+        7.8, 15.3
+      ]
+    },
+    "tests/browser/follow-up-queue.spec.mjs": {
+      "Solo queued rows survive reload and Send or Remove stays durable": [
+        16.2, 26.4
+      ],
+      "Solo queues follow-ups, keeps typing intact, and offers Send now": [
+        11.3, 20.4
+      ],
+      "an open queue recovers Remove when another window releases an abandoned handoff": [
+        7.9, 13.4
+      ],
+      "external removal pauses successors while earlier queued work still drains": [
+        8, 13.8
+      ],
+      "queue focus survives preview release and pointer removal": [7.8, 13.5],
+      "resuming saved Solo work › Don't resume preserves the queued rows without sending": [
+        10.3, 18.6
+      ],
+      "resuming saved Solo work › Resume continues the interrupted turn before draining the queue in order": [
+        10.9, 18
+      ],
+      "shared receipt inspection cannot delete another window's journal entry": [
+        1.9, 2.3
+      ]
+    },
+    "tests/browser/gallery-theme.spec.mjs": {
+      "an open image gallery follows host appearance while retaining its dark stage": [
+        17, 39.9
+      ],
+      "primary gallery keeps hidden media and keyboard navigation through thread retry": [
+        3.9, 8.3
+      ]
+    },
+    "tests/browser/gif-presentation.spec.mjs": {
+      "sent images and extensionless GIFs keep full frames with captions and multiple attachments": [
+        8.5, 10.3
+      ]
+    },
+    "tests/browser/gifs.spec.mjs": {
+      "GIF discovery retries after invalid response": [3.1, 7.6],
+      "GIF discovery retries after unsupported relay": [3.2, 7.6],
+      "GIF send roundtrip › chosen GIF sends as an image attachment instead of visible markdown body text": [
+        5.3, 6.9
+      ],
+      "GIF shortcut retry keeps keyboard focus through repeated discovery failure": [
+        3.1, 5.2
+      ],
+      "a GIF draft preview takes its own row so prose and the caret keep text height": [
+        3.2, 5.3
+      ],
+      "relay-backed GIF tab searches KLIPY and inserts URL-only media": [
+        8.7, 14.5
+      ]
+    },
+    "tests/browser/github-actions.spec.mjs": {
+      "PR action menu converts a pull request to draft after a pointer click": [
+        13, 13.6
+      ]
+    },
+    "tests/browser/github-body.spec.mjs": {
+      "PR media plays under the packaged media policy in a narrow GitHub panel": [
+        5.4, 20
+      ]
+    },
+    "tests/browser/github-checklist.spec.mjs": {
+      "a PR opens on its checklist, with failing checks linked and wrapping in a narrow pane": [
+        4, 9.1
+      ]
+    },
+    "tests/browser/github-metadata.spec.mjs": {
+      "PR metadata wraps into readable rows at enlarged text size": [3.7, 6.3]
+    },
+    "tests/browser/global-search.spec.mjs": {
+      "a resting pointer does not steal the typed selection when results move under it": [
+        2.3, 5
+      ],
+      "changing search scope returns focus to the input without clearing the query": [
+        2.7, 3.4
+      ],
+      "inline search exposes selected grid rows and hands focus to the destination setting": [
+        3.8, 6.5
+      ],
+      "keyboard selection follows its page while matching conversations arrive": [
+        3.1, 4.2
+      ],
+      "message search operators › combines author, channel and inclusive/exclusive day boundaries in the rendered flow": [
+        4.6, 8
+      ],
+      "public search destination › a rejected Join keeps a thread reader at its end, clear of the notice": [
+        4, 7.7
+      ],
+      "public search destination › finds an unjoined public channel by name, previews it, joins it and sends a message": [
+        4.7, 7
+      ],
+      "public search destination › focuses the composer when live membership arrives before the join request settles": [
+        4.2, 6.6
+      ],
+      "public search destination › opens a public nonmember exact reply without enabling writes or adding a sidebar row": [
+        5.9, 11
+      ],
+      "search arrows traverse the conversation action and recent activity, Enter opens and Escape restores focus": [
+        3.1, 5
+      ]
+    },
+    "tests/browser/goose-model-row.spec.mjs": {
+      "a long goose model name stays inside its Settings row": [0.7, 1.1]
+    },
+    "tests/browser/hidden-conversation-retry.spec.mjs": {
+      "hidden-conversation exhaustion exposes the existing action and manual retry recovers": [
+        8, 11.5
+      ]
+    },
+    "tests/browser/history-loading.spec.mjs": {
+      "automatic history starts before the top in a production broker session": [
+        10.5, 17.8
+      ],
+      "cancelled navigation keeps relay reads usable in the same document": [
+        6.9, 13.5
+      ],
+      "pages inside one second › a cancelled drag ends the hold": [8.5, 17.3],
+      "pages inside one second › a drag released before the page's rows measure ends the hold": [
+        8.3, 18.5
+      ],
+      "pages inside one second › a held pointer keeps its place after the page's reader row unmounts": [
+        8.6, 16.6
+      ],
+      "pages inside one second › a held pointer scrolls across the page without being pulled back": [
+        16.2, 24.3
+      ],
+      "pages inside one second › a live message after a failed older load is new": [
+        7.7, 14.6
+      ],
+      "pages inside one second › a live message in the loaded first second at 0ms is new": [
+        8, 16.2
+      ],
+      "pages inside one second › a live message in the loaded first second at 999ms is new": [
+        8, 17.4
+      ],
+      "pages inside one second › a press released outside history leaves no hold behind": [
+        8.8, 17.8
+      ],
+      "pages inside one second › a row in view grows downward 1200px above the page's reader": [
+        8.7, 19
+      ],
+      "pages inside one second › a row in view grows downward 600px above the page's reader": [
+        8.7, 19.1
+      ],
+      "pages inside one second › a row in view grows downward above the page's reader in equal-height rows": [
+        13, 24.7
+      ],
+      "pages inside one second › an older page among the loaded rows keeps a reader 1400px up": [
+        11.5, 15.6
+      ],
+      "pages inside one second › an older page among the loaded rows keeps a reader 250px up": [
+        10.3, 15.6
+      ],
+      "pages inside one second › input after the page lands starts from the reader's row": [
+        11.1, 17
+      ],
+      "quota retry without threshold-driven continuation › older-page quota errors require deliberate retry instead of more scrolling requests": [
+        12.7, 16.8
+      ],
+      "returning to the top continues history loading on wheel without a button": [
+        10.7, 17.1
+      ],
+      "saved top resumes automatic history on an upward gesture after remount": [
+        13.9, 21.5
+      ]
+    },
+    "tests/browser/history-prefix.spec.mjs": {
+      "older pages behind a retained first row preserve bottom following": [
+        3.2, 3.2
+      ],
+      "older pages behind a retained first row preserve reading and are not new arrivals": [
+        9.2, 10
+      ]
+    },
+    "tests/browser/huddles.spec.mjs": {
+      "DM requests share window and capsule controls without capturing audio until Join": [
+        5.6, 5.5
+      ],
+      "Huddle chat expands beside the call and stays separate from Live transcript": [
+        5.3, 5.2
+      ],
+      "accepting preserves both request avatars until connected, then moves them into the call": [
+        5.2, 4.8
+      ],
+      "active chat has a split Huddle menu for members and a join-path link": [
+        5.4, 6.9
+      ],
+      "an inactive call error does not suppress the next incoming call": [
+        3.6, 3.3
+      ],
+      "archived conversations do not offer a Huddle launcher": [2.8, 1.9],
+      "audio settings mirror device choices between compact and window controls": [
+        4.8, 4.7
+      ],
+      "capsule and companion presentation share mute and leave": [11.7, 12.7],
+      "connected Huddles keep compact controls beside the default window": [
+        6.1, 6.4
+      ],
+      "detached regular composer keeps failed drafts, uploads real file bytes and preserves duplicate attachments": [
+        10.9, 12.7
+      ],
+      "drawer resize before its view update keeps avatars stationary and unchanged window sizes remain toggleable": [
+        3.3, 3.4
+      ],
+      "huddle panel finishes its exit before resizing and can reverse a pending close": [
+        4.8, 5.4
+      ],
+      "incoming Huddles appear without joining and follow the viewed conversation": [
+        3.1, 3.7
+      ],
+      "incoming ring plays the Pow clip repeatedly and stops on decline": [
+        5.1, 5.5
+      ],
+      "lifecycle read errors preserve Join and later View for active calls": [
+        3.1, 3.4
+      ],
+      "live participant avatars enter on top and reflow without growing the shell": [
+        4.2, 5.3
+      ],
+      "long caller names keep compact request controls inside the shell": [
+        10.1, 6.8
+      ],
+      "pending companion attachment send survives a transcript tab switch": [
+        4.3, 4.4
+      ],
+      "portraits can be tossed within the stage and return home, with reduced motion immediate": [
+        5, 7
+      ],
+      "real capture emits 20ms frames and stops on mute and plugin disposal": [
+        4.3,
+        null
+      ],
+      "the header cancels a pending Huddle and ignores late connection events": [
+        6.8, 6.8
+      ],
+      "window Join and compact Decline operate on the same incoming request": [
+        13.2, 12.8
+      ]
+    },
+    "tests/browser/image-copy-focus.spec.mjs": {
+      "image copy feedback remains visible after pointer controls hide": [
+        17.4, 20.2
+      ],
+      "image copy keeps keyboard focus while clipboard write is pending": [
+        18, 20.7
+      ]
+    },
+    "tests/browser/image-scroll.spec.mjs": {
+      "blurhash visibility, decode swap, failure and retired source lifetimes": [
+        5.5, 5.3
+      ],
+      "decoded image resizing preserves reading and bottom following across remounts": [
+        14.7, 11.4
+      ],
+      "image navigation handles partial gestures and rejects blocked input": [
+        33.8, 48.1
+      ],
+      "original decode rejection retains blur and the next source still recovers": [
+        4.7, 4.1
+      ],
+      "original ready first cannot regress on late visibility; missing and invalid hashes still load": [
+        4.1, 4.3
+      ],
+      "unavailable canvas keeps the placeholder and original loading": [4.5, 4],
+      "unavailable visibility keeps the placeholder and original loading": [
+        4.6, 3.1
+      ]
+    },
+    "tests/browser/image-strip.spec.mjs": {
+      "mixed videos and photos stay in four tiles and all remain reachable": [
+        12.9, 15.3
+      ],
+      "posted image previews keep every image reachable beside documents": [
+        24, 26.9
+      ]
+    },
+    "tests/browser/image-zoom.spec.mjs": {
+      "clicking a gallery image zooms in and out without closing or navigating": [
+        12.4, 15.1
+      ]
+    },
+    "tests/browser/inbox-archive.spec.mjs": {
+      "DM archive delivery › ordinary DM activity reopens across reload without resurfacing old mentions": [
+        11, 23.4
+      ],
+      "Inbox archive survives reload and reopens Threads before fresh Mentions": [
+        14, 27.7
+      ],
+      "Inbox sending keeps the conversation open until manually archived": [
+        4.5, 7.7
+      ],
+      "Inbox status choices combine with attention filters and preserve them": [
+        8.7, 13.5
+      ],
+      "archiving the open conversation advances its tab, then closes it": [
+        4, 5.2
+      ],
+      "reply and fresh mention reopen their filters without replacing composer draft": [
+        5.3, 11.1
+      ],
+      "same-account windows reconcile filters and archive intent without reload": [
+        9.9, 16.7
+      ],
+      "saved grouped archive converges with unresolved Inbox evidence across reload": [
+        10.1, 17.9
+      ],
+      "selected row button advances and menu closes without losing the original draft": [
+        4.9, 9
+      ],
+      "unselected row Archive preserves the open editor and unread neighbor": [
+        5.1, 10.8
+      ]
+    },
+    "tests/browser/inbox-channel-archive.spec.mjs": {
+      "excludes a channel-archived conversation across reload without clearing local unread": [
+        11.1, 26.9
+      ]
+    },
+    "tests/browser/inbox-drafts.spec.mjs": {
+      "Draft and conversation previews share their plain layout and show real selected context": [
+        9.7, 16.9
+      ],
+      "coarse-pointer draft entry › waits for an editor tap when opening channel and thread drafts": [
+        6, 10.3
+      ],
+      "keyboard draft retirement returns to its row, a remaining row, then Inbox filters": [
+        8, 13.7
+      ],
+      "saved strict-window draft › opens the exact saved root with newest reply context and one composer": [
+        3.5, 7.6
+      ],
+      "saved strict-window draft › root loading retains a deliberate focus cancellation before the composer mounts": [
+        3.8, 8.7
+      ],
+      "saved strict-window draft › root loading retains the opening focus intent before the composer mounts": [
+        4.7, 6.6
+      ],
+      "two pages coordinate a selected draft through actual storage events": [
+        10.6, 19.8
+      ]
+    },
+    "tests/browser/inbox-edit.spec.mjs": {
+      "Inbox edits an owned reply in place and restores the reply draft": [
+        5.3, 12.5
+      ]
+    },
+    "tests/browser/inbox-live-read.spec.mjs": {
+      "a live reply in the open Inbox conversation is read while focus stays on its row": [
+        3.6, 6.1
+      ]
+    },
+    "tests/browser/inbox-parity.spec.mjs": {
+      "the same signed mention opens its profile in Inbox and Channels": [
+        6.1, 12.2
+      ]
+    },
+    "tests/browser/inbox-preview.spec.mjs": {
+      "hovering the sidebar Inbox row previews recent conversations and opens one directly": [
+        8.1, 10.2
+      ]
+    },
+    "tests/browser/inbox-reading.spec.mjs": {
+      "Inbox DM composer focus reads a visible peer arrival after dwell without reselecting": [
+        4.5, 7.6
+      ]
+    },
+    "tests/browser/inbox-refresh-layout.spec.mjs": {
+      "Inbox refresh status preserves layout at 1280px": [4, 6.8],
+      "Inbox refresh status preserves layout at 280px": [4, 5.1],
+      "narrow enlarged-text rows overlay Archive without erasing their labels": [
+        4.1, 10.9
+      ]
+    },
+    "tests/browser/inbox-restoration.spec.mjs": {
+      "Inbox restores its conversation after visiting Messages and another page": [
+        4.6, 11.8
+      ]
+    },
+    "tests/browser/inbox-strict.spec.mjs": {
+      "reveals an exact thread target after effect cleanup and setup replay": [
+        4.9, 7.4
+      ]
+    },
+    "tests/browser/inbox-tabs.spec.mjs": {
+      "Inbox rows open their conversation in one side tab beside the list": [
+        4.8, 9.9
+      ],
+      "an Inbox tab's menu opens its thread in its channel": [5.4, 9]
+    },
+    "tests/browser/inbox.spec.mjs": {
+      "Inbox Solo chat thread › a Solo chat thread reply opens its thread without a reply composer": [
+        3, 4.9
+      ],
+      "Inbox names after leaving a channel › names an author seen only in the Inbox": [
+        2.8, 5.5
+      ],
+      "Inbox opens the exact thread, shares read state, and fits the workspace": [
+        13, 28.4
+      ],
+      "a narrow DM tab keeps portalled media dismissal inside the tab": [
+        4.5, 8.8
+      ],
+      "narrow Inbox keeps a rejected read save and its captured Retry behind an open tab": [
+        3.9, 8.1
+      ],
+      "signed newest-first Inbox windows › reveals an older exact unread anchor in newest-first context": [
+        3.7, 7
+      ]
+    },
+    "tests/browser/initial-position.spec.mjs": {
+      "cold and warm sidebar entries start at bottom without scrolling": [
+        10.7, 18.1
+      ],
+      "deliberate reading anchor survives a session reload": [8.5, 13.8],
+      "near-fit channel with 1 mixed-height rows starts at bottom": [5.3, 7.3],
+      "near-fit channel with 3 mixed-height rows starts at bottom": [5, 7.9],
+      "near-fit channel with 5 mixed-height rows starts at bottom": [5.2, 7.5],
+      "near-fit channel with 7 mixed-height rows starts at bottom": [5.3, 7.6],
+      "near-fit channel with 9 mixed-height rows starts at bottom": [5.2, 7.4],
+      "short channel with tall messages opens at the actual bottom": [5.7, 9.3]
+    },
+    "tests/browser/large-channel-unread.spec.mjs": {
+      "opening a joined guest channel from search reads its welcome post": [
+        4.3, 7.6
+      ],
+      "opening a joined guest channel from sidebar reads its welcome post": [
+        3.8, 5.3
+      ]
+    },
+    "tests/browser/launch-home.spec.mjs": {
+      "Channels stays enabled despite saved disabled settings and has no disable action": [
+        5.9, 12.8
+      ],
+      "default navigation retries failed metadata and accepts a completed empty lookup": [
+        2.7, 6
+      ],
+      "exact destinations wait for classification (ordinary)": [1.9, 3.2],
+      "exact destinations wait for classification (unproven legacy Huddle)": [
+        1.7, 2.9
+      ],
+      "launch opens Messages without exposing Home across responsive navigation, search and history": [
+        5.8, 12.6
+      ],
+      "launch retains plugin-configuration recovery without Home": [2.7, 6.1]
+    },
+    "tests/browser/layout.spec.mjs": {
+      "A plugin owns the launcher and the reusable companion card across pages and disable": [
+        20.7, 37.1
+      ],
+      "Control+Home from a message link preserves native scroll ownership": [
+        4.6, 6.8
+      ],
+      "Page Up respects the raw diff auto scroll boundary": [5.3, 8.1],
+      "Page Up respects the raw diff contain scroll boundary": [4.1, 7.9],
+      "PageUp from a message button preserves native scroll ownership": [
+        4.6, 9.4
+      ],
+      "PageUp from a message link preserves native scroll ownership": [4.2, 8],
+      "Todos stacks beside threads and linked panels in either opening order": [
+        11.1, 21
+      ],
+      "a focused message stays mounted until focus leaves the timeline": [
+        2.9, 7.9
+      ],
+      "companion resize preserves the timeline anchor and both cards at narrow sizes": [
+        8.6, 15.4
+      ],
+      "composer stays docked while a cold channel loads": [3.2, 4.2],
+      "narrow link panels begin after the rendered sidebar": [3.6, 4.4],
+      "page overscroll is disabled while message history still scrolls": [
+        4.6, 9
+      ],
+      "panel resizing preserves bottom follow and the visible reading anchor": [
+        7.8, 15.8
+      ],
+      "panel restoration yields to a new wheel reading position": [7.5, 9.9],
+      "separate sidebar and workspace surfaces, real link panel and compact community navigation": [
+        17.9, 33
+      ],
+      "sidebar activity and compose routes restore content history and preserve companion intent": [
+        13.7, 19.4
+      ],
+      "simultaneous row shrink above and growth below preserve bottom follow": [
+        2.7, 6
+      ]
+    },
+    "tests/browser/live-status.spec.mjs": {
+      "held setup › clean pending setup stays in diagnostics and never flashes a warning during channel switches": [
+        4, 11
+      ],
+      "long recovery stays bounded above the composer at enlarged text size": [
+        6, 8
+      ],
+      "public preview recovery › keeps wrapped recovery clear of Join and restores keyboard focus to history": [
+        6.4, 9.5
+      ],
+      "public preview recovery › restores focus when empty preview catch-up fails before loading rows": [
+        7.9, 11
+      ],
+      "quota recovery for alpha stays quiet until attempts exhaust, then keeps retrying automatically until EOSE": [
+        15, 23
+      ],
+      "quota recovery for profiles stays quiet until attempts exhaust, then keeps retrying automatically until EOSE": [
+        14.9, 19.6
+      ]
+    },
+    "tests/browser/live.spec.mjs": {
+      "automatic recovery restores an empty paused roster without restarting healthy global subscriptions": [
+        12.8, 14.3
+      ],
+      "post-reconnect finite catch-up keeps paged history, cursor and reading position": [
+        12.6, 19.8
+      ],
+      "production WS → broker → mounted UI delivers messages and retries a paused catch-up without replacing healthy routes": [
+        16.7, 27
+      ]
+    },
+    "tests/browser/local-agent-activity.spec.mjs": {
+      "Stop in a channel response activity stops its work": [4.1, 6.9],
+      "Stop in a message's activity ends its local work quietly": [5.4, 8],
+      "finishing a channel response hands focus back only when it owns focus": [
+        5, 7.5
+      ],
+      "finishing activity retires keyboard controls without stealing focus: bubble": [
+        4.7, 6.3
+      ],
+      "finishing activity retires keyboard controls without stealing focus: composer": [
+        5, 7.1
+      ],
+      "finishing activity retires keyboard controls without stealing focus: popup": [
+        5, 8.2
+      ],
+      "local agent receipt, work and failure agree across sidebar, thread and exact message": [
+        8.9, 13.1
+      ],
+      "one thread summary retains reply navigation and work on another reply": [
+        3.8, 5.8
+      ],
+      "opens an active message's empty thread without losing its activity preview": [
+        6.1, 8.6
+      ],
+      "the published-activity tab shows turns its agent published": [4.7, 6.2]
+    },
+    "tests/browser/media-controls.spec.mjs": {
+      "file previews keep dark stage colors when host appearance changes": [
+        5.1, 9.8
+      ],
+      "image review keeps its header and controls usable across panel widths": [
+        5.4, 7.1
+      ],
+      "media popovers support hover and keyboard without stealing playback focus": [
+        8.2, 10.4
+      ],
+      "mute glides the volume knob and keyboard changes stay immediate": [
+        5.2, 6.3
+      ],
+      "narrow image comments slide downward while retaining their full width": [
+        3.9, 5.4
+      ],
+      "narrow video comments slide downward while retaining their full width": [
+        6.1, 5.9
+      ],
+      "narrow video thumbnails keep play clear of the progress controls": [
+        3.7, 5
+      ],
+      "timeline hover marks the click position without seeking until clicked": [
+        4.7, 5
+      ],
+      "touch volume controls › opening and dismissing volume preserves sound until an explicit mute": [
+        5.5, 5.7
+      ],
+      "unavailable media keeps its explanation readable and recovery visible": [
+        3.7, 3.2
+      ],
+      "video review keeps its header and controls usable across panel widths": [
+        7.9, 8.6
+      ]
+    },
+    "tests/browser/membership.spec.mjs": {
+      "Channels renders grouped history and live membership without turning activity into messages": [
+        6.8, 18
+      ],
+      "a join burst longer than a page shows the newest messages first, then its joins": [
+        9.9, 20.1
+      ],
+      "a restored membership anchor follows delayed group growth through resize and revisit": [
+        7.9, 14.7
+      ],
+      "one keyboard scroll leaves bottom follow and live membership preserves the reader": [
+        7.2, 15
+      ]
+    },
+    "tests/browser/mention-edit.spec.mjs": {
+      "editing selected name plus pasting same name cannot transfer notification to pasted prose": [
+        8.8, 10
+      ],
+      "focus during the first edit after send preserves the advanced native caret": [
+        7.2, 6.6
+      ],
+      "typing after an unchanged agent prefill does not consume a stale caret command": [
+        6.4, 6.9
+      ]
+    },
+    "tests/browser/mention-rules.spec.mjs": {
+      "Space commits a unique exact identity but leaves namesakes as prose": [
+        10.9, 9.9
+      ],
+      "a DM sends outside people as references without asking": [6.8, 6.1],
+      "an open list preserves keys and highlight when membership is revoked": [
+        6, 5.7
+      ],
+      "outside people survive Close and send reference-only with Send anyway": [
+        7.7, 9.8
+      ]
+    },
+    "tests/browser/mention-selection.spec.mjs": {
+      "a selection that starts at a mention paints only its own range (a label with a space)": [
+        8, 8.3
+      ],
+      "a selection that starts at a mention paints only its own range (one-word labels)": [
+        8.1, 8.1
+      ],
+      "composer code and recipient fills remain distinct in both themes": [
+        9.8, 10.7
+      ],
+      "keyboard and pointer selection cross a mention as one unit in both directions (a label with a space)": [
+        9.1, 8.5
+      ],
+      "keyboard and pointer selection cross a mention as one unit in both directions (one-word labels)": [
+        8.5, 9.1
+      ],
+      "selection remains visible on outgoing bubbles and their neutral content": [
+        5.9, 10.1
+      ]
+    },
+    "tests/browser/mentions.spec.mjs": {
+      "actual composer selects namesakes by exact key, publishes channel/reply tags, and asks before mentioning removed members": [
+        16.7, 14.5
+      ],
+      "namesake recipient qualifiers remain visible on touch after live name changes": [
+        12.1, 6.7
+      ],
+      "selected mentions inside code remain visible through draft restore and channel/reply publication": [
+        11.6, 8.8
+      ],
+      "settings-enabled mentions fixture renders the composer and preference": [
+        9.4, 6.2
+      ]
+    },
+    "tests/browser/menu-dismiss.spec.mjs": {
+      "closing a menu keeps focus where the user moved it": [2.5, 10.7],
+      "dismissing a community menu restores pointer and keyboard focus within the picker": [
+        3, 8.2
+      ]
+    },
+    "tests/browser/message-actions-floating.spec.mjs": {
+      "actions clear a short received message's name and stay reachable beside it": [
+        5.3, 8.5
+      ],
+      "actions stay above own bubbles across pane sizes": [12.4, 18.8],
+      "actions stay above received bubbles across pane sizes": [12.3, 21.3],
+      "captioned own attachments keep their actions reachable": [6.5, 13.8],
+      "captioned received attachments keep their actions reachable": [7, 14],
+      "compact timeline actions slide under the top edge, track scrolling and preserve keyboard order": [
+        5.7, 8.8
+      ],
+      "keyboard search covers a toolbar under the pointer and restores its actions": [
+        3.3, 10.6
+      ],
+      "long bubbles expand to 32px before the opposite avatar": [3.8, 7.1],
+      "menus keep their actions showing; pickers and dialogs cover them": [
+        5.1, 18.9
+      ],
+      "profile menus and composer pickers keep message hover actions out of the way": [
+        7.3, 16.3
+      ],
+      "thread actions and growing reactions paint beyond the scroller without moving text": [
+        5.2, 12.6
+      ]
+    },
+    "tests/browser/message-actions.spec.mjs": {
+      "DM actions open the correct reply thread": [5, 13.1],
+      "Tab enters untouched continuation actions backward without an extra stop": [
+        3.4, 6.8
+      ],
+      "Tab enters untouched continuation actions forward without an extra stop": [
+        3.2, 6.9
+      ],
+      "coordination keeps its first line visible throughout expansion and collapse": [
+        4.6, 12.6
+      ],
+      "copied Buzz links and the desktop alias reveal their destination from a conversation": [
+        4.2, 10.8
+      ],
+      "historical single-day DMs and their threads expose dates without hover": [
+        3.3, 6.9
+      ],
+      "live grouped appends preserve avatar focus in channel and thread": [
+        5.5, 7.1
+      ],
+      "message actions reveal, copy, restore focus and reply across responsive layouts": [
+        11, 37.4
+      ],
+      "narrow timeline continuation actions never cover prose or move adjacent rows": [
+        4.6, 8.8
+      ],
+      "touch › opens the message menu without hover": [2.8, 5.1]
+    },
+    "tests/browser/message-avatar-stacking.spec.mjs": {
+      "later reply avatars stack above earlier avatars": [3.9, 5.8]
+    },
+    "tests/browser/message-content-polish.spec.mjs": {
+      "file anchors and native download buttons stay readable and keyboard reachable": [
+        4.9, 6.9
+      ],
+      "long links wrap inside their bubble in a narrow pane": [2.6, 3.3],
+      "message references and inset surfaces remain legible in dark": [8, 11.1],
+      "message references and inset surfaces remain legible in light": [
+        7.9, 11.9
+      ],
+      "reactions under an unboxed own table stay contained and readable": [
+        8.3, 8.6
+      ],
+      "standalone table and diff hover stays transparent in dark": [2.8, 3.5],
+      "standalone table and diff hover stays transparent in light": [3.5, 3.2]
+    },
+    "tests/browser/message-delivery-polish.spec.mjs": {
+      "app delivery › delivery Retry fits the app at enlarged text sizes": [
+        17.3, 26.1
+      ],
+      "delivery Retry explains its state on hover and focus": [7.6, 27.5]
+    },
+    "tests/browser/message-edit.spec.mjs": {
+      "Cmd+Up edits in the existing composer and restores native focus, draft history and attachments": [
+        15.9, 12.9
+      ]
+    },
+    "tests/browser/message-files-polish.spec.mjs": {
+      "files message presentation": [3.8, 6]
+    },
+    "tests/browser/message-gallery-polish.spec.mjs": {
+      "layout message presentation": [4.5, 6.2]
+    },
+    "tests/browser/message-management.spec.mjs": {
+      "DM menus edit own messages but never expose destructive actions for peers": [
+        4.6, 12.5
+      ],
+      "deleting a thread reply returns focus to the surviving thread composer": [
+        5.2, 12.5
+      ],
+      "manage a channel message, peer unread state, and its thread": [
+        11.2, 26.8
+      ],
+      "saving an attachment caption preserves its original metadata through the broker": [
+        3.8, 10.4
+      ],
+      "thread media preserves its tab and draft while modal Escape restores focus": [
+        6.3, 18.3
+      ]
+    },
+    "tests/browser/message-navigation.spec.mjs": {
+      "an accessible exact reply stays visible without its root or a thread composer": [
+        3.9, 8.2
+      ],
+      "deleting the selected reply keeps valid thread context and exposes a local unavailable state": [
+        5.7, 7.7
+      ],
+      "direct ancestry › exact direct reply reveals before slow surrounding traversal and preserves moved focus afterwards": [
+        5.8, 10.9
+      ],
+      "direct ancestry › exact direct reply reveals before slow surrounding traversal and retains target focus afterwards": [
+        5.7, 12.6
+      ],
+      "exact reveal uses ordinary dwell rather than marking read at open": [
+        10.8, 12.3
+      ],
+      "exact thread navigation leaves the ordinary channel reading anchor unchanged": [
+        5.5, 7.7
+      ],
+      "fractional row geometry › bottom following keeps the final row fully visible after fractional reflow": [
+        3, 3.5
+      ],
+      "late ancestry › exact nested reply reveals before slow surrounding traversal and preserves moved focus afterwards": [
+        4.9, 7.6
+      ],
+      "late ancestry › exact nested reply reveals before slow surrounding traversal and retains target focus afterwards": [
+        5.6, 7.4
+      ],
+      "live child-count changes preserve reply state and deliberately moved focus": [
+        6.6, 8.3
+      ],
+      "live child-count changes preserve reply state and target focus": [
+        6.7, 8.4
+      ],
+      "loaded virtual rows reveal per attempt without thread reads or live-update focus theft": [
+        8.4, 19
+      ],
+      "old root and reply beyond the first thread page open exactly; reclick and Back reveal again": [
+        13.3, 50.8
+      ],
+      "opening another message in the same thread keeps the reply editor mounted": [
+        7.1, 9
+      ],
+      "post-success membership loss removes the thread and live updates do not snap it back to the target": [
+        8.1, 13.2
+      ],
+      "same-scope replacement waits for fresh membership before reopening the exact reply": [
+        6.2, 7.7
+      ],
+      "same-scope replacement waits for fresh membership before reopening the exact root": [
+        6.1, 7.6
+      ],
+      "settings blocks reading and focus in a retained thread": [13.8, 23.9],
+      "settings suppresses revealed spoiler painting and restores the retained thread": [
+        7.3, 17.4
+      ],
+      "stream repair retains thread rows, reading position and composer focus after exact opening": [
+        7.9, 8.9
+      ],
+      "superseding a held exact read cancels it; a late response cannot steal focus or complete the next visit": [
+        4, 5.2
+      ],
+      "unknown target fails without channel-head success and retries in the same visit": [
+        4.1, 5
+      ]
+    },
+    "tests/browser/message-overlays.spec.mjs": {
+      "a grouped reaction toggles my contribution while its preview is open": [
+        6.9, 4.1
+      ],
+      "clicking a grouped reaction during preview handoff toggles it": [
+        4.9, 3.4
+      ],
+      "comment actions revealed while the drawer slides realign when it settles": [
+        4.6, 4.3
+      ],
+      "destination previews yield to modals they are outside": [4.2, 4],
+      "enlarged media review reflows comments and keeps playback controls reachable": [
+        7.6, 9.1
+      ],
+      "focused actions follow sibling growth and shrinkage without scrolling": [
+        4, 3.1
+      ],
+      "reaction previews and the inline picker do not reveal message hover actions": [
+        6.7, 7
+      ],
+      "resolved chip previews fit narrow, intermediate and wide themed views": [
+        5.4, 3.8
+      ],
+      "unavailable dark media review keeps Retry readable in a light host": [
+        3.4, 2.8
+      ],
+      "video speed options escape the thread and restore focus after selection and Escape": [
+        7.1, 8.9
+      ]
+    },
+    "tests/browser/message-selection.spec.mjs": {
+      "a selection spanning rows copies only the visible conversation": [
+        3.2, 5.9
+      ]
+    },
+    "tests/browser/messages.spec.mjs": {
+      "a thread's long conversation name wraps inside its pane and opens from the keyboard": [
+        6.8, 6
+      ],
+      "exact reply media keeps its selected attachment and canonical thread": [
+        8.8, 8.8
+      ],
+      "inline video controls follow playback, hover and keyboard focus": [
+        13.7, 9.3
+      ],
+      "media review chrome follows host colors while stage controls stay dark": [
+        12, 9.2
+      ],
+      "media review completions stay visible and preserve modal keyboard ownership": [
+        11.4, 11.7
+      ],
+      "media review hands off the thread draft, contains focus and keeps narrow controls reachable": [
+        11.2, 9
+      ],
+      "media review stage contains portrait video and image media": [15.8, 8.9],
+      "message tables keep their scrollbar inside the row across resizes and edits": [
+        null,
+        6.4
+      ],
+      "shared thread UI auto-loads, follows live replies, retries and isolates retargeted drafts": [
+        23.8, 28.4
+      ]
+    },
+    "tests/browser/mocked-native-ipc.spec.mjs": {
+      "mocked native IPC admission and uncertain delivery survive page reload without the broker": [
+        8, 7.1
+      ]
+    },
+    "tests/browser/model-picker-row.spec.mjs": {
+      "a Model preference row aligns its trigger with sibling rows": [0.5, 0.7]
+    },
+    "tests/browser/navigation-authority.spec.mjs": {
+      "a static pending page retains authority across a relay reconnect": [
+        2.9, 3.9
+      ],
+      "provider reactivation presents the original pending visit with fresh authority": [
+        2.8, 3.9
+      ],
+      "removed provider cannot complete its old pending request": [2.3, 3.7],
+      "removed provider cannot resolve its old pending request": [2.2, 3.4],
+      "removed provider rejects complete inside the registration notification before React cleanup": [
+        2.4, 3.4
+      ],
+      "removed provider rejects resolve inside the registration notification before React cleanup": [
+        2.8, 4.1
+      ],
+      "replaced session cannot complete its old pending request": [2.3, 3.6],
+      "replaced session cannot resolve its old pending request": [2.6, 3.3],
+      "session reactivation presents the original pending visit with fresh authority": [
+        3.1, 4.4
+      ]
+    },
+    "tests/browser/navigation-boundaries.spec.mjs": {
+      "Messages default resolution returns opened to cold and warm callers without an extra visit": [
+        3.6, 5.6
+      ],
+      "cold Settings provider waits for its plugin activation": [2.2, 4],
+      "cold destination waits for its enabled provider to activate": [3.5, 5.2],
+      "native Alt arrows preserve composer editing; deliberate history shortcuts navigate": [
+        5, 7.7
+      ],
+      "native Settings traversal retains a dirty Profile behind an unavailable provider": [
+        4.8, 7.5
+      ]
+    },
+    "tests/browser/navigation-dm-move.spec.mjs": {
+      "Move conversation saves a DM in a section and restores it there after reload": [
+        8.5, 11.4
+      ]
+    },
+    "tests/browser/navigation-group-icons.spec.mjs": {
+      "group icons resolve custom media without overlapping labels, and the move dialog fits narrow widths": [
+        4.5, 7.9
+      ],
+      "section labels fade on overflow and recover when widened": [4.4, 10.3]
+    },
+    "tests/browser/navigation-group-order.spec.mjs": {
+      "dragging a group header moves the whole group, keeps its state, and persists": [
+        7.8, 15.9
+      ],
+      "group landing edge follows list order when text size changes during a drag": [
+        2.8, 5
+      ],
+      "group move recovery keeps keyboard focus on the group header": [
+        3.4, 8.3
+      ],
+      "saved groups accept gap drops in both directions": [5.7, 10.8]
+    },
+    "tests/browser/navigation-group-rename.spec.mjs": {
+      "renaming a saved group from its menu persists and keeps its channels": [
+        5.4, 9.4
+      ]
+    },
+    "tests/browser/navigation-groups.spec.mjs": {
+      "Create new retains its draft when preferences fail before submission and recovers in place": [
+        12.5, 11.4
+      ],
+      "Create new supports cancel, moves before publication, and retries the same section after partial failure": [
+        16.6, 15
+      ],
+      "Move and Create stay available on Workflows": [7.9, 6.1],
+      "Workflows → Messages keeps saved groups, selected channel, and a visible entry's scroll on every frame without re-decoding": [
+        12.2, 9.3
+      ],
+      "a rejected drag into collapsed Starred rolls back and retries the same move": [
+        7, 9.5
+      ],
+      "dismissing a failed move restores keyboard focus to its placement or a surviving row": [
+        6.4, 11
+      ],
+      "dragging a channel between a group and Channels saves, reloads, and rolls back like the row menu": [
+        10.8, 15.5
+      ],
+      "dragging keeps empty Starred hidden and visible Starred moves save and reload": [
+        13.6, 19.9
+      ],
+      "optimistic Star moves close the menu before the write, roll back with visible retry, and remove to Channels after reload": [
+        12.9, 15.9
+      ],
+      "row menu moves and removes a channel optimistically, retaining keyboard navigation and confirmed reload": [
+        13.9, 23.7
+      ]
+    },
+    "tests/browser/navigation-join.spec.mjs": {
+      "successful community setup navigates from Personal space Messages and restores both visits": [
+        8.2, 16
+      ],
+      "successful community setup navigates from Primary Messages and restores both visits": [
+        8.9, 16.8
+      ]
+    },
+    "tests/browser/navigation-leak.spec.mjs": {
+      "Settings → Close releases the unmounted Settings DOM": [7.2, null]
+    },
+    "tests/browser/navigation-lifecycle.spec.mjs": {
+      "Local Settings retain plugin recovery without blocking Profile and Appearance": [
+        2.9, 13.8
+      ],
+      "a healthy same-page reclick preserves its draft and visit identity": [
+        2.9, 4.5
+      ],
+      "page render failure › a late failure can be retried within the same visit": [
+        3, 5.8
+      ],
+      "page render failure › an initial render failure never acknowledges opened": [
+        2.8, 4.5
+      ]
+    },
+    "tests/browser/navigation-mute-read.spec.mjs": {
+      "channel menu mute/read persist without selecting the row; failed mute remains retryable": [
+        24.6, 34.6
+      ],
+      "muted bell stays visible while pressing an unselected channel": [5, 11.2]
+    },
+    "tests/browser/navigation-repairs.spec.mjs": {
+      "An edited navigation hash opens its destination and survives reload and Back": [
+        4, 10.7
+      ],
+      "Back restores Personal space without inheriting the active community": [
+        2.7, 6.5
+      ],
+      "Skip to content focuses main without adding a visit or dropping Back": [
+        3, 6.2
+      ],
+      "a refused account is explained as access, in place and in the sidebar": [
+        1.5, 2.7
+      ],
+      "keyboard Retry hands off focus while reconnecting a failed Messages tab opening": [
+        2.2, 3.5
+      ],
+      "keyboard Retry keeps focus when the retry fails in place": [1.7, 2.7],
+      "malformed navigation addresses fail explicitly on cold and warm entry": [
+        5.8, 9
+      ],
+      "page status :has() rules keep :has() on their subject": [2.6, 5.3]
+    },
+    "tests/browser/navigation-row-menu.spec.mjs": {
+      "channel context menus retain keyboard focus without write capabilities": [
+        3, 6.7
+      ],
+      "menu placement lifetime › does not resurrect a menu after a preference refresh moves its row away and back": [
+        4.2, 11.5
+      ]
+    },
+    "tests/browser/navigation-scroll-intent.spec.mjs": {
+      "delayed sidebar restoration respects returned to top viewport (cached startup: false)": [
+        9.9, 19.2
+      ],
+      "delayed sidebar restoration respects returned to top viewport (cached startup: true)": [
+        9.8, 23.3
+      ],
+      "delayed sidebar restoration respects scroll event pending viewport (cached startup: false)": [
+        10.8, 21
+      ],
+      "delayed sidebar restoration respects scroll event pending viewport (cached startup: true)": [
+        9.9, 22
+      ],
+      "delayed sidebar restoration respects scrolled viewport (cached startup: false)": [
+        10.1, 21.4
+      ],
+      "delayed sidebar restoration respects scrolled viewport (cached startup: true)": [
+        10.8, 20.2
+      ],
+      "delayed sidebar restoration respects untouched viewport (cached startup: false)": [
+        10, 20.4
+      ],
+      "delayed sidebar restoration respects untouched viewport (cached startup: true)": [
+        10.6, 20.9
+      ]
+    },
+    "tests/browser/navigation-selection.spec.mjs": {
+      "context menus appear immediately and retain their source highlight through dismissal": [
+        5.1, 15.7
+      ],
+      "navigation menus do not highlight labels while message text and editors remain selectable": [
+        5.2, 15.2
+      ]
+    },
+    "tests/browser/navigation-sidebar.spec.mjs": {
+      "Channels opens the shared creation dialog": [12.3, 26.9],
+      "Messages reselects the latest sidebar channel and keyboard page search focuses main": [
+        5.6, 7.2
+      ],
+      "a reveal while the narrow drawer is closed runs when the drawer opens": [
+        5.9, 11.7
+      ],
+      "channel navigation preserves sidebar DOM and group state": [5.4, 12.6],
+      "channel sidebar resizes from the full gutter and persists": [8.9, 20.1],
+      "community picker stays available across pages and restores focus after joining": [
+        8.5, 11.2
+      ],
+      "hovering a sidebar row inks only that row, not its siblings": [
+        4.9, 10.4
+      ],
+      "invalid saved sidebar fields fall back": [7.7, 9.8],
+      "navigation reveals the current sidebar entry without moving a visible one": [
+        7.5, 16.6
+      ],
+      "rail loads relay-owned image icons for inactive communities without acquiring sessions": [
+        4.6, 6.2
+      ],
+      "scope indicator › scope selection follows sidebar resize at normal and enlarged text": [
+        6, 16.4
+      ],
+      "segmented selections slide but window resizing follows the selected tab immediately": [
+        5.8, 8
+      ],
+      "sidebar state survives Messages → Back/Forward → Messages": [6.6, 8.8],
+      "sidebar state survives Messages → Settings → Messages": [5.9, 7.9],
+      "sidebar state survives Messages → Workflows → Messages": [6.5, 9.4],
+      "sidebar view state does not leak across communities": [7.8, 10]
+    },
+    "tests/browser/navigation-sorting.spec.mjs": {
+      "cold sidebar presentation › reveals saved placement and Recent together without blocking the conversation": [
+        1.8, 3.9
+      ],
+      "distant channel motion › fades a distant jump at its endpoints without a long slide": [
+        3.6, 6.2
+      ],
+      "keeps a stationary selected row visible while its neighbors exchange places": [
+        3.7, 8.8
+      ],
+      "live reduced-motion preference › updates an already-mounted list when reduced motion changes": [
+        3.9, 6.3
+      ],
+      "live sidebar motion: no-preference › slides a live reorder without replacing the focused row": [
+        3.4, 8.4
+      ],
+      "live sidebar motion: reduce › slides a live reorder without replacing the focused row": [
+        2.9, 5
+      ],
+      "membership changes after layout changes › keeps retained rows still and fades additions/removals after Solo to Team": [
+        5.1, 11.3
+      ],
+      "membership changes after layout changes › keeps retained rows still and fades additions/removals after interface text size": [
+        4.5, 12.9
+      ],
+      "nearby motion after layout changes › starts a nearby reorder at the live positions after Solo to Team": [
+        3.8, 7
+      ],
+      "nearby motion after layout changes › starts a nearby reorder at the live positions after interface text size": [
+        3.6, 7.1
+      ],
+      "retargets an unfinished slide without jumping or losing focus": [
+        4.6, 7.7
+      ],
+      "retires Recent failures on A–Z and recovers selected ordering on retry": [
+        5, 16.5
+      ],
+      "section sort applies immediately, rolls back on failure, and persists retry independently": [
+        8.2, 15.4
+      ],
+      "sorting with lifecycle visibility › archive and DM hide preserve Recent ordering through reload": [
+        9.5, 21.1
+      ]
+    },
+    "tests/browser/navigation-thread-history.spec.mjs": {
+      " › a covered conversation keeps its reading position through a resize and a new message": [
+        6.6, 12.5
+      ],
+      "Back and Forward return to a root-linked thread's reading place; a fresh link reveals it again": [
+        10, 23.8
+      ],
+      "Back restores each thread visit before the previous channel": [
+        6.8, 11.6
+      ],
+      "a wrong link hint preserves both open thread editors and selects the verified destination": [
+        5.9, 12.5
+      ],
+      "choosing a thread tab resumes typing where its reply was left": [
+        5, 10.9
+      ],
+      "closing a linked thread with native Close returns focus to its link in the side pane": [
+        4.8, 8.8
+      ],
+      "closing a linked thread with the close button returns focus to its link in the side pane": [
+        4.9, 9.7
+      ],
+      "closing a main-pane thread with Escape returns keyboard focus to its opener": [
+        4.4, 6.8
+      ],
+      "closing an active thread highlights its visible channel origin without scrolling": [
+        9.2, 12.1
+      ],
+      "consecutive native Close requests close each main-pane thread, then return focus to its opener": [
+        5.4, 8.4
+      ],
+      "consecutive native Close requests close each side thread, then return focus to its opener": [
+        5, 9
+      ],
+      "dragging thread tabs reorders and crosses panes without losing the reply": [
+        7, 17.7
+      ],
+      "header openings keep focus while a main-pane thread is retained": [
+        5.6, 12.7
+      ],
+      "ordinary reply-count opening finishes at the bottom after held pagination": [
+        6.1, 13.1
+      ],
+      "ordinary reply-count opening preserves intervening reading after held pagination": [
+        9.3, 16.1
+      ],
+      "thread dragging respects narrow overlay": [6.1, 8],
+      "thread dragging respects same-channel history": [6.2, 10.8]
+    },
+    "tests/browser/navigation.spec.mjs": {
+      "Agents provider Back is reversible; Close skips its visit and returns to Agents": [
+        5.6, 13.5
+      ],
+      "Settings Back is reversible; explicit Close retires every section visit": [
+        6.7, 21
+      ],
+      "Settings provider closes before its parent and retires only its own return path": [
+        7.7, 17.4
+      ],
+      "a collapsible sidebar yields to narrow drawer styles during resize": [
+        3.3, 5.2
+      ],
+      "a retired contributed Settings destination fails promptly on Back": [
+        5.2, 12.4
+      ],
+      "channel visits, toolbar, browser traversal and Settings sections share one history": [
+        8.1, 13.1
+      ]
+    },
+    "tests/browser/nested-replies.spec.mjs": {
+      "an exact linked reply stays readable when its parent is outside loaded history": [
+        3.7, 7.2
+      ],
+      "branch hooks land on each reply's avatar across sides and row shapes": [
+        8.7, 34.3
+      ],
+      "crowded capped branches expand once with readable actions at 1024": [
+        17.2, 39.2
+      ],
+      "crowded capped branches expand once with readable actions at 1280": [
+        17.5, 38.4
+      ],
+      "crowded capped branches expand once with readable actions at 1492": [
+        18.5, 42.6
+      ],
+      "crowded capped branches expand once with readable actions at 390": [
+        17, 28.9
+      ],
+      "crowded capped branches expand once with readable actions at 700": [
+        17.8, 34.7
+      ],
+      "nested replies send, stay open, and reveal through links at readable panel widths": [
+        26.8, 47.5
+      ],
+      "touch branch controls › expands with a visible touch target and removes it once open": [
+        5, 7.8
+      ]
+    },
+    "tests/browser/new-menu-layout.spec.mjs": {
+      "New remains clickable beside enlarged navigation filters": [3.5, 4.4]
+    },
+    "tests/browser/new-message-boundary.spec.mjs": {
+      "keeps the first unread boundary stable through reading and live appends": [
+        15.5, 35
+      ],
+      "pending entry membership › does not turn a backdated live arrival into an entry boundary": [
+        3.9, 7.7
+      ],
+      "restores the boundary message at its saved offset with warm virtualized geometry": [
+        4.1, 6.9
+      ]
+    },
+    "tests/browser/new-message.spec.mjs": {
+      "a send finishing behind Settings keeps Settings and its unsaved edit": [
+        7.2, 13.7
+      ],
+      "empty compose, keyboard selection, pagination, removal effects, retry, then confirmed normal timeline": [
+        17.5, 37.9
+      ],
+      "existing DM previews inline and opens its exact thread": [5.2, 12.8],
+      "large recipient directory › paging past 100 preserves the mounted row and scroll position": [
+        13.6, 18.5
+      ],
+      "large recipient directory › reopens a bounded list and reaches offscreen recipients by keyboard and search": [
+        14.3, 20.2
+      ],
+      "profile Message opens a fresh DM and restores a hidden one": [11.9, 22.2]
+    },
+    "tests/browser/notification-settings.spec.mjs": {
+      "Notifications keeps settings separated and button labels contained at supported interface sizes": [
+        6.4, 12.2
+      ]
+    },
+    "tests/browser/notifications.spec.mjs": {
+      "a fully visible incoming row stays quiet without publishing read intent": [
+        6.2, 10.3
+      ],
+      "an installed producer shares policy and OS click navigation, including after producer disable": [
+        4.6, 8.6
+      ],
+      "asynchronous browser display failure reaches Settings once without redelivery": [
+        4.3, 6.6
+      ],
+      "explicit Allow releases the first fresh alert; master off preserves categories": [
+        4.8, 8.4
+      ],
+      "keyboard permission check keeps focus and geometry while busy": [
+        4.4, 9.2
+      ],
+      "live mention notification focuses its exact row in the normal conversation, then ordinary dwell reads it": [
+        11.6, 16.2
+      ],
+      "live thread reply notification focuses its exact row in the normal conversation, then ordinary dwell reads it": [
+        10.6, 15.5
+      ],
+      "real live traffic alerts once; replay/reload stay quiet and choices persist": [
+        6.4, 11
+      ],
+      "workflow ownership stays quiet while an explicit owner mention alerts": [
+        3.9, 7.2
+      ]
+    },
+    "tests/browser/outbox-storage.spec.mjs": {
+      "forgetting a stale receipt relinquishes its journal deletion ownership": [
+        0.2, 0.3
+      ],
+      "receipt adoption serializes queue consumption with dismissal (adopt-first)": [
+        0.6, 0.3
+      ],
+      "receipt adoption serializes queue consumption with dismissal (dismiss-first)": [
+        0.6, 0.4
+      ],
+      "receipt adoption serializes queue consumption with dismissal (peer-accepted)": [
+        0.5, 0.4
+      ]
+    },
+    "tests/browser/own-video.spec.mjs": {
+      "a stacked own video keeps its size without a byline": [3.4, 4.6]
+    },
+    "tests/browser/owned-agent-message-deletion.spec.mjs": {
+      "the verified owner confirms a NIP-09 delete for an agent message": [
+        4.5, 7.4
+      ]
+    },
+    "tests/browser/page-placement.spec.mjs": {
+      "a page sidebar uses the shell slot, generic toggle, theme, and narrow drawer": [
+        5.4, 10.1
+      ],
+      "failed page sidebar recovery › recovery navigation scrolls at short heights and enlarged text": [
+        4, 8.3
+      ],
+      "header pages remain reachable without overlap through scale and resize": [
+        6.8, 15.8
+      ],
+      "shared navigation preserves drafts and history across Solo and header pages": [
+        12.9, 33.4
+      ]
+    },
+    "tests/browser/pairing.spec.mjs": {
+      "Personal space pairs with a manually entered community address": [
+        3.8, 6.8
+      ],
+      "comparison code replaces QR, preserves leading zeros, and waits for phone completion": [
+        5.5, 7.9
+      ],
+      "expired QR refreshes automatically and leaving stops it": [4.8, 6.9],
+      "leaving during native setup cancels its late result": [4.2, 6.5],
+      "pairing positions stay fixed across states": [7.5, 8.6],
+      "phone confirmation, retry after expiry, and leaving Settings cancel the session": [
+        5.8, 7.5
+      ],
+      "reduced motion removes QR animation styles": [3.9, 6.1],
+      "reloading a contributed Settings route waits for its plugin to activate": [
+        5.9, 7.4
+      ]
+    },
+    "tests/browser/panel-motion.spec.mjs": {
+      "Messages main and secondary panels resize without resetting content": [
+        3.7, 6.4
+      ],
+      "Messages split opens and closes continuously and reverses without losing content": [
+        3.3, 6
+      ],
+      "Workflows main and secondary panels resize without resetting content": [
+        3.5, 5.9
+      ],
+      "Workflows split opens and closes continuously and reverses without losing content": [
+        3.6, 6.2
+      ],
+      "joined header seams, drag feedback, and pointer-only overlay motion": [
+        4.3, 5.4
+      ]
+    },
+    "tests/browser/plugin-cli-reload.spec.mjs": {
+      "CLI reload replaces an enabled folder plugin without a Settings action": [
+        11.3, 9.4
+      ]
+    },
+    "tests/browser/plugin-defaults.spec.mjs": {
+      "Bestie opts in without changing the other bundled defaults and survives reload": [
+        9.8, 21.5
+      ],
+      "Membership action removes and restores the working Invite destination": [
+        10.2, 23.3
+      ],
+      "an existing profile keeps Reminders and Workflows until deliberately disabled": [
+        8, 15.7
+      ],
+      "an untouched client profile keeps both plugins on across reopen": [
+        9.9, 15.9
+      ],
+      "cold app startup pins both plugins off across a second launch": [2.6, 3]
+    },
+    "tests/browser/plugin-import.spec.mjs": {
+      "Add keeps a rejected install reachable and retries the same preview": [
+        9.7, 21.2
+      ],
+      "Retry recovers installed activation without installing or enabling again": [
+        4.4, 9.3
+      ],
+      "Settings controls scale together and keep enlarged labels reachable": [
+        18.8, 54
+      ],
+      "a linked preview can close during acquisition and a later link still opens": [
+        2.9, 3.9
+      ],
+      "browser omits native import acquisition controls": [3.1, 6.1],
+      "checked-in local examples activate and work independently": [8.5, 19.3],
+      "folder/Git preview selects the exact subfolder and preserves enabled state through updates": [
+        19.1, 43.4
+      ],
+      "leaving Settings discards a late preview without installing": [3.2, 7.2],
+      "plugin deep link opens the consent flow in Dark mode": [4.7, 11.2],
+      "plugin deep link opens the consent flow in Light mode": [4.7, 11.6],
+      "resizing over the catalog keeps focus in visible plugin details": [
+        3.4, 9.1
+      ],
+      "saved folder acquisition retries stay focused inside the update modal": [
+        9.3, 13.7
+      ],
+      "saved git acquisition retries stay focused inside the update modal": [
+        4.7, 9.5
+      ]
+    },
+    "tests/browser/plugins.spec.mjs": {
+      "A new Solo chat places companion plugins in its draft state and removes disabled cards": [
+        5, 12.5
+      ],
+      "a second plugin uses the same launcher slot without remounting a legacy page or accepting stale handlers": [
+        6.6, 16.5
+      ],
+      "companion remains usable while Channels connection is pending": [3, 5.1],
+      "old close cannot dismiss a later opening of the same contribution": [
+        2.3, 3.9
+      ],
+      "the launched card works with an empty Channels roster": [2.7, 5]
+    },
+    "tests/browser/presence.spec.mjs": {
+      "avatar choices publish through the existing socket and persist across reload": [
+        23.2, 24.3
+      ],
+      "foreground send and cold channel entry remain available during a profile snapshot": [
+        4.1, 9.5
+      ],
+      "human message bylines omit presence › timeline and thread omit badges while the profile retains presence": [
+        7.5, 7.9
+      ],
+      "presence becomes usable during held HTTP work and unfinished subscription setup": [
+        7.7, 8.3
+      ],
+      "profile snapshot and same-socket renewal coexist with real chat while optional response is held": [
+        8.5, 12
+      ],
+      "profile trigger stays transparent through hover, press, and open menu": [
+        4.4, 6.5
+      ],
+      "real same-origin windows queue one publisher and transfer its Web Lock on close": [
+        13.8, 16.7
+      ]
+    },
+    "tests/browser/product-ui.spec.mjs": {
+      "catalogue preserves disabled, read-only and failed-send recovery examples": [
+        2, 1.8
+      ],
+      "playground distinguishes same-name people and agents in the real composer": [
+        3.9, 3.3
+      ],
+      "production composer catalogue preserves source and controls at responsive widths": [
+        4.9, 4.3
+      ]
+    },
+    "tests/browser/profile-channel-focus.spec.mjs": {
+      "profile channel focus ring paints on one row and both list boundaries": [
+        9.9, 12.2
+      ]
+    },
+    "tests/browser/profile-contrast.spec.mjs": {
+      "profile avatar and Availability stay readable through hover and press in both themes": [
+        4.7, 9.6
+      ]
+    },
+    "tests/browser/profile-verification.spec.mjs": {
+      "profile verification checkmark follows the verified full name": [
+        8.6, 9.3
+      ],
+      "profile verification checkmark follows the verified username": [7.9, 6.3]
+    },
+    "tests/browser/profiles-appearance.spec.mjs": {
+      "Profiles keeps controls contained and keyboard reachable across text size and widths": [
+        4, 8.3
+      ]
+    },
+    "tests/browser/profiles.spec.mjs": {
+      "Close after same-scope replacement retires earlier profile visits through Back/Forward": [
+        10.4, 7.2
+      ],
+      "Close before successor reply resolution retires the inherited verified thread": [
+        9.2, 6.2
+      ],
+      "closing a profile beside a main thread preserves the thread destination": [
+        7.3, 6
+      ],
+      "contextual panel callbacks retire with opening, channel, contribution and session": [
+        8.7, 7.1
+      ],
+      "member Send message navigates a human DM without sending or returning focus to Members": [
+        5.4, 5.1
+      ],
+      "member rows hand off to Profiles without trapping or losing keyboard focus": [
+        24.4, 19
+      ],
+      "profile Message for humans and agents kept on this machine": [8.9, 6.7],
+      "profile Message for humans and agents not kept on this machine": [
+        8.3, 6.3
+      ],
+      "profile plumbing: exact avatar/mention targets, thread enrichment, lifecycle and recovery": [
+        18.9, 16.7
+      ],
+      "profile preview fits enlarged text and stops its status with reduced motion": [
+        5.1, 5.6
+      ],
+      "profile preview stays inside a Solo conversation beside another pane": [
+        4.3, 4.1
+      ],
+      "profile visits survive passive traversal and X retires active and inactive visits": [
+        11.3, 7.9
+      ],
+      "touch member actions › keeps the ellipsis available without hover": [
+        4.9, 4.3
+      ],
+      "transient profiles replace without retiring Back/Forward return paths": [
+        8.8, 6.4
+      ]
+    },
+    "tests/browser/quote-styling.spec.mjs": {
+      "sent quotes stay contained and keep their bar in forced colors": [
+        5.2, 3.3
+      ]
+    },
+    "tests/browser/reactions-polish.spec.mjs": {
+      "all reactor names wrap and remain reachable with pointer and keyboard": [
+        27.2, 18.8
+      ],
+      "counted reaction hover leaves the count and capsule stationary": [
+        3.7, 3
+      ],
+      "grouped reaction counts fit and preview in both themes and text sizes": [
+        5.1, 4.4
+      ],
+      "long native reactions and unavailable shortcode artwork stay inside the hit area": [
+        3, 2.4
+      ],
+      "reaction bubbles wrap, preview, toggle, and add from the inline control": [
+        8.5, 5.6
+      ],
+      "reaction control rendering › add-reaction icon stays still while neighboring emojis animate": [
+        6.1, 5.7
+      ],
+      "reaction emojis and hit areas grow together without clipping": [
+        5.5, 3.6
+      ],
+      "reaction previews center above each emoji bubble": [7.1, 5],
+      "reaction previews use the delayed first open, immediate warm switch, and reset delay": [
+        4.3, 3.1
+      ],
+      "scrolling a reaction preview loads previously uncached names": [
+        6.2, 3.7
+      ],
+      "short bubbles keep one reaction beside the add-reaction pill": [5.5, 3],
+      "short reactor lists do not add a keyboard stop": [3.9, 2.9]
+    },
+    "tests/browser/reactions.spec.mjs": {
+      "keyboard removal keeps pointer retry reachable after a rejected deletion": [
+        7, 3.2
+      ],
+      "one active reaction picker preserves target and focus when switching or unmounting": [
+        5.9, 4.8
+      ],
+      "reaction plus opens a visible emoji-only picker, restores focus and publishes custom emoji": [
+        15, 9.8
+      ],
+      "standalone message gallery hosts clipboard success and failure toasts": [
+        4, 7.8
+      ]
+    },
+    "tests/browser/read-reserve.spec.mjs": {
+      "reserve commits across windows, survives reload, and is purged with only its partition": [
+        2.8, 2
+      ]
+    },
+    "tests/browser/relay-recovery.spec.mjs": {
+      "relay reads recover automatically after the network returns": [
+        11.1, 14.3
+      ]
+    },
+    "tests/browser/reminders-layout.spec.mjs": {
+      "completion preserves section alignment and avatar opens its conversation": [
+        2.1, 2.9
+      ],
+      "pointer completion animates surviving rows in a scrolled list": [
+        0.9, 1.1
+      ],
+      "reminder rows stay readable and contained at 390px": [1.2, 1.5],
+      "reminder rows stay readable and contained at 480px": [1.2, 1.6]
+    },
+    "tests/browser/right-pane-dismissal.spec.mjs": {
+      "Close all retires mixed active and inactive content visits": [6.6, 14.2],
+      "Close all tabs uses an unresolved reply tab's hinted thread identity": [
+        5.3, 10.4
+      ],
+      "Close other tabs uses an unresolved reply tab's hinted thread identity": [
+        5.7, 10.4
+      ],
+      "Close others keeps channel details visible when its routed threads are retired": [
+        7.5, 16.1
+      ],
+      "Close others preserves an inactive GitHub and retires every other content visit": [
+        6.1, 14.3
+      ],
+      "Close others preserves an inactive thread and retires every other content visit": [
+        6, 15.4
+      ],
+      "GitHub visits restore through native history and reload; X skips their retired visits": [
+        7.5, 14.7
+      ],
+      "Keep unresolved uses an unresolved reply tab's hinted thread identity": [
+        5.1, 10
+      ],
+      "X on an inactive thread skips its visits through native history while preserving the selected thread": [
+        6, 10.4
+      ],
+      "X uses an unresolved reply tab's hinted thread identity": [5.2, 10.9],
+      "a cold thread closes to its own channel in place": [7.1, 13.6],
+      "closing the selected thread returns to its surviving neighbour and Back leaves that thread": [
+        6.1, 11.4
+      ],
+      "passive Back/Forward preserves a thread; X removes its visit without an invisible stop": [
+        6.2, 11.3
+      ]
+    },
+    "tests/browser/route-teardown.spec.mjs": {
+      "a context route still in flight at test end does not fail the test": [
+        0.2, 0.3
+      ],
+      "a page route still in flight at test end does not fail the test": [
+        0.2, 0.3
+      ],
+      "a test that closes its own context still passes": [0.2, 0.3],
+      "an app route still in flight at test end does not fail the test": [
+        0.2, 0.5
+      ]
+    },
+    "tests/browser/search-author-chip.spec.mjs": {
+      "replacing a standalone author chip leaves no hidden operand": [3.7, 4.5],
+      "selected author remains a removable chip through typing and date completion": [
+        4.3, 6
+      ]
+    },
+    "tests/browser/settings-developer.spec.mjs": {
+      "Developer opens through App routing and restores from history": [
+        7.8, 10.2
+      ],
+      "client performance › records channel opens by source and exports them": [
+        13.2, 21
+      ]
+    },
+    "tests/browser/settings-layout.spec.mjs": {
+      "hosted settings empty and setup cards fit without covering their actions": [
+        16.5, 35.9
+      ],
+      "settings empty collections › empty cards fit the settings column and their actions lead to the editor": [
+        15.7, 32.2
+      ],
+      "settings share a centered, bounded column and keep controls contained across themes and widths": [
+        40.2, 80.3
+      ]
+    },
+    "tests/browser/settings-sidebar-width.spec.mjs": {
+      "Settings keeps the channel sidebar width across navigation and reload": [
+        9.7, 17.7
+      ],
+      "narrow Settings keeps the clamped channel drawer behind its modal": [
+        5.3, 8.2
+      ],
+      "sidebar width survives route remounts when saving it fails": [4.4, 7.5],
+      "sidebar width updates across open windows without losing a draft": [
+        12.2, 18.2
+      ]
+    },
+    "tests/browser/settings.spec.mjs": {
+      "Leave community hands keyboard focus to Personal Profile": [4.1, 6.7],
+      "Local settings saves a device name without changing the community identity": [
+        8.2, 10.1
+      ],
+      "Remove from this device hands keyboard focus to Personal Profile": [
+        4.1, 7.2
+      ],
+      "Settings loads and publishes the selected community profile": [13, 15],
+      "Settings opens over the retained workspace and closing restores the prior view": [
+        4, 6.3
+      ],
+      "avatar Settings access dismisses cleanly and exposes Profile and Plugins": [
+        14.2, 21.8
+      ],
+      "community administration permissions › shows Membership to a verified owner": [
+        6.9, 9.6
+      ],
+      "discarding community setup leaves the published profile unchanged": [
+        4.5, 5.6
+      ],
+      "hosted deletion keeps a foreign owner's full npub inside the dialog and notice": [
+        3.5, 4.5
+      ],
+      "hosted deletion reload keeps the UUID until an enabled manual replay": [
+        4.5, 5.1
+      ],
+      "long Settings sections end with the dialog padding at every width": [
+        3.1, 4.5
+      ],
+      "narrow plugin details moves focus, skips covered rows, and restores the trigger on Escape": [
+        5.8, 6.3
+      ],
+      "native Back warns before discarding Profile edits and Keep editing retains the draft": [
+        5.8, 7.3
+      ],
+      "plugin details preserves the catalog scroll position on open and close": [
+        3.5, 5.4
+      ],
+      "short narrow Settings keeps plugin copy and controls reachable at 200% interface size": [
+        5.1, 7.5
+      ]
+    },
+    "tests/browser/shortcuts.spec.mjs": {
+      "Settings → Shortcuts rebinds a plugin shortcut live, blocks host conflicts, persists and resets": [
+        8.4, 16.6
+      ],
+      "a shadow-root modal blocks Settings and plugin bindings but allows interface zoom": [
+        2.8, 4.7
+      ],
+      "independent plugin consumes injected shortcuts; disable/re-enable and editor guards work": [
+        6.4, 15.2
+      ],
+      "interface zoom preserves an open emoji search and scales its controls": [
+        5.1, 10.2
+      ],
+      "real Settings keys respect dialogs and modifiers, focus Settings, and preserve drafts": [
+        4.2, 8.2
+      ],
+      "scaled history › interface zoom keeps timeline paging and sidebar resizing usable": [
+        5.7, 12.6
+      ],
+      "shortcut capture keeps its title and keyboard focus visible, with neutral notices and a Tab exit": [
+        18.2, 33
+      ],
+      "zoom keys scale text, icons and spacing together and persist/reset": [
+        14.4, 55.8
+      ]
+    },
+    "tests/browser/sidebar-contributions.spec.mjs": {
+      "plugin sidebar contributions › failed section icon recovery › contains a failed contributed icon while dragging its fallback section": [
+        2.9, 3.1
+      ],
+      "plugin sidebar contributions › shows a drag preview for contributed sections": [
+        2.8, 3
+      ],
+      "plugin sidebar contributions › stay inside the existing Solo and Team rail": [
+        17.6, 36.7
+      ]
+    },
+    "tests/browser/sidebar-filters.spec.mjs": {
+      "failed activity reads explain the filter and recover on Retry": [
+        5.3, 8.2
+      ],
+      "filter action focus › filtered-out row actions return focus to the owning section": [
+        6, 17.8
+      ],
+      "section filters save activity windows and recover hidden channels": [
+        17.3, 49.2
+      ]
+    },
+    "tests/browser/sidebar-geometry.spec.mjs": {
+      "Team and Solo working badges share the painted row inset": [3.5, 9.7],
+      "a presence badge preserves the sidebar avatar center and header insets": [
+        9.3, 11
+      ]
+    },
+    "tests/browser/sidebar-headings.spec.mjs": {
+      "sidebar headings keep readable space and compact disclosure targets at enlarged sizes": [
+        8.5, 25.3
+      ]
+    },
+    "tests/browser/sidebar-reveal.spec.mjs": {
+      "a user scroll before a delayed entry renders keeps that position for its destination": [
+        0.5, 1.1
+      ],
+      "a user scroll before contributed rows arrive cancels their reveal": [
+        0.4, 1
+      ],
+      "focus skips a row relocated into a collapsed section": [0.4, 0.5],
+      "late contributed rows retry the sidebar reveal without moving the owner": [
+        0.4, 0.4
+      ],
+      "restoring the saved position does not cancel a delayed entry's reveal": [
+        0.4, 0.5
+      ]
+    },
+    "tests/browser/sidebar-rows.spec.mjs": {
+      "plugins decorate live rows and persist a custom section sort": [
+        9.8, 19.3
+      ]
+    },
+    "tests/browser/sidebar-section-creation.spec.mjs": {
+      "Channels offers empty-section creation with keyboard focus and confirmed persistence": [
+        11.6, 25.6
+      ],
+      "only the top channel-section boundary reveals creation, latches, cancels and saves first": [
+        10, 15
+      ],
+      "without saved sections › the first Channels boundary works with reduced motion in a narrow sidebar": [
+        3.5, 6.4
+      ]
+    },
+    "tests/browser/sidebar-section-removal.spec.mjs": {
+      "section removal › confirmed section removal preserves channels and survives reload": [
+        8.2, 16
+      ]
+    },
+    "tests/browser/sidebar-unread.spec.mjs": {
+      "DM hide control removes a row and a new message restores it": [
+        21.3, 38.5
+      ],
+      "DM preview wiring › production sidebar wires only 1:1 avatars and preserves their shape and overlap": [
+        5.2, 8.8
+      ],
+      "channel establishment preserves an in-flight unread batch and its sidebar badges": [
+        9.7, 14.4
+      ],
+      "edge controls follow scroll and reveal the nearest unread without selection or reads; focus retains existing preparation": [
+        13.3, 19.2
+      ],
+      "priority dots stay aligned and use the prominent mark color in both modes": [
+        9, 16.3
+      ],
+      "resizing, collapsed groups and new unread evidence update only the displayed roster": [
+        14.8, 36.1
+      ],
+      "session changes discard the previous sidebar targets and manual unread still participates": [
+        14.9, 27.8
+      ]
+    },
+    "tests/browser/sidenav-polish.spec.mjs": {
+      "Inbox and Bestie pages retain companion layout across navigation and resize": [
+        6.9, 12.7
+      ],
+      "Personal space preserves scope control and global-row geometry": [
+        3.4, 4.8
+      ],
+      "Settings retains the sidebar toggle across desktop and narrow layouts": [
+        6.1, 14.9
+      ],
+      "channel name fades follow renames without resizing the sidebar": [
+        4.2, 8
+      ],
+      "compact sidenav keeps its geometry across persistent page navigation": [
+        4.9, 9.1
+      ],
+      "non-ready sidebar keeps page rows and Retry reachable by pointer scrolling": [
+        4.2, 6.2
+      ],
+      "section disclosure toggles content and honors reduced motion": [
+        3.5, 6.3
+      ],
+      "shell toggle restores the shared sidebar for Channels and Agents": [
+        6.2, 13
+      ],
+      "sidebar scrollbar stays close to the divider without clipping its native thumb": [
+        2.9, 4.4
+      ],
+      "top bar swaps its pages for an overflow menu when narrow": [3.8, 7.2]
+    },
+    "tests/browser/solo-chats.spec.mjs": {
+      "Berd-style Solo project organization › a project retains two chats and their exact tagged drafts": [
+        9.1, 26.6
+      ],
+      "Share opens View only and posts a link without promoting or moving the Solo chat": [
+        7, 15.6
+      ],
+      "Solo composer caret › a returning draft resumes at its end and picking agents leaves the text alone": [
+        4.9, 13.5
+      ],
+      "Solo composer caret › menu picks that edit typed tags keep keyboard focus in the menu, and Tab leaves it": [
+        3.5, 8.3
+      ],
+      "Solo send focus › sending keeps the keyboard focus ring off the briefly disabled editor": [
+        3.6, 6.7
+      ],
+      "View-only Solo conversion preserves access and restores focus after its chat header is replaced": [
+        26.6, 51.5
+      ],
+      "chat row menus open Share with the chat's people and restore focus": [
+        3.6, 8.8
+      ],
+      "dragging a chat between a project and Chats saves and reloads like Move to": [
+        7.1, 14.4
+      ],
+      "explicit conversion moves the same conversation from Solo to Messages and keeps history": [
+        23, 51.3
+      ],
+      "unified chat naming and lifetime retain host focus and save only explicit changes": [
+        8, 22.5
+      ]
+    },
+    "tests/browser/solo-legacy-invitation.spec.mjs": {
+      "Outbox Retry reconciles a recorded then removed Solo invitation without replaying it": [
+        19.1, 33.5
+      ]
+    },
+    "tests/browser/solo-navigation.spec.mjs": {
+      "Solo layout › Solo chat keeps new and selected chats usable and full width at 200%": [
+        4.1, 11
+      ],
+      "a Solo chat reply shows as a thread and its link opens beside the chat": [
+        4.5, 10.8
+      ]
+    },
+    "tests/browser/solo-public-access.spec.mjs": {
+      "owner › explains retained access for joined viewers and existing Public chats": [
+        34.3, 55.6
+      ],
+      "owner › omits Public, retains View only after reload, and restores privacy": [
+        43, 67.1
+      ],
+      "visitor › joins as a viewer, keeps Private access and leaves without write access": [
+        18.7, 31.4
+      ],
+      "visitor › reads View only without joining and loses access when the chat becomes Private": [
+        20, 31.7
+      ]
+    },
+    "tests/browser/solo-rename.spec.mjs": {
+      "a delayed initial name read keeps focus on a different chat": [3.6, 8.5],
+      "collapsing a workspace waits for its rename save before hiding the editor": [
+        8, 21.8
+      ],
+      "composable row removal respects blur and continues past a CSS-hidden neighbor": [
+        3.2, 6.1
+      ],
+      "composable rows retain narrow rename and immediate keyboard/touch activation": [
+        4.3, 8.3
+      ],
+      "failed Enter-save and explicit reload retain keyboard control": [
+        8, 15.9
+      ],
+      "live conversion removes the old editor and permits renaming another Solo chat": [
+        3.6, 8.2
+      ],
+      "narrow mouse double-click renames while single-click and keyboard still navigate": [
+        5.5, 11.3
+      ],
+      "removing a focused region keeps keyboard focus in the remaining region": [
+        3.5, 6.4
+      ]
+    },
+    "tests/browser/solo-sharing.spec.mjs": {
+      "Messages Share navigation › Messages Share choices never cross source or history visits": [
+        4.8, 17
+      ],
+      "People search holds loading, lists inline results and restores keyboard focus": [
+        2.8, 6.9
+      ],
+      "View only channel share › pasted owned chats confirm Private and View only while preserving Public access": [
+        14.3, 23.4
+      ],
+      "View only channel share › shares View only links with accessible disclosure": [
+        25.8, 46.6
+      ],
+      "a Solo chat link card opens the same authorized conversation in the channel side pane": [
+        4, 6.8
+      ],
+      "owned Solo invitation headings › wrapped saved-agent headings preserve keyboard reachability in dark": [
+        2.3, 5
+      ],
+      "owned Solo invitation headings › wrapped saved-agent headings preserve keyboard reachability in light": [
+        2.4, 5.5
+      ]
+    },
+    "tests/browser/solo-workspace.spec.mjs": {
+      "Solo chat Activity opens the agent's profile locally, restores per conversation and retires on plugin disable": [
+        9, 25.5
+      ],
+      "Solo row status rules keep :has() out of minified :is() lists": [
+        3.2, 5.7
+      ],
+      "Solo sidebar opens a captured trigger in the canonical message reader": [
+        4.2, 8.3
+      ],
+      "Solo sidebar shares working activity, keyboard preview and local panel navigation": [
+        9.2, 22.6
+      ],
+      "personal recipients › Solo chat signs only explicit owned recipients and never offers an outside identity, in a linked tab too": [
+        6.5, 15.6
+      ],
+      "reading › Solo chat focuses and reads a chat clicked while its activity preview is open": [
+        4.8, 9.8
+      ],
+      "reading › Solo chat reads a chat opened from the sidebar, so it stays unbolded after leaving": [
+        4.2, 8.3
+      ],
+      "touch sidebar activity › working remains visible beside the row menu": [
+        5.9, 11.3
+      ]
+    },
+    "tests/browser/startup.spec.mjs": {
+      "cached workspace remains usable when live reconnect stalls": [6.2, 9.1],
+      "document launch uses dark background and a centered logo before React": [
+        3.1, 5.5
+      ],
+      "document launch uses light background and a centered logo before React": [
+        2.7, 5.5
+      ],
+      "fresh roster omission removes cached conversation and its next-launch record": [
+        11.6, 13.7
+      ],
+      "launch waits for the initial sidebar and message history before revealing the workspace": [
+        4.4, 7
+      ],
+      "offline reload remains readable and recovers in place on the browser online signal": [
+        8.6, 12.9
+      ],
+      "pending startup navigation › cold conversation access stays behind launch until resolution fails": [
+        4.3, 5
+      ],
+      "pending startup navigation › waits for a conversation absent from the saved roster, then opens it live": [
+        11.9, 16.8
+      ],
+      "populated device cache › selected conversation paints with 64 saved heads while handshake is held": [
+        15.4, 27
+      ],
+      "reload restores the selected conversation/groups before handshake and updates without replacing its DOM": [
+        16.3, 25.6
+      ],
+      "saved DM labels › restores the sidebar name even when the DM was never opened": [
+        10.3, 15.7
+      ]
+    },
+    "tests/browser/surface-consumers.spec.mjs": {
+      "availability retains semantic state fills in dark": [13.8, 15],
+      "availability retains semantic state fills in light": [13.4, 16]
+    },
+    "tests/browser/surface-interactions.spec.mjs": {
+      "surface contexts preserve controls and nested resets in dark": [
+        11, 10.7
+      ],
+      "surface contexts preserve controls and nested resets in light": [
+        10.1, 11.3
+      ]
+    },
+    "tests/browser/tab-close-others.spec.mjs": {
+      "a tab's Close other tabs keeps only that tab": [7.3, 13.8]
+    },
+    "tests/browser/terminal-motion.spec.mjs": {
+      "terminal drawer shares panel motion without delaying close or losing the session": [
+        4.7, 3.9
+      ]
+    },
+    "tests/browser/terminal-renderer.spec.mjs": {
+      "focused terminal follows rebind, restore and reset without swallowing the chord or writing it to the shell": [
+        4.8, 5.3
+      ],
+      "real xterm batches synchronized redraws, recovers an unfinished frame and retains scrollback": [
+        4, 5.1
+      ],
+      "real xterm parses a large hidden output completely and in order": [
+        1.9, 1.3
+      ],
+      "real xterm preserves navigation and input provenance on Linux x86_64": [
+        1.7, 1.3
+      ],
+      "real xterm preserves navigation and input provenance on MacIntel": [
+        2, 1.4
+      ],
+      "real xterm replies survive scope switches while stale input and retired writes are fenced": [
+        2.3, 2.6
+      ],
+      "real xterm retains output across detach, handles input and resize, and does not reserve absent shortcuts": [
+        4.7, 4.1
+      ],
+      "terminal shared controls keep focus, recovery and layout in both modes": [
+        12.7, 15.5
+      ]
+    },
+    "tests/browser/terminal.spec.mjs": {
+      "web hides the unusable terminal and does not consume its shortcut, including re-enable": [
+        6, 10.2
+      ]
+    },
+    "tests/browser/thread-composer-focus.spec.mjs": {
+      "a late-mounted thread focuses its reply composer": [3.1, 5.4],
+      "a late-mounted thread preserves a later dialog": [3.4, 7.3],
+      "a late-mounted thread preserves a later menu": [3.4, 7.4],
+      "a late-mounted thread preserves a later page draft": [3.8, 5.8],
+      "a link to a specific reply reveals it without focusing the composer": [
+        4.1, 10
+      ],
+      "opening and reopening a main thread resumes typing": [7.8, 18.2],
+      "opening and reopening a side thread resumes typing": [7.3, 14.3]
+    },
+    "tests/browser/thread-follow.spec.mjs": {
+      "Follow thread makes a peer thread's replies unread across reload, and Unfollow is saved for the viewer's own thread": [
+        10.9, 20.3
+      ]
+    },
+    "tests/browser/thread-opening.spec.mjs": {
+      "ordinary thread reveals its first content already positioned at the bottom": [
+        4.5, 9.2
+      ]
+    },
+    "tests/browser/thread-resize.spec.mjs": {
+      "exact history resize ownership › exact target shift committed with a live reply": [
+        7.1, 8.4
+      ],
+      "exact history resize ownership › held exact target resize followed by live reply": [
+        10, 10.5
+      ],
+      "exact history resize ownership › reading position contraction clamped with a live reply": [
+        6.5, 7.7
+      ],
+      "exact history resize ownership › reading position shift committed with a live reply": [
+        6.2, 7.4
+      ],
+      "thread preserves bottom and reading position through activity and composer resizing": [
+        14.9, 18
+      ],
+      "thread stays beside the channel whenever both panes fit": [8.6, 11.6]
+    },
+    "tests/browser/thread-scrollbar.spec.mjs": {
+      "thread divider leaves the channel edge available and still resizes": [
+        5.7, 9.1
+      ]
+    },
+    "tests/browser/thread-tab-moves.spec.mjs": {
+      "last side-tab transfer captures the current reader position": [1.4, 0.7]
+    },
+    "tests/browser/thread-unread.spec.mjs": {
+      "a live reply in a main-pane thread stays unread while focus is in the side-pane thread": [
+        10.1, 20.3
+      ],
+      "channel bottom quiets ordinary replies newer than the latest top-level message without reading their threads": [
+        5.2, 9.8
+      ],
+      "mentioned reply priority › a mention and broadcast remain distinguishable in Activity": [
+        6.2, 12.1
+      ],
+      "mentioned reply priority › an Activity reopening leaves focus the person moved meanwhile": [
+        7.6, 15.8
+      ],
+      "mentioned reply priority › opening a main-pane thread from Activity reads it, not the side-pane thread": [
+        8.7, 16.4
+      ],
+      "mentioned reply priority › opening a thread from Activity reads it when its channel's pane was collapsed": [
+        8.4, 15.6
+      ],
+      "mentioned reply priority › opening an already-open thread from Activity reads it": [
+        6.9, 13.3
+      ],
+      "opening a fitting thread reads after unchanged-row continuation without another gesture": [
+        6.6, 15.2
+      ],
+      "opening a message link reads the channel but not its already-open thread": [
+        5.3, 14.3
+      ],
+      "returning to a channel leaves its hidden thread unread at 1440px": [
+        7.2, 16.7
+      ],
+      "returning to a channel reads it and its already-open thread at 1280px": [
+        7.5, 14.1
+      ],
+      "returning to a channel reads it and its already-open thread at 1440px": [
+        8.1, 13.4
+      ],
+      "same-thread sidebar activity replaces timeline focus return": [
+        6.5, 15.3
+      ],
+      "thread buttons show observed unread independently, clear only after reading, and expose hover/focus affordance": [
+        17, 35.5
+      ]
+    },
+    "tests/browser/thread-video.spec.mjs": {
+      "channel thread hands off to a stable video viewer": [5.6, 11.2],
+      "public channel preview › keeps a thread reply video open without joining the channel": [
+        5.9, 10.8
+      ]
+    },
+    "tests/browser/thread-window.spec.mjs": {
+      "legacy continuation failure exposes recovery after retained replies": [
+        6.8, 5.3
+      ],
+      "newest window positions immediately; scrollback preserves the visible reply and live following": [
+        14, 10.6
+      ],
+      "older page reparents a visible reply under its late parent": [8.8, 7.9],
+      "older-page loading adds no row or layout shift while the request is held": [
+        8.5, 7.1
+      ],
+      "older-page retry reparents a visible reply under its late parent": [
+        9.3, 7.6
+      ],
+      "older-page retry repeats the failed continuation at the scrollback cue": [
+        9, 8
+      ],
+      "reconnect repair failure keeps retry reachable at the newest replies": [
+        7.8, 7
+      ]
+    },
+    "tests/browser/timeline-copy.spec.mjs": {
+      "copying a timeline selection keeps mentions, channel refs and links in both flavors": [
+        4.5, 5.6
+      ]
+    },
+    "tests/browser/timeline-scrollbar-gutter.spec.mjs": {
+      "feed reserves a stable scrollbar gutter": [9.1, 10]
+    },
+    "tests/browser/timeline-setup.spec.mjs": {
+      "reading anchor after a scroll reads at the scroll event, before later frames": [
+        0.2, 0.5
+      ],
+      "reading anchor handles clipped paragraphs and still detects displacement": [
+        10.3, 9.8
+      ],
+      "reading setup handles partial wheel progress without weakening the anchor": [
+        9.8, 14.3
+      ],
+      "reading setup rejects an immobile timeline instead of accepting a bottom anchor": [
+        18.1, 21.6
+      ],
+      "upper waits for end's held final movement before capturing the reading anchor": [
+        2.1, 2.8
+      ],
+      "wheel baseline rejects input blocked at the edge instead of accepting a stale completion": [
+        10.5, 10.8
+      ],
+      "wheel baseline waits through a geometry pause until the final input completes": [
+        0.8, 1.5
+      ],
+      "wheel setup drains a timed-out DOM read before returning its rejection": [
+        0.3, 0.6
+      ]
+    },
+    "tests/browser/todos.spec.mjs": {
+      "opt-in Todos saves ordinary Canvas and disabling leaves it editable": [
+        16, 26.3
+      ]
+    },
+    "tests/browser/typeahead.spec.mjs": {
+      "a later emoji trigger wins after a mention without discarding recipient intent": [
+        5.4, 2.5
+      ],
+      "channel and actual ThreadPanel composers keep separate completion and draft ownership": [
+        6.5, 3.2
+      ],
+      "closing-colon emoji conversion restores literal source and caret on undo": [
+        10.7, 3.8
+      ],
+      "cold multi-word mention query wakes when profiles arrive without another keystroke": [
+        4.2, 1.9
+      ],
+      "completion resumes after selection collapses to the original caret": [
+        5.4, 3.5
+      ],
+      "current custom catalog drives typeahead and signed tags across community replacement": [
+        6.7, 3.5
+      ],
+      "custom emoji completion keeps the large preview and caret on one line": [
+        6.5, 3.4
+      ],
+      "dark emoji keyboard selection is visible against its popup": [5.4, 3.7],
+      "dark mention keyboard selection is visible against its popup": [5.5, 4],
+      "editable composer exposes its listbox popup relationship only while suggestions are open": [
+        6.4, 3.2
+      ],
+      "emoji completion starts at the first ranked result when Unicode joins community matches": [
+        4, 1.9
+      ],
+      "emoji keyboard, Escape, selected text, blur, IME and plugin disable preserve ordinary editing": [
+        6.4, 4.4
+      ],
+      "light emoji keyboard selection is visible against its popup": [5.5, 3.7],
+      "light mention keyboard selection is visible against its popup": [
+        5.7, 3.4
+      ],
+      "mention choices survive unrelated list updates but revoke removed membership": [
+        4.7, 2.5
+      ],
+      "mention completion distinguishes exact agent identity without reshaping a namesake human": [
+        4.8, 3.3
+      ],
+      "native read-only state rejects a displayed choice without sending": [
+        2.5, 1.3
+      ],
+      "open completion republishes library-only display hints without changing the query": [
+        5.1, 3.5
+      ],
+      "plugin replacement, native blur and composer sessions revoke late publications": [
+        3.1, 1.4
+      ],
+      "portal bounds hold when the focused composer moves outside the viewport": [
+        2.6, 1.3
+      ],
+      "recovery is a keyboard-selectable action without transferring editor focus": [
+        2.5, 1.4
+      ],
+      "selection follows IDs through reordering and rejected replacement never falls through to send": [
+        3.1, 1.5
+      ],
+      "selection recovery requires fresh results and preserves Escape dismissal": [
+        3.4, 2.2
+      ],
+      "typeahead replaces only the query and publishes selected namesake identity, including replies": [
+        6.1, 4
+      ]
+    },
+    "tests/browser/typing-dm.spec.mjs": {
+      "DM composer publishes empty scoped typing through the authenticated broker": [
+        4.9, 6.1
+      ],
+      "DM receive lifecycle isolates participants, channels and threads and expires silence": [
+        11.6, 12
+      ],
+      "channel, thread and DM composers publish their own scope without publishing restored drafts": [
+        6.4, 9.5
+      ]
+    },
+    "tests/browser/typing.spec.mjs": {
+      "Messages receives scoped typing through authenticated live traffic and expires it without publishing": [
+        13, 16.5
+      ],
+      "a growing channel composer lifts history with it at the bottom": [
+        5, 8.6
+      ],
+      "a growing thread composer lifts history with it at the bottom": [
+        6.6, 10.8
+      ],
+      "channel typing preserves viewport bounds and the visible bottom through completion and expiry": [
+        16, 20
+      ],
+      "thread typing preserves viewport bounds and the visible bottom through completion and expiry": [
+        15.1, 17.7
+      ]
+    },
+    "tests/browser/unread.spec.mjs": {
+      "Messages startup waits for channel discovery before loading templates": [
+        6.6, 11.7
+      ],
+      "a join burst longer than a history page › opening the channel reads the messages behind the joins": [
+        2.9, 6.8
+      ],
+      "a surviving window publishes a closed window's durable read intent": [
+        18.6, 29.4
+      ],
+      "automatic catch-up after membership rows › own-composer focus quiets a channel whose last visible row is membership activity": [
+        2.7, 6.8
+      ],
+      "built sidebar → visible dwell → durable journal → encrypted broker publication; reload preserves intent": [
+        15.9, 25.3
+      ],
+      "explicit mark-through with membership activity › activity-only history explains the missing message without clearing manual unread": [
+        6.4, 14.9
+      ],
+      "explicit mark-through with membership activity › chat followed by membership activity clears manual unread through the newest chat": [
+        7.2, 15.4
+      ],
+      "focus cancellation and local manual-unread survive reload until explicit mark-through or reading to the bottom": [
+        11.8, 25.2
+      ],
+      "local receipt reserve › a viewport receipt survives other-channel pressure and app reload": [
+        52, 83.8
+      ]
+    },
+    "tests/browser/updates.spec.mjs": {
+      "retry after a failed install releases native update resources before checking again": [
+        3.7, 5
+      ],
+      "the ready toast yields to Settings → Updates, which offers the same action": [
+        3.5, 7.2
+      ],
+      "update checks recover from failure, download, and restart from the toast": [
+        4.2, 10
+      ]
+    },
+    "tests/browser/user-status.spec.mjs": {
+      "statuses edit, synchronize, clear, reject stale traffic and retain failed drafts": [
+        16.2, 16.3
+      ]
+    },
+    "tests/browser/video-preview-sizing.spec.mjs": {
+      "extreme video metadata stays bounded with reachable controls and uncropped content": [
+        3.5, 3.9
+      ],
+      "portrait and tall images keep proportional bounded frames without side bars": [
+        51.6, 25.8
+      ],
+      "video-only outgoing messages keep a readable, proportional preview": [
+        4, 3.2
+      ]
+    },
+    "tests/browser/voice-notes.spec.mjs": {
+      "failed upload survives disabling the plugin and switching conversations": [
+        4.6,
+        null
+      ],
+      "permission cancellation, denial and plugin removal release microphones": [
+        2.4,
+        null
+      ],
+      "record, preview, send and play the chat card with speed and seeking": [
+        5.1,
+        null
+      ],
+      "rejected voice messages retry through the outbox without reuploading": [
+        2.8,
+        null
+      ],
+      "rejects a full attachment draft before opening the microphone": [
+        2.8, 2.6
+      ]
+    },
+    "tests/browser/window-chrome.spec.mjs": {
+      "window controls stay usable through the launch overlay and identity handoff": [
+        9.4, 6.7
+      ]
+    }
+  },
+  "vitest": {
+    "browser-host/agent-library.test.mjs": 0.8,
+    "browser-host/agent-memory.test.mjs": 2.3,
+    "browser-host/agent-observer.test.mjs": 0.3,
+    "browser-host/archive.test.mjs": 2.9,
+    "browser-host/attachment-upload.test.mjs": 0.6,
+    "browser-host/builderlab.test.mjs": 0.8,
+    "browser-host/channel-commands.test.mjs": 0,
+    "browser-host/channel-kit.test.mjs": 0.4,
+    "browser-host/media-preparation.integration.test.mjs": 0,
+    "browser-host/media-preparation.test.mjs": 0.3,
+    "browser-host/project-git-broker.test.mjs": 0.1,
+    "browser-host/project-git.test.mjs": 0.5,
+    "browser-host/read-state-broker.test.mjs": 1.3,
+    "browser-host/read-state.test.mjs": 0.2,
+    "browser-host/relay-authority.test.mjs": 0.2,
+    "browser-host/relay-broker-api.test.mjs": 8.9,
+    "browser-host/relay-broker-live.test.mjs": 23.6,
+    "browser-host/relay-broker.test.mjs": 0.1,
+    "browser-host/sidebar-create-section.test.mjs": 0.3,
+    "browser-host/sidebar-group-moves.test.mjs": 0.6,
+    "browser-host/sidebar-intents.test.mjs": 0,
+    "browser-host/sidebar-mutes-broker.test.mjs": 0.5,
+    "browser-host/sidebar-preference-writes.test.mjs": 2.1,
+    "browser-host/sidebar-sort-broker.test.mjs": 0.6,
+    "browser-host/sidebar-sort.test.mjs": 0.7,
+    "browser-host/sidebar-toggle.test.mjs": 0.5,
+    "browser-host/user-status.test.mjs": 0,
+    "browser-host/vite-config.test.mjs": 20.8,
+    "browser-host/workflow-broker.test.mjs": 1.2,
+    "scripts/desktop-config.test.mjs": 0,
+    "scripts/developer-settings.test.mjs": 0.2,
+    "scripts/export-claude-session.test.mjs": 0,
+    "scripts/live-setup-probe.test.mjs": 0.1,
+    "scripts/native-browser-fixture.test.mjs": 0,
+    "scripts/native-mcp-client.test.mjs": 0.3,
+    "src/app/AgentPluginRequests.test.tsx": 1.3,
+    "src/app/AgentSettings.test.tsx": 2,
+    "src/app/App.completion-lifetime.test.tsx": 0.4,
+    "src/app/App.profile.test.tsx": 63.8,
+    "src/app/AppearanceSettings.test.tsx": 5.5,
+    "src/app/CommunityAddress.test.tsx": 0.5,
+    "src/app/CommunityDepartureSettings.test.tsx": 1.3,
+    "src/app/CommunityLocalSettings.test.tsx": 1,
+    "src/app/CommunityRepositoriesSettings.test.tsx": 0.7,
+    "src/app/DecisionsSettings.test.tsx": 0.8,
+    "src/app/DeveloperSettings.test.tsx": 0.9,
+    "src/app/IdentitySettings.test.tsx": 2.3,
+    "src/app/ManagedPlugins.test.tsx": 1.5,
+    "src/app/NotificationSettings.test.tsx": 4.7,
+    "src/app/PluginAccessReview.test.tsx": 0.5,
+    "src/app/PluginImport.test.tsx": 6.4,
+    "src/app/PluginReadme.test.tsx": 0.3,
+    "src/app/PluginRequestCard.test.tsx": 0.6,
+    "src/app/ProfileSettings.avatar.test.tsx": 3.8,
+    "src/app/ProfileSettings.test.tsx": 8.6,
+    "src/app/Settings.test.tsx": 22.8,
+    "src/app/SettingsSidebar.test.tsx": 0.5,
+    "src/app/ShortcutSettings.test.tsx": 6.9,
+    "src/app/UnreadIndicatorSettings.test.tsx": 0.5,
+    "src/app/deep-links.test.mjs": 0,
+    "src/app/device-settings.test.ts": 0,
+    "src/app/entity-navigation.test.tsx": 37.8,
+    "src/app/external-links.test.mjs": 0,
+    "src/app/first-run-join-handoff.test.tsx": 8.2,
+    "src/app/first-run-navigation.test.tsx": 3.1,
+    "src/app/launch.test.ts": 0.1,
+    "src/app/message-shortcuts.test.ts": 0.1,
+    "src/app/navigation.test.tsx": 26,
+    "src/app/pages.integration.test.mjs": 13.9,
+    "src/app/plugin-folder-drop.test.ts": 0,
+    "src/app/plugin-links.test.tsx": 2.1,
+    "src/app/plugin-request-feature.test.tsx": 0.5,
+    "src/app/retained-page.test.tsx": 4,
+    "src/app/services.test.ts": 0.6,
+    "src/app/settings-sections.test.ts": 0,
+    "src/app/shell/AppShell.test.tsx": 5.6,
+    "src/app/shell/BestieNavigation.test.tsx": 1.9,
+    "src/app/shell/ChannelDirectoryResults.test.tsx": 3.8,
+    "src/app/shell/CommunityShortcuts.test.tsx": 0,
+    "src/app/shell/LaunchWindowControls.test.tsx": 0.3,
+    "src/app/shell/MarkAllReadShortcut.test.tsx": 0.5,
+    "src/app/shell/PageIcon.test.tsx": 0.2,
+    "src/app/shell/PageSearch.test.tsx": 2.5,
+    "src/app/shell/PrimarySidebar.sign-in.test.tsx": 1.2,
+    "src/app/shell/PrimarySidebar.test.tsx": 12.7,
+    "src/app/shell/ProfileButton.test.tsx": 4,
+    "src/app/shell/SearchChoices.test.tsx": 0.8,
+    "src/app/shell/SearchResults.test.tsx": 49.1,
+    "src/app/shell/SearchSettings.test.tsx": 0.8,
+    "src/app/shell/WindowControls.test.tsx": 0.8,
+    "src/app/shell/parseSearchOperators.test.ts": 0,
+    "src/app/shell/presentation.test.ts": 0,
+    "src/app/shell/title-bar.test.ts": 0,
+    "src/app/shell/usePanelLauncher.test.tsx": 0.2,
+    "src/app/shell/useSearchMessages.test.tsx": 2.8,
+    "src/app/shortcuts.test.tsx": 0.7,
+    "src/bundled/admin-access.test.ts": 0.8,
+    "src/bundled/agent-activity/ActivityAccessory.test.tsx": 3.6,
+    "src/bundled/agent-activity/activity-presentation.test.ts": 0,
+    "src/bundled/agent-activity/current-activity.test.ts": 0,
+    "src/bundled/agent-activity/message-activity.test.ts": 0,
+    "src/bundled/agent-activity/request-activity.test.ts": 0,
+    "src/bundled/agents/AgentBrowse.test.tsx": 2,
+    "src/bundled/agents/AgentCardAttachment.test.tsx": 1,
+    "src/bundled/agents/AgentCreateDialog.test.tsx": 14.6,
+    "src/bundled/agents/AgentDefaults.test.tsx": 0.4,
+    "src/bundled/agents/AgentDetails.test.tsx": 6.9,
+    "src/bundled/agents/AgentMessageButton.test.tsx": 0.4,
+    "src/bundled/agents/AgentSettingsHost.test.tsx": 1.9,
+    "src/bundled/agents/AgentShareDialog.test.tsx": 9.3,
+    "src/bundled/agents/AgentTabs.test.tsx": 4,
+    "src/bundled/agents/AgentsPage.test.tsx": 50.5,
+    "src/bundled/agents/CreationReview.test.tsx": 1.4,
+    "src/bundled/agents/ExternalConnectionSettings.test.tsx": 0.2,
+    "src/bundled/agents/PackedAgentAvatar.test.tsx": 0.4,
+    "src/bundled/agents/UpdateReview.test.tsx": 1.6,
+    "src/bundled/agents/routes.test.ts": 0,
+    "src/bundled/bestie/BestieChooser.test.tsx": 2,
+    "src/bundled/bestie/BestieTab.test.tsx": 2.4,
+    "src/bundled/bestie/PinnedBestie.test.tsx": 4.8,
+    "src/bundled/bestie/PrivateChannels.test.tsx": 1.3,
+    "src/bundled/bestie/chat.test.ts": 0,
+    "src/bundled/bestie/features.test.ts": 0,
+    "src/bundled/bestie/former.test.ts": 0.1,
+    "src/bundled/bestie/index.test.tsx": 0.7,
+    "src/bundled/bestie/routes.test.ts": 0,
+    "src/bundled/bestie/save.test.ts": 0,
+    "src/bundled/bestie/setup.test.ts": 3.9,
+    "src/bundled/builderlab/adapter-type/Activity.test.tsx": 0.3,
+    "src/bundled/builderlab/adapter-type/Create.test.tsx": 3.8,
+    "src/bundled/builderlab/adapter-type/Instructions.test.tsx": 8.7,
+    "src/bundled/builderlab/adapter-type/ModelSettings.test.tsx": 6.2,
+    "src/bundled/builderlab/adapter-type/SignInFooter.test.tsx": 1.6,
+    "src/bundled/builderlab/adapter-type/index.test.ts": 0,
+    "src/bundled/builderlab/adapter-type/models.test.ts": 0,
+    "src/bundled/builderlab/agents/RemoteAgents.test.tsx": 0.3,
+    "src/bundled/builderlab/agents/client.test.ts": 0.1,
+    "src/bundled/builderlab/agents/registration.test.ts": 0,
+    "src/bundled/builderlab/apps/client.test.ts": 0,
+    "src/bundled/builderlab/apps/environment.test.ts": 0,
+    "src/bundled/builderlab/apps/index.test.ts": 0,
+    "src/bundled/builderlab/apps/viewer.test.tsx": 0.2,
+    "src/bundled/builderlab/communities/HostedCommunities.test.tsx": 10,
+    "src/bundled/builderlab/communities/api.test.ts": 0,
+    "src/bundled/builderlab/communities/native.test.ts": 0.2,
+    "src/bundled/builderlab/decisions.test.tsx": 0,
+    "src/bundled/builderlab/dev-session.test.ts": 0.6,
+    "src/bundled/builderlab/index.test.tsx": 11.6,
+    "src/bundled/builderlab/known-communities/client.test.ts": 0,
+    "src/bundled/builderlab/known-communities/sync.test.ts": 0.1,
+    "src/bundled/builderlab/login/Login.test.tsx": 0.5,
+    "src/bundled/builderlab/oauth/browser.test.ts": 0.2,
+    "src/bundled/builderlab/oauth/first-run.test.ts": 0.2,
+    "src/bundled/builderlab/oauth/session.test.ts": 0,
+    "src/bundled/builderlab/service.test.ts": 0,
+    "src/bundled/builderlab/session.test.ts": 0.2,
+    "src/bundled/channels/CanvasEditor.test.tsx": 14.5,
+    "src/bundled/channels/CanvasHistory.test.tsx": 1.2,
+    "src/bundled/channels/CanvasView.test.tsx": 4.4,
+    "src/bundled/channels/ChannelActivityPopover.test.tsx": 1.4,
+    "src/bundled/channels/ChannelCompletion.test.tsx": 0.3,
+    "src/bundled/channels/ChannelDetailsEditor.test.tsx": 18.5,
+    "src/bundled/channels/ChannelGeneralAccess.test.tsx": 11.3,
+    "src/bundled/channels/ChannelHeaderMenu.test.tsx": 2.5,
+    "src/bundled/channels/ChannelLifecycleActions.test.tsx": 0.8,
+    "src/bundled/channels/ChannelLifecycleMenu.test.tsx": 4.4,
+    "src/bundled/channels/ChannelMemberAvatars.test.tsx": 0.2,
+    "src/bundled/channels/ChannelMembersDialog.solo.test.tsx": 27.2,
+    "src/bundled/channels/ChannelMembersDialog.test.tsx": 83.8,
+    "src/bundled/channels/ChannelPrivacyConfirmation.test.tsx": 3.8,
+    "src/bundled/channels/ChannelReadMenuItem.test.tsx": 0.7,
+    "src/bundled/channels/ChannelSettingsPanel.test.tsx": 1.8,
+    "src/bundled/channels/ChannelSidebarItem.test.tsx": 0.7,
+    "src/bundled/channels/ChannelSidebarMenuItem.test.tsx": 0.3,
+    "src/bundled/channels/ChannelSidebarRow.test.tsx": 0.2,
+    "src/bundled/channels/ChannelTemplateSettings.test.tsx": 5,
+    "src/bundled/channels/ChannelsPage.conversion.test.tsx": 3.6,
+    "src/bundled/channels/ChannelsPage.icon.test.tsx": 0,
+    "src/bundled/channels/ChannelsPage.solo.test.tsx": 10.9,
+    "src/bundled/channels/ChannelsPage.tabs.test.tsx": 13.3,
+    "src/bundled/channels/ChannelsPage.test.tsx": 0.4,
+    "src/bundled/channels/ConversationTab.test.tsx": 0.5,
+    "src/bundled/channels/CreateChannelDialog.test.tsx": 9.3,
+    "src/bundled/channels/CreateSidebarSection.test.tsx": 0.9,
+    "src/bundled/channels/DmTypingBadge.test.tsx": 0.7,
+    "src/bundled/channels/LiveStatus.test.tsx": 0.6,
+    "src/bundled/channels/MemberAdministration.test.tsx": 51.8,
+    "src/bundled/channels/OutboxStatus.test.tsx": 2.2,
+    "src/bundled/channels/PageTabs.test.tsx": 1.4,
+    "src/bundled/channels/SidebarActiveDialog.test.tsx": 0.7,
+    "src/bundled/channels/SidebarGroupIcon.test.tsx": 0.1,
+    "src/bundled/channels/SidebarSection.test.tsx": 2.9,
+    "src/bundled/channels/SidebarUnread.test.tsx": 0.8,
+    "src/bundled/channels/SoloChatName.test.tsx": 0.6,
+    "src/bundled/channels/SoloWorkspaces.test.tsx": 8.8,
+    "src/bundled/channels/StartLinkedChat.test.tsx": 0.6,
+    "src/bundled/channels/TabHosts.test.tsx": 0.2,
+    "src/bundled/channels/canvas-panel.test.tsx": 0.4,
+    "src/bundled/channels/channel-query.test.ts": 0,
+    "src/bundled/channels/conversation-rows.test.ts": 0.1,
+    "src/bundled/channels/index.test.tsx": 0,
+    "src/bundled/channels/sidebar-sections.test.ts": 0,
+    "src/bundled/channels/useChannelHistoryFocus.test.ts": 0.1,
+    "src/bundled/channels/useChannelLabels.test.tsx": 0.3,
+    "src/bundled/channels/useChannelPanels.test.tsx": 0.5,
+    "src/bundled/channels/useChannelReadAction.test.tsx": 0,
+    "src/bundled/channels/useChannelRowMenu.test.tsx": 0,
+    "src/bundled/channels/useChannelTabState.test.tsx": 0.2,
+    "src/bundled/channels/useComposerSent.test.tsx": 0,
+    "src/bundled/channels/useConversationTabs.panels.test.tsx": 11,
+    "src/bundled/channels/useConversationTabs.test.tsx": 2.6,
+    "src/bundled/channels/useHiddenDms.test.tsx": 0.1,
+    "src/bundled/channels/useOptimisticMute.test.tsx": 0,
+    "src/bundled/channels/useSidebarFilters.test.tsx": 0.1,
+    "src/bundled/channels/useSidebarStartup.test.tsx": 0.2,
+    "src/bundled/channels/useSidebarView.test.tsx": 0,
+    "src/bundled/channels/working-agents.test.ts": 0,
+    "src/bundled/claude-code/claude-sh.test.ts": 0.7,
+    "src/bundled/claude-code/claude.live.test.ts": 0,
+    "src/bundled/claude-code/claude.test.ts": 0,
+    "src/bundled/claude-code/hooks.live.test.ts": 0,
+    "src/bundled/claude-code/index.test.ts": 0,
+    "src/bundled/claude-code/prompt.test.ts": 0,
+    "src/bundled/claude-code/protection.live.test.ts": 0,
+    "src/bundled/claude-code/runtime.test.ts": 3.8,
+    "src/bundled/claude-code/security.test.ts": 0.4,
+    "src/bundled/claude-code/sessions.test.ts": 0.3,
+    "src/bundled/claude-code/setup.test.ts": 0.6,
+    "src/bundled/claude-code/tabs.test.tsx": 8.8,
+    "src/bundled/claude-code/transcript.test.ts": 6.5,
+    "src/bundled/claude-code/usage.test.ts": 0.3,
+    "src/bundled/codex/codex-sh.test.ts": 2.3,
+    "src/bundled/codex/execution.test.ts": 0.4,
+    "src/bundled/codex/hook-bridge.live.test.ts": 0,
+    "src/bundled/codex/hook-bridge.test.ts": 0,
+    "src/bundled/codex/hooks.test.ts": 0,
+    "src/bundled/codex/index.test.ts": 0.1,
+    "src/bundled/codex/recorded-tools.test.ts": 0,
+    "src/bundled/codex/rpc.test.ts": 0,
+    "src/bundled/codex/runtime.test.ts": 25.3,
+    "src/bundled/codex/security-review.test.ts": 0.1,
+    "src/bundled/codex/setup.test.ts": 0.2,
+    "src/bundled/codex/tabs.test.tsx": 6.1,
+    "src/bundled/codex/transcript.test.ts": 0.4,
+    "src/bundled/codex/usage.test.ts": 0,
+    "src/bundled/diffs/DiffMessage.test.tsx": 0.9,
+    "src/bundled/diffs/parse.test.ts": 0,
+    "src/bundled/discovery.test.ts": 0,
+    "src/bundled/emoji/CustomEmoji.test.tsx": 0.2,
+    "src/bundled/emoji/CustomEmojiSettings.test.tsx": 4.5,
+    "src/bundled/emoji/EmojiPicker.appearance.test.tsx": 0.8,
+    "src/bundled/emoji/EmojiPicker.requests.test.tsx": 1.3,
+    "src/bundled/emoji/copy-emoji.test.ts": 0.2,
+    "src/bundled/emoji/emoji-mart.test.ts": 1.4,
+    "src/bundled/emoji/emoji-query.test.ts": 0,
+    "src/bundled/emoji/emoji-search.test.ts": 0.2,
+    "src/bundled/emoji/gif-shortcut.test.ts": 0,
+    "src/bundled/feedback/FeedbackDialog.test.tsx": 2.5,
+    "src/bundled/feedback/prepare-feedback-native.test.ts": 0,
+    "src/bundled/feedback/prepare-feedback.test.ts": 0,
+    "src/bundled/focus/FocusDialog.test.tsx": 0.9,
+    "src/bundled/focus/index.test.tsx": 0.7,
+    "src/bundled/focus/preferences.test.ts": 0,
+    "src/bundled/focus/state.test.ts": 0,
+    "src/bundled/focus/status.test.ts": 0,
+    "src/bundled/github/AuthorSettings.test.tsx": 1.6,
+    "src/bundled/github/GitHub.module.test.ts": 0,
+    "src/bundled/github/GitHubBody.test.tsx": 1.6,
+    "src/bundled/github/GitHubPanel.test.tsx": 6.2,
+    "src/bundled/github/PullLink.test.tsx": 0.6,
+    "src/bundled/github/ResolvePull.test.tsx": 1.2,
+    "src/bundled/github/SoloPull.test.tsx": 0.3,
+    "src/bundled/github/attention.test.tsx": 0.2,
+    "src/bundled/github/authors.test.ts": 0,
+    "src/bundled/github/checks.test.ts": 0,
+    "src/bundled/github/data.test.tsx": 0.1,
+    "src/bundled/github/gh.test.ts": 0,
+    "src/bundled/github/pattern.test.ts": 0.1,
+    "src/bundled/github/pull-state-tool.test.ts": 0.1,
+    "src/bundled/github/pull-states.test.ts": 3.5,
+    "src/bundled/github/references.test.ts": 0,
+    "src/bundled/github/solo-pull.test.ts": 0.5,
+    "src/bundled/github/watch.test.ts": 0,
+    "src/bundled/github/watcher.test.ts": 0.5,
+    "src/bundled/goose/goose.live.test.ts": 0,
+    "src/bundled/goose/goose.test.ts": 0.8,
+    "src/bundled/goose/index.test.ts": 0,
+    "src/bundled/goose/runtime.test.ts": 2.9,
+    "src/bundled/goose/sessions.test.ts": 0.3,
+    "src/bundled/goose/settings.test.ts": 0,
+    "src/bundled/goose/setup.test.ts": 0.1,
+    "src/bundled/goose/tabs.test.tsx": 6.9,
+    "src/bundled/goose/transcript.test.ts": 0,
+    "src/bundled/goose/usage.test.ts": 0.2,
+    "src/bundled/hook-output.test.ts": 0,
+    "src/bundled/hook-wiring.test.ts": 0,
+    "src/bundled/huddles/HuddleAvatarStack.test.tsx": 0.2,
+    "src/bundled/huddles/HuddleCard.test.tsx": 0.2,
+    "src/bundled/huddles/HuddleDiscussionView.test.tsx": 1.1,
+    "src/bundled/huddles/HuddleLauncher.test.tsx": 0.5,
+    "src/bundled/huddles/HuddlePanel.test.tsx": 0.6,
+    "src/bundled/huddles/useHuddleRequestFocus.test.tsx": 0.2,
+    "src/bundled/inbox/DraftsView.test.tsx": 30.1,
+    "src/bundled/inbox/InboxPage.test.tsx": 114.2,
+    "src/bundled/inbox/archive.test.ts": 0.3,
+    "src/bundled/inbox/dm-label.test.ts": 0,
+    "src/bundled/inbox/index.test.ts": 0,
+    "src/bundled/inbox/route.test.ts": 0,
+    "src/bundled/links/InlineLink.test.tsx": 0.1,
+    "src/bundled/mentions/mention-candidates.test.ts": 0,
+    "src/bundled/mentions/mention-query.test.ts": 0,
+    "src/bundled/mentions/mention-ranking.test.ts": 0.9,
+    "src/bundled/mentions/solo-agents.test.tsx": 29.1,
+    "src/bundled/mentions/team-mentions.test.tsx": 4.9,
+    "src/bundled/mentions/use-mention-choices.test.ts": 0,
+    "src/bundled/mentions/useMentionDirectory.test.ts": 0,
+    "src/bundled/mermaid/MermaidDiagram.test.tsx": 0.6,
+    "src/bundled/moderation/CommunityAdmin.native.test.tsx": 3.2,
+    "src/bundled/moderation/CommunityAdmin.test.tsx": 3.6,
+    "src/bundled/moderation/membership.test.ts": 0,
+    "src/bundled/moderation/registration.test.ts": 0,
+    "src/bundled/pairing/PairingSettings.test.tsx": 0.6,
+    "src/bundled/pi/host.live.test.ts": 0,
+    "src/bundled/pi/index.test.ts": 0,
+    "src/bundled/pi/launch.test.ts": 0.5,
+    "src/bundled/pi/pi.test.ts": 0.3,
+    "src/bundled/pi/protection.live.test.ts": 0,
+    "src/bundled/pi/runtime.test.ts": 1.3,
+    "src/bundled/pi/tabs.test.tsx": 5.6,
+    "src/bundled/pi/transcript.test.ts": 0,
+    "src/bundled/pi/usage.test.ts": 0,
+    "src/bundled/profiles/ProfileAgentIdentity.test.tsx": 5,
+    "src/bundled/profiles/ProfileChannels.test.tsx": 0.3,
+    "src/bundled/profiles/ProfilePanel.fallback.test.tsx": 1.5,
+    "src/bundled/profiles/ProfilePanel.message.test.tsx": 1.6,
+    "src/bundled/profiles/ProfilePanel.status.test.tsx": 2.5,
+    "src/bundled/profiles/ProfilePanel.test.tsx": 2.3,
+    "src/bundled/readmes.test.ts": 0,
+    "src/bundled/relay-notes/NotesPage.test.tsx": 6.5,
+    "src/bundled/relay-notes/index.test.ts": 0,
+    "src/bundled/relay-staff/RelayStaff.test.tsx": 45.8,
+    "src/bundled/relay-staff/read-retry.test.ts": 0,
+    "src/bundled/relay-staff/writes.test.ts": 0,
+    "src/bundled/reminders/RemindDialog.test.tsx": 1.6,
+    "src/bundled/reminders/RemindersPage.test.tsx": 2.1,
+    "src/bundled/reminders/index.test.ts": 14.7,
+    "src/bundled/reminders/model.test.ts": 0,
+    "src/bundled/repos/RepoPage.test.tsx": 5.6,
+    "src/bundled/terminal/TerminalPanel.test.tsx": 0.3,
+    "src/bundled/terminal/banner.test.ts": 0,
+    "src/bundled/terminal/bridge.test.ts": 0,
+    "src/bundled/terminal/index.test.ts": 0,
+    "src/bundled/terminal/sessions.test.ts": 0.2,
+    "src/bundled/todos/TodosPanel.test.tsx": 11.5,
+    "src/bundled/todos/model.test.ts": 0.2,
+    "src/bundled/typesafe/TypeSafeSettings.test.tsx": 0.5,
+    "src/bundled/typesafe/index.test.ts": 0,
+    "src/bundled/usage/UsagePage.test.tsx": 6.2,
+    "src/bundled/usage/stats.test.ts": 0,
+    "src/bundled/voice-notes/VoiceNoteCard.test.tsx": 0.5,
+    "src/bundled/voice-notes/audio.test.mjs": 0.3,
+    "src/bundled/voice-notes/voiceNoteWav.test.mjs": 0,
+    "src/bundled/watching/InstructionsMarkdown.test.tsx": 0.2,
+    "src/bundled/watching/Tab.test.tsx": 1.7,
+    "src/bundled/workflows/CronExpressionInput.test.tsx": 0.5,
+    "src/bundled/workflows/WorkflowChannel.test.tsx": 2.9,
+    "src/bundled/workflows/WorkflowChannelPicker.test.tsx": 0.7,
+    "src/bundled/workflows/WorkflowEditor.test.tsx": 5.3,
+    "src/bundled/workflows/WorkflowForm.test.tsx": 1.7,
+    "src/bundled/workflows/WorkflowLanding.test.tsx": 27.8,
+    "src/bundled/workflows/WorkflowMessageText.test.tsx": 1.7,
+    "src/bundled/workflows/WorkflowOperations.test.tsx": 0.3,
+    "src/bundled/workflows/WorkflowRuns.test.tsx": 0.2,
+    "src/bundled/workflows/WorkflowScheduleFields.test.tsx": 1.4,
+    "src/bundled/workflows/WorkflowWebhookSecretDialog.test.tsx": 0.6,
+    "src/bundled/workflows/WorkflowWebhookSecrets.test.tsx": 0.8,
+    "src/bundled/workflows/WorkflowsPage.test.tsx": 29.2,
+    "src/bundled/workflows/cronExpression.test.mjs": 0,
+    "src/bundled/workflows/editor-model.test.ts": 0.1,
+    "src/bundled/workflows/workflowActivationWarning.test.mjs": 0,
+    "src/bundled/workflows/workflowCardPresentation.test.ts": 0,
+    "src/bundled/workflows/workflowConditionExpression.test.mjs": 0,
+    "src/bundled/workflows/workflowDuration.test.mjs": 0,
+    "src/bundled/workflows/workflowFormTypes.test.mjs": 0.1,
+    "src/bundled/workflows/workflowSchedule.test.mjs": 0,
+    "src/bundled/workflows/workflowYamlDocument.test.mjs": 0,
+    "src/buzz-mcp/app-client.test.ts": 0.1,
+    "src/buzz-mcp/attention.test.ts": 0.1,
+    "src/buzz-mcp/connection.test.ts": 0,
+    "src/buzz-mcp/external.test.ts": 0,
+    "src/buzz-mcp/node.test.ts": 4.7,
+    "src/buzz-mcp/plugins.test.ts": 0,
+    "src/buzz-mcp/session-tools.test.ts": 0,
+    "src/buzz-mcp/settings.test.ts": 0,
+    "src/buzz-mcp/solo-worker-protocol.test.ts": 0.2,
+    "src/buzz-mcp/solo-worker.test.ts": 4.9,
+    "src/buzz-mcp/tools.test.ts": 0.7,
+    "src/features/agent-harness/acp/client.test.ts": 0,
+    "src/features/agent-harness/attention-prompt.test.ts": 0,
+    "src/features/agent-harness/core-memory.test.ts": 0,
+    "src/features/agent-harness/kit.test.ts": 0,
+    "src/features/agent-harness/plugin-wake.test.ts": 0,
+    "src/features/agent-harness/project.test.ts": 0.1,
+    "src/features/agent-harness/turn-records.test.ts": 0,
+    "src/features/agent-protection/native-bridge.test.ts": 0,
+    "src/features/agent-protection/service.test.ts": 0.1,
+    "src/features/agents/ActivityTranscript.test.tsx": 0.3,
+    "src/features/agents/AgentAvatar.test.tsx": 0,
+    "src/features/agents/AgentAvatarArtworkProvider.test.tsx": 0.1,
+    "src/features/agents/AgentCommunityScope.test.tsx": 0.4,
+    "src/features/agents/AgentConfigHistory.test.tsx": 3.4,
+    "src/features/agents/AgentConfigHistoryRow.test.tsx": 1.8,
+    "src/features/agents/AgentConnectionSetup.test.tsx": 1.2,
+    "src/features/agents/AgentManage.test.tsx": 0.3,
+    "src/features/agents/AttentionPanel.test.tsx": 0,
+    "src/features/agents/ExternalAuthorizationDialog.test.tsx": 1.5,
+    "src/features/agents/InterruptedNotice.test.tsx": 0.3,
+    "src/features/agents/MemoryPanel.test.tsx": 2.4,
+    "src/features/agents/ModelDiscoveryRecovery.test.tsx": 0.2,
+    "src/features/agents/ModelPicker.test.tsx": 3.3,
+    "src/features/agents/OpenedConversation.test.tsx": 0,
+    "src/features/agents/activity-records.test.ts": 0,
+    "src/features/agents/activity-transcript.test.ts": 0,
+    "src/features/agents/activity.test.ts": 0.3,
+    "src/features/agents/agent-config-artifacts.test.ts": 0.2,
+    "src/features/agents/agent-config-history.test.ts": 0.1,
+    "src/features/agents/agent-config.test.ts": 0.2,
+    "src/features/agents/agent-share.test.ts": 0.1,
+    "src/features/agents/agent-start.test.ts": 0.2,
+    "src/features/agents/attention-command.test.ts": 0,
+    "src/features/agents/attention-discovery.test.ts": 0,
+    "src/features/agents/attention-objects.test.ts": 0,
+    "src/features/agents/attention-sources.test.ts": 0.3,
+    "src/features/agents/attention.test.ts": 0,
+    "src/features/agents/catch-up.test.ts": 0.2,
+    "src/features/agents/choices.test.ts": 0,
+    "src/features/agents/command.test.ts": 0.2,
+    "src/features/agents/community-config.test.ts": 0.4,
+    "src/features/agents/config-channels.test.ts": 0.5,
+    "src/features/agents/config-follow.session.test.ts": 0.2,
+    "src/features/agents/config-sync.test.ts": 4.4,
+    "src/features/agents/config-writes.test.ts": 0.1,
+    "src/features/agents/core-memory-cache.test.ts": 0,
+    "src/features/agents/current-activity.test.ts": 0,
+    "src/features/agents/execution.test.ts": 0.3,
+    "src/features/agents/external-connection.test.ts": 0,
+    "src/features/agents/formatModelDisplayName.test.ts": 0,
+    "src/features/agents/history-presentation.test.ts": 0,
+    "src/features/agents/hooks.test.ts": 0,
+    "src/features/agents/inventory.test.ts": 0.3,
+    "src/features/agents/keep-awake.test.ts": 0,
+    "src/features/agents/launch-boundary.test.ts": 1.6,
+    "src/features/agents/library.test.ts": 0.1,
+    "src/features/agents/local-activity.integration.test.ts": 0.3,
+    "src/features/agents/local-activity.test.ts": 0.1,
+    "src/features/agents/memory.test.ts": 0.2,
+    "src/features/agents/migrate-filter.test.ts": 0,
+    "src/features/agents/migrate-keywords.test.ts": 0,
+    "src/features/agents/migrate-storage.test.ts": 0,
+    "src/features/agents/native.test.ts": 0,
+    "src/features/agents/owner-attestation.test.ts": 0.1,
+    "src/features/agents/react.test.tsx": 0.1,
+    "src/features/agents/relay-library.test.ts": 0.9,
+    "src/features/agents/relay-removal.test.ts": 2.6,
+    "src/features/agents/service.test.ts": 36.7,
+    "src/features/agents/session-prompts.test.ts": 0,
+    "src/features/agents/share-card.test.ts": 0,
+    "src/features/agents/shared-agents.test.ts": 0,
+    "src/features/agents/solo-chat-name.test.ts": 0.1,
+    "src/features/agents/solo-chat.test.ts": 0,
+    "src/features/agents/state.test.ts": 0,
+    "src/features/agents/store.test.ts": 0,
+    "src/features/agents/tabs.test.tsx": 0.3,
+    "src/features/agents/team-config.test.ts": 0,
+    "src/features/agents/team-ops.test.ts": 0.1,
+    "src/features/agents/thread-working.test.ts": 0,
+    "src/features/agents/typing.test.ts": 0,
+    "src/features/agents/use-work-stops.test.tsx": 0.1,
+    "src/features/agents/visible-teams.test.ts": 0,
+    "src/features/agents/workflow-authorization.test.ts": 0.2,
+    "src/features/artifact-storage/service.test.ts": 0,
+    "src/features/browser/BrowserHostView.test.tsx": 3,
+    "src/features/browser/platform.test.ts": 0,
+    "src/features/browser/service.test.ts": 0,
+    "src/features/browser/sessions.test.ts": 0.2,
+    "src/features/channel-members/administration.test.ts": 2.5,
+    "src/features/channel-members/members.test.ts": 14.9,
+    "src/features/channel-members/operations.test.ts": 0,
+    "src/features/channel-members/search.test.ts": 0.2,
+    "src/features/channel-navigation/ChannelInventory.test.tsx": 49.6,
+    "src/features/channel-navigation/ChannelNavigationState.test.tsx": 1.7,
+    "src/features/channel-navigation/ChannelSidebarRows.test.tsx": 1.2,
+    "src/features/channel-navigation/ResizableSidebar.test.ts": 0,
+    "src/features/channel-navigation/ResizableSidebar.test.tsx": 0.3,
+    "src/features/channel-navigation/SidebarContributionSection.test.tsx": 0.5,
+    "src/features/channel-navigation/SidebarRowRenderer.test.tsx": 0,
+    "src/features/channel-navigation/SoloInventory.test.tsx": 3.8,
+    "src/features/channel-navigation/SoloRegions.test.tsx": 3.4,
+    "src/features/channel-navigation/routes.test.ts": 0,
+    "src/features/channel-navigation/sidebar-rows-service.test.ts": 0,
+    "src/features/channel-navigation/sidebar-sections-service.test.ts": 0,
+    "src/features/channel-navigation/solo-navigation.test.ts": 0.4,
+    "src/features/channel-navigation/solo-successor.test.ts": 0,
+    "src/features/channel-templates/canvas-conflict.test.ts": 0,
+    "src/features/channel-templates/capability.test.ts": 1.2,
+    "src/features/channel-templates/local.test.ts": 0,
+    "src/features/channel-templates/setup.test.ts": 1,
+    "src/features/channel-templates/team-payload.test.ts": 0,
+    "src/features/channels/channel-icon.test.ts": 0,
+    "src/features/channels/useChannelDirectory.test.ts": 0,
+    "src/features/communities/CommunityDialog.test.tsx": 4.2,
+    "src/features/communities/CommunityLanding.test.tsx": 1.2,
+    "src/features/communities/CommunityPicker.native.test.tsx": 0.7,
+    "src/features/communities/CommunityPicker.test.tsx": 12.8,
+    "src/features/communities/FindCommunity.test.tsx": 0.8,
+    "src/features/communities/api.test.ts": 0,
+    "src/features/communities/broker-config.test.ts": 0.1,
+    "src/features/communities/broker-identity.test.ts": 0.4,
+    "src/features/communities/broker-url.test.ts": 0.3,
+    "src/features/communities/broker.test.ts": 0.3,
+    "src/features/communities/community-icon.test.ts": 0,
+    "src/features/communities/departure.test.ts": 0,
+    "src/features/communities/destination.test.ts": 0,
+    "src/features/communities/device-state.test.ts": 0,
+    "src/features/communities/find-community.test.ts": 0,
+    "src/features/communities/invite-intent.test.ts": 0,
+    "src/features/communities/invite-link.test.ts": 0,
+    "src/features/communities/join-journal.test.ts": 0,
+    "src/features/communities/join.test.ts": 0,
+    "src/features/communities/known-communities.test.ts": 0,
+    "src/features/communities/legacy-communities.test.ts": 0,
+    "src/features/communities/names.test.ts": 0.3,
+    "src/features/communities/native-api.test.ts": 0.2,
+    "src/features/communities/native-join.test.tsx": 4.2,
+    "src/features/communities/repositories.test.ts": 0,
+    "src/features/communities/service.test.ts": 0.4,
+    "src/features/conversation/AttachmentView.test.tsx": 0,
+    "src/features/conversation/BuzzLinkPreview.test.tsx": 0.1,
+    "src/features/conversation/ComposerAccessories.test.tsx": 0.1,
+    "src/features/conversation/ComposerCompletions.test.tsx": 0.2,
+    "src/features/conversation/EmbeddedThread.test.tsx": 0.5,
+    "src/features/conversation/MessageLink.presentation.test.tsx": 0.6,
+    "src/features/conversation/MessageLink.test.tsx": 1.6,
+    "src/features/conversation/ReactionTool.test.ts": 0,
+    "src/features/conversation/channel-reference.test.tsx": 0.4,
+    "src/features/conversation/completion.test.ts": 0,
+    "src/features/conversation/exact-opening.test.ts": 0,
+    "src/features/conversation/linked-message.test.tsx": 0.3,
+    "src/features/conversation/message-preview-text.test.ts": 0,
+    "src/features/conversation/opener.test.tsx": 0.2,
+    "src/features/conversation/service.test.tsx": 1.1,
+    "src/features/conversation/typing-presentation.test.tsx": 0,
+    "src/features/decisions/agent-tool.test.ts": 0.1,
+    "src/features/decisions/service.test.ts": 0.1,
+    "src/features/developer/client-metrics.test.ts": 0,
+    "src/features/developer/logging-sync.test.ts": 0.1,
+    "src/features/developer/logging.test.ts": 0,
+    "src/features/direct-messages/NewMessage.recovery.test.tsx": 15.4,
+    "src/features/direct-messages/NewMessage.test.tsx": 25.2,
+    "src/features/federated-identity/CommunitySignIn.test.tsx": 0.2,
+    "src/features/federated-identity/LaunchSignIn.test.tsx": 0.7,
+    "src/features/federated-identity/service.test.ts": 0.1,
+    "src/features/host/service.test.ts": 0.4,
+    "src/features/huddle/audio-settings.test.ts": 0.1,
+    "src/features/huddle/audio.test.ts": 0,
+    "src/features/huddle/composer.test.ts": 4.9,
+    "src/features/huddle/discovery.test.ts": 0.1,
+    "src/features/huddle/discussion.test.ts": 1.1,
+    "src/features/huddle/invitations.test.ts": 0.7,
+    "src/features/huddle/lifecycle.test.ts": 1.2,
+    "src/features/huddle/requests.test.ts": 0.2,
+    "src/features/huddle/ring.test.ts": 0,
+    "src/features/huddle/service.test.ts": 0.3,
+    "src/features/huddle/use-incoming.test.tsx": 0.2,
+    "src/features/huddle/window.test.ts": 0.9,
+    "src/features/identity-names/consumers.test.tsx": 1.6,
+    "src/features/identity-names/directory.test.ts": 0.1,
+    "src/features/identity-names/policy.test.ts": 0,
+    "src/features/identity-names/react.test.tsx": 0.1,
+    "src/features/identity-names/service.test.ts": 0.5,
+    "src/features/identity/BackupConsent.test.tsx": 0.9,
+    "src/features/identity/CommunityUrlField.test.ts": 0,
+    "src/features/identity/KeyRestore.test.tsx": 0.4,
+    "src/features/identity/OnboardingBees.test.tsx": 0,
+    "src/features/identity/ProfileStep.test.tsx": 0.5,
+    "src/features/identity/PublicKeyPanel.test.tsx": 0.2,
+    "src/features/identity/WelcomeBack.test.tsx": 0.3,
+    "src/features/identity/backup-choice.test.ts": 0,
+    "src/features/identity/backup.test.ts": 0.6,
+    "src/features/identity/builderlab-account.test.ts": 0.2,
+    "src/features/identity/builderlab-hosted.test.ts": 0,
+    "src/features/identity/first-run-seed.test.ts": 0.1,
+    "src/features/identity/identity.test.tsx": 22.5,
+    "src/features/identity/key-import.test.ts": 0,
+    "src/features/identity/restore-communities.test.ts": 0,
+    "src/features/identity/setup.test.ts": 0,
+    "src/features/messages/ActivityGroupPreview.test.tsx": 0.5,
+    "src/features/messages/AttachmentImage.test.tsx": 0.3,
+    "src/features/messages/AudioAttachment.test.tsx": 0.6,
+    "src/features/messages/ChannelJoinNotice.test.tsx": 0.3,
+    "src/features/messages/ChannelTimeline.report.test.tsx": 9.1,
+    "src/features/messages/ChannelTimeline.restore.test.tsx": 7.6,
+    "src/features/messages/ChannelTimeline.test.tsx": 0.6,
+    "src/features/messages/ChannelTimeline.viewport.test.tsx": 2.8,
+    "src/features/messages/ComposerAttachments.test.tsx": 1.8,
+    "src/features/messages/DeliveryNotice.test.tsx": 0.2,
+    "src/features/messages/EditableInput.test.tsx": 10.9,
+    "src/features/messages/FileAttachment.test.tsx": 0.4,
+    "src/features/messages/ImageReviewStage.test.tsx": 3,
+    "src/features/messages/MediaAttachment.video.test.tsx": 1.6,
+    "src/features/messages/MediaDownloadAction.test.tsx": 1.1,
+    "src/features/messages/MediaReviewViewer.comments.test.tsx": 15.4,
+    "src/features/messages/MediaReviewViewer.motion.test.tsx": 3.9,
+    "src/features/messages/MediaReviewViewer.source.test.tsx": 1.8,
+    "src/features/messages/MediaReviewViewer.test.tsx": 1.2,
+    "src/features/messages/MediaReviewViewer.video.test.tsx": 3,
+    "src/features/messages/MessageActionBar.test.tsx": 3.6,
+    "src/features/messages/MessageComposer.test.tsx": 141.3,
+    "src/features/messages/MessageEdit.integration.test.tsx": 5.9,
+    "src/features/messages/MessageManagement.test.tsx": 16.8,
+    "src/features/messages/MessageMarkdown.test.tsx": 9.4,
+    "src/features/messages/MessageReactions.test.tsx": 5.8,
+    "src/features/messages/MessageRow.test.tsx": 8.4,
+    "src/features/messages/MessageTimestamp.test.tsx": 0.2,
+    "src/features/messages/QueuedFollowUps.test.tsx": 0.7,
+    "src/features/messages/ReferenceText.test.tsx": 0.2,
+    "src/features/messages/ReportMessageDialog.test.tsx": 6.3,
+    "src/features/messages/RichComposerInput.test.tsx": 1.3,
+    "src/features/messages/TerminalMentionEdit.regression.test.tsx": 0.4,
+    "src/features/messages/ThreadPanel.identity.test.tsx": 1.1,
+    "src/features/messages/ThreadPanel.nesting.test.tsx": 3.4,
+    "src/features/messages/ThreadPanel.profile.test.tsx": 3.6,
+    "src/features/messages/ThreadPanel.test.tsx": 4.5,
+    "src/features/messages/TypingIndicator.stop.test.tsx": 1,
+    "src/features/messages/TypingIndicator.test.tsx": 5.6,
+    "src/features/messages/VideoPlayer.gestures.test.tsx": 0.4,
+    "src/features/messages/WorkflowProfiles.test.tsx": 0.5,
+    "src/features/messages/activity-groups.test.ts": 0,
+    "src/features/messages/activity-presentation.test.tsx": 0,
+    "src/features/messages/attachment-draft.test.tsx": 1,
+    "src/features/messages/attachment-panes.test.tsx": 2.1,
+    "src/features/messages/attachment-source.test.ts": 0,
+    "src/features/messages/audience-address.test.ts": 0,
+    "src/features/messages/blurhash.test.ts": 0,
+    "src/features/messages/chat-cards.test.ts": 0,
+    "src/features/messages/chat-link-sharing.test.tsx": 7.3,
+    "src/features/messages/composer-chat-cards.test.ts": 0.1,
+    "src/features/messages/composer-clipboard.test.ts": 0.2,
+    "src/features/messages/composer-document.test.ts": 0.3,
+    "src/features/messages/composer-resource.test.tsx": 1.4,
+    "src/features/messages/delivery.test.ts": 0,
+    "src/features/messages/emoji-size.test.ts": 0,
+    "src/features/messages/encode-webp.test.ts": 0,
+    "src/features/messages/follow-up-persistence.test.ts": 6.5,
+    "src/features/messages/follow-up-preference.test.ts": 0,
+    "src/features/messages/follow-up-queue.test.ts": 0.2,
+    "src/features/messages/geometry.test.ts": 0.1,
+    "src/features/messages/icon-labels.test.tsx": 0.6,
+    "src/features/messages/image-copy.test.ts": 0,
+    "src/features/messages/image-metadata.test.ts": 0,
+    "src/features/messages/jpeg-metadata.test.ts": 0,
+    "src/features/messages/markdown-preparation.test.ts": 1.3,
+    "src/features/messages/media-timecode.test.ts": 0,
+    "src/features/messages/membership-rows.test.tsx": 0.3,
+    "src/features/messages/mention-admission.test.ts": 0,
+    "src/features/messages/mention-draft.test.ts": 0,
+    "src/features/messages/message-copy.test.ts": 0,
+    "src/features/messages/message-edit.test.ts": 0,
+    "src/features/messages/message-grouping.test.ts": 0,
+    "src/features/messages/message-highlight.test.ts": 0,
+    "src/features/messages/message-link-parts.test.ts": 0.1,
+    "src/features/messages/message-references.test.ts": 0,
+    "src/features/messages/message-selection.test.ts": 0.1,
+    "src/features/messages/profile-mentions.test.ts": 0,
+    "src/features/messages/reply-tree.test.ts": 0,
+    "src/features/messages/scroll-correction.test.ts": 0,
+    "src/features/messages/selection-copy.test.tsx": 1.2,
+    "src/features/messages/send-key-preference.test.ts": 0,
+    "src/features/messages/use-file-drop.test.tsx": 0.2,
+    "src/features/messages/use-media-element-source.test.ts": 0.2,
+    "src/features/messages/use-media-read-recovery.test.tsx": 0.1,
+    "src/features/messages/use-message-opening.test.ts": 0.4,
+    "src/features/messages/use-message-reveal.test.tsx": 0.2,
+    "src/features/messages/use-reading.dm.test.ts": 0.2,
+    "src/features/messages/use-reading.test.ts": 0.1,
+    "src/features/messages/useModalBoundary.test.tsx": 0.3,
+    "src/features/messages/useTypingBroadcast.test.tsx": 0,
+    "src/features/messages/view-key.test.tsx": 0,
+    "src/features/messages/virtua-compensation.test.mjs": 0,
+    "src/features/navigation/RejectedLinkNotice.test.tsx": 0.2,
+    "src/features/navigation/SettingsSectionLink.test.tsx": 0.2,
+    "src/features/navigation/browser-history.test.ts": 0.1,
+    "src/features/navigation/buzz-links.test.ts": 0.1,
+    "src/features/navigation/controller-reentrancy.test.ts": 0,
+    "src/features/navigation/controller.test.ts": 0,
+    "src/features/navigation/deep-links.test.ts": 1,
+    "src/features/navigation/service.test.ts": 0.1,
+    "src/features/navigation/targets.test.ts": 0,
+    "src/features/notifications/agent-completions.test.ts": 0,
+    "src/features/notifications/content.test.ts": 0.1,
+    "src/features/notifications/desktop-channel.test.ts": 0,
+    "src/features/notifications/desktop.test.ts": 0.2,
+    "src/features/notifications/indicator-unread.test.ts": 0.4,
+    "src/features/notifications/indicator.test.ts": 0.1,
+    "src/features/notifications/messages-reading.test.ts": 2.1,
+    "src/features/notifications/messages.test.ts": 5,
+    "src/features/notifications/platform.test.ts": 0,
+    "src/features/notifications/preferences.test.ts": 0,
+    "src/features/notifications/presentation.test.ts": 0,
+    "src/features/notifications/service-lifetime.test.ts": 0,
+    "src/features/notifications/service.test.ts": 0.3,
+    "src/features/notifications/sound.test.ts": 0,
+    "src/features/pages/service.test.ts": 0.1,
+    "src/features/pairing/client.test.ts": 0.1,
+    "src/features/panels/PanelDock.test.tsx": 0.2,
+    "src/features/panels/PanelSubview.test.tsx": 0.4,
+    "src/features/panels/PanelWorkspace.test.tsx": 2.5,
+    "src/features/panels/ResizeHandle.drag.test.tsx": 0.3,
+    "src/features/panels/ResizeHandle.test.tsx": 0.2,
+    "src/features/panels/service.test.tsx": 0.1,
+    "src/features/panels/usePanelSplit.test.tsx": 0.3,
+    "src/features/plugin-development/agent-tools.test.ts": 0,
+    "src/features/plugin-development/service.test.ts": 0,
+    "src/features/presence/activity.dom.test.ts": 0,
+    "src/features/presence/activity.test.ts": 0,
+    "src/features/presence/presence.test.ts": 0.4,
+    "src/features/presence/react.test.tsx": 0.1,
+    "src/features/profiles/AvatarEditor.test.tsx": 2.7,
+    "src/features/profiles/ProfilePeek.test.tsx": 0.8,
+    "src/features/profiles/avatar-upload.test.ts": 0,
+    "src/features/profiles/target.test.ts": 0,
+    "src/features/profiles/use-avatar-preview.test.tsx": 0.7,
+    "src/features/profiles/useVerifiedNames.test.tsx": 0.5,
+    "src/features/relay/RecoveryNotice.test.tsx": 0,
+    "src/features/relay/activity-typing.test.ts": 0.2,
+    "src/features/relay/agent-memory.test.ts": 0.1,
+    "src/features/relay/artifact-incremental-reader.test.ts": 0.2,
+    "src/features/relay/artifact-reconcile.test.ts": 0.1,
+    "src/features/relay/artifact-store-sync.test.ts": 5.3,
+    "src/features/relay/artifact-sync.session.test.ts": 0.2,
+    "src/features/relay/artifact-sync.test.ts": 0.2,
+    "src/features/relay/attachments.test.ts": 0.1,
+    "src/features/relay/broker-live-sync.test.ts": 0.5,
+    "src/features/relay/broker-live.test.ts": 0.2,
+    "src/features/relay/broker.integration.test.ts": 0.5,
+    "src/features/relay/budget.test.ts": 0,
+    "src/features/relay/channel-activity-session.test.ts": 1.8,
+    "src/features/relay/channel-activity.test.ts": 0.2,
+    "src/features/relay/channel-creation-names.test.ts": 1.4,
+    "src/features/relay/channel-details.test.ts": 1.5,
+    "src/features/relay/channel-lifecycle.test.ts": 3.4,
+    "src/features/relay/channel-opening.test.ts": 0.3,
+    "src/features/relay/channel-references.test.ts": 2.4,
+    "src/features/relay/channel-writes.test.ts": 1.6,
+    "src/features/relay/container-relay.e2e.test.ts": 0,
+    "src/features/relay/cross-client.test.ts": 0.2,
+    "src/features/relay/diff-messages.test.ts": 0.2,
+    "src/features/relay/direct-messages.test.ts": 5.3,
+    "src/features/relay/directory-session.test.ts": 1.2,
+    "src/features/relay/discovery-absence.test.ts": 0.1,
+    "src/features/relay/discovery-auto-join.test.ts": 0.1,
+    "src/features/relay/discovery-budget.test.ts": 0.1,
+    "src/features/relay/discovery-huddle.test.ts": 0.1,
+    "src/features/relay/discovery-permissions.test.ts": 0.2,
+    "src/features/relay/discovery-start.test.ts": 0,
+    "src/features/relay/discovery-system.test.ts": 0,
+    "src/features/relay/emoji.test.ts": 2,
+    "src/features/relay/event-access.test.ts": 0,
+    "src/features/relay/event-proof.test.ts": 0.1,
+    "src/features/relay/events.test.ts": 0.1,
+    "src/features/relay/fold.test.ts": 0.8,
+    "src/features/relay/gifs.test.ts": 0,
+    "src/features/relay/global-search.test.ts": 4.7,
+    "src/features/relay/history-seek.test.ts": 0,
+    "src/features/relay/host-admission.test.ts": 0,
+    "src/features/relay/http-admission.test.ts": 0.1,
+    "src/features/relay/identity-archives.test.ts": 1,
+    "src/features/relay/inbox-feed.test.ts": 4.5,
+    "src/features/relay/live-demand.test.ts": 2.7,
+    "src/features/relay/live-recovery.test.ts": 0,
+    "src/features/relay/live-restriction.test.ts": 0.6,
+    "src/features/relay/live-session.test.ts": 2.7,
+    "src/features/relay/live.test.ts": 81.5,
+    "src/features/relay/media.test.ts": 0,
+    "src/features/relay/membership-outbox.test.ts": 4.4,
+    "src/features/relay/membership.test.ts": 4.4,
+    "src/features/relay/mentions-live.test.ts": 1.8,
+    "src/features/relay/mentions.test.ts": 0.5,
+    "src/features/relay/message-order.test.ts": 0.3,
+    "src/features/relay/message-projection.test.ts": 0.2,
+    "src/features/relay/native-sidebar.test.ts": 0.8,
+    "src/features/relay/native-socket.test.ts": 0.1,
+    "src/features/relay/native.test.ts": 1.7,
+    "src/features/relay/outbox-receipts.test.ts": 0.2,
+    "src/features/relay/outbox-recovery.test.ts": 1.6,
+    "src/features/relay/outbox.test.ts": 3.2,
+    "src/features/relay/owned-agent-edits.test.ts": 1.1,
+    "src/features/relay/partition.test.ts": 0,
+    "src/features/relay/persistence.test.ts": 0,
+    "src/features/relay/prepared.test.ts": 2.8,
+    "src/features/relay/product-feedback.test.ts": 0.1,
+    "src/features/relay/profile-details.test.ts": 0.5,
+    "src/features/relay/profile-search.test.ts": 0,
+    "src/features/relay/queries.test.ts": 0.2,
+    "src/features/relay/react.test.tsx": 0,
+    "src/features/relay/reactions.test.ts": 0.4,
+    "src/features/relay/read-retry.test.ts": 0,
+    "src/features/relay/read-state-model.test.ts": 0,
+    "src/features/relay/read-state-retention.test.ts": 0.9,
+    "src/features/relay/read-state-vectors.test.ts": 0.1,
+    "src/features/relay/read-state.test.ts": 10.9,
+    "src/features/relay/reader-recovery.test.ts": 0,
+    "src/features/relay/reader.test.ts": 0.1,
+    "src/features/relay/reauthorization.test.ts": 0.1,
+    "src/features/relay/recovery.test.ts": 0,
+    "src/features/relay/reminders.test.ts": 0.4,
+    "src/features/relay/report.test.ts": 0.1,
+    "src/features/relay/revocation.test.ts": 1.7,
+    "src/features/relay/send-to-channel.test.ts": 0.3,
+    "src/features/relay/service.test.ts": 0.7,
+    "src/features/relay/session-agent-admission.test.ts": 2.5,
+    "src/features/relay/session-attachments.test.ts": 0.4,
+    "src/features/relay/session-discovery.test.ts": 0.1,
+    "src/features/relay/session-feedback.test.ts": 0.3,
+    "src/features/relay/session-inventory-navigation.test.tsx": 0.3,
+    "src/features/relay/session-leave.test.ts": 0.5,
+    "src/features/relay/session-main-agent.test.ts": 0.1,
+    "src/features/relay/session-permissions.test.ts": 2.4,
+    "src/features/relay/session-read-retry.test.ts": 0.1,
+    "src/features/relay/session-snapshot-read.test.ts": 0.8,
+    "src/features/relay/sidebar-edits.test.ts": 0,
+    "src/features/relay/sidebar-moves-store.test.ts": 0.1,
+    "src/features/relay/sidebar-preferences-store.test.ts": 0.2,
+    "src/features/relay/sidebar-preferences.test.ts": 0.8,
+    "src/features/relay/sidebar-registers.test.ts": 0,
+    "src/features/relay/sidebar-section-order-store.test.ts": 0.1,
+    "src/features/relay/sidebar-section-removal-store.test.ts": 0.1,
+    "src/features/relay/sidebar-section-rename-store.test.ts": 0,
+    "src/features/relay/sidebar-sorting-store.test.ts": 0,
+    "src/features/relay/signed-admission.test.ts": 0.2,
+    "src/features/relay/signed-boundary.test.ts": 0.1,
+    "src/features/relay/signed-priority.test.ts": 0.3,
+    "src/features/relay/solo-preferences.test.ts": 0.4,
+    "src/features/relay/solo-start.test.ts": 1.8,
+    "src/features/relay/startup-service.test.ts": 1.2,
+    "src/features/relay/startup.test.ts": 27.4,
+    "src/features/relay/store-discovery.test.ts": 61.2,
+    "src/features/relay/store-seek.test.ts": 21.7,
+    "src/features/relay/store-system-discovery.test.ts": 4.7,
+    "src/features/relay/store.test.ts": 3.6,
+    "src/features/relay/thread-follows.test.ts": 0,
+    "src/features/relay/thread-target.test.ts": 3.6,
+    "src/features/relay/thread-window.test.ts": 3.8,
+    "src/features/relay/threads.test.ts": 1,
+    "src/features/relay/traffic.integration.test.ts": 5.4,
+    "src/features/relay/transport-memory.test.ts": 0,
+    "src/features/relay/transport.test.ts": 0.2,
+    "src/features/relay/typing-protocol.test.ts": 0,
+    "src/features/relay/typing.integration.test.ts": 0.4,
+    "src/features/relay/typing.test.ts": 5.3,
+    "src/features/relay/unread-follows.test.ts": 1.6,
+    "src/features/relay/unread-invalidation.test.ts": 0.2,
+    "src/features/relay/unread-lookups.test.ts": 0.5,
+    "src/features/relay/unread-startup.test.ts": 46,
+    "src/features/relay/unread.test.ts": 5.2,
+    "src/features/relay/user-status.test.ts": 0.4,
+    "src/features/relay/verified-profile.test.ts": 0.9,
+    "src/features/relay/video-preparation.test.ts": 0,
+    "src/features/relay/voice-media.test.ts": 0.1,
+    "src/features/relay/warm-lifecycle.test.ts": 1.7,
+    "src/features/relay/warm.test.ts": 0.3,
+    "src/features/relay/window.test.ts": 0.1,
+    "src/features/relay/workflow-attribution.test.ts": 0.2,
+    "src/features/repos/destinations.test.ts": 1,
+    "src/features/repos/git-read-retry.test.ts": 0,
+    "src/features/repos/git.test.ts": 0,
+    "src/features/repos/routes.test.ts": 0,
+    "src/features/search/people-rank.test.ts": 0,
+    "src/features/search/person-match.test.ts": 0,
+    "src/features/search/usage.test.ts": 0.1,
+    "src/features/search/use-search-highlight.test.ts": 0,
+    "src/features/search/use-search-highlight.test.tsx": 0.3,
+    "src/features/settings/service.test.ts": 0,
+    "src/features/shortcuts/format.test.ts": 0,
+    "src/features/shortcuts/preferences.test.ts": 0,
+    "src/features/shortcuts/service.test.ts": 0.5,
+    "src/features/shortcuts/terminal-key-event.test.ts": 0,
+    "src/features/solo/ConvertToChannel.placement.test.tsx": 1.2,
+    "src/features/solo/ConvertToChannel.test.tsx": 8.5,
+    "src/features/solo/Lifetime.test.tsx": 0.8,
+    "src/features/solo/NewWorkspace.test.tsx": 1,
+    "src/features/solo/SoloDraft.test.tsx": 31.2,
+    "src/features/solo/WorkspaceControl.test.tsx": 0.6,
+    "src/features/solo/WorkspaceFields.test.tsx": 0.9,
+    "src/features/solo/WorkspaceSettings.test.tsx": 5.1,
+    "src/features/solo/chat-title.test.ts": 0,
+    "src/features/solo/default-agent.test.tsx": 0.3,
+    "src/features/solo/labels.test.ts": 0,
+    "src/features/solo/people.test.ts": 0,
+    "src/features/solo/recipients.test.ts": 0,
+    "src/features/solo/share.test.ts": 0,
+    "src/features/solo/workspace.test.ts": 0,
+    "src/features/updates/UpdateNotice.test.tsx": 1.2,
+    "src/features/updates/UpdateSettings.test.tsx": 0.8,
+    "src/features/updates/updates.test.ts": 0.5,
+    "src/features/user-status/StatusDisplay.test.tsx": 0.4,
+    "src/features/user-status/StatusEditor.test.tsx": 3.3,
+    "src/features/user-status/status-duration.test.ts": 0,
+    "src/features/workflows/capability.test.ts": 0.7,
+    "src/features/workflows/http.test.ts": 0,
+    "src/features/workflows/pagination.test.ts": 0.1,
+    "src/features/workflows/protocol.test.ts": 0,
+    "src/features/workflows/session.test.ts": 2,
+    "src/plugins/OwnedContribution.test.tsx": 0,
+    "src/plugins/author.test.mjs": 6.6,
+    "src/plugins/contributions.test.ts": 0,
+    "src/plugins/installer.test.ts": 0,
+    "src/plugins/managed.test.ts": 0,
+    "src/plugins/manager.test.ts": 0.1,
+    "src/plugins/requests.test.ts": 0,
+    "src/plugins/review-access.test.ts": 0,
+    "src/plugins/runtime.test.mjs": 0.1,
+    "src/plugins/storage-imports.test.ts": 0,
+    "src/plugins/storage.desktop.test.ts": 0,
+    "src/plugins/storage.test.ts": 0,
+    "src/shared/datetime.test.ts": 0,
+    "src/shared/design-system/chips/address.test.ts": 0,
+    "src/shared/design-system/chips/faceResolver.test.ts": 0,
+    "src/shared/design-system/overlayLayer.test.tsx": 0.9,
+    "src/shared/design-system/tokens/brand.test.ts": 0,
+    "src/shared/design-system/tokens/contrast.test.mjs": 8.8,
+    "src/shared/design-system/tokens/registry.test.ts": 0,
+    "src/shared/design-system/ui/Avatar.lifecycle.test.tsx": 0.4,
+    "src/shared/design-system/ui/Avatar.test.tsx": 0,
+    "src/shared/design-system/ui/ChoiceControls.test.tsx": 2.2,
+    "src/shared/design-system/ui/InlineChip.test.tsx": 0.1,
+    "src/shared/design-system/ui/LoadingRegion.test.tsx": 0.2,
+    "src/shared/design-system/ui/Menu.test.tsx": 2.3,
+    "src/shared/design-system/ui/Popover.test.tsx": 0.7,
+    "src/shared/design-system/ui/PreferenceRow.test.tsx": 0.4,
+    "src/shared/design-system/ui/RadioGroup.test.tsx": 0.4,
+    "src/shared/design-system/ui/Select.test.tsx": 0.5,
+    "src/shared/design-system/ui/SidebarNavigation.test.tsx": 1.5,
+    "src/shared/design-system/ui/SplitButton.test.tsx": 0.4,
+    "src/shared/design-system/ui/Toast.test.tsx": 1.5,
+    "src/shared/design-system/ui/Tooltip.test.tsx": 1.3,
+    "src/shared/design-system/ui/compositions.test.tsx": 2.7,
+    "src/shared/design-system/ui/controls.test.tsx": 1.7,
+    "src/shared/design-system/ui/multiPanelLayout.test.ts": 0,
+    "src/shared/design-system/useKeyboardFocusVisibility.test.tsx": 0,
+    "src/shared/device-settings.test.ts": 0,
+    "src/shared/identity/IdentityRow.test.tsx": 0.9,
+    "src/shared/identity/public-key.test.ts": 0.1,
+    "src/shared/relative-timestamp.test.ts": 0,
+    "src/shared/theme/adoption.test.mjs": 0,
+    "src/shared/theme/service.test.ts": 0.1,
+    "src/shared/theme/tokens.test.ts": 0.3,
+    "src/shared/view-state.test.ts": 0.1,
+    "tests/fixtures/design-system/ui/BrandColors.test.ts": 0.1,
+    "tests/fixtures/design-system/ui/ExamplePreview.test.ts": 0.2,
+    "tests/fixtures/design-system/ui/MarkdownPage.test.ts": 0.2,
+    "tests/fixtures/design-system/ui/ToastSpecimens.test.ts": 0.7,
+    "tests/fixtures/design-system/ui/createDecorativeIcon.test.tsx": 0.2,
+    "tests/fixtures/design-system/ui/icons.test.ts": 0.1
+  }
+}
