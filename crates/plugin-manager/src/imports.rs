@@ -675,28 +675,41 @@ impl Git {
         }
         command
     }
+    /// Returns the URL Git should clone, which differs from `repository` only for a Square
+    /// HTTPS source that this agent can read over SSH.
     #[cfg(any(target_os = "macos", all(test, unix)))]
-    fn use_block_ssh_agent(&mut self, repository: &str, home: &Path) -> Result<()> {
+    fn use_block_ssh_agent(&mut self, repository: &str, home: &Path) -> Result<String> {
         use std::os::unix::fs::FileTypeExt;
 
         let url = url::Url::parse(repository).map_err(err)?;
-        if url.scheme() != "ssh"
+        let square_ssh = url.scheme() == "ssh"
+            && url.username() == "org-49461806"
+            && url.port().is_none_or(|port| port == 22);
+        // Imports run without credential helpers, so anonymous HTTPS cannot read private
+        // Square repositories; this agent can read them over SSH.
+        let square_https =
+            url.scheme() == "https" && url.port().is_none() && self.authorization.is_none();
+        if !(square_ssh || square_https)
             || url.host_str() != Some("github.com")
-            || url.username() != "org-49461806"
-            || url.port().is_some_and(|port| port != 22)
             || !url.path().starts_with("/squareup/")
+            // Git decodes SSH paths, so `%2F..` could leave `/squareup/` after this check.
+            || url.path().contains('%')
         {
-            return Ok(());
+            return Ok(repository.into());
         }
         // Block's SSH config selects this agent, but imports do not execute SSH config.
         let socket = home.join("Library/Application Support/block-ssh-agent/agent.sock");
         match fs::metadata(&socket) {
             Ok(metadata) if metadata.file_type().is_socket() => {
                 self.ssh_auth_sock = Some(socket);
-                Ok(())
+                Ok(if square_https {
+                    format!("ssh://org-49461806@github.com{}", url.path())
+                } else {
+                    repository.into()
+                })
             }
             Ok(_) => Err("Block SSH agent path is not a socket".into()),
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(repository.into()),
             Err(error) => Err(format!("Cannot read Block SSH agent socket: {error}")),
         }
     }
@@ -999,9 +1012,12 @@ pub fn prepare_git_authorized(
     }
     git.retired = retired;
     #[cfg(target_os = "macos")]
-    if let Some(home) = dirs::home_dir() {
-        git.use_block_ssh_agent(&url, &home)?;
-    }
+    let transport = match dirs::home_dir() {
+        Some(home) => git.use_block_ssh_agent(&url, &home)?,
+        None => url.clone(),
+    };
+    #[cfg(not(target_os = "macos"))]
+    let transport = url.clone();
     let mut args = vec![
         "clone",
         "--depth=1",
@@ -1013,7 +1029,7 @@ pub fn prepare_git_authorized(
     if !reference.is_empty() {
         args.extend(["--branch", reference]);
     }
-    args.extend(["--", &url, "repository"]);
+    args.extend(["--", &transport, "repository"]);
     git.run(&args, LIMIT)?;
     let mut prepared = git.read_plugins(url.clone(), required.map(|required| required.0))?;
     if git.retired.as_ref().is_some_and(|retired| retired()) {
@@ -2299,7 +2315,7 @@ mod tests {
     }
     #[cfg(unix)]
     #[test]
-    fn block_agent_selection_is_limited_to_squareup_ssh() {
+    fn block_agent_selection_is_limited_to_squareup_github() {
         use std::os::unix::net::UnixListener;
 
         let home = tempfile::tempdir_in("/tmp").unwrap();
@@ -2309,7 +2325,11 @@ mod tests {
         fs::create_dir_all(socket.parent().unwrap()).unwrap();
         let _agent = UnixListener::bind(&socket).unwrap();
         for repository in [
-            "https://github.com/squareup/plugin.git",
+            "https://github.com/other/plugin.git",
+            "https://github.com:8443/squareup/plugin.git",
+            "https://github.com.example/squareup/plugin.git",
+            "https://github.com/squareup/plugin%2F..%2F..%2Fother",
+            "ssh://org-49461806@github.com/squareup/plugin%2F..%2F..%2Fother",
             "ssh://git@github.com/squareup/plugin.git",
             "ssh://org-49461806@github.com/other/plugin.git",
             "ssh://org-49461806@github.com.example/squareup/plugin.git",
@@ -2321,7 +2341,8 @@ mod tests {
                 .get_envs()
                 .map(|(k, v)| (k.to_owned(), v.map(|v| v.to_owned())))
                 .collect::<Vec<_>>();
-            git.use_block_ssh_agent(repository, home.path()).unwrap();
+            let transport = git.use_block_ssh_agent(repository, home.path()).unwrap();
+            assert_eq!(transport, repository);
             let after = git
                 .command()
                 .get_envs()
@@ -2329,6 +2350,41 @@ mod tests {
                 .collect::<Vec<_>>();
             assert_eq!(before, after, "{repository}");
         }
+    }
+    #[cfg(unix)]
+    #[test]
+    fn block_agent_reads_squareup_https_over_ssh() {
+        use std::os::unix::net::UnixListener;
+
+        let home = tempfile::tempdir_in("/tmp").unwrap();
+        let repository = "https://github.com/squareup/plugin.git";
+        let mut git = Git::new().unwrap();
+        assert_eq!(
+            git.use_block_ssh_agent(repository, home.path()).unwrap(),
+            repository
+        );
+        assert!(git.ssh_auth_sock.is_none());
+
+        let socket = home
+            .path()
+            .join("Library/Application Support/block-ssh-agent/agent.sock");
+        fs::create_dir_all(socket.parent().unwrap()).unwrap();
+        let _agent = UnixListener::bind(&socket).unwrap();
+        assert_eq!(
+            git.use_block_ssh_agent(repository, home.path()).unwrap(),
+            "ssh://org-49461806@github.com/squareup/plugin.git"
+        );
+        assert_eq!(git.ssh_auth_sock.as_deref(), Some(socket.as_path()));
+
+        let mut authorized = Git::new().unwrap();
+        authorized.authorization = Some((repository.into(), "token".into()));
+        assert_eq!(
+            authorized
+                .use_block_ssh_agent(repository, home.path())
+                .unwrap(),
+            repository
+        );
+        assert!(authorized.ssh_auth_sock.is_none());
     }
     #[cfg(unix)]
     #[test]

@@ -705,3 +705,69 @@ html[data-keyboard-navigation]
   display: grid;
   gap: 0;
 }
+
+/* The composer's inline mention rows (conversation/Completions.module.css). */
+.workflow-mention-list {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: var(--space-1);
+  max-height: 17.5rem;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+
+.workflow-mention-option {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-2);
+  border-radius: var(--floating-inner-radius);
+  cursor: pointer;
+}
+
+.workflow-mention-option[aria-selected="true"] {
+  background: var(--affordance-popover-selected);
+}
+
+.workflow-mention-preview {
+  flex-shrink: 0;
+  display: grid;
+  place-items: center;
+  width: var(--size-control-sm);
+  height: var(--size-control-sm);
+}
+
+.workflow-mention-label {
+  display: flex;
+  flex: 1;
+  align-items: center;
+  gap: var(--space-2);
+  min-width: 0;
+}
+
+.workflow-mention-name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.workflow-mention-label small {
+  flex: 0 0 12ch;
+  overflow: hidden;
+  white-space: nowrap;
+  color: var(--text-metadata);
+  font-family: var(--font-mono);
+  font-size: var(--text-caption);
+  line-height: var(--text-caption--line-height);
+  letter-spacing: var(--text-caption--letter-spacing);
+}
+
+.workflow-mention-status {
+  margin: var(--space-1) var(--space-2) 0;
+  color: var(--text-subtle);
+  font-size: var(--text-caption);
+  line-height: var(--text-caption--line-height);
+  letter-spacing: var(--text-caption--letter-spacing);
+}

@@ -11,11 +11,13 @@ export function activeModal(document: Document) {
  * Native top-layer hover surfaces paint above ordinary portals regardless of
  * z-index. Reuse popup semantics and Base UI's rendered lifetime, not a second
  * overlay registry. Inline lists, toasts and supplemental previews aren't popups.
+ * The element's `own` popup, and popups nested in its portal, don't cover it.
  */
-export function behindActiveOverlay(element: Element) {
+export function behindActiveOverlay(element: Element, own?: Element | null) {
   const document = element.ownerDocument;
   const modal = activeModal(document);
   if (modal && !modal.contains(element)) return true;
+  const owned = own?.closest("[data-base-ui-portal]") ?? own;
 
   const triggers = [
     ...document.querySelectorAll("[aria-haspopup][aria-controls]"),
@@ -27,6 +29,7 @@ export function behindActiveOverlay(element: Element) {
   ].some((popup) => {
     if (
       popup.contains(element) ||
+      owned?.contains(popup) ||
       popup.closest(`${unavailable}, [popover="manual"]`)
     )
       return false;

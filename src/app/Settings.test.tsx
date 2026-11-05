@@ -25,8 +25,16 @@ import type { DecisionsService } from "../features/decisions/service";
 import type { RelayData } from "../features/relay/service";
 import type { Contribution } from "../plugins/contributions";
 import { createPluginInstallRequests } from "../plugins/installer";
+import { createPluginRequests } from "../plugins/requests";
 
 afterEach(cleanup);
+// Settings reads agent plugin requests from every plugin manager.
+const noRequests = createPluginRequests({
+  catalog: () => undefined,
+  imports: undefined,
+  change: vi.fn(),
+  error: () => null,
+});
 vi.mock("../bundled/icons", () => ({
   bundledIcons: new Map([
     ["buzz.channels", "/channels-icon.png"],
@@ -246,6 +254,7 @@ it.each([false, true])("groups plugins (Essentials=%s)", async (essentials) => {
         {
           subscribe: () => () => {},
           snapshot: () => ready,
+          requests: noRequests,
           change: vi.fn(async () => true),
           reload: vi.fn(async () => true),
           dismissError: vi.fn(),
@@ -469,6 +478,7 @@ it("opens each plugin's existing metadata and controls in a detail aside", () =>
   const plugins = {
     subscribe: () => () => {},
     snapshot: () => snapshot,
+    requests: noRequests,
     change: vi.fn(),
     reload: vi.fn(),
     dismissError: vi.fn(),
@@ -693,6 +703,7 @@ function reviewPluginFixture(
       return () => listeners.delete(listener);
     },
     snapshot: () => snapshot,
+    requests: noRequests,
     change: vi.fn(async (action: string, id: string) => {
       if (action === "remove") {
         snapshot.configuration = {
@@ -1481,6 +1492,7 @@ it("renders a bundled plugin's README below its status, never an external one's"
   const plugins = {
     subscribe: () => () => {},
     snapshot: () => snapshot,
+    requests: noRequests,
     change: vi.fn(),
     reload: vi.fn(),
     dismissError: vi.fn(),
@@ -1596,6 +1608,7 @@ it("keeps related plugins out of the pane even when tags overlap", () => {
     },
     subscribe: () => () => {},
     snapshot: () => snapshot,
+    requests: noRequests,
     change: vi.fn(),
     reload: vi.fn(),
     dismissError: vi.fn(),
@@ -2443,6 +2456,7 @@ function installRequestFixture(imports: object | undefined) {
     imports,
     subscribe: () => () => {},
     snapshot: () => snapshot,
+    requests: noRequests,
     change: vi.fn(async () => true),
     dismissError: vi.fn(),
   } as unknown as Parameters<typeof Settings>[0]["plugins"];

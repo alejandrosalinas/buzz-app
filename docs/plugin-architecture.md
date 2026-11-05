@@ -1691,6 +1691,17 @@ access and reports the previous and updated declarations. Rejected builds leave
 the installed revision unchanged. Replacing an active plugin ends its in-memory
 work, including a voice call. This is a host-management capability, since an
 external plugin cannot manage other installations or add CLI commands.
+Agents reach management through the host's own tools: they read the catalog and
+disable directly, and every install, update, enable or removal waits for the person
+to confirm it on a card in the agent's conversation, or in Settings; see
+[managing plugins from a conversation](agents.md#managing-plugins-from-a-conversation).
+The request service is provided on the root context (`pluginRequests`) so agent
+runs can reach it, which also makes it reachable from plugin scopes; plugins remain
+trusted code. The card is a built-in feature (`buzz.plugin-requests`) that registers a
+message renderer for messages with a `plugin-request` tag. Two services,
+`pluginManagement` and `pluginReviewHold`, give the plugin manager and the open-review
+hold to that feature alone, so asking cannot install or delete another plugin's code
+without the review.
 
 Opening an installed plugin's details checks its remembered folder. A matching
 package shows Up to date in the pane. Local folders are checked every five seconds
@@ -1720,7 +1731,9 @@ credentials/tokens are never saved with source metadata. SSH accepts explicit UR
 and `user@host:owner/repository.git` shorthand, including organization-specific
 usernames. On macOS, sources at `ssh://org-49461806@github.com/squareup/…` on
 port 22 use Block's agent when its socket exists at
-`~/Library/Application Support/block-ssh-agent/agent.sock`. Other SSH sources use
+`~/Library/Application Support/block-ssh-agent/agent.sock`. When that socket exists,
+`https://github.com/squareup/…` sources are read over that SSH URL instead; the saved
+source keeps the HTTPS URL. Public Square repositories then also need a working agent. Other SSH sources use
 the desktop process's inherited `SSH_AUTH_SOCK`. SSH uses known hosts, with
 interactive prompts and SSH config disabled. For another agent selected by
 `IdentityAgent` in SSH config, launch the app with that socket in `SSH_AUTH_SOCK`.

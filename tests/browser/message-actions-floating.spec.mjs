@@ -778,7 +778,7 @@ test("keyboard search covers a toolbar under the pointer and restores its action
   ).toBeVisible();
 });
 
-test("menus and pickers retain their anchor but cover actions", async ({
+test("menus keep their actions showing; pickers and dialogs cover them", async ({
   page,
   app,
 }) => {
@@ -806,7 +806,20 @@ test("menus and pickers retain their anchor but cover actions", async ({
   await menu.hover();
   await expect(bubble).not.toHaveCSS("background-color", restingFill);
   await shown(actions);
+  // The bar's own menu opens beside it and leaves it showing.
+  await expect(actions).toHaveCSS("visibility", "visible");
+  // A modal opened over that menu still covers the bar.
+  await page.keyboard.press("ControlOrMeta+k");
+  const searchDialog = page.getByRole("dialog", {
+    name: "Search Buzz",
+    exact: true,
+  });
+  await expect(searchDialog).toBeVisible();
+  // The modal hides the menu from the accessibility tree, not the page.
+  await expect(page.locator('[role="menu"]')).toBeVisible();
   await hidden(actions);
+  await page.keyboard.press("Escape");
+  await expect(searchDialog).toBeHidden();
   await expect(row.locator("[data-layout]")).toHaveAttribute(
     "data-actions-revealed",
     "",

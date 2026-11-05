@@ -183,7 +183,7 @@ export async function settlePanelMotion(page) {
         docks.flatMap((dock) =>
           [
             ...dock.getAnimations({ subtree: true }),
-            ...dock.parentElement.getAnimations(),
+            ...(dock.parentElement?.getAnimations() ?? []),
           ]
             .filter(
               (animation) =>
