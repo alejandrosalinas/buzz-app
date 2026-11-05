@@ -85,8 +85,10 @@ it.each([
   "checks only when the installed plugin and user policy allow it (%j, %j)",
   async (policy, choice, expected) => {
     const f = fixture();
-    f.plugin.manifest = { ...f.plugin.manifest, updates: policy };
-    f.plugin.updateChecks = choice;
+    const manifest = { ...f.plugin.manifest };
+    delete manifest.updates;
+    f.plugin.manifest = policy ? { ...manifest, updates: policy } : manifest;
+    f.plugin.updateChecks = choice ?? null;
     const updates = createPluginUpdates(f.manager, f.authorize);
     await updates.check();
     expect(f.checkGit).toHaveBeenCalledTimes(expected ? 1 : 0);
