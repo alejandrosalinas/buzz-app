@@ -153,7 +153,7 @@ it("shows progress while applying a fresh preview without more access", async ()
       "Updating plugin",
     );
     expect(
-      within(dialog).queryByRole("button", { name: "Update", exact: true }),
+      within(dialog).queryByRole("button", { name: /^Update$/ }),
     ).toBeNull();
     expect(
       within(dialog).queryByRole("region", { name: "Computer access" }),
