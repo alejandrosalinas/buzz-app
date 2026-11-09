@@ -176,8 +176,8 @@ test("profiles primary actions through production broker and built app", async (
   for (const channel of ["alpha", "beta"])
     await expect.poll(() => app.relay.hasRoute("primary", channel)).toBe(true);
   await expect(
-    page.getByRole("status", {
-      name: "Reconnecting to relay…",
+    page.getByRole("dialog", {
+      name: "Buzz is having trouble connecting",
       exact: true,
     }),
   ).toHaveCount(0);

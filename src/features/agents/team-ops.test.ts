@@ -79,6 +79,7 @@ describe("teamOps.change", () => {
       added: ["a", "b"],
       removed: [],
       skipped: [],
+      created: true,
     });
     expect(channels.ensure).toHaveBeenCalledOnce();
     expect(save).toHaveBeenCalledWith(
@@ -130,6 +131,186 @@ describe("teamOps.change", () => {
     });
     const result = await ops.change({ ...edit, members: ["a"], adopt: true });
     expect(result.ok).toBe(true);
+  });
+
+  it("a move's first try writes nothing to a different team already there", async () => {
+    for (const [stored, members] of [
+      [head("Other", "x"), ["a"]],
+      // The same text, with a member this copy doesn't have.
+      [head(), ["a", "z"]],
+    ] as const) {
+      const { ops, channels } = setup({
+        members: [...members],
+        saved: { status: "conflict", head: stored } as never,
+      });
+      const result = await ops.change({
+        ...edit,
+        members: ["a"],
+        adopt: true,
+        fresh: true,
+      });
+      expect(result).toMatchObject({ ok: false, conflict: true });
+      expect(result.created).toBeUndefined();
+      expect(channels.addMember).not.toHaveBeenCalled();
+      expect(channels.removeMember).not.toHaveBeenCalled();
+    }
+  });
+
+  it("a move's first try adopts an identical team, and reports its own create even when a member fails", async () => {
+    const same = setup({
+      members: ["a"],
+      saved: { status: "conflict", head: head() } as never,
+    });
+    expect(
+      await same.ops.change({
+        ...edit,
+        members: ["a"],
+        adopt: true,
+        fresh: true,
+      }),
+    ).toMatchObject({ ok: true });
+    const partial = setup({
+      add: async () => ({ status: "failed", error: "No" }),
+    });
+    expect(
+      await partial.ops.change({
+        ...edit,
+        members: ["a"],
+        adopt: true,
+        fresh: true,
+      }),
+    ).toMatchObject({ ok: false, created: true });
+  });
+
+  it("a move's retry resumes its own earlier try's partial copy, but no other", async () => {
+    // The first try's save landed unanswered, before any member joined.
+    const first = setup({ saved: { status: "unknown", message: "timeout" } });
+    const order: string[] = [];
+    first.save.mockImplementationOnce(async () => {
+      order.push("save");
+      return { status: "unknown", message: "timeout" } as never;
+    });
+    expect(
+      await first.ops.change({
+        ...edit,
+        members: ["a"],
+        adopt: true,
+        fresh: true,
+        saving: async () => void order.push("saving"),
+      }),
+    ).toMatchObject({ ok: false, uncertain: true });
+    expect(order).toEqual(["saving", "save"]);
+    const retry = setup({
+      members: [],
+      saved: { status: "conflict", head: head() } as never,
+    });
+    const move = { ...edit, members: ["a"], adopt: true, fresh: true };
+    const sent = { ...edit, members: ["a"] };
+    expect(await retry.ops.change({ ...move, resume: sent })).toMatchObject({
+      ok: true,
+      added: ["a"],
+      created: true,
+    });
+    // Without proof of that try it stays a conflict, and so does a copy
+    // that differs in text or has a member this one doesn't.
+    for (const [stored, members, resume] of [
+      [head(), [], undefined],
+      [head("Crew", "Other"), [], sent],
+      [head(), ["z"], sent],
+    ] as const) {
+      const other = setup({
+        members: [...members],
+        saved: { status: "conflict", head: stored } as never,
+      });
+      const result = await other.ops.change({
+        ...move,
+        ...(resume && { resume }),
+      });
+      expect(result).toMatchObject({ ok: false, conflict: true });
+      expect(result.created).toBeUndefined();
+      expect(other.channels.addMember).not.toHaveBeenCalled();
+    }
+  });
+
+  // The first try sent "Crew" with a and b and stopped, its result unknown
+  // or a crash after a joined; the team was edited here since.
+  const resumed = (members: string[], change: object) => {
+    const retry = setup({
+      members,
+      saved: { status: "conflict", head: head() } as never,
+    });
+    const result = retry.ops.change({
+      ...edit,
+      members: ["a", "b"],
+      ...change,
+      adopt: true,
+      fresh: true,
+      resume: { ...edit, members: ["a", "b"] },
+    });
+    return { retry, result };
+  };
+
+  it("a resumed move with its name or instructions edited since matches what its earlier try sent", async () => {
+    const { retry, result } = resumed([], { name: "Renamed" });
+    expect(await result).toMatchObject({ ok: true, created: true });
+    // It sends the recorded text again; the edit follows as an Edit.
+    expect((retry.save.mock.calls[0] as unknown[] | undefined)?.[1]).toEqual({
+      version: 1,
+      name: "Crew",
+      instructions: "Ship it",
+    });
+  });
+
+  it("a resumed move with a member removed since its partial roster matches what its earlier try sent", async () => {
+    const { retry, result } = resumed(["a", "b"], { members: ["a"] });
+    expect(await result).toMatchObject({ ok: true, added: [], created: true });
+    expect(retry.channels.removeMember).not.toHaveBeenCalled();
+  });
+
+  it("a move records its own copy before any member change, and stops if that record fails", async () => {
+    const order: string[] = [];
+    const recorded = setup({
+      members: [],
+      saved: { status: "conflict", head: head() } as never,
+    });
+    recorded.channels.addMember.mockImplementation(async () => {
+      order.push("add");
+      return { status: "confirmed" } as never;
+    });
+    const move = {
+      ...edit,
+      members: ["a", "b"],
+      adopt: true,
+      fresh: true,
+      resume: { ...edit, members: ["a"] },
+    };
+    await recorded.ops.change({
+      ...move,
+      owned: async () => void order.push("owned"),
+    });
+    expect(order[0]).toBe("owned");
+    const refused = setup({
+      members: [],
+      saved: { status: "conflict", head: head() } as never,
+    });
+    expect(
+      await refused.ops.change({
+        ...move,
+        owned: async () => {
+          throw new Error("Storage refused");
+        },
+      }),
+    ).toMatchObject({ ok: false, created: true, error: "Storage refused" });
+    expect(refused.channels.addMember).not.toHaveBeenCalled();
+  });
+
+  it("a definitely refused first save is reported as refused", async () => {
+    const { ops } = setup({
+      saved: { status: "refused", refusal: "offline", message: "no" },
+    });
+    expect(
+      await ops.change({ ...edit, members: ["a"], adopt: true, fresh: true }),
+    ).toMatchObject({ ok: false, refused: true });
   });
 
   it("an unanswered content save is reported as uncertain, not success", async () => {

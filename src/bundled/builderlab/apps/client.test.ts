@@ -1,11 +1,10 @@
+import { createTestSession } from "../test-helpers";
 import { expect, it, vi } from "vitest";
 import type {
-  Host,
   HostRequest,
   HostResponse,
   HostUpload,
 } from "../../../features/host/service";
-import { createOAuthSession } from "../oauth/session";
 import { createAppsClient } from "./client";
 import { controlPlane, isAppUrl } from "./environment";
 
@@ -35,8 +34,8 @@ it.each(["create", "community"] as const)(
   "stops %s after the owner changes during its first request",
   async (operation) => {
     let owner = "A";
-    const session = createOAuthSession(async () => ({
-      value: owner,
+    const session = createTestSession(async () => ({
+      revision: owner,
       account: {
         subject: owner,
         email: "",
@@ -47,11 +46,7 @@ it.each(["create", "community"] as const)(
     await session.signIn();
     const held = deferred<HostResponse>();
     const request = vi.fn(() => held.promise);
-    const client = createAppsClient(
-      { request } as unknown as Host,
-      session,
-      BASE,
-    );
+    const client = createAppsClient(session, BASE, { request });
     const pending =
       operation === "create"
         ? client.create("Demo")
@@ -71,8 +66,8 @@ it.each(["create", "community"] as const)(
 );
 
 it("preserves the reserved app ID when sign-out interrupts initialization", async () => {
-  const session = createOAuthSession(async () => ({
-    value: "A",
+  const session = createTestSession(async () => ({
+    revision: "A",
     account: {
       subject: "A",
       email: "",
@@ -96,11 +91,7 @@ it("preserves the reserved app ID when sign-out interrupts initialization", asyn
       started.resolve();
       return held.promise;
     });
-  const client = createAppsClient(
-    { request } as unknown as Host,
-    session,
-    BASE,
-  );
+  const client = createAppsClient(session, BASE, { request });
   const pending = client.create("Demo");
   const rejected = expect(pending).rejects.toThrow(
     /app_id=demo.*not signed in/,
@@ -112,9 +103,9 @@ it("preserves the reserved app ID when sign-out interrupts initialization", asyn
   expect(request).toHaveBeenCalledTimes(3);
 });
 
-async function setup(responses: HostResponse[], signedIn = true, dev = false) {
-  const session = createOAuthSession(async () => ({
-    value: "secret-session",
+async function setup(responses: HostResponse[], signedIn = true) {
+  const session = createTestSession(async () => ({
+    revision: "revision-1",
     account: {
       subject: "auth0|owner",
       email: "",
@@ -130,14 +121,16 @@ async function setup(responses: HostResponse[], signedIn = true, dev = false) {
     if (!response) throw new Error("No response left");
     return response;
   };
-  const host = { request: vi.fn(next), upload: vi.fn(next) } as unknown as Host;
   return {
-    client: createAppsClient(host, session, BASE, dev ? host : undefined),
+    client: createAppsClient(session, BASE, {
+      request: vi.fn(next),
+      upload: vi.fn(next),
+    }),
     requests,
   };
 }
 
-it("plans and reserves a static app with the Builderlab session", async () => {
+it("plans and reserves a static app, leaving the session to the transport", async () => {
   const { client, requests } = await setup([
     contract(),
     json(200, {
@@ -159,12 +152,16 @@ it("plans and reserves a static app with the Builderlab session", async () => {
       url: `${BASE}/v1/agent/apps/plan`,
       method: "POST",
       headers: {
-        Authorization: "BBIdentity secret-session",
+        Accept: "application/json",
+        "Content-Type": "application/json",
         "X-Hotpod-Agent-Client-Version": "0.2.0",
       },
     },
     { url: `${BASE}/v1/agent/apps/demo-1a2b/reserve`, method: "POST" },
   ]);
+  expect((requests[1] as HostRequest).headers).not.toHaveProperty(
+    "Authorization",
+  );
   const [, plan, reserve] = requests as HostRequest[];
   expect(JSON.parse(plan?.body ?? "")).toEqual({
     name: "Demo",
@@ -296,7 +293,6 @@ it("uploads the artifact to the app's deploy endpoint", async () => {
       url: `${BASE}/v1/agent/apps/demo/deploy`,
       headers: {
         Accept: "application/json",
-        Authorization: "BBIdentity secret-session",
         "X-Hotpod-Agent-Client-Version": "0.2.0",
       },
       file: {
@@ -318,22 +314,6 @@ it("points the agent at Settings when signed out or refused", async () => {
   const refused = await setup([json(401, {})]);
   await expect(refused.client.list()).rejects.toThrow(
     /refused the sign-in.*HTTP 401.*Settings/,
-  );
-});
-
-it("reports the server's error without the session", async () => {
-  const { client } = await setup([
-    json(400, {
-      error: {
-        code: "artifact_manifest_invalid",
-        message: "missing public/ for secret-session",
-      },
-      next_action: "rebuild",
-    }),
-  ]);
-  const failure = client.deploy("demo", "/Users/me/artifact.tar.gz");
-  await expect(failure).rejects.toThrow(
-    "Deploying failed (HTTP 400): artifact_manifest_invalid: missing public/ for [redacted]: next_action: rebuild",
   );
 });
 
@@ -435,9 +415,20 @@ it("passes a conflicting community change through unchanged", async () => {
 
 it("deploys to the sign-in's own tenant", () => {
   expect(controlPlane("https://app.builderlabstaging.xyz")).toBe(BASE);
-  expect(controlPlane("https://block.builderlab.xyz/")).toBe(
-    "https://compose-ctrl.block.builderlab.xyz",
-  );
+  expect(
+    controlPlane(
+      "https://login.example/",
+      "https://login.example",
+      "https://ctrl.example",
+    ),
+  ).toBe("https://ctrl.example");
+  expect(
+    controlPlane(
+      "https://other.example",
+      "https://login.example",
+      "https://ctrl.example",
+    ),
+  ).toBeUndefined();
   expect(controlPlane("https://app.builderlab.xyz")).toBe(
     "https://compose-ctrl.builderlab.xyz",
   );
@@ -448,7 +439,7 @@ it("deploys to the sign-in's own tenant", () => {
 it("recognizes deployed app hosts across tenants", () => {
   for (const url of [
     "https://tiny-counter--bpsites.apps.builderlab.xyz/",
-    "https://demo--bpsites.apps.block.builderlab.xyz/",
+    "https://demo--bpsites.apps.example-tenant.builderlab.xyz/",
     "https://demo--bpsites.apps.builderlabstaging.xyz/path?x=1",
     "https://demo--workspace.apps.acme.builderlab.xyz/",
     "https://demo--workspace.apps.acme.builderlabstaging.xyz/",
@@ -469,11 +460,11 @@ it("rejects URLs outside the deployed app hostname shapes", () => {
     "https://demo--bpsites.apps.builderlab.xyz.example.org/",
     "https://evilapps.builderlab.xyz/",
     "https://user:pass@demo--bpsites.apps.builderlab.xyz/",
-    "http://demo.apps.block.builderlab.xyz/",
-    "https://apps.block.builderlab.xyz/",
-    "https://demo.apps.block.builderlab.xyz.example.org/",
-    "https://evilapps.block.builderlab.xyz/",
-    "https://user:pass@demo.apps.block.builderlab.xyz/",
+    "http://demo.apps.example-tenant.builderlab.xyz/",
+    "https://apps.example-tenant.builderlab.xyz/",
+    "https://demo.apps.example-tenant.builderlab.xyz.example.org/",
+    "https://evilapps.example-tenant.builderlab.xyz/",
+    "https://user:pass@demo.apps.example-tenant.builderlab.xyz/",
     "http://demo.apps.acme.builderlabstaging.xyz/",
     "https://user@demo.apps.acme.builderlab.xyz/",
     "https://:pass@demo.apps.acme.builderlabstaging.xyz/",
@@ -489,8 +480,7 @@ it("rejects URLs outside the deployed app hostname shapes", () => {
     "https://apps.demo.acme.builderlabstaging.xyz/",
     "https://demo.acme.builderlab.xyz/",
     "https://demo.apps.builderlab.example/",
-    "https://demo.apps.acme.blockstaging.build/",
-    "https://demo.apps.blockstaging.build/",
+    "https://demo.apps.acme.builderlab.example/",
     "https://demo.apps..builderlab.xyz/",
     "https://demo.apps.-acme.builderlab.xyz/",
     "https://demo.apps.acme-.builderlabstaging.xyz/",
@@ -511,23 +501,17 @@ it("rejects URLs outside the deployed app hostname shapes", () => {
 });
 
 it.each(["reserve", "initialize"] as const)(
-  "keeps dev create errors and the recovery app ID readable after %s fails",
+  "keeps create errors and the recovery app ID readable after %s fails",
   async (step) => {
-    const { client, requests } = await setup(
-      [
-        contract(),
-        json(200, {
-          app_id: "recovery-app",
-          initialize: { required: true, recommended: true },
-        }),
-        ...(step === "initialize"
-          ? [json(200, { app_id: "recovery-app" })]
-          : []),
-        json(503, { error: { message: "gateway unavailable" } }),
-      ],
-      true,
-      true,
-    );
+    const { client, requests } = await setup([
+      contract(),
+      json(200, {
+        app_id: "recovery-app",
+        initialize: { required: true, recommended: true },
+      }),
+      ...(step === "initialize" ? [json(200, { app_id: "recovery-app" })] : []),
+      json(503, { error: { message: "gateway unavailable" } }),
+    ]);
     await expect(client.create("Demo")).rejects.toThrow(
       `Create stopped during ${step} for app_id=recovery-app: ${step === "reserve" ? "Reserving" : "Initializing"} failed (HTTP 503): gateway unavailable. The reservation may already exist; inspect or resume this exact app before creating a replacement.`,
     );

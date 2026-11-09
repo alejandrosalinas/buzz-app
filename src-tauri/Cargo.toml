@@ -9,17 +9,24 @@ rust-version = "1.90"
 [features]
 native-mcp = ["dep:tauri-plugin-mcp-bridge"]
 
+# build.rs's own tests.
+[[test]]
+name = "build_config"
+path = "build_test.rs"
+
 [lib]
 name = "buzz_foundation_lib"
 crate-type = ["staticlib", "cdylib", "rlib"]
 
 [build-dependencies]
+dotenvy = "0.15"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 url = "2"
 tauri-build = { version = "2.7.2", features = [] }
 
 [dependencies]
+buzz-mesh-compute = { path = "../src/bundled/mesh-compute/compute" }
 buzz-nsec-backup = { path = "../crates/nsec-backup" }
 buzz-pairing = { path = "../crates/pairing" }
 nostr-pairing = { package = "nostr", version = "0.44", features = ["nip44"] }
@@ -34,14 +41,14 @@ qrcode = { version = "0.14", default-features = false, features = ["svg"] }
 # Cmd shortcuts straight to the menu, so the page never sees Cmd+Z (tauri#9426).
 tauri = { version = "=2.12.4", features = [] }
 wry = { version = "=0.57.0", default-features = false, features = ["os-webview"] }
-buzzodz-plugins = { path = "../crates/plugin-manager" }
+buzzodz-plugins = { path = "../crates/plugin-manager", features = ["app"] }
 buzz-credential-store = { path = "../crates/credential-store" }
 buzz-agent-controller = { path = "../crates/agent-controller" }
 serde = { version = "1", features = ["derive"] }
 serde_json = { version = "1", features = ["raw_value"] }
-buzz-audio-client = { git = "https://github.com/block/buzz.git", rev = "7e6461242aa7d98f132919dd672f7cc5f4abbba6" }
+buzz-audio-client = { git = "https://github.com/block/buzz.git", rev = "c8d736642e1cddaca5797c54c0c625d16a1724ed" }
 rustls-native-certs = "0.8"
-tokio = { version = "1", features = ["sync", "time", "macros", "process", "io-util", "net"] }
+tokio = { version = "1", features = ["sync", "time", "macros", "process", "io-util", "net", "signal"] }
 sha2 = "0.10"
 hmac = "0.12"
 base64 = "0.22"
@@ -72,7 +79,8 @@ tempfile = "3"
 fs2 = "0.4"
 arboard = { version = "3", features = ["wayland-data-control"] }
 image = { version = "0.25", default-features = false, features = ["jpeg", "png", "webp", "gif"] }
-rusqlite = { version = "0.38", features = ["bundled"] }
+# 0.40: mesh-llm's log store requires it, and only one libsqlite3-sys may link sqlite3.
+rusqlite = { version = "0.40", features = ["bundled"] }
 
 [dev-dependencies]
 hex = "0.4"
@@ -82,6 +90,9 @@ tauri = { version = "=2.12.4", features = ["test"] }
 rcgen = "0.14"
 rustls = { version = "0.23", default-features = false, features = ["aws_lc_rs", "std", "tls12"] }
 tokio-rustls = { version = "0.26", default-features = false }
+# For the build_config test, which compiles build.rs.
+tauri-build = { version = "2.7.2", features = [] }
+dotenvy = "0.15"
 
 [target.'cfg(unix)'.dependencies]
 nix = { version = "0.31", features = ["user"] }
@@ -95,7 +106,7 @@ security-framework = "3.7"
 block2 = "=0.6.2"
 objc2 = "=0.6.4"
 objc2-app-kit = { version = "=0.3.2", default-features = false, features = ["NSApplication", "NSResponder", "NSScreen", "NSWindow", "NSEvent", "NSWorkspace", "NSRunningApplication", "NSMenu", "NSMenuItem", "NSUserInterfaceItemIdentification", "block2"] }
-objc2-foundation = { version = "=0.3.2", default-features = false, features = ["std", "NSObject", "NSThread", "NSBundle", "NSString", "NSURL", "NSError", "NSUserDefaults", "NSFormatter", "NSDateFormatter", "NSLocale", "NSProcessInfo", "NSData", "NSProgress", "NSURLRequest", "NSURLResponse", "NSURLError"] }
+objc2-foundation = { version = "=0.3.2", default-features = false, features = ["std", "NSObject", "NSThread", "NSBundle", "NSString", "NSURL", "NSError", "NSUserDefaults", "NSFormatter", "NSDateFormatter", "NSLocale", "NSProcessInfo", "NSData", "NSProgress", "NSURLRequest", "NSURLResponse", "NSURLError", "NSNotification", "NSOperation", "block2"] }
 objc2-user-notifications = { version = "=0.3.2", default-features = false, features = ["UNError", "UNUserNotificationCenter", "UNNotificationSettings", "UNNotification", "UNNotificationContent", "UNNotificationRequest", "UNNotificationResponse", "UNNotificationTrigger", "block2"] }
 
 objc2-web-kit = { version = "=0.3.2", default-features = false, features = ["std", "objc2-app-kit", "block2", "WKWebView", "WKUIDelegate", "WKFrameInfo", "WKSecurityOrigin", "WKWebViewConfiguration", "WKWebsiteDataStore", "WKHTTPCookieStore", "WKDownload", "WKDownloadDelegate", "WKNavigation", "WKNavigationDelegate"] }

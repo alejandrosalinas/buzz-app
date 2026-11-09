@@ -1,6 +1,6 @@
 use serde::Deserialize;
 use std::collections::HashMap;
-use tauri::{Manager, PhysicalPosition, PhysicalRect, PhysicalSize, Runtime, Window};
+use tauri::{LogicalSize, Manager, PhysicalPosition, PhysicalRect, PhysicalSize, Runtime, Window};
 use tauri_plugin_window_state::{AppHandleExt, Builder, StateFlags, WindowExt};
 
 pub(crate) fn builder() -> Builder {
@@ -138,8 +138,8 @@ fn restore_geometry_from<R: Runtime>(
         .collect();
     let fallback = window
         .primary_monitor()?
-        .map(|monitor| *monitor.work_area())
-        .or_else(|| areas.first().copied());
+        .or_else(|| monitors.first().cloned())
+        .map(|monitor| (*monitor.work_area(), monitor.scale_factor()));
     if let Some(fallback) = fallback {
         // Only the client-to-frame origin offset is needed. Linux's initial
         // outer_size is not reliable until its first configure event.
@@ -151,12 +151,20 @@ fn restore_geometry_from<R: Runtime>(
         );
         // AppShell owns a 48 logical-pixel header on all desktop platforms.
         let header_height = (48.0 * window.scale_factor()?).ceil() as u32;
-        let (position, size) = restore_request(&saved, offset, header_height, &areas, fallback);
+        let windows = &window.config().app.windows;
+        let config = windows.first().cloned().unwrap_or_default();
+        let (position, size, relocated) =
+            restore_request(&saved, offset, header_height, &areas, fallback, &config);
         // Validate the requested geometry BEFORE sending it. Native setters
         // may apply asynchronously (Linux/macOS); getters can still report the
         // startup frame.
-        window.set_size(size)?;
+        // Move first: Windows rescales on DPI change. macOS/GTK convert at the startup scale.
+        if let Some(scale) = relocated.filter(|_| cfg!(not(windows))) {
+            window.set_position(position.to_logical::<f64>(scale))?;
+            return window.set_size(size.to_logical::<f64>(scale));
+        }
         window.set_position(position)?;
+        window.set_size(size)?;
     }
     Ok(())
 }
@@ -166,8 +174,9 @@ fn restore_request(
     client_offset: PhysicalPosition<i32>,
     header_height: u32,
     areas: &[PhysicalRect<i32, u32>],
-    fallback: PhysicalRect<i32, u32>,
-) -> (PhysicalPosition<i32>, PhysicalSize<u32>) {
+    (fallback, scale): (PhysicalRect<i32, u32>, f64),
+    config: &tauri::utils::config::WindowConfig,
+) -> (PhysicalPosition<i32>, PhysicalSize<u32>, Option<f64>) {
     let position = if saved.maximized {
         PhysicalPosition::new(saved.prev_x, saved.prev_y)
     } else {
@@ -180,21 +189,34 @@ fn restore_request(
         ),
         size: PhysicalSize::new(saved.width, saved.height),
     };
-    let target = reachable_client(client, header_height, areas, fallback).unwrap_or(client);
+    // A size below the minimum at the fallback's scale (rounded as tao rounds it) was
+    // saved at a lower scale and would reopen below it. Windows applies the minimum to
+    // the frame: take off tao's shadow insets (default metrics, Windows 11 top).
+    let win = u32::from(cfg!(windows));
+    let side = win * (4 * (scale * 96.0).round() as u32 + 48) / 96 * 2;
+    let top = win * scale.round() as u32;
+    let px = |logical: Option<f64>| (logical.unwrap_or(0.0) * scale).round() as u32;
+    let below = saved.width < px(config.min_width).saturating_sub(2 * side)
+        || saved.height < px(config.min_height).saturating_sub(side + top);
+    let default = below.then(|| LogicalSize::new(config.width, config.height).to_physical(scale));
+    let relocated = reachable_client(client, header_height, areas, fallback, default);
+    let target = relocated.unwrap_or(client);
     (
         PhysicalPosition::new(
             target.position.x.saturating_sub(client_offset.x),
             target.position.y.saturating_sub(client_offset.y),
         ),
         target.size,
+        relocated.map(|_| scale),
     )
 }
 
 fn reachable_client(
-    client: PhysicalRect<i32, u32>,
+    mut client: PhysicalRect<i32, u32>,
     header_height: u32,
     areas: &[PhysicalRect<i32, u32>],
     fallback: PhysicalRect<i32, u32>,
+    default: Option<PhysicalSize<u32>>,
 ) -> Option<PhysicalRect<i32, u32>> {
     let x = i64::from(client.position.x);
     let y = i64::from(client.position.y);
@@ -212,9 +234,11 @@ fn reachable_client(
                     && y < i64::from(area.position.y) + i64::from(area.size.height)
             })
         });
-    if reachable {
+    // A lone monitor's scale is known, so a sub-minimum size is replaced even there.
+    if reachable && !(default.is_some() && areas.len() == 1) {
         return None;
     }
+    client.size = default.unwrap_or(client.size);
     // Unlike any-corner intersection, this keeps the drag strip and both sets
     // of platform controls on-screen, including after removing an upper monitor.
     let size = PhysicalSize::new(
@@ -260,17 +284,124 @@ mod tests {
         );
     }
 
+    // Mirrors the main window in tauri.conf.json.
+    fn config() -> tauri::utils::config::WindowConfig {
+        tauri::utils::config::WindowConfig {
+            width: 1200.0,
+            height: 800.0,
+            min_width: Some(480.0),
+            min_height: Some(400.0),
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn saved_size_is_kept_with_monitors_attached_and_recovered_on_a_lone_monitor() {
+        let external = rect(1512, 0, 1920, 1080);
+        let laptop = rect(0, 50, 3024, 1840);
+        let saved = decode(&saved_state(1600, 100, 602, 470));
+        let offset = tauri::PhysicalPosition::new(0, 0);
+        let request = |areas: &[tauri::PhysicalRect<i32, u32>]| {
+            super::restore_request(&saved, offset, 96, areas, (laptop, 2.0), &config())
+        };
+        // The 1x external overlaps the 2x laptop's physical rect, so the scale
+        // this rect was saved at is ambiguous. Keep it as saved.
+        assert_eq!(
+            request(&[laptop, external]),
+            (
+                tauri::PhysicalPosition::new(1600, 100),
+                tauri::PhysicalSize::new(602, 470),
+                None
+            ),
+        );
+        // Unplugged: the laptop's physical rect still contains the saved rect,
+        // but 301x235 points is below the minimum at its known scale. Send the
+        // default in the laptop's logical units.
+        assert_eq!(
+            request(&[laptop]),
+            (
+                tauri::PhysicalPosition::new(312, 50),
+                tauri::PhysicalSize::new(2400, 1600),
+                Some(2.0)
+            ),
+        );
+    }
+
+    #[test]
+    fn fallback_uses_default_size_when_saved_size_is_below_minimum_at_its_scale() {
+        let laptop = rect(0, 50, 3024, 1840);
+        let left = rect(-3024, 0, 3024, 1964);
+        let fallback = |width, height, area| {
+            let saved = decode(&saved_state(5530, 100, width, height));
+            let offset = tauri::PhysicalPosition::new(0, 0);
+            let (position, size, scale) =
+                super::restore_request(&saved, offset, 96, &[area, left], (area, 2.0), &config());
+            assert_eq!(scale, Some(2.0));
+            Some(tauri::PhysicalRect { position, size })
+        };
+        // Saved on a 1x monitor that is gone: 301x235 points on a 2x laptop.
+        assert_frame(fallback(602, 470, laptop), Some(rect(312, 50, 2400, 1600)));
+        // One axis below the minimum is enough (781 is under the Windows client too).
+        assert_frame(fallback(960, 781, laptop), Some(rect(312, 50, 2400, 1600)));
+        // At or above the minimum at the fallback's scale, the saved size stays.
+        assert_frame(fallback(960, 800, laptop), Some(rect(1032, 50, 960, 800)));
+        // The default still fits inside a small fallback work area.
+        let small = rect(0, 25, 1440, 875);
+        assert_frame(fallback(602, 470, small), Some(small));
+    }
+
+    #[test]
+    fn minimum_allows_windows_shadow_insets_but_a_lower_scale_size_is_replaced() {
+        let area = rect(0, 0, 3840, 2160);
+        let offset = tauri::PhysicalPosition::new(0, 0);
+        let relocated = |scale, width, height| {
+            let saved = decode(&saved_state(100, 100, width, height));
+            super::restore_request(&saved, offset, 96, &[area], (area, scale), &config())
+                .2
+                .is_some()
+        };
+        // tao applies the 480x400 minimum to an undecorated Windows frame. The
+        // shadow insets (size frame plus padded border on the sides and bottom,
+        // one scaled pixel on top on Windows 11) come off the saved client.
+        for (scale, width, height) in [(1.0, 464, 391), (1.25, 580, 489), (2.0, 928, 782)] {
+            assert_eq!(relocated(scale, width, height), !cfg!(windows));
+        }
+        // One pixel under that client is replaced everywhere.
+        assert!(relocated(1.0, 463, 391));
+        assert!(relocated(1.0, 464, 390));
+        assert!(relocated(2.0, 927, 782));
+        // Neither tao on Windows nor macOS clamps a programmatic resize, so a 1x
+        // save of 900x750 would open at 450x375 points on a 2x laptop.
+        assert!(relocated(2.0, 900, 750));
+        // At 110 DPI the minimum rounds to 550x458, and the Windows client to 530x447.
+        let scale = 110.0 / 96.0;
+        assert!(!relocated(scale, 550, 458));
+        assert_eq!(relocated(scale, 550, 457), !cfg!(windows));
+        assert_eq!(relocated(scale, 530, 447), !cfg!(windows));
+        assert!(relocated(scale, 529, 447));
+        // At 100 DPI the height rounds up (416.67 to 417; 408 on Windows).
+        let scale = 100.0 / 96.0;
+        assert_eq!(relocated(scale, 500, 416), !cfg!(windows));
+        assert!(relocated(scale, 484, 407));
+        // A client saved at the minimum one scale step lower is replaced
+        // everywhere, including across the smallest step, 225% to 250%.
+        assert!(relocated(1.25, 464, 391));
+        assert!(relocated(2.5, 1044, 880));
+        assert!(relocated(2.5, 1080, 900));
+        assert!(!relocated(2.0, 960, 800));
+    }
+
     #[test]
     fn partial_overlap_after_removing_upper_monitor_recovers_entire_header() {
         let laptop = rect(0, 25, 1440, 875);
         let saved = rect(100, -450, 960, 640);
         assert_frame(
-            super::reachable_client(saved, 48, &[laptop], laptop),
+            super::reachable_client(saved, 48, &[laptop], laptop, None),
             Some(rect(240, 25, 960, 640)),
         );
         let upper = rect(0, -900, 1440, 900);
         assert_frame(
-            super::reachable_client(saved, 48, &[laptop, upper], laptop),
+            super::reachable_client(saved, 48, &[laptop, upper], laptop, None),
             None,
         );
     }
@@ -281,7 +412,7 @@ mod tests {
         let left = rect(-1920, 0, 1920, 1080);
         for saved in [rect(100, 120, 960, 640), rect(-1800, 80, 960, 640)] {
             assert_frame(
-                super::reachable_client(saved, 48, &[primary, left], primary),
+                super::reachable_client(saved, 48, &[primary, left], primary, None),
                 None,
             );
         }
@@ -297,7 +428,7 @@ mod tests {
             rect(100, 860, 960, 640),
         ] {
             assert_frame(
-                super::reachable_client(saved, 48, &[area], area),
+                super::reachable_client(saved, 48, &[area], area, None),
                 Some(rect(240, 25, 960, 640)),
             );
         }
@@ -307,15 +438,15 @@ mod tests {
     fn oversized_window_fits_remaining_work_area_and_scaled_header_is_checked() {
         let area = rect(0, 50, 1440, 850);
         assert_frame(
-            super::reachable_client(rect(0, 50, 2800, 1800), 96, &[area], area),
+            super::reachable_client(rect(0, 50, 2800, 1800), 96, &[area], area, None),
             Some(area),
         );
         assert_frame(
-            super::reachable_client(rect(100, 820, 960, 640), 48, &[area], area),
+            super::reachable_client(rect(100, 820, 960, 640), 48, &[area], area, None),
             None,
         );
         assert_frame(
-            super::reachable_client(rect(100, 820, 960, 640), 96, &[area], area),
+            super::reachable_client(rect(100, 820, 960, 640), 96, &[area], area, None),
             Some(rect(240, 50, 960, 640)),
         );
     }
@@ -330,9 +461,10 @@ mod tests {
                 tauri::PhysicalPosition::new(7, 0),
                 48,
                 &[area],
-                area
+                (area, 1.0),
+                &config()
             ),
-            (tauri::PhysicalPosition::new(-7, 0), area.size),
+            (tauri::PhysicalPosition::new(-7, 0), area.size, None),
         );
     }
 
@@ -342,12 +474,12 @@ mod tests {
         let right = rect(0, 0, 1920, 1080);
         let spanning = rect(-480, 100, 960, 640);
         assert_frame(
-            super::reachable_client(spanning, 48, &[left, right], right),
+            super::reachable_client(spanning, 48, &[left, right], right, None),
             None,
         );
         let below = rect(0, 300, 1920, 1080);
         assert_frame(
-            super::reachable_client(spanning, 48, &[left, below], left),
+            super::reachable_client(spanning, 48, &[left, below], left, None),
             Some(rect(-1440, 0, 960, 640)),
         );
     }
@@ -371,29 +503,37 @@ mod tests {
         let completed = rect(100, -450, 960, 640);
         let saved = decode(&saved_state(100, -450, 960, 640));
         // The old post-set guard approves this stale, reachable startup frame.
-        assert_frame(super::reachable_client(startup, 48, &[area], area), None);
+        assert_frame(
+            super::reachable_client(startup, 48, &[area], area, None),
+            None,
+        );
         // The planner accepts no current bounds: they can be either startup or
         // completed bounds. Only the frame-to-client offset (zero for this
         // undecorated window) is used. The unsafe origin is never sent to GTK.
         let expected = (
             tauri::PhysicalPosition::new(240, 25),
             tauri::PhysicalSize::new(960, 640),
+            Some(1.0),
         );
         assert_frame(
-            super::reachable_client(completed, 48, &[area], area),
+            super::reachable_client(completed, 48, &[area], area, None),
             Some(rect(240, 25, 960, 640)),
         );
         let offset = tauri::PhysicalPosition::new(0, 0);
         assert_eq!(
-            super::restore_request(&saved, offset, 48, &[area], area),
+            super::restore_request(&saved, offset, 48, &[area], (area, 1.0), &config()),
             expected
         );
         // Resize is asynchronous too: validating only startup width misses
         // the right-hand controls of a wider saved client.
         let saved = decode(&saved_state(100, 120, 1800, 800));
         assert_eq!(
-            super::restore_request(&saved, offset, 48, &[area], area),
-            (area.position, tauri::PhysicalSize::new(1440, 800)),
+            super::restore_request(&saved, offset, 48, &[area], (area, 1.0), &config()),
+            (
+                area.position,
+                tauri::PhysicalSize::new(1440, 800),
+                Some(1.0)
+            ),
         );
     }
 
@@ -403,10 +543,11 @@ mod tests {
         let offset = tauri::PhysicalPosition::new(7, 0);
         let saved = decode(&saved_state(-7, 0, 1920, 1000));
         assert_eq!(
-            super::restore_request(&saved, offset, 48, &[area], area),
+            super::restore_request(&saved, offset, 48, &[area], (area, 1.0), &config()),
             (
                 tauri::PhysicalPosition::new(-7, 0),
-                tauri::PhysicalSize::new(1920, 1000)
+                tauri::PhysicalSize::new(1920, 1000),
+                None
             ),
         );
         let mut state = saved_state(0, 0, 960, 640);
@@ -414,20 +555,22 @@ mod tests {
         state["main"]["prev_x"] = json!(100);
         state["main"]["prev_y"] = json!(-450);
         assert_eq!(
-            super::restore_request(&decode(&state), offset, 48, &[area], area),
+            super::restore_request(&decode(&state), offset, 48, &[area], (area, 1.0), &config()),
             (
                 tauri::PhysicalPosition::new(473, 0),
-                tauri::PhysicalSize::new(960, 640)
+                tauri::PhysicalSize::new(960, 640),
+                Some(1.0)
             ),
         );
         // Fullscreen uses x/y, not prev_x/prev_y, matching the plugin format.
         state["main"]["maximized"] = json!(false);
         state["main"]["fullscreen"] = json!(true);
         assert_eq!(
-            super::restore_request(&decode(&state), offset, 48, &[area], area),
+            super::restore_request(&decode(&state), offset, 48, &[area], (area, 1.0), &config()),
             (
                 tauri::PhysicalPosition::new(0, 0),
-                tauri::PhysicalSize::new(960, 640)
+                tauri::PhysicalSize::new(960, 640),
+                None
             ),
         );
     }

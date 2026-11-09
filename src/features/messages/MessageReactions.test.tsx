@@ -175,6 +175,8 @@ it("shows one bubble per emoji, counts unique people, and removes all my duplica
     name: "👍: 2 people",
   });
   expect(own.getAttribute("aria-pressed")).toBe("true");
+  // The pill's highlight follows whether I am among its reactors.
+  expect(own.closest("[data-mine]")).not.toBeNull();
   expect(own.textContent).toBe("👍2");
   fireEvent.mouseEnter(own);
   fireEvent.mouseMove(own);
@@ -187,11 +189,11 @@ it("shows one bubble per emoji, counts unique people, and removes all my duplica
   expect(
     deletions?.map((event) => event.tags.filter(([name]) => name === "e")),
   ).toEqual([[["e", mine.id]], [["e", duplicate.id]]]);
-  expect(
-    screen
-      .getByRole("button", { name: `👍: ${other.pubkey.slice(0, 10)}` })
-      .getAttribute("aria-pressed"),
-  ).toBe("false");
+  const remaining = screen.getByRole("button", {
+    name: `👍: ${other.pubkey.slice(0, 10)}`,
+  });
+  expect(remaining.getAttribute("aria-pressed")).toBe("false");
+  expect(remaining.closest("[data-mine]")).toBeNull();
   await act(async () => {
     await flush();
     await flush();
@@ -471,6 +473,61 @@ it("prevents duplicate submissions and unavailable-message actions", async () =>
   });
 });
 
+it.each(["hover", "focus"] as const)(
+  "shows who reacted on %s to someone who cannot react",
+  async (reveal) => {
+    const h = harness([react(other)]);
+    render(<h.Controls disabled />);
+    const pill = screen.getByRole("button", {
+      name: `👍: ${other.pubkey.slice(0, 10)}`,
+    });
+    // A disabled button drops hover, focus and keys, and the preview with them.
+    expect(pill.hasAttribute("disabled")).toBe(false);
+    expect(pill.hasAttribute("data-disabled")).toBe(false);
+    expect(pill.getAttribute("aria-disabled")).toBe("true");
+    if (reveal === "hover") {
+      fireEvent.mouseEnter(pill);
+      fireEvent.mouseMove(pill);
+    } else act(() => pill.focus());
+    const preview = await screen.findByRole("tooltip", {}, { timeout: 2500 });
+    expect(preview.textContent).toContain(other.pubkey.slice(0, 10));
+  },
+);
+
+it("does not let someone who cannot react toggle, and leaves keys to ancestors", async () => {
+  const h = harness([react(other)]);
+  const keys: string[] = [];
+  render(
+    // Thread Escape, the message menu and timeline scrolling skip prevented keys.
+    // biome-ignore lint/a11y/noStaticElementInteractions: Observes bubbling keys.
+    <div
+      onKeyDown={(event) => {
+        if (!event.defaultPrevented) keys.push(event.key);
+      }}
+    >
+      <h.Controls disabled />
+    </div>,
+  );
+  const pill = screen.getByRole("button", {
+    name: `👍: ${other.pubkey.slice(0, 10)}`,
+  });
+  act(() => pill.focus());
+  await screen.findByRole("tooltip");
+  // Enter and Space activate a native button by dispatching this click.
+  fireEvent.click(pill);
+  expect(screen.getByRole("tooltip")).toBeTruthy();
+  expect(h.session.outbox?.snapshot()).toHaveLength(0);
+  expect(pill.getAttribute("aria-pressed")).toBe("false");
+  expect(screen.queryByTestId("inline-add-reaction")).toBeNull();
+  for (const key of ["F10", "ContextMenu", "ArrowUp", "PageUp"])
+    fireEvent.keyDown(pill, { key, shiftKey: key === "F10" });
+  // The open preview is a nested surface: Escape dismisses only it first.
+  fireEvent.keyDown(pill, { key: "Escape" });
+  await waitFor(() => expect(screen.queryByRole("tooltip")).toBeNull());
+  fireEvent.keyDown(pill, { key: "Escape" });
+  expect(keys).toEqual(["F10", "ContextMenu", "ArrowUp", "PageUp", "Escape"]);
+});
+
 it("keeps emojis visually active but rejects another click while delivery is pending or failed", async () => {
   let release!: () => void;
   const publish = vi.fn(
@@ -492,12 +549,24 @@ it("keeps emojis visually active but rejects another click while delivery is pen
   expect(pill.hasAttribute("disabled")).toBe(false);
   fireEvent.click(pill);
   expect(h.session.outbox?.snapshot()).toHaveLength(1);
+  // Fresh hover still keeps the preview off delivery recovery controls.
+  vi.useFakeTimers();
+  try {
+    fireEvent.mouseEnter(pill);
+    fireEvent.mouseMove(pill);
+    await act(() => vi.advanceTimersByTimeAsync(PREVIEW_REST_MS));
+    expect(screen.queryByRole("tooltip")).toBeNull();
+  } finally {
+    vi.useRealTimers();
+  }
   await act(async () => {
     release();
     await flush();
     await flush();
   });
   expect(pill.getAttribute("aria-disabled")).toBe("false");
+  // Only delivery held back the preview that the hover opened.
+  expect(screen.getByRole("tooltip").textContent).toContain("You");
 
   const failed = harness(
     [react(other)],

@@ -51,6 +51,7 @@ function fixture(dir, version = "0.0.0-preview.22.1") {
   mkdirSync(assetDir);
   const installers = [
     `Buzz_${version}_aarch64.app.tar.gz`,
+    `Buzz_${version}_x64.app.tar.gz`,
     `Buzz_${version}_x64_unsigned.exe`,
     `Buzz_${version}_amd64.deb`,
     `Buzz_${version}_x86_64.AppImage`,
@@ -175,6 +176,7 @@ test("preview feed signs every desktop installer into its updater target", (t) =
   const { platforms } = JSON.parse(readFileSync(manifest, "utf8"));
   const targets = [
     "darwin-aarch64",
+    "darwin-x86_64",
     "windows-x86_64",
     "linux-x86_64-deb",
     "linux-x86_64-appimage",
@@ -188,7 +190,7 @@ test("preview feed signs every desktop installer into its updater target", (t) =
       url: `https://github.com/block/buzz-app/releases/download/v0.0.0-preview.22.1/${name}`,
     });
   });
-  const [, windows, deb] = installers;
+  const [, , windows, deb] = installers;
   const data = JSON.parse(readFileSync(manifest, "utf8"));
   delete data.platforms["windows-x86_64"];
   writeFileSync(manifest, JSON.stringify(data));

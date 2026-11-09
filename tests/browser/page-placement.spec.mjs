@@ -1,9 +1,16 @@
 import { test, expect } from "./fixture.mjs";
-import { newChat, openPage } from "./navigation.mjs";
+import {
+  newChat,
+  openPage,
+  pageChoice,
+  selectCommunity,
+  selectPage,
+} from "./navigation.mjs";
 
-// Browser-only boundaries: measured overflow/simulated native insets, keyboard focus on
-// resize, and real App wiring between Messages and Solo chats. Contract matrices stay in RTL.
-test.use({ pluginFixtures: true });
+// Browser-only boundaries: painted focus, native insets, resize geometry, and
+// real App wiring between Messages, Solo chats and the pages listed in its
+// sidebar. Contract matrices stay in RTL.
+test.use({ pluginFixtures: true, enabledPlugins: ["buzz.drafts-and-sent"] });
 
 test("shared navigation preserves drafts and history across Solo and header pages", async ({
   page,
@@ -26,8 +33,9 @@ test("shared navigation preserves drafts and history across Solo and header page
   });
   await expect(composer).toBeVisible();
   await composer.fill("Keep this draft");
-  const topbar = page.getByRole("navigation", { name: "Topbar pages" });
+  const topbar = page.getByRole("navigation", { name: "Apps dock" });
   await expect(topbar.getByRole("tab")).toHaveText([
+    "Activity",
     "Messages",
     "Reminders",
     "Agents",
@@ -68,23 +76,13 @@ test("shared navigation preserves drafts and history across Solo and header page
     .click();
   await expect(composer).toHaveText("Keep this draft");
   const reminders = topbar.getByRole("tab", { name: "Reminders", exact: true });
-  const indicator = topbar.locator(".buzz-tabs-indicator");
-  await expect
-    .poll(async () => {
-      const tab = await messages.boundingBox();
-      const pill = await indicator.boundingBox();
-      return tab && pill
-        ? Math.abs(tab.x - pill.x) + Math.abs(tab.width - pill.width)
-        : Infinity;
-    })
-    .toBeLessThan(1);
   await expect(composer).toHaveText("Keep this draft");
   // Enter the page through normal keyboard traversal, not programmatic panel focus.
   for (const mode of ["light", "dark"]) {
     await page.emulateMedia({ colorScheme: mode });
     for (const activation of ["Enter", "Space"]) {
       await messages.focus();
-      await messages.press("ArrowRight");
+      await messages.press("ArrowDown");
       await expect(reminders).toBeFocused();
       await reminders.press(activation);
       const newComposer = page.getByRole("heading", {
@@ -101,7 +99,7 @@ test("shared navigation preserves drafts and history across Solo and header page
       );
       await expect(reminders).toHaveAttribute("aria-selected", "true");
       await expect(reminders).toBeFocused();
-      await page.keyboard.press("ArrowLeft");
+      await page.keyboard.press("ArrowUp");
       await expect(messages).toBeFocused();
       await expect(reminders).toHaveAttribute("aria-selected", "true");
       await page.keyboard.press(activation);
@@ -190,70 +188,66 @@ test("shared navigation preserves drafts and history across Solo and header page
   await expect(
     page.getByRole("complementary", { name: "Sidebar", exact: true }),
   ).toBeVisible();
-  // The real sidebar changes the route, not the containing Messages area.
-  const inbox = page
-    .getByRole("navigation", { name: "Pages" })
-    .getByRole("button", { name: "Inbox", exact: true });
-  for (const mode of ["light", "dark"]) {
-    await page.emulateMedia({ colorScheme: mode });
-    for (const activation of ["pointer", "Enter", "Space"]) {
-      await inbox.click();
-      await expect(inbox).toHaveAttribute("aria-current", "page");
-      await expect(messages).toHaveAttribute("aria-selected", "true");
-      await expect(
-        page.getByRole("tabpanel", { name: "Messages", exact: true }),
-      ).toHaveAttribute("id", await messages.getAttribute("aria-controls"));
-      await expect(page.locator("#main-content")).toBeFocused();
-      if (activation === "pointer") await messages.click();
-      else {
-        await messages.focus();
-        await messages.press(activation);
-      }
-      await expect(composer).toHaveText("Keep this draft");
-      await expect(messages).toBeFocused();
-    }
-  }
+  const inbox = topbar.getByRole("tab", { name: "Activity", exact: true });
   await inbox.click();
+  await expect(inbox).toHaveAttribute("aria-selected", "true");
+  await expect(messages).toHaveAttribute("aria-selected", "false");
   await page.reload();
-  await expect(inbox).toHaveAttribute("aria-current", "page");
-  await expect(messages).toHaveAttribute("aria-selected", "true");
+  await expect(inbox).toHaveAttribute("aria-selected", "true");
   await reminders.click();
   await expect(reminders).toHaveAttribute("aria-selected", "true");
   await page.goBack();
-  await expect(inbox).toHaveAttribute("aria-current", "page");
-  await expect(messages).toHaveAttribute("aria-selected", "true");
+  await expect(inbox).toHaveAttribute("aria-selected", "true");
   await page.goForward();
   await expect(reminders).toHaveAttribute("aria-selected", "true");
-  await page.goBack();
-  await expect(inbox).toHaveAttribute("aria-current", "page");
-  for (const mode of ["light", "dark"]) {
-    await page.emulateMedia({ colorScheme: mode });
-    await page.setViewportSize({ width: 390, height: 950 });
-    await page.evaluate(() => {
-      document.documentElement.style.fontSize = "200%";
-    });
-    await page.getByRole("button", { name: "More pages", exact: true }).click();
-    const overflow = page.getByRole("navigation", { name: "Header pages" });
-    const area = overflow.getByRole("button", {
-      name: "Messages",
-      exact: true,
-    });
-    await expect(area).toHaveAttribute("aria-current", "true");
-    await expect(area).toBeVisible();
-    await page.keyboard.press("Escape");
-    await page.evaluate(() => {
-      document.documentElement.style.fontSize = "";
-    });
-    await page.setViewportSize({ width: 1440, height: 950 });
-    await expect(messages).toHaveAttribute("aria-selected", "true");
-    await page.screenshot({
-      path: test.info().outputPath(`messages-inbox-${mode}.png`),
-    });
-  }
   await messages.click();
   await expect(composer).toHaveText("Keep this draft");
   await openPage(page, "Settings");
   await expect(topbar.locator('[aria-selected="true"]')).toHaveCount(0);
+});
+
+test("a page listed in the Messages sidebar keeps Messages and the conversation sidebar", async ({
+  page,
+  app,
+}) => {
+  await page.addInitScript(() => {
+    localStorage.setItem(
+      "buzzodz.plugins.v1",
+      JSON.stringify({
+        version: 2,
+        enabled: { "fixture.page-placement": true },
+      }),
+    );
+  });
+  await page.goto(app.origin);
+  await openPage(page, "Messages");
+  const composer = page.getByRole("textbox", {
+    name: "Message #Alpha",
+    exact: true,
+  });
+  await expect(composer).toBeVisible();
+  const sidebar = page.getByRole("complementary", {
+    name: "Sidebar",
+    exact: true,
+  });
+  const destination = sidebar
+    .getByRole("navigation", { name: "Pages" })
+    .getByRole("button", { name: "Listed destination", exact: true });
+  await destination.click();
+  await expect(
+    page.getByRole("heading", { name: "Listed destination", exact: true }),
+  ).toBeVisible();
+
+  const messages = page
+    .getByRole("navigation", { name: "Apps dock" })
+    .getByRole("tab", { name: "Messages", exact: true });
+  await expect(messages).toHaveAttribute("aria-selected", "true");
+  await expect(sidebar).toBeVisible();
+  await expect(destination).toHaveAttribute("aria-current", "page");
+
+  await messages.click();
+  await expect(composer).toBeVisible();
+  await expect(destination).not.toHaveAttribute("aria-current");
 });
 
 test("a page sidebar uses the shell slot, generic toggle, theme, and narrow drawer", async ({
@@ -270,6 +264,7 @@ test("a page sidebar uses the shell slot, generic toggle, theme, and narrow draw
           "fixture.page-placement": true,
           "buzz.reminders": true,
           "buzz.workflows": true,
+          "buzz.drafts-and-sent": true,
         },
       }),
     );
@@ -287,9 +282,20 @@ test("a page sidebar uses the shell slot, generic toggle, theme, and narrow draw
 
   const sidebar = page.getByRole("complementary", { name: "Fixture sidebar" });
   await expect(sidebar).toContainText("Target: sidebar");
+  const drafts = sidebar
+    .getByRole("navigation", { name: "Pages" })
+    .getByRole("button", { name: "Drafts & sent", exact: true });
+  await expect(drafts).toHaveCount(1);
+  // The page's own sidebar replaces the Messages sidebar it is listed in, and
+  // Messages stays selected.
   await expect(
     page.getByRole("complementary", { name: "Sidebar", exact: true }),
   ).toHaveCount(0);
+  await expect(
+    page
+      .getByRole("navigation", { name: "Apps dock" })
+      .getByRole("tab", { name: "Messages", exact: true }),
+  ).toHaveAttribute("aria-selected", "true");
   const wideSize = await sidebar.evaluate(
     (element) => element.getBoundingClientRect().width,
   );
@@ -338,6 +344,10 @@ test("a page sidebar uses the shell slot, generic toggle, theme, and narrow draw
   for (const mode of ["light", "dark"]) {
     await page.emulateMedia({ colorScheme: mode });
     await expect(page.locator("html")).toHaveAttribute("data-color-mode", mode);
+    await expect(drafts).toBeVisible();
+    await page.screenshot({
+      path: test.info().outputPath(`drafts-sidebar-${mode}.png`),
+    });
     const geometryAndColors = await sidebar.evaluate((element) => {
       const slot = element.parentElement.getBoundingClientRect();
       const action = element.querySelector("button").getBoundingClientRect();
@@ -375,19 +385,20 @@ test("a page sidebar uses the shell slot, generic toggle, theme, and narrow draw
     expect(geometryAndColors.action.bottom).toBeLessThanOrEqual(
       geometryAndColors.slot.bottom,
     );
-    await destination.focus();
-    const tabStopCount = await page
-      .locator(
-        "button:not([disabled]), a[href], input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex='-1'])",
-      )
-      .count();
-    for (let index = 0; index <= tabStopCount; index += 1) {
-      if (
-        await action.evaluate((element) => element === document.activeElement)
-      )
-        break;
-      await page.keyboard.press("Tab");
-    }
+    await page
+      .getByRole("navigation", { name: "Apps dock" })
+      .getByRole("tab")
+      .first()
+      .focus();
+    await page.keyboard.press("Tab");
+    await expect(
+      page.getByRole("button", { name: /^Community switcher:/ }),
+    ).toBeFocused();
+    await page.keyboard.press("Tab");
+    await expect(
+      page.getByRole("button", { name: "Your profile", exact: true }),
+    ).toBeFocused();
+    await page.keyboard.press("Tab");
     await expect(action).toBeFocused();
     await page.getByRole("button", { name: "Hide sidebar" }).click();
     await expect(shellNavigation).toHaveAttribute("aria-hidden", "true");
@@ -450,6 +461,47 @@ test("a page sidebar uses the shell slot, generic toggle, theme, and narrow draw
       element.contains(document.activeElement),
     ),
   ).toBe(false);
+  // Native focus and drawer handoff across a contributed sidebar cannot be
+  // established by the mounted App's route/slot coverage.
+  await selectCommunity(page, "Personal space");
+  await openPage(page, "Sidebar playground");
+  await showNavigation.click();
+  await drafts.focus();
+  await expect(drafts).toBeInViewport();
+  await drafts.press("Enter");
+  const draftsPage = page.getByRole("region", {
+    name: "Drafts & sent",
+    exact: true,
+  });
+  await expect(draftsPage).toBeVisible();
+  await expect(page.locator("#main-content")).toBeFocused();
+  await expect(shellNavigation).toHaveAttribute("aria-hidden", "true");
+  await showNavigation.click();
+  const coreDrafts = pages.getByRole("button", {
+    name: "Drafts & sent",
+    exact: true,
+  });
+  await expect(coreDrafts).toHaveCount(1);
+  await expect(coreDrafts).toHaveAttribute("aria-current", "page");
+  await destination.click();
+  await expect(
+    page.getByRole("heading", { name: "Sidebar playground", exact: true }),
+  ).toBeVisible();
+  await page.getByRole("button", { name: "Search Buzz", exact: true }).click();
+  const search = page.getByRole("dialog", { name: "Search Buzz", exact: true });
+  const input = search.getByRole("combobox", { name: "Search Buzz" });
+  await input.fill("drafts");
+  await expect(pageChoice(search, "Drafts & sent")).toHaveCount(1);
+  await selectPage(page, "Drafts & sent");
+  await expect(search).toHaveCount(0);
+  await expect(draftsPage).toBeVisible();
+  await expect(page.locator("#main-content")).toBeFocused();
+  await expect(
+    page.getByRole("button", {
+      name: "Community switcher: Personal space",
+      exact: true,
+    }),
+  ).toBeVisible();
 });
 
 test.describe("failed page sidebar recovery", () => {
@@ -547,7 +599,7 @@ test.describe("failed page sidebar recovery", () => {
   });
 });
 
-test("header pages remain reachable without overlap through scale and resize", async ({
+test("dock destinations and titlebar controls remain reachable through scale and resize", async ({
   page,
   app,
 }) => {
@@ -567,96 +619,135 @@ test("header pages remain reachable without overlap through scale and resize", a
   });
   await page.goto(app.origin);
   await openPage(page, "Messages");
-  const topbar = page.getByRole("navigation", { name: "Topbar pages" });
-  const toolbar = page.getByRole("navigation", { name: "Toolbar pages" });
-  const more = page.getByRole("button", { name: "More pages", exact: true });
-  const reminders = topbar.getByRole("tab", { name: "Reminders", exact: true });
-  for (const mode of ["light", "dark"]) {
-    await page.emulateMedia({ colorScheme: mode });
-    await expect(page.locator("html")).toHaveAttribute("data-color-mode", mode);
-    await page.setViewportSize({ width: 1600, height: 950 });
-    await expect(topbar).toBeVisible();
-    const geometry = await page.locator(".shell-header").evaluate((header) => {
-      const rect = (selector) =>
-        header.querySelector(selector).getBoundingClientRect();
-      return {
-        left: rect(".shell-history").right,
-        center: rect(".shell-center-capsule").toJSON(),
-        pages: rect(".shell-topbar-pages").toJSON(),
-        search: rect(".shell-search-action").toJSON(),
-        right: rect(".shell-actions").left,
-        width: header.clientWidth,
-      };
-    });
-    expect(geometry.center.x).toBeGreaterThan(geometry.left);
-    expect(geometry.pages.right).toBeLessThanOrEqual(geometry.search.x);
-    expect(geometry.search.right).toBeLessThan(geometry.right);
-    expect(
-      Math.abs(
-        geometry.center.x + geometry.center.width / 2 - geometry.width / 2,
-      ),
-    ).toBeLessThan(1);
-    await toolbar.getByRole("button", { name: "Toolbar destination" }).click();
-    await expect(
-      page.getByRole("heading", { name: "Toolbar destination" }),
-    ).toBeVisible();
-    await expect(toolbar.getByRole("button")).toHaveAttribute(
-      "aria-current",
-      "page",
-    );
-    // 800px exercises measured overflow, not only the <=650px CSS fallback.
-    for (const width of [800, 650, 390]) {
-      await reminders.focus();
-      await page.setViewportSize({ width, height: 950 });
-      await expect(more).toBeFocused();
-      await expect(topbar).not.toBeVisible();
-      await expect(toolbar).not.toBeVisible();
-      await more.press("Enter");
-      const choices = page.getByRole("navigation", { name: "Header pages" });
-      await expect(choices.getByRole("button")).toHaveText([
-        "Messages",
-        "Reminders",
-        "A deliberately long topbar destination",
-        "Agents",
-        "Toolbar destination",
-        "Workflows",
-      ]);
-      await page.keyboard.press("Escape");
-      await expect(choices).toHaveCount(0);
-      await expect(more).toBeFocused();
-      await more.press("Enter");
-      await choices
-        .getByRole("button", { name: "Reminders", exact: true })
-        .click();
-      await expect(
-        page.getByRole("heading", { name: "Reminders", exact: true }),
-      ).toBeVisible();
-      await expect(more).not.toHaveAttribute("aria-expanded", "true");
-      // Widen with focus inside the open overflow, not only on its trigger.
-      await more.click();
-      await choices
-        .getByRole("button", { name: "Messages", exact: true })
-        .focus();
-      await page.setViewportSize({ width: 1600, height: 950 });
-      await expect(choices).toHaveCount(0);
-      await expect(
-        topbar.getByRole("tab", { name: "Messages", exact: true }),
-      ).toBeFocused();
-    }
-  }
-  // Simulate the native reserve and 200% interface text size, not native drag behavior.
+  const dock = page.getByRole("navigation", { name: "Apps dock" });
+  const toolbar = dock.getByRole("tab", {
+    name: "Toolbar destination",
+    exact: true,
+  });
+  await toolbar.click();
+  await expect(
+    page.getByRole("heading", { name: "Toolbar destination" }),
+  ).toBeVisible();
+  await expect(toolbar).toHaveAttribute("aria-selected", "true");
+  await openPage(page, "Messages");
+  // Simulate the native control reserve; native dragging itself needs desktop testing.
   await page
     .locator(".shell-header")
     .evaluate((header) => header.classList.add("shell-header-mac"));
-  await page.evaluate(() => {
-    document.documentElement.style.fontSize = "200%";
-  });
-  await page.setViewportSize({ width: 800, height: 950 });
-  await expect(more).toBeVisible();
-  await more.click();
-  await expect(
-    page
-      .getByRole("navigation", { name: "Header pages" })
-      .getByRole("button", { name: "Messages", exact: true }),
-  ).toBeVisible();
+  for (const mode of ["light", "dark"]) {
+    await page.emulateMedia({ colorScheme: mode });
+    await expect(page.locator("html")).toHaveAttribute("data-color-mode", mode);
+    for (const scale of [1, 2]) {
+      await page.evaluate((scale) => {
+        document.documentElement.style.fontSize = `${scale * 100}%`;
+      }, scale);
+      for (const width of [1600, 1024, 800, 650, 480, 390]) {
+        await page.setViewportSize({ width, height: 950 });
+        await expect(dock).toBeVisible();
+        const search = page.getByRole("button", {
+          name: "Search Buzz",
+          exact: true,
+        });
+        await expect(search).toBeInViewport({ ratio: 1 });
+        if (width >= 480 * scale) {
+          await expect
+            .poll(() =>
+              page.locator(".shell-header").evaluate((header) => {
+                const search = header
+                  .querySelector(".shell-menu-search")
+                  .getBoundingClientRect();
+                const history = header
+                  .querySelector(".shell-history")
+                  .getBoundingClientRect();
+                const actions = header
+                  .querySelector(".shell-actions")
+                  .getBoundingClientRect();
+                return (
+                  Math.abs(
+                    search.y +
+                      search.height / 2 -
+                      history.y -
+                      history.height / 2,
+                  ) < 1 &&
+                  Math.abs(
+                    search.y +
+                      search.height / 2 -
+                      actions.y -
+                      actions.height / 2,
+                  ) < 1
+                );
+              }),
+            )
+            .toBe(true);
+        }
+
+        await expect
+          .poll(async () => {
+            const box = await search.boundingBox();
+            const history = await page.locator(".shell-history").boundingBox();
+            const actions = await page.locator(".shell-actions").boundingBox();
+            const sameRow =
+              Math.abs(
+                box.y + box.height / 2 - history.y - history.height / 2,
+              ) < 1;
+            if (width < 1024 * scale && sameRow) {
+              // Compact Search fills the available track, retaining the requested 24pt gaps.
+              return Math.max(
+                Math.abs(box.x - history.x - history.width - 24 * scale),
+                Math.abs(actions.x - box.x - box.width - 24 * scale),
+              );
+            }
+            return Math.abs(box.x + box.width / 2 - width / 2);
+          })
+          .toBeLessThan(1);
+        await expect
+          .poll(() =>
+            page.locator(".shell-header").evaluate((header) => {
+              const search = header
+                .querySelector(".shell-menu-search")
+                .getBoundingClientRect();
+              const others = [
+                ...header.querySelectorAll(
+                  ".shell-history button, .shell-community-switcher button",
+                ),
+              ];
+              return others.every((button) => {
+                const box = button.getBoundingClientRect();
+                return (
+                  box.right <= search.left ||
+                  box.left >= search.right ||
+                  box.bottom <= search.top ||
+                  box.top >= search.bottom
+                );
+              });
+            }),
+          )
+          .toBe(true);
+        const messages = dock.getByRole("tab", {
+          name: "Messages",
+          exact: true,
+        });
+        await messages.focus();
+        await expect(messages).toBeInViewport({ ratio: 1 });
+        await messages.press("ArrowDown");
+        await expect(
+          dock.getByRole("tab", { name: "Reminders", exact: true }),
+        ).toBeFocused();
+        await expect(messages).toHaveAttribute("aria-selected", "true");
+        await search.click();
+        const dialog = page.getByRole("dialog", {
+          name: "Search Buzz",
+          exact: true,
+        });
+        await expect(
+          dialog.getByRole("combobox", { name: "Search Buzz" }),
+        ).toBeFocused();
+        await page.keyboard.press("Escape");
+        await expect(search).toBeFocused();
+        await page.screenshot({
+          path: test.info().outputPath(`dock-${mode}-${scale}-${width}.png`),
+        });
+      }
+    }
+  }
 });

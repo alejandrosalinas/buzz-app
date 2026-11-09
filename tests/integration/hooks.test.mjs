@@ -561,39 +561,54 @@ for (const [file, content] of [
   });
 }
 
-test("a Rust-only push runs Clippy and blocks the push on a lint failure", (t) => {
-  const f = pushFixture(t, {
-    "crates/probe/src/lib.rs": "pub fn value() -> usize {\n    2\n}\n",
+for (const path of [
+  "crates/probe/src/lib.rs",
+  "src/bundled/mesh-compute/compute/src/lib.rs",
+]) {
+  test(`${path}-only push runs Clippy and blocks the push on a lint failure`, (t) => {
+    const f = pushFixture(t, {
+      [path]: "pub fn value() -> usize {\n    2\n}\n",
+    });
+    const result = f.push();
+    assert.equal(result.status, 0, result.stdout + result.stderr);
+    assert.match(result.stdout + result.stderr, /Pre-push: Clippy/);
+    if (path.startsWith("crates/"))
+      assert.match(
+        result.stdout + result.stderr,
+        /No JS unit-test inputs changed/,
+      );
+    else
+      assert.ok(
+        f
+          .args()
+          .some((arg) => arg.endsWith("src/app/pages.integration.test.mjs")),
+      );
+    assert.deepEqual(f.read("cargo-args").trim().split("\n"), [
+      "clippy",
+      "--workspace",
+      "--locked",
+      "--all-targets",
+      "--",
+      "-D",
+      "warnings",
+    ]);
+    const failed = f.run(
+      "git",
+      ["push", "./remote.git", "HEAD:refs/heads/fail"],
+      {
+        BUZZ_FAKE_CARGO_STATUS: "1",
+      },
+    );
+    assert.notEqual(failed.status, 0, failed.stdout + failed.stderr);
+    assert.match(failed.stdout + failed.stderr, /Pre-push: Clippy/);
+    assert.notEqual(
+      f.run("git", ["--git-dir=remote.git", "rev-parse", "refs/heads/fail"])
+        .status,
+      0,
+      "push reached the remote despite the Clippy failure",
+    );
   });
-  const result = f.push();
-  assert.equal(result.status, 0, result.stdout + result.stderr);
-  assert.match(result.stdout + result.stderr, /Pre-push: Clippy/);
-  assert.match(result.stdout + result.stderr, /No JS unit-test inputs changed/);
-  assert.deepEqual(f.read("cargo-args").trim().split("\n"), [
-    "clippy",
-    "--workspace",
-    "--locked",
-    "--all-targets",
-    "--",
-    "-D",
-    "warnings",
-  ]);
-  const failed = f.run(
-    "git",
-    ["push", "./remote.git", "HEAD:refs/heads/fail"],
-    {
-      BUZZ_FAKE_CARGO_STATUS: "1",
-    },
-  );
-  assert.notEqual(failed.status, 0, failed.stdout + failed.stderr);
-  assert.match(failed.stdout + failed.stderr, /Pre-push: Clippy/);
-  assert.notEqual(
-    f.run("git", ["--git-dir=remote.git", "rev-parse", "refs/heads/fail"])
-      .status,
-    0,
-    "push reached the remote despite the Clippy failure",
-  );
-});
+}
 
 test("JS-only pushes skip Clippy; the lane stays independent of unit-test skip", (t) => {
   const f = pushFixture(t, { "src/value.ts": "export const value = 1;\n" });

@@ -34,6 +34,14 @@ afterEach(() => {
   localStorage.clear();
 });
 
+/** A workspace heading's row, which also holds its actions. */
+const PROJECT_HEADER = '[data-solo-menu-id^="project-"]';
+/** The workspace containing a heading: its row and its chats. */
+function projectOf(heading: HTMLElement) {
+  const project = heading.closest(PROJECT_HEADER)?.parentElement;
+  if (!project) throw new Error("Missing project");
+  return project;
+}
 function fixture(projectName = "Work") {
   const owner = createRelaySession(null);
   const details = { ...owner.session.channelDetails };
@@ -180,7 +188,7 @@ it("creates and moves through the relay service, then restores in a fresh store"
   const second = h.store();
   render(h.view(second.queries, "other-device"));
   const project = await screen.findByRole("button", { name: "Projects" });
-  expect(project.parentElement?.parentElement).toHaveTextContent("Planning");
+  expect(projectOf(project)).toHaveTextContent("Planning");
   fireEvent.click(project);
   expect(screen.queryByRole("button", { name: "Planning" })).toBeNull();
   expect(screen.getByRole("button", { name: "Existing chat" })).toBeVisible();
@@ -206,7 +214,7 @@ it("rolls back a rejected move and keeps retry available", async () => {
   await user.click(await screen.findByRole("menuitem", { name: "Work" }));
   expect(await screen.findByText("Relay unavailable")).toBeVisible();
   expect(
-    screen.getByRole("button", { name: "Chats" }).parentElement?.parentElement,
+    projectOf(screen.getByRole("button", { name: "Chats" })),
   ).toHaveTextContent("Planning");
   await user.click(screen.getByRole("button", { name: "Retry move" }));
   await waitFor(() => expect(h.saved().assignments.chat).toBe("work"));
@@ -214,7 +222,7 @@ it("rolls back a rejected move and keeps retry available", async () => {
     expect(screen.queryByText("Relay unavailable")).toBeNull(),
   );
   expect(
-    screen.getByRole("button", { name: "Work" }).parentElement?.parentElement,
+    projectOf(screen.getByRole("button", { name: "Work" })),
   ).toHaveTextContent("Planning");
   store.dispose();
 });
@@ -320,7 +328,7 @@ it("starts a chat in a project from its heading plus", async () => {
   render(h.view(store.queries));
   try {
     const heading = await screen.findByRole("button", { name: "Work" });
-    const header = heading.parentElement;
+    const header = heading.closest<HTMLElement>(PROJECT_HEADER);
     if (!header) throw new Error("Missing project header");
     await user.click(
       within(header).getByRole("button", { name: "New chat in Work" }),
@@ -745,8 +753,7 @@ it("lists and focuses a chat moved into a full workspace", async () => {
   await user.keyboard("{ArrowRight}");
   await user.click(await screen.findByRole("menuitem", { name: "Work" }));
   await waitFor(() => expect(h.saved().assignments.chat).toBe("work"));
-  const work = screen.getByRole("button", { name: "Work" }).parentElement
-    ?.parentElement as HTMLElement;
+  const work = projectOf(screen.getByRole("button", { name: "Work" }));
   await waitFor(() =>
     expect(
       within(work).getByRole("button", { name: "Planning" }),

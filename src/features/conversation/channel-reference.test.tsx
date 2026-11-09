@@ -173,6 +173,14 @@ it("keeps the authored label while the answer is unknown", async () => {
   expect(screen.queryByText("Private channel")).toBeNull();
 });
 
+it("holds a readable channel's demand too, without the store looking it up", async () => {
+  const t = fixture();
+  t.answer("open", crew);
+  render(link(t.session, "open"));
+  await act(async () => {});
+  expect(t.refer.mock.calls).toEqual([["open"]]);
+});
+
 it("asks only once the list is ready, and never from a composer decoration", async () => {
   const t = fixture("loading");
   render(

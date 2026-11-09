@@ -85,6 +85,25 @@ function dateFormats() {
   return formats;
 }
 
+const days = new Map<number, string>();
+let daysZone: string | undefined;
+/** Local calendar day of a unix-seconds timestamp. Every row compares days on
+ * each render, so days are memoized under the time zone `dateFormats` saw. */
+export function calendarDay(createdAt: number) {
+  const { timeZone } = dateFormats();
+  if (timeZone !== daysZone) {
+    daysZone = timeZone;
+    days.clear();
+  }
+  let day = days.get(createdAt);
+  if (day === undefined) {
+    if (days.size >= 8192) days.clear();
+    day = new Date(createdAt * 1000).toDateString();
+    days.set(createdAt, day);
+  }
+  return day;
+}
+
 /** Days in a week, past which the weekday name stops being unambiguous. */
 const WEEKDAY_BAND_DAYS = 7;
 

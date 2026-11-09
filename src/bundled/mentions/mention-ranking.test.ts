@@ -52,24 +52,44 @@ it("sorts equal matches by case-insensitive displayed labels and only then keys"
   expect(rankMentions([c, a, b], "")).toEqual([b, c, a]);
 });
 
-it("never matches hex or npub keys, including short substrings", () => {
+it("matches a complete key only to its owner, never partial keys or key text in a name", () => {
   const key =
     "150b20bdf6130418df9239dd1bd082c71612c8d653b47c277200365b9be215dc";
   const row = choice("a", "Bad Janet", {
     recipient: { pubkey: key, name: "Bad Janet" },
   });
   const npub = npubEncode(key);
+  const namesake = choice("b", "Bad Janet");
+  const impostor = choice("c", npub);
   for (const query of [
     "h",
-    key,
     key.slice(0, 12),
     key.slice(-8),
-    npub,
     npub.slice(0, 15),
     npub.slice(-6),
+    // Mixed case is not bech32, and a 20-byte payload is not a public key.
+    `NPUB1${npub.slice(5)}`,
+    "npub1qurswpc8qurswpc8qurswpc8qurswpc86nz8sw",
   ]) {
     expect(rankMentions([row], query), query).toEqual([]);
     expect(exactMention([row], query), query).toBeUndefined();
+  }
+  const unnamed = { ...row, label: "npub…15dc", aliases: [] };
+  for (const query of [
+    key,
+    key.toUpperCase(),
+    npub,
+    `nostr:${npub}`,
+    npub.toUpperCase(),
+    ` ${npub} `,
+  ]) {
+    expect(rankMentions([row, impostor], query), query).toEqual([row]);
+    expect(exactMention([row, namesake, impostor], query), query).toBe(key);
+    expect(matchingMentions([row, namesake, impostor], query), query).toEqual([
+      row,
+    ]);
+    expect(rankMentions([unnamed], query), query).toEqual([unnamed]);
+    expect(exactMention([unnamed], query), query).toBe(key);
   }
   expect(rankMentions([row], "jan")).toEqual([row]);
 });
@@ -128,6 +148,43 @@ it("orders mixed people and agents the same way from every input order", () => {
     ]);
 });
 
+it("a limit keeps the first rows of the full order", () => {
+  // Namesake agents, people, members, outsiders and equal labels, so every
+  // ranking key decides some pair.
+  const names = ["Honey", "Honey Bee", "honey", "Hank", "Bea", "Zed"];
+  const rows = Array.from({ length: 240 }, (_, i) => {
+    const name = names[i % names.length] ?? "";
+    const key = i.toString(16).padStart(64, "0");
+    return {
+      ...choice("0", name, {
+        agent: i % 3 === 0,
+        owned: i % 5 === 0,
+        managed: i % 7 === 0,
+        member: i % 4 !== 0,
+        ...(i % 11 ? {} : { elsewhere: "Other" }),
+        label: i % 2 ? `${name} · ${key.slice(-4)}` : name,
+        aliases: i % 13 ? [name] : [],
+      }),
+      recipient: { pubkey: key, name },
+    };
+  });
+  const history = new Map(
+    rows.flatMap((c, i) => (i % 9 ? [] : [[c.recipient.pubkey, i]])),
+  );
+  const presence = (key: string) =>
+    ["online", "away", "unknown"][Number.parseInt(key.slice(-1), 16) % 3] ??
+    "unknown";
+  for (const query of ["", "h", "honey", "honey b", "bea", "nobody"]) {
+    const full = rankMentions(rows, query, history, presence);
+    for (const limit of [0, 1, 7, 50, full.length, full.length + 1])
+      expect(rankMentions(rows, query, history, presence, limit)).toEqual(
+        full.slice(0, limit),
+      );
+  }
+  // A bare `@` has no exact or continuing name.
+  expect(continuingNames(rows, " ")).toEqual([]);
+  expect(exactMention(rows, "")).toBeUndefined();
+});
 it("a known longer name continues the query, except an identity's own beside its exact name", () => {
   const longer = choice("1", "Mira Example");
   expect(continuedMention([longer], "mira")).toBe(true);
@@ -161,7 +218,7 @@ it("a known longer name continues the query, except an identity's own beside its
   ).toBe(false);
 });
 it("validates the portable mention fixture version and case lists", () => {
-  expect(mentionConformance.version).toBe(2);
+  expect(mentionConformance.version).toBe(3);
   expect(mentionConformance.matching.length).toBeGreaterThan(0);
   expect(mentionConformance.ranking.length).toBeGreaterThan(0);
   expect(mentionConformance.space.length).toBeGreaterThan(0);
@@ -225,6 +282,11 @@ it("returns index matches in list order and skips names that cannot match", () =
   expect(matchingMentions(rows, "oney")).toEqual([]);
   expect(matchingMentions(rows, "jane d")).toEqual([rows[2]]);
   expect(matchingMentions(rows, "")).toBe(rows);
+  // A repeated query reuses its matches; another query is matched afresh.
+  const jane = matchingMentions(rows, "Jane");
+  expect(matchingMentions(rows, "jane")).toBe(jane);
+  expect(matchingMentions(rows, "hon")).toEqual([rows[1]]);
+  expect(matchingMentions(rows, "jane")).toEqual(jane);
 });
 
 it("bounds index work for long profile names and still matches them", () => {

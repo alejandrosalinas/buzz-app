@@ -11,8 +11,8 @@ test("profile snapshot and same-socket renewal coexist with real chat while opti
   await expect.poll(() => app.relay.hasRoute("primary", "alpha")).toBe(true);
   await expect.poll(() => app.relay.hasRoute("primary", "beta")).toBe(true);
   await expect(
-    page.getByRole("status", {
-      name: "Reconnecting to relay…",
+    page.getByRole("dialog", {
+      name: "Buzz is having trouble connecting",
       exact: true,
     }),
   ).toHaveCount(0);
@@ -530,7 +530,7 @@ test("avatar choices publish through the existing socket and persist across relo
   await avatar.click();
   await expect(
     page.getByRole("button", { name: "Availability: Online", exact: true }),
-  ).toHaveCSS("color", "rgb(25, 59, 45)");
+  ).toHaveCSS("color", "rgb(30, 106, 73)");
   await page.getByRole("button", { name: /^Availability:/ }).click();
   const attempts = [];
   const recordPresence = async (response) => {

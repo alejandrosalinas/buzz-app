@@ -197,6 +197,11 @@ it("keeps an accessible reply when the original is unavailable, without a compos
     target: { id: reply.id },
   });
   expect(h.view.snapshot().replies.map((row) => row.id)).toEqual([reply.id]);
+  // A sibling reply arriving later stays hidden: only the target shows.
+  h.traffic.receive([
+    message(alice, "a", "Sibling reply", 10002, [["e", root.id, "", "reply"]]),
+  ]);
+  expect(h.view.snapshot().replies.map((row) => row.id)).toEqual([reply.id]);
 });
 
 it("keeps a fetched root in the existing thread surface", async () => {

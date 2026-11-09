@@ -13,7 +13,7 @@ flexible props do not enforce the composition rules.
 ## Keep decisions with their owner
 
 - Shared components live in `ui/`, values and recipes in `styles/`, and documentation metadata in `tokens/` and `ui/registry.ts`.
-- Use semantic color roles and complete type roles. Block UI is the visual reference; Base UI owns interaction behavior except Toast, which uses Sonner through the shared Toast API. Import Tabler icons through `icons/`.
+- Use semantic color roles and complete type roles. Buzz's tokens and `DESIGN.md` are the visual reference; Base UI owns interaction behavior except Toast, which uses Sonner through the shared Toast API. Import Tabler icons through `icons/`.
 - Keep palette steps in shared token definitions. Product code uses roles and shared components, not viewer-specific layouts or styles.
 - Keep features, plugins, native adapters, and app startup out of the system and core viewer. The viewer at `tests/fixtures/design-system` renders real shared components.
 - Integrate global styles through the host entry point with one reset. The host owns appearance; `theme/useColorScheme.ts` belongs to the standalone viewer.

@@ -15,7 +15,7 @@ import {
   type KitRecord,
   type PayloadRecord,
 } from "./model";
-import { keypair, metadata, roster, signed } from "../relay/testing";
+import { flush, keypair, metadata, roster, signed } from "../relay/testing";
 import { matchesEvent } from "../relay/projection";
 import type { ReadFilter, RelayEvent } from "../relay/events";
 import { ReadError } from "../relay/errors";
@@ -176,6 +176,75 @@ it.each(["head read", "encryption"] as const)(
     }
   },
 );
+const other: KitRecord = {
+  ...record,
+  value: { type: "team", id: "other", name: "Other", agents: [] },
+};
+it("saves another record during a save, never the same record twice", async () => {
+  const f = fixture();
+  let release = () => {};
+  const gate = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  let preparing = false;
+  f.host.prepare.mockImplementationOnce(async (value) => {
+    preparing = true;
+    await gate;
+    return JSON.stringify(value);
+  });
+  const first = f.capability.save(record.value, undefined);
+  try {
+    await vi.waitFor(() => expect(preparing).toBe(true));
+    await expect(f.capability.save(record.value, undefined)).rejects.toThrow(
+      "already in progress",
+    );
+    const id = await f.capability.save(other.value, undefined);
+    expect(f.capability.snapshot().entries.map((e) => e.eventId)).toEqual([id]);
+  } finally {
+    release();
+  }
+  await first;
+  expect(f.outbox.send).toHaveBeenCalledTimes(2);
+});
+it("reads a save back after a catalog read that began before its confirmation", async () => {
+  const f = fixture();
+  const read = vi.mocked(f.reader.read);
+  const answer = read.getMockImplementation();
+  let release = () => {};
+  const gate = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  let held = false;
+  read.mockImplementation(async (filters, options) => {
+    const events = (await answer?.(filters, options)) ?? [];
+    if (!held && filters.some((filter) => filter["#t"])) {
+      held = true;
+      await gate; // Answer with the catalog as it was when the read began.
+    }
+    return events;
+  });
+  const first = f.capability.save(record.value, undefined);
+  try {
+    await vi.waitFor(() => expect(held).toBe(true));
+    const second = f.capability.save(other.value, undefined);
+    // The final head read precedes the trailing catalog refresh.
+    await vi.waitFor(() =>
+      expect(
+        read.mock.calls.filter(
+          ([filters]) => filters[0]?.["#d"]?.[0] === coordinate(other),
+        ),
+      ).toHaveLength(2),
+    );
+    await flush();
+    release();
+    const ids = await Promise.all([first, second]);
+    expect(f.capability.snapshot().entries.map((e) => e.eventId)).toEqual(
+      expect.arrayContaining(ids),
+    );
+  } finally {
+    release();
+  }
+});
 it("caller cancellation after enqueue does not retract or interrupt durable delivery", async () => {
   const f = fixture();
   const operation = new AbortController();

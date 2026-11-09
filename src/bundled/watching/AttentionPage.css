@@ -17,15 +17,17 @@
 .attention-page h4 {
   margin: 0;
 }
+/* The surface includes the summary's hit area, rather than sitting inside it. */
+.attention-instructions,
+.attention-watch-details,
+.attention-watch-activity {
+  box-sizing: border-box;
+  width: calc(100% + 2 * var(--space-2));
+  margin-inline: calc(-1 * var(--space-2));
+  padding-inline: var(--space-2);
+}
 .attention-instructions {
   min-width: 0;
-}
-.attention-instructions summary {
-  cursor: pointer;
-}
-.attention-instructions-preview {
-  min-width: 0;
-  flex: 1;
 }
 .attention-markdown {
   display: grid;
@@ -33,9 +35,28 @@
   padding-block: var(--space-2);
   overflow-wrap: anywhere;
 }
+.attention-instructions > .attention-markdown {
+  padding-block: var(--space-3);
+}
+.attention-markdown > :is(h1, h2, h3, h4, h5, h6) {
+  margin: var(--space-4) 0 0;
+}
+.attention-markdown > :first-child {
+  margin-block-start: 0;
+}
+.attention-markdown ul {
+  list-style-type: disc;
+}
+.attention-markdown ol {
+  list-style-type: decimal;
+}
 .attention-markdown pre {
   overflow: auto;
   margin: 0;
+}
+.attention-markdown :is(a, .attention-link) {
+  text-decoration: underline;
+  cursor: pointer;
 }
 .attention-markdown ul,
 .attention-markdown ol {
@@ -43,7 +64,6 @@
   padding-inline-start: var(--space-5);
 }
 .attention-agent-head,
-.attention-head,
 .attention-actions {
   display: flex;
   align-items: center;
@@ -53,12 +73,10 @@
 .attention-agent-head {
   justify-content: space-between;
 }
-.attention-agent-toggle {
-  display: flex;
-  align-items: center;
-  gap: var(--space-2);
+.attention-agent {
+  container-type: inline-size;
+  gap: var(--space-6);
 }
-.attention-agent,
 .attention-suggestions {
   container-type: inline-size;
   padding: var(--space-4);
@@ -100,59 +118,63 @@
   color: var(--text-subtle);
 }
 
-.attention-heading {
+/* Disclosure, references, and status are independent sibling targets. */
+.attention-status {
+  grid-column: 4;
+  grid-row: 1;
+}
+.attention-title,
+.attention-reference-label {
   min-width: 0;
-  flex: 1;
-  display: flex;
-  align-items: center;
-  gap: var(--space-2);
-  text-align: start;
-  color: inherit;
-  background: none;
-  border: 0;
-  padding: var(--space-1) 0;
-  font: inherit;
-  cursor: pointer;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
-.attention-type {
-  display: flex;
-  align-items: center;
-  gap: var(--space-2);
-  flex-shrink: 0;
-  color: var(--text-subtle);
+.attention-reference-label {
+  max-inline-size: 7rem;
 }
-.attention-type > svg {
-  width: 1rem;
-  height: 1rem;
+.attention-command {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  margin: 0;
+}
+.attention-expanded-meta {
+  display: grid;
+  gap: var(--space-3);
+  margin: 0;
+}
+.attention-expanded-meta > div {
+  display: grid;
+  grid-template-columns: 6rem minmax(0, 1fr);
+  align-items: baseline;
+  gap: var(--space-3);
+}
+.attention-expanded-meta dt,
+.attention-expanded-meta dd {
+  margin: 0;
+}
+@container (max-width: 28rem) {
+  .attention-reference-label {
+    max-inline-size: 4rem;
+  }
+  .attention-table-row {
+    column-gap: var(--space-2);
+  }
 }
 .attention-interest-head {
+  padding-block-start: var(--space-2);
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: var(--space-2);
 }
-.attention-interest-head > div:first-child {
+.attention-interest-head > h4 {
   min-width: 0;
-  display: grid;
-  gap: var(--space-half);
-}
-@media (hover: hover) and (pointer: fine) {
-  .attention-interest-head:not(:hover, :focus-within) .attention-delete,
-  .attention-card:not(:hover, :focus-within)
-    > .attention-head
-    .attention-delete {
-    opacity: 0;
-    pointer-events: none;
-  }
-}
-.attention-instructions summary {
-  width: 100%;
-  box-sizing: border-box;
-  display: flex;
-  gap: var(--space-2);
-  min-width: 0;
+  overflow-wrap: anywhere;
 }
 .attention-instructions-preview {
+  min-width: 0;
+  flex: 1;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -169,99 +191,94 @@
   height: 0.875rem;
   flex-shrink: 0;
 }
-.attention-title {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  min-width: 0;
-}
-.attention-heading svg,
-.attention-actions {
-  flex-shrink: 0;
-}
-@container (max-width: 30rem) {
-  .attention-type {
-    flex-basis: var(--space-8);
-  }
-  .attention-subtitle {
-    display: none;
-  }
-  .attention-title {
-    white-space: nowrap;
-  }
-}
-.attention-head {
-  display: grid;
-  grid-template-columns: minmax(0, max-content) minmax(0, 1fr) auto auto;
-}
-.attention-head > .attention-heading {
-  grid-column: 1;
-  grid-row: 1;
-}
-.attention-head > .attention-actions {
-  grid-column: 4;
-  grid-row: 1;
-}
-.attention-head > span {
-  grid-column: 3;
-  grid-row: 1;
-}
-.attention-head > .attention-destination {
-  grid-column: 2;
-  grid-row: 1;
-  white-space: nowrap;
-  min-width: 0;
-
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-.attention-subtitle {
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-.attention-meta {
-  display: flex;
-  align-items: center;
-  flex-wrap: wrap;
-  gap: var(--space-1);
-  padding-inline-start: var(--space-2);
-  overflow-wrap: anywhere;
-}
 .attention-details {
-  padding-inline-start: var(--space-4);
   display: grid;
-  gap: var(--space-3);
-  margin-block-start: var(--space-3);
-  padding-block-start: var(--space-3);
+  justify-items: start;
+  gap: 0;
+  padding: 0;
 }
-.attention-details section {
+.attention-timeline {
+  list-style: none;
+  padding: 0;
+  margin: 0;
   display: grid;
-  gap: var(--space-1);
+  width: 100%;
   min-width: 0;
 }
-.attention-details p {
+.attention-timeline-event {
+  position: relative;
+  min-width: 0;
+  color: var(--text-subtle);
+}
+.attention-activity-row {
+  display: grid;
+  grid-template-columns: var(--space-4) minmax(0, 1fr) auto var(--space-4);
+  align-items: center;
+  gap: var(--space-2);
+  min-height: var(--space-8);
+  cursor: pointer;
+  list-style: none;
+}
+.attention-activity-row::-webkit-details-marker {
+  display: none;
+}
+.attention-activity-row > span:last-of-type {
+  white-space: nowrap;
+}
+.attention-timeline-event details[open] > summary > svg:last-child {
+  transform: rotate(90deg);
+}
+.attention-timeline-event:not(:last-child)::after {
+  content: "";
+  position: absolute;
+  inset-inline-start: calc(var(--space-2) - 1px);
+  inset-block-start: var(--space-6);
+  inset-block-end: 0;
+  border-inline-start: 1px solid var(--border-standard);
+  pointer-events: none;
+}
+.attention-watch-details {
+  min-width: 0;
+}
+.attention-watch-details > summary {
+  min-height: var(--space-8);
+}
+.attention-activity-summary {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+  display: block;
+}
+.attention-timeline-event > span {
+  white-space: nowrap;
+}
+.attention-configuration {
+  display: grid;
+  gap: var(--space-4);
+  padding-block-start: var(--space-3);
+  padding-inline-start: var(--space-6);
+}
+.attention-configuration p {
   white-space: pre-wrap;
   overflow-wrap: anywhere;
 }
-.attention-details pre {
+.attention-configuration pre,
+.attention-activity-preview pre {
   margin: 0;
-  max-height: 14rem;
-  overflow: auto;
   white-space: pre-wrap;
   overflow-wrap: anywhere;
-  padding: var(--space-2) var(--space-3);
-  border-radius: var(--radius-control);
-  background: var(--surface-inset);
-  font-family: var(--font-mono);
+}
+.attention-activity-preview {
+  padding-block: var(--space-2) var(--space-4);
+  padding-inline-start: var(--space-6);
+  overflow-wrap: anywhere;
 }
 .attention-interest {
   display: grid;
   gap: var(--space-3);
   min-width: 0;
-  padding-block-start: var(--space-4);
-  border-top: 1px solid var(--border-standard);
+  padding: var(--space-2) var(--space-4);
 }
 .attention-interest > p {
   white-space: pre-wrap;
@@ -279,49 +296,14 @@
   display: none;
 }
 .attention-disclosure > svg {
+  margin-inline-start: auto;
   flex-shrink: 0;
 }
 details[open] > .attention-disclosure > svg {
   transform: rotate(90deg);
 }
-@container (max-width: 30rem) {
-  .attention-details {
-    padding-inline-start: var(--space-4);
-  }
-}
-@container (max-width: 30rem) {
-  .attention-agent-head {
-    flex-wrap: wrap;
-  }
-  .attention-agent-name {
-    flex-wrap: wrap;
-  }
-  .attention-agent-toggle {
-    padding-inline-end: 0;
-    margin-inline-start: auto;
-  }
-  .attention-type {
-    flex-basis: auto;
-  }
-  .attention-head {
-    grid-template-columns: minmax(0, 1fr) auto auto;
-  }
-  .attention-head > .attention-actions {
-    grid-column: 3;
-  }
-  .attention-head > span {
-    grid-column: 2;
-  }
-  .attention-head > .attention-destination {
-    grid-column: 1 / -1;
-    grid-row: 2;
-    max-width: 100%;
-    padding-inline-start: var(--space-6);
-  }
-}
-
-.attention-card[data-paused] .attention-head {
-  opacity: 0.65;
+.attention-card[data-paused] .attention-title {
+  color: var(--text-subtle);
 }
 
 .attention-channel-name {
@@ -329,4 +311,323 @@ details[open] > .attention-disclosure > svg {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.attention-card:has(> .attention-table-row) {
+  padding-block: 0;
+}
+
+.attention-table-row,
+.attention-column-headings {
+  grid-template-columns: minmax(0, 1fr) minmax(0, 22cqi) minmax(0, 18cqi) 5.5rem;
+  column-gap: var(--space-2);
+  display: grid;
+  align-items: center;
+}
+
+/* Match the transcript's quiet disclosure rows and pointer-only metadata. */
+.attention-table-row,
+.attention-activity-row,
+.attention-disclosure {
+  border-radius: var(--radius-row);
+  transition: background-color var(--duration-state) var(--easing-state);
+}
+.attention-activity-row,
+.attention-disclosure {
+  margin-inline: calc(-1 * var(--space-2));
+  padding-inline: var(--space-2);
+  padding-block: var(--space-1);
+}
+.attention-instructions summary {
+  cursor: pointer;
+  box-sizing: border-box;
+  display: flex;
+  gap: var(--space-2);
+  min-width: 0;
+  width: calc(100% + 2 * var(--space-2));
+}
+.attention-timeline-event details[open] .attention-activity-summary {
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+.attention-activity-time {
+  font-variant-numeric: tabular-nums;
+  text-align: end;
+}
+@media (hover: hover) and (pointer: fine) {
+  .attention-table-row:has(.attention-heading:hover),
+  .attention-activity-row:hover,
+  .attention-disclosure:hover {
+    --text-subtle: var(--interaction-row-text);
+    --text-metadata: var(--interaction-row-metadata);
+    background: var(--interaction-row-hover);
+  }
+  .attention-activity-row > svg:last-child,
+  .attention-disclosure > svg {
+    opacity: 0;
+  }
+  .attention-activity-row:is(:hover, :focus-visible) > svg:last-child,
+  .attention-disclosure:is(:hover, :focus-visible) > svg {
+    opacity: 1;
+  }
+}
+html[data-keyboard-navigation] .attention-heading:focus-visible,
+html[data-keyboard-navigation] .attention-activity-row:focus-visible,
+html[data-keyboard-navigation] .attention-disclosure:focus-visible {
+  outline: 2px solid var(--border-focus);
+  outline-offset: 2px;
+}
+@media (prefers-reduced-motion: reduce) {
+  .attention-table-row,
+  .attention-activity-row,
+  .attention-disclosure {
+    transition: none;
+  }
+}
+
+.attention-disclosure-icon,
+.attention-pill-icon {
+  display: inline-flex;
+  align-items: center;
+  flex-shrink: 0;
+}
+.attention-detail-preview {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.attention-watch-details[open] .attention-detail-preview {
+  display: none;
+}
+
+.attention-section-label {
+  margin: 0;
+  padding-block-start: var(--space-2);
+}
+.attention-section-label + .attention-instructions,
+.attention-section-label + .attention-list {
+  margin-block-start: calc(-1 * var(--space-2));
+}
+
+/* One geometry for watch, instruction, detail, and activity disclosures. */
+.attention-table-row,
+.attention-heading,
+.attention-disclosure,
+.attention-activity-row {
+  box-sizing: border-box;
+  min-height: var(--space-8);
+}
+.attention-heading {
+  display: grid;
+  grid-template-columns: var(--space-4) minmax(0, 1fr);
+  align-items: center;
+  gap: var(--space-2);
+  min-width: 0;
+  width: 100%;
+  padding: var(--space-2) 0;
+  text-align: start;
+  color: inherit;
+  background: none;
+  border: 0;
+  font: inherit;
+  cursor: pointer;
+  padding-block: var(--space-1);
+}
+.attention-disclosure,
+.attention-heading,
+.attention-activity-row {
+  gap: var(--space-2);
+}
+.attention-disclosure-icon {
+  width: var(--space-4);
+  height: var(--space-4);
+}
+
+.attention-channel-table dd {
+  display: grid;
+  gap: var(--space-2);
+}
+.attention-channel-table .attention-destination-label {
+  align-items: baseline;
+  overflow-wrap: anywhere;
+}
+.attention-expanded-meta dd {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.attention-channel-table > div {
+  grid-template-columns: minmax(0, 1fr);
+  gap: var(--space-2);
+}
+.attention-popover-content:has(> .attention-channel-table) {
+  padding-block-start: 0;
+}
+.attention-table-row {
+  position: relative;
+  display: grid;
+  align-items: center;
+  min-height: calc(var(--space-8) + var(--space-2));
+  margin-inline: calc(-1 * var(--space-2));
+  padding-inline-start: var(--space-2);
+  padding-inline-end: var(--space-2);
+}
+.attention-reference .attention-channel-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-inline-size: 7rem;
+}
+.attention-watch-activity {
+  min-width: 0;
+}
+.attention-watch-activity > .attention-timeline {
+  box-sizing: border-box;
+  padding-block: var(--space-2);
+  padding-inline-start: var(--space-6);
+}
+
+/* An expanded watch owns its header and all revealed content as one surface. */
+.attention-card[data-expanded] {
+  margin-inline: calc(-1 * var(--space-2));
+  padding: 0 var(--space-2);
+  border-radius: var(--radius-row);
+  background: var(--interaction-row-hover);
+}
+.attention-card[data-expanded] > .attention-table-row {
+  background: transparent;
+}
+.attention-watch-details[open],
+.attention-watch-activity[open],
+.attention-instructions[open],
+.attention-timeline-event > details[open] {
+  border-radius: var(--radius-row);
+  background: var(--interaction-row-hover);
+}
+.attention-instructions[open] > summary,
+.attention-watch-details[open] > summary,
+.attention-watch-activity[open] > summary {
+  background: transparent;
+}
+.attention-watch-details[open] > .attention-configuration,
+.attention-instructions[open] > .attention-markdown {
+  padding-block-end: var(--space-3);
+}
+
+/* Source and response destination have separate, aligned columns. */
+.attention-reference {
+  grid-column: 2;
+  grid-row: 1;
+  --interaction-border: var(--border-standard);
+  min-width: 0;
+  max-width: 100%;
+}
+.attention-destination {
+  --interaction-border: var(--border-standard);
+  grid-column: 3;
+  grid-row: 1;
+  min-width: 0;
+}
+.attention-reference-item,
+.attention-reference-item > button,
+.attention-destination > button {
+  min-width: 0;
+  max-width: 100%;
+}
+.attention-reference-label,
+.attention-destination .attention-channel-name {
+  max-inline-size: 100%;
+}
+.attention-popover-content {
+  display: grid;
+  max-inline-size: 20rem;
+  justify-items: start;
+  text-align: start;
+  gap: var(--space-2);
+  padding-block-start: 0;
+}
+
+.attention-card[data-expanded]:has(> .attention-table-row) {
+  padding: var(--space-1) var(--space-2);
+}
+
+/* Use the message activity reveal's retained, inert exit panel. */
+.attention-expansion {
+  min-width: 0;
+  transition: none;
+}
+@media (prefers-reduced-motion: no-preference) {
+  html:not([data-keyboard-navigation]) .attention-expansion {
+    transition: grid-template-rows var(--duration-panel-enter)
+      var(--easing-enter);
+  }
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  html:not([data-keyboard-navigation]) .attention-card {
+    transition: background-color var(--duration-panel-enter) var(--easing-enter);
+  }
+}
+
+/* Header bands and shared tracks make each interest read as a compact table. */
+.attention-section-label,
+.attention-column-headings {
+  box-sizing: border-box;
+  min-height: var(--space-8);
+  margin-inline: calc(-1 * var(--space-2));
+  padding: var(--space-2);
+  background: transparent;
+  border-block-end: 1px solid var(--border-standard);
+}
+.attention-column-headings h5 {
+  margin: 0;
+}
+.attention-column-headings > :nth-child(2) {
+  text-align: start;
+}
+.attention-column-headings > :last-child {
+  text-align: start;
+}
+.attention-column-headings + .attention-list {
+  margin-block-start: calc(-1 * var(--space-3));
+}
+.attention-table-row > .attention-reference {
+  justify-self: start;
+}
+.attention-table-row > .attention-status {
+  justify-self: end;
+}
+
+/* Disabled watches remain inspectable and can still be re-enabled. */
+.attention-card[data-disabled] {
+  opacity: 0.55;
+  --text-primary: var(--text-subtle);
+  --text-standard: var(--text-subtle);
+  --text-secondary: var(--text-metadata);
+}
+
+.attention-list > .attention-card[data-expanded],
+.attention-list > .attention-card[data-expanded] + li {
+  border-top-color: transparent;
+}
+.attention-column-headings:has(
+  + .attention-list > .attention-card:first-child[data-expanded]
+) {
+  border-block-end-color: transparent;
+}
+
+.attention-setting {
+  padding: var(--space-3) var(--space-4);
+  display: flex;
+  align-items: center;
+  gap: var(--space-4);
+  min-width: 0;
+}
+.attention-setting > .attention-sonar {
+  flex-shrink: 0;
+}
+.attention-setting > .buzz-preference-row {
+  flex: 1;
+  min-width: 0;
 }

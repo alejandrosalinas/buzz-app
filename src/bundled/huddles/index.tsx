@@ -1,3 +1,5 @@
+import { dmVoiceAgent } from "../../features/huddle/dm-agent";
+import { createHuddleVoices } from "../../features/huddle/voice";
 import { buzzLinkTarget } from "../../features/navigation/buzz-links";
 import { createHuddleRing } from "../../features/huddle/ring";
 import type { PluginModule } from "../../plugins/api";
@@ -22,7 +24,20 @@ export const inject = [
 ];
 export const apply: PluginModule["apply"] = (ctx) => {
   if (!nativeHuddles.available) return;
-  const huddles = createHuddles(ctx.relay, nativeHuddles, openHuddleAudio);
+  const huddles = createHuddles(
+    ctx.relay,
+    nativeHuddles,
+    openHuddleAudio,
+    (connection, destination) =>
+      dmVoiceAgent(connection, destination, ctx.agents)?.pubkey,
+  );
+  const stopVoices = createHuddleVoices(
+    huddles,
+    ctx.agents,
+    ctx.relay,
+    nativeHuddles,
+    huddles.voiceError,
+  );
   provideHuddleStatus(ctx, huddles);
   const stopRing = createHuddleRing(huddles);
   const openLink = (url: string) => {
@@ -69,7 +84,7 @@ export const apply: PluginModule["apply"] = (ctx) => {
   });
   ctx.effect(() => async () => {
     stopRing();
-    await Promise.all([companion.dispose(), huddles.dispose()]);
+    await Promise.all([stopVoices(), companion.dispose(), huddles.dispose()]);
   });
   ctx.conversation.registerChatMenu((props) => (
     <SoloHuddleMenu
@@ -92,6 +107,7 @@ export const apply: PluginModule["apply"] = (ctx) => {
     ),
     channelLauncher: (props) => (
       <HuddleLauncher
+        agents={ctx.agents}
         {...props}
         relay={ctx.relay}
         huddles={huddles}

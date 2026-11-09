@@ -140,3 +140,59 @@ it("reconnects a connection the federated session refused once it is signed in",
   expect(connect).toHaveBeenCalledTimes(2);
   expect(data.snapshot().status).toBe("ready");
 });
+it("asks a live socket that may have died during sleep to answer", async () => {
+  vi.useFakeTimers();
+  const check = vi.fn();
+  const source: ReadTransport = {
+    ...transport("viewer"),
+    subscribe: () => ({ update() {}, retry() {}, check, dispose() {} }),
+  };
+  const data = provideRelay(root(), async () => source);
+  await vi.advanceTimersByTimeAsync(0);
+  expect(data.snapshot().status).toBe("ready");
+  await vi.advanceTimersByTimeAsync(10_000);
+  expect(check).not.toHaveBeenCalled();
+  // Timers stop while the machine sleeps, so the clock jumps between ticks.
+  vi.setSystemTime(Date.now() + 60_000);
+  await vi.advanceTimersByTimeAsync(5_000);
+  expect(check).toHaveBeenCalledTimes(1);
+});
+
+it("turns a community refusal heard after connecting into one denied connection", async () => {
+  const ctx = root();
+  const listeners = new Set<(kind: "sign-in" | "access") => void>();
+  const refusing = (): ReadTransport => ({
+    ...transport("viewer"),
+    scope: "https://relay.example",
+    observeRefusal(listener) {
+      listeners.add(listener);
+      return () => void listeners.delete(listener);
+    },
+  });
+  const connect = vi.fn(async () => refusing());
+  const data = provideRelay(ctx, connect);
+  await flush();
+  expect(data.snapshot().status).toBe("ready");
+  const ready = data.snapshot().session;
+  for (const listener of [...listeners]) listener("sign-in");
+  // A second refusal from the same connection changes nothing.
+  for (const listener of [...listeners]) listener("access");
+  await flush();
+  expect(data.snapshot()).toMatchObject({
+    status: "error",
+    denied: true,
+    refusal: "sign-in",
+    viewer: "viewer",
+    error: "Federated sign-in is required",
+  });
+  expect(data.snapshot().retrying).toBeUndefined();
+  expect(data.snapshot().session).not.toBe(ready);
+  // Nothing reconnects by itself; signing in does, and the old connection's
+  // listener is gone.
+  expect(connect).toHaveBeenCalledTimes(1);
+  data.reauthorize();
+  await flush();
+  expect(connect).toHaveBeenCalledTimes(2);
+  expect(data.snapshot().status).toBe("ready");
+  expect(listeners.size).toBe(1);
+});

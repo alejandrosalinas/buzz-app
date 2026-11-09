@@ -5,6 +5,7 @@ import {
   ApiPaused,
   createApiAdmission,
   readApiFailure,
+  refusalOfError,
 } from "./http-admission";
 
 afterEach(() => vi.useRealTimers());
@@ -225,5 +226,86 @@ it("reads an edge 403 page as unavailable, not as the relay's denial", async () 
   });
   await expect(readApiFailure(page)).resolves.toEqual({
     error: "Relay request failed (403)",
+  });
+});
+it.each([
+  [401, "authentication required\n", "sign-in"],
+  [403, "evidence rejected\n", "sign-in"],
+  [403, "authorization denied\n", "access"],
+])(
+  "reads the relay's exact %i %j as a community refusal",
+  async (status, body, admission) => {
+    const failure = await readApiFailure(
+      new Response(body, {
+        status,
+        headers: { "Content-Type": "text/plain; charset=utf-8" },
+      }),
+    );
+    expect(failure).toMatchObject({ denied: true, admission });
+    // The broker forwards it as JSON; reading that again keeps the refusal.
+    expect(apiFailure(status, failure)).toEqual(failure);
+  },
+);
+it.each([
+  // An outage, not a refusal: NIP-FI's, and the media route's own.
+  [503, "authorization unavailable\n"],
+  [503, JSON.stringify({ error: "media service temporarily unavailable" })],
+  // A known body under the wrong status, or not exactly the relay's bytes.
+  [403, "authentication required\n"],
+  [403, "authorization denied"],
+  [403, "Authorization denied\n"],
+])("leaves %i %j to the feature that asked", async (status, body) => {
+  const failure = await readApiFailure(new Response(body, { status }));
+  expect(failure.admission).toBeUndefined();
+  expect(failure.denied).toBeUndefined();
+});
+it.each([
+  [
+    {
+      error: "relay_membership_required",
+      message: "You must be a relay member to access this relay",
+    },
+    "restricted: not a relay member",
+  ],
+  [
+    { error: "blocked: you are banned from this community" },
+    "blocked: you are banned from this community",
+  ],
+  // Media routes refuse a non-member or a banned key with their own spelling.
+  [{ error: "relay membership required" }, "restricted: not a relay member"],
+])(
+  "reads a community's membership refusal %j as a community refusal",
+  async (body, error) => {
+    const failure = await readApiFailure(Response.json(body, { status: 403 }));
+    expect(failure).toEqual({ error, denied: true, admission: "access" });
+    // The broker forwards it as JSON; reading that again keeps the refusal.
+    expect(apiFailure(403, failure)).toEqual(failure);
+    // A refusal met while connecting keeps its reason.
+    expect(refusalOfError(new Error(failure.error))).toBe("access");
+    // Under another status it isn't the relay's front door.
+    expect(apiFailure(401, body).admission).toBeUndefined();
+  },
+);
+it("keeps one item's JSON refusal with its feature", async () => {
+  const failure = await readApiFailure(
+    Response.json({ error: "restricted: p-gated" }, { status: 403 }),
+  );
+  expect(failure).toMatchObject({ denied: true });
+  expect(failure.admission).toBeUndefined();
+  // Claimed admission without the relay's own reason is not one either.
+  expect(
+    apiFailure(403, { error: "restricted: p-gated", admission: "access" })
+      .admission,
+  ).toBeUndefined();
+});
+it("keeps the relay's status and its classified reason through the lane", async () => {
+  const response = await admittedApiRequest(
+    createApiAdmission(),
+    async () => new Response("authorization denied\n", { status: 403 }),
+  );
+  expect(response.status).toBe(403);
+  expect(await response.json()).toMatchObject({
+    error: "restricted: authorization denied",
+    admission: "access",
   });
 });

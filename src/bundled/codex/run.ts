@@ -26,6 +26,7 @@ export const codexRun = (
   | "timeoutMs"
   | "syncedSettings"
   | "resumes"
+  | "readFile"
 > => ({
   models: (agent) => runtime.preview(agent),
   retire: (agent) => runtime.retire(agent),
@@ -43,6 +44,7 @@ export const codexRun = (
     await ready?.(turn.signal, turn.delivery.agent.key);
     return runtime.runOnce(turn);
   },
+  readFile: (agent, path, signal) => runtime.workspaceFile(agent, path, signal),
   timeoutMs: HANDOVER_MS,
   syncedSettings: {
     schema: syncedSettingsSchema,

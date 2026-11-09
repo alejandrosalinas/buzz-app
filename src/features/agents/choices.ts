@@ -1,4 +1,5 @@
 import type { LocalAgent, LocalAgents } from "./local";
+import type { AgentExecutionLocation } from "./execution-location";
 import type { AgentLibrarySnapshot, createAgentLibrary } from "./library";
 import type { ChannelList } from "../relay/contracts";
 import { relayOrigin } from "../communities/destination";
@@ -30,6 +31,9 @@ export function sameCommunityAgents(
 
 type Choice = AgentLibrarySnapshot["identities"][number] & {
   managed: boolean;
+  /** Known from this community's local/hosted source, never presence. */
+  execution?: AgentExecutionLocation;
+  runtime?: string;
   managedName?: string;
   /** Additional DM eligibility from completed owned hosted-agent records. */
   messageable?: true;
@@ -133,6 +137,8 @@ export function createAgentChoices({
           ...choices.get(row.pubkey),
           managed: false,
           messageable: true,
+          execution: "remote",
+          ...(row.runtime ? { runtime: row.runtime } : {}),
         });
       }
     if (local?.status === "ready")
@@ -146,6 +152,7 @@ export function createAgentChoices({
           ...(row.picture ? { avatar: row.picture } : {}),
           managed: true,
           managedName: row.name,
+          execution: row.execution ?? "local",
         });
       }
     const ready = legacy.status === "ready" || local?.status === "ready";

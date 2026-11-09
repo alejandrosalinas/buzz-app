@@ -364,7 +364,7 @@ The existing `MessageComposer` owns the draft and ordinary input behavior. Its p
 afterward. Disabled mention and emoji icons stay unfilled. When the recipients
 plus the viewer are exactly an existing DM's participants, in any order, that
 DM's history loads inline above the draft. This includes a DM removed with
-Remove from Team or Hide conversation. A subset or superset of a group's
+Close conversation or Hide conversation. A subset or superset of a group's
 participants shows the recipients' avatars instead. Each recipient change
 replaces the preview with the newly matched DM's timeline, or with the avatars.
 Previewing does not open, restore or mark the DM read, and it remains when
@@ -446,7 +446,7 @@ preview are omitted from Channel Settings; opening details does not read Canvas.
 
 Lifecycle actions extend the persistent sidebar’s existing context popup after
 Move channel and the mute/read group. Lifecycle items use shared leading icons and
-a separator only when they resolve and earlier actions exist. Right-click
+a separator only when there are lifecycle items and earlier actions exist. Right-click
 and keyboard access reuse the existing row trigger; no ⋮ control or second popup
 is added. Attention actions keep their existing owners. Solo chats in
 Messages use these same permission-checked
@@ -456,30 +456,37 @@ transcript layout, Share behavior and recipient rules do not change. Move/Star/g
 controls share this popup with independent eligibility; lifecycle actions do not
 change shared-menu styling.
 
-The row menu resolves fresh relay-authored metadata (`39000`), administrators
-(`39001`) and membership (`39002`) at exact channel coordinates before offering
-Archive/Unarchive/Delete/Leave or DM Hide. Archive and Unarchive require a direct
-owner/admin role or verified ownership evidence for an owner-role agent, matching
-the relay and desktop. Delete is offered to a direct owner or a member with that
-same evidence; the last direct owner cannot Leave. The menu omits Leave
-when it is forbidden, without an ownership-transfer explanation. Action labels
-have no trailing ellipsis. DMs offer Hide only.
+Every lifecycle surface (sidebar row, header, Solo chat menu and Settings)
+offers its actions as soon as it opens, from state the session already holds:
+the live relay-signed metadata (`39000`) and roster (`39002`). Opening a menu
+reads no channel permissions and waits on no relay read, so items do not shift. The roster's
+role fields (`["p", pubkey, relay_hint?, role?]`) agree with the administrator
+record (`39001`), as member administration requires, so they are a sound basis
+for what to offer. Archive and Unarchive are offered to a direct owner/admin or a
+verified owner-agent's human; Delete to a direct owner or that human; the last
+direct owner is not offered Leave, without an ownership-transfer explanation.
+Action labels have no trailing ellipsis. DMs offer Hide only. Channels whose id
+the lifecycle protocol rejects offer no lifecycle actions.
 
-Owner-agent eligibility follows the desktop's profile-based UX: read the channel
-owners' latest signed kind-0 profiles in bounded exact-author batches, then verify
-the unique NIP-OA tag, target binding, owner signature and conditions against the
-profile event. Display-only owner fields and agent hints never qualify. The
-existing shared verifier owns these checks; no new relay query or deployment is
-needed. Direct owners, DMs, Leave, and actions a direct role already grants do
-not require these optional profile reads. A failed five-second owner-profile lookup
-preserves independently established actions, omits the owner-agent actions and,
-on an active channel, exposes "Delete check unavailable" with explicit retry in
-both surfaces. Settings keeps
-its retry button focusable and busy during a fresh read, without retaining stale
-actions. Pending progress stays inside the button spinner, not a duplicate visible
-status sentence. If focus is still on recovery when the read finishes, it moves to the
-retry, an allowed action (Delete first), or a no-actions status. Moving focus
-elsewhere while waiting cancels that handoff.
+**What a surface offers is a hint; confirming authorizes.** Before signing and
+again before publishing, `run` reads fresh `39000`/`39001`/`39002` at exact
+channel coordinates and rejects a no-longer-permitted action in the
+confirmation result, and the relay enforces its own state. A stale roster can
+therefore offer an attempt that fails with an explanation, never a command the
+host would publish without a fresh check. Membership restored from the offline
+cache offers nothing until the relay confirms it, and membership the relay has
+revoked offers nothing.
+
+Owner-agent eligibility follows the desktop's profile-based UX: a channel owner's
+latest signed kind-0 profile must carry a unique NIP-OA tag whose target binding,
+owner signature and conditions verify against the profile event. Surfaces use
+the session profile cache's verified owner; if a roster owner's profile is not
+cached, they fetch it in the background and add Archive/Delete when it
+verifies, without holding back Leave. They ask again after a cache clear, an
+eviction or a failed read, at the directory's next change. `run` rereads the owner profiles in bounded
+exact-author batches with a five-second budget; failure there reports "Delete
+check unavailable. Try again." Display-only owner fields and agent hints never
+qualify.
 
 **Profile provenance is not the relay's persisted authorization mapping.** It is
 an eligibility hint for offering an attempt, not proof the command will succeed.
@@ -489,24 +496,16 @@ Profile replacement does not establish relay ownership transfer or revocation.
 The viewer signs the unchanged Delete command and the relay enforces its stored
 ownership and current channel state. A definitive rejection retains the channel
 and recoverable confirmation; uncertain delivery still blocks blind resubmission.
-Archive/Unarchive/Leave depend only on the viewer's own channel role. Existing
-membership requirements remain; nonmember access, owner-agent Archive/Unarchive authority and
-community-admin overrides are not added.
-Membership accepts NIP-29 `p` tags with optional relay and role fields
-(`["p", pubkey, relay_hint?, role?]`), including the relay's four-field roster.
-These fields never substitute for the separate administrator record. Invalid
-member keys and duplicate entries still fail closed. Failed menu permission reads
-show "Channel actions unavailable" with retry, not raw protocol errors. Pending
-permission reads show neither a loading row nor a lifecycle separator; the
-separator appears with the resolved actions or unavailable/retry section, and is
-omitted when there are no lifecycle items. Actions appear only after verification.
+Existing membership requirements remain; nonmember access and community-admin
+overrides are not added. Invalid member keys and duplicate entries still fail
+closed in the confirmation check.
 
 Channel Settings also offers **Leave channel**, **Archive channel** and **Delete
-channel** in its tools area, using one fresh lifecycle permission check. Each
-entry follows its own permission result: a last owner can Archive/Delete even
+channel** in its tools area, from the same live state. Each
+entry follows its own rule: a last owner can Archive/Delete even
 though Leave is forbidden, while an ordinary admin without owner-agent evidence can Archive but not Delete.
-Forbidden entries are omitted; failed checks offer retry and unsupported
-connections explain unavailability. DMs and read-only nonmember/cached views have no channel
+Forbidden entries are omitted and unsupported connections explain
+unavailability. DMs and read-only nonmember/cached views have no channel
 lifecycle entries. Archived channels cannot be deleted:
 the relay rejects Delete while archived. A direct owner/admin can restore it with
 **Unarchive channel**, which replaces Archive in the same Settings position, before
@@ -515,8 +514,8 @@ These controls hand off to the same persistent sidebar confirmation/navigation
 owner, so confirmed removal can unmount Settings without cancelling completion.
 Cancellation returns focus to the originating Settings button (or the sidebar
 fallback if that entry has gone away). Archive retains the current conversation,
-messages, membership and open Settings, replacing Archive with Unarchive after a
-fresh permission read. The conversation stays selected after reload; archived
+messages, membership and open Settings, replacing Archive with Unarchive once
+the confirmed metadata arrives. The conversation stays selected after reload; archived
 write restrictions still apply. Archived conversations and their threads replace the
 message composer with the lower archived-channel notice. If that composer owned
 focus, focus moves to the retained message history. Nonempty unsent text, including
@@ -1184,8 +1183,16 @@ member neither deletes their identity nor stops their agents.
 
 Role change and removal use deliberate confirmation steps in the same dialog,
 initially focused on Cancel. Removal shows only the avatar/name and actions;
-Cancel returns to the list. Errors appear below Search, outside the scrolling
-list; pending and success banners are omitted.
+Cancel returns to the list. Leaving either step keeps the list's scroll position
+and returns focus to that member's actions, including while a confirmed change
+is pending. When a confirmed removal takes the row away, focus moves to the
+actions of the member now in its place, the one before it, or Search when none
+is left, unless focus has moved elsewhere; a failed or uncertain removal leaves
+focus on the member. An addition's confirmation returns to Search. Errors appear
+below Search, outside the scrolling list. Only a confirmed change's own error
+scrolls the list, to keep that member's actions in view, and only while focus
+and the list are where the change left them. Pending and success banners are
+omitted.
 The service checks fresh actor/target state before signing and again
 before publication, rejects altered signer payloads, and confirms the requested
 role or roster absence with a fresh read. Relay acceptance alone is not success.
@@ -1467,6 +1474,54 @@ not visible rows or complete history.
 The relay can filter rows after its limit, and summaries/EOSE are not proof of
 exhaustion. See [the thread owner and bounds](relay-queries.md#thread-views).
 
+### Scrolling long threads
+
+These are the requirements for scrolling a long thread; the targets below measure
+how close the panel is, and [performance runs](performance.md)
+report where it stands. A thread with hundreds of replies must scroll as smoothly
+as a short one, for every reply the panel has loaded, up to the bounded history
+above, whatever the mix of Markdown, mentions, links and authors. Reaching replies
+beyond those bounds belongs to the relay's thread retention, not to scrolling.
+
+- **Smooth and responsive:** wheel, trackpad and keyboard input move the pane from
+  the first event, at the display's frame rate, and a reversal follows at once.
+  The panel's own position corrections never stall input or cut a trackpad coast
+  short.
+- **Always available:** loaded replies are painted as they come into view, at any
+  scroll speed and through direction changes. The pane never blinks or shows empty
+  space where loaded replies belong, and replies already shown stay readable while
+  an older page loads.
+- **Final on arrival:** a reply appears at its final size and position. It does not
+  rewrap, resize or move after it is on screen; media occupy their reserved frame.
+- **Reading position holds:** older pages, resolved media and profiles, live
+  replies and panel resizes keep the message being read at the same offset. New
+  replies are followed only while the reader is at or near the bottom.
+- **Bounded work:** the cost of a scroll gesture depends on the replies near the
+  viewport, not on how many are loaded. If replies far from the viewport are not
+  rendered, scrolling, exact links, keyboard selection and Back/Forward still reach
+  every loaded reply, and focus, selection, editing, drafts and expanded branches
+  keep working for them.
+
+#### Targets
+
+These targets are measured on a fixed mock thread of 460 replies (the strict
+window's full history) in the macOS app, with every reply loaded and a 60 Hz
+display. A measured run is two upward trackpad flings with a reversal, then Jump to
+latest.
+They are advisory: the [performance suite](performance.md) reports them and does
+not fail CI on them.
+
+| While scrolling the loaded thread | Target | Ceiling |
+| --- | --- | --- |
+| 95th-percentile frame interval | 16.7 ms (60 fps) | 33 ms |
+| Frames longer than two 60 Hz frames, per run | 0 | 5 |
+| Captured frames with a blank band (35% of the pane or more), per run | 0 | 5 |
+
+The target is the goal; the ceiling is the line regressions must not cross while
+the target is out of reach. Browser engines show a different subset: Chromium's
+frame rate cannot see compositing stalls, so its runs report main-thread cost, and
+macOS WebKit reproduces the frame intervals but not momentum or painted pixels.
+
 ## Validation and limits
 
 `just scan` runs frontend checks/build, runtime/CLI tests, relay behavior tests,
@@ -1648,17 +1703,19 @@ and OS notifications are not enabled by this feature.
 
 The Channels plugin registers Slack-style shortcuts through the shared dispatcher, so
 each is listed in Settings → Shortcuts and can be rebound. All run while typing in the
-message editor and are ignored behind a dialog. None run in a terminal, which keeps
-Escape and Option+Arrow for the shell.
+message editor, except as noted below, and are ignored behind a dialog. None run in a
+terminal, which keeps Escape and Option+Arrow for the shell.
 
 - **Previous/next conversation** (Option+Up/Down) and **previous/next unread
   conversation** (Option+Shift+Up/Down) step through the sidebar's rendered order,
-  Solo chats and team rows alike. `conversation-rows.ts` scans the sidebar's
-  `Subscribed channels` list, so sorting, sections, filters and the All/Solo/Team pane
+  Solo chats and team rows alike. As in Slack, plain Option+Up/Down steps from the
+  composer only while its draft is empty; with text it moves the caret by paragraph
+  instead. `conversation-rows.ts` scans the sidebar's `Subscribed channels` list, so sorting, sections, filters and the All/Solo/Team pane
   are already applied; rows in a collapsed section or the inactive pane are skipped. A
   row is unread when it shows the unread or thread-activity marker that
   `SidebarUnread` also reads. The open conversation is the row marked `aria-current`.
-  Stepping does not wrap, and at either end it does nothing. When the open
+  Plain stepping does not wrap, and at either end it does nothing; unread stepping
+  wraps around to the nearest unread row from the other end. When the open
   conversation is not among the rows, next starts from the top and previous from the
   bottom. A conversation listed in two sections is stepped over once. The shortcuts
   are unavailable, leaving the key alone, while the sidebar renders no rows (for
@@ -1747,6 +1804,13 @@ message opens as the root in the existing thread panel; a reply opens there with
 its actual root and bounded surrounding replies. No around-message channel query
 or separate detail screen is added. The presentation choice stays fixed for that
 navigation attempt; exact reads do not insert isolated old rows into channel history.
+Only **Open in channel** from a thread tab also shows the thread's root in the
+timeline: the list waits while older pages are read to find it, within the same
+bound as conversation tabs, then reveals and marks the root without taking the
+thread's focus. A root it cannot find leaves the timeline at its usual place.
+Back or Forward to that visit, or closing Members, seeks the root again; a list
+already shown stays in place while it does. Cached rows cannot place the root,
+so a cached session shows them as usual and seeks once it connects.
 
 Navigation completes only after the exact folded target is visible and focused.
 Reclick/Back reveals again; live/profile updates do not steal focus. The shared

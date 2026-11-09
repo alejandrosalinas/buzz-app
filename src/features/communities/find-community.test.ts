@@ -116,8 +116,9 @@ it.each([
   [
     "a Buzz relay with no community bound to this host",
     {
-      "/": Response.json({ name: "Buzz Relay", version: "1.4.2" }),
-      "/api/join-policy": Response.json({}),
+      "/": new Response("relay: no community is configured for this host", {
+        status: 404,
+      }),
     },
     "no-community",
   ],
@@ -129,6 +130,22 @@ it.each([
     ).resolves.toBe(failure_);
   },
 );
+
+it("finds a released relay that does not advertise host-bound fields", async () => {
+  // relay-v0.2.1 (the Helm chart's image) serves NIP-11 without
+  // read_state_snapshot or buzz_v1, and without icon until one is set.
+  await expect(
+    find({
+      "/": Response.json({
+        name: "Buzz Relay",
+        software: "https://github.com/block/buzz",
+        version: "0.2.1",
+        self,
+      }),
+      "/api/join-policy": Response.json({}),
+    }),
+  ).resolves.toMatchObject({ host: "relay.example.com:8443", policy: null });
+});
 
 it.each([
   ["404", html(404), null],

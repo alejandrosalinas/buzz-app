@@ -3,6 +3,7 @@ import {
   type HuddleAudioSettings,
 } from "./audio-settings";
 import workletUrl from "./capture.worklet.js?url&no-inline";
+import { createPlayout } from "./playout";
 
 export type HuddleAudio = {
   settings?: HuddleAudioSettings;
@@ -51,16 +52,9 @@ export const openHuddleAudio: OpenHuddleAudio = async (send, ended, signal) => {
         autoGainControl: true,
       },
     });
-  const playback = new Map<
-    string,
-    { next: number; sources: Set<AudioBufferSourceNode> }
-  >();
+  const playback = new Map<string, ReturnType<typeof createPlayout>>();
   const clear = (peer: string) => {
-    const entry = playback.get(peer);
-    for (const node of entry?.sources ?? []) {
-      node.stop();
-      node.disconnect();
-    }
+    playback.get(peer)?.close();
     playback.delete(peer);
   };
   const close = () => {
@@ -172,27 +166,13 @@ export const openHuddleAudio: OpenHuddleAudio = async (send, ended, signal) => {
           if (!peers.includes(peer)) clear(peer);
       },
       play(peer, samples) {
-        if (closed || !samples.length || samples.length > 5760) return;
+        if (closed) return;
         let entry = playback.get(peer);
         if (!entry) {
-          entry = { next: context.currentTime + 0.06, sources: new Set() };
+          entry = createPlayout(context, output, 0.06);
           playback.set(peer, entry);
         }
-        // Bound latency after a suspended device or a burst; never queue old speech.
-        if (entry.next > context.currentTime + 0.2) return;
-        entry.next = Math.max(entry.next, context.currentTime + 0.02);
-        const buffer = context.createBuffer(1, samples.length, 48000);
-        buffer.copyToChannel(Float32Array.from(samples), 0);
-        const node = context.createBufferSource();
-        node.buffer = buffer;
-        node.connect(output);
-        entry.sources.add(node);
-        node.onended = () => {
-          entry.sources.delete(node);
-          node.disconnect();
-        };
-        node.start(entry.next);
-        entry.next += buffer.duration;
+        entry.play(samples);
       },
     };
   } catch (error) {

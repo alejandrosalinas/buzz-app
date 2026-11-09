@@ -33,6 +33,9 @@ export type LocalWork = Readonly<{
   publishing?: number;
   /** Recent messages this run published here; their relay echoes are not separate alerts. */
   replyMessages?: readonly Readonly<{ id: string; acknowledgedAt: number }>[];
+  /** Recent publication IDs retained with this work entry for transcript navigation,
+   * independently of notification echo expiry. Capped at 512 per entry. */
+  publishedMessageIds?: readonly string[];
   error?: string;
   /** Latest live step, as the harness named it; display only. */
   step?: WorkStep;
@@ -143,6 +146,7 @@ export function createLocalAgentActivity() {
         | "startedAt"
         | "publishing"
         | "replyMessages"
+        | "publishedMessageIds"
         | "error"
         | "dismissed"
         | "stoppable"
@@ -226,6 +230,9 @@ export function createLocalAgentActivity() {
           state: "waiting",
           startedAt,
           ...(replyMessages?.length ? { replyMessages } : {}),
+          ...(replaced?.publishedMessageIds
+            ? { publishedMessageIds: replaced.publishedMessageIds }
+            : {}),
           ...(retry ? { retryable: true } : {}),
         }),
       );
@@ -329,7 +336,15 @@ export function createLocalAgentActivity() {
             ),
             Object.freeze({ id: messageId, acknowledgedAt: now }),
           ];
-          entries.set(id, Object.freeze({ ...current, replyMessages }));
+          const publishedMessageIds = Object.freeze(
+            [
+              ...new Set([...(current.publishedMessageIds ?? []), messageId]),
+            ].slice(-512),
+          );
+          entries.set(
+            id,
+            Object.freeze({ ...current, replyMessages, publishedMessageIds }),
+          );
           clearTimeout(replyTimers.get(id));
           const oldest = replyMessages[0];
           if (oldest)

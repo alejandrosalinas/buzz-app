@@ -10,8 +10,22 @@ import { typedDraft } from "./composer-testing";
 import { composerMarkdown } from "./composer-markdown";
 const first = { pubkey: "a".repeat(64), name: "Honey", start: 0, end: 6 };
 const second = { pubkey: "b".repeat(64), name: "Honey", start: 7, end: 13 };
-it("inline Markdown delimiters end a mention as the timeline binds it, but an underscore extends the name", () => {
-  for (const text of ["**@Honey**", "~~@Honey~~", "`@Honey`", "*@Honey*"]) {
+it("punctuation, quotes and inline Markdown delimiters end a mention as the timeline binds it, but an underscore or a mark extends the name", () => {
+  for (const text of [
+    "**@Honey**",
+    "~~@Honey~~",
+    "`@Honey`",
+    "*@Honey*",
+    "@Honey's",
+    "@Honey’s",
+    '"@Honey"',
+    "“@Honey”",
+    "(@Honey)",
+    "@Honey, @Honey. @Honey! @Honey? @Honey: @Honey;",
+    "@Honey-bot",
+    "@Honey/ops",
+    "@Honey😀",
+  ]) {
     const start = text.indexOf("@Honey");
     expect(
       mentionDraft({
@@ -21,12 +35,16 @@ it("inline Markdown delimiters end a mention as the timeline binds it, but an un
       text,
     ).toEqual([{ ...first, start, end: start + 6 }]);
   }
-  expect(
-    mentionDraft({
-      text: "_@Honey_",
-      recipients: [{ ...first, start: 1, end: 7 }],
-    }).recipients,
-  ).toEqual([]);
+  for (const text of ["_@Honey_", "@Honeys", "@Honey2", "@Honeý"]) {
+    const start = text.indexOf("@Honey");
+    expect(
+      mentionDraft({
+        text,
+        recipients: [{ ...first, start, end: start + 6 }],
+      }).recipients,
+      text,
+    ).toEqual([]);
+  }
 });
 
 it("legacy prose and malformed persisted metadata never infer recipients", () => {

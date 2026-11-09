@@ -131,8 +131,11 @@ test("media review chrome follows host colors while stage controls stay dark", a
     const zoom = stage.getByRole("button", { name: "Zoom in", exact: true });
     await expect(stage).toHaveAttribute("data-color-mode", "dark");
     await page.mouse.move(0, 0);
-    for (const button of [close, comments]) {
-      await expect(button).toHaveCSS("color", "rgb(15, 15, 15)");
+    for (const [button, color] of [
+      [close, "rgb(95, 95, 95)"],
+      [comments, "rgb(15, 15, 15)"],
+    ]) {
+      await expect(button).toHaveCSS("color", color);
       await expect(button).toHaveCSS("background-color", "rgba(0, 0, 0, 0)");
     }
     await expect(zoom).toHaveCSS("color", "rgb(255, 255, 255)");
@@ -159,7 +162,13 @@ test("media review chrome follows host colors while stage controls stay dark", a
       for (const button of [close, comments]) {
         await expect(button).toHaveCSS(
           "color",
-          mode === "light" ? "rgb(15, 15, 15)" : "rgb(255, 255, 255)",
+          button === close
+            ? mode === "light"
+              ? "rgb(95, 95, 95)"
+              : "rgb(164, 164, 164)"
+            : mode === "light"
+              ? "rgb(15, 15, 15)"
+              : "rgb(255, 255, 255)",
         );
       }
       await expect(stage).toHaveCSS("background-color", "rgb(0, 0, 0)");

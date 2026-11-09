@@ -26,6 +26,7 @@ it("offers appearance and the message and agent preferences, and nothing else", 
     { key: "appearance.interface_size", value: 100, saved: true },
     { key: "appearance.accent", value: "citrus", saved: true },
     { key: "appearance.vibe", value: "low", saved: true },
+    { key: "conversations.message_density", value: "default", saved: true },
     { key: "conversations.thread_placement", value: "side", saved: true },
     {
       key: "conversations.follow_up_behavior",
@@ -55,16 +56,20 @@ it("changes appearance as its own controls do: live, saved and announced", () =>
   ).toBe("1.2");
   expect(set(settings, "appearance.accent", "cobalt").value).toBe("cobalt");
   expect(set(settings, "appearance.vibe", "high").value).toBe("high");
-  expect(listener).toHaveBeenCalledTimes(4);
+  expect(set(settings, "conversations.message_density", "compact").value).toBe(
+    "compact",
+  );
+  expect(document.documentElement.dataset.messageDensity).toBe("compact");
+  expect(listener).toHaveBeenCalledTimes(5);
   appearance.dispose();
   // Another window, or the next launch, reads what was saved.
   const next = createAppearance(window);
   expect(
     deviceSettings(next)
       .list()
-      .slice(0, 4)
+      .slice(0, 5)
       .map(({ value }) => value),
-  ).toEqual(["dark", 120, "cobalt", "high"]);
+  ).toEqual(["dark", 120, "cobalt", "high", "compact"]);
   next.dispose();
 });
 

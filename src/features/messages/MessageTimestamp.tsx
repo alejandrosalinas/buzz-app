@@ -3,6 +3,7 @@ import { Tooltip } from "../../shared/design-system/ui/Tooltip";
 import {
   formatDayGroupLabel,
   formatFullTimestamp,
+  formatCompactTime,
   formatItemTimestamp,
 } from "../../shared/datetime";
 import { useClockPreference } from "../../shared/clock-preference";
@@ -60,9 +61,11 @@ export function DayDivider({ createdAt }: { createdAt: number }) {
 export function MessageTimestamp({
   createdAt,
   visible = true,
+  compact = false,
 }: {
   createdAt: number;
   visible?: boolean;
+  compact?: boolean;
 }) {
   useLocalDay();
   useClockPreference();
@@ -75,7 +78,9 @@ export function MessageTimestamp({
     <Tooltip content={fullDate} disableHoverablePopup>
       <time dateTime={date.toISOString()} style={{ cursor: "default" }}>
         <span aria-hidden="true">
-          {formatItemTimestamp(createdAt, { withTime: true })}
+          {compact
+            ? formatCompactTime(createdAt)
+            : formatItemTimestamp(createdAt, { withTime: true })}
         </span>
         {accessible}
       </time>

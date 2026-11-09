@@ -37,7 +37,7 @@ Terms:
 
 ## Configuration compatibility
 
-These extensions retain the `agent-attention/v1` schema name. Older readers reject fields and watch types they do not support, retain the objects for repair, and do not execute them. Janet does not support conversation delivery addresses or plugin source watches. Conversion to Janet must reject unsupported objects rather than silently dropping a source or its destination. Converter enforcement of this requirement remains unverified.
+These extensions retain the `agent-attention/v1` schema name. Older readers reject fields and watch types they do not support, retain the objects for repair, and do not execute them. Janet does not support conversation delivery addresses or plugin source watches. Watches saved under an Interest an older reader cannot apply, because it is paused or has a `title` or `summary`, carry a storage-only `interest_paused` envelope that also preserves timer progress, completed-source state, and wake history across older-reader rewrites. Older readers reject and retain those watches too, so they never run them without their instructions; supported readers remove the marker only after validating the parent. Active Interests omit the pause field on disk so older readers retain their instructions. Conversion to Janet must reject unsupported objects rather than silently dropping a source or its destination. Converter enforcement of this requirement remains unverified.
 
 ## Known limit
 

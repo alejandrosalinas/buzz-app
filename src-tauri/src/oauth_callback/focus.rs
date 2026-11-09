@@ -89,7 +89,7 @@ impl FocusReturn {
 }
 
 #[cfg(target_os = "macos")]
-pub(super) fn capture<R: tauri::Runtime>(app: &tauri::AppHandle<R>, url: &str) -> Option<String> {
+pub(crate) fn capture<R: tauri::Runtime>(app: &tauri::AppHandle<R>, url: &str) -> Option<String> {
     use objc2_app_kit::NSWorkspace;
     use objc2_foundation::{NSString, NSURL};
     if !app
@@ -119,7 +119,7 @@ fn browser_is_foreground(browser: &str) -> bool {
 
 // Without a reliable foreground-browser check, completion must not activate Buzz.
 #[cfg(not(target_os = "macos"))]
-pub(super) fn capture<R: tauri::Runtime>(_: &tauri::AppHandle<R>, _: &str) -> Option<String> {
+pub(crate) fn capture<R: tauri::Runtime>(_: &tauri::AppHandle<R>, _: &str) -> Option<String> {
     None
 }
 #[cfg(not(target_os = "macos"))]

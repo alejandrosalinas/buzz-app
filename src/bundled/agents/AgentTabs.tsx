@@ -15,7 +15,10 @@ import type {
   RegisteredAgentType,
   TranscriptRequest,
 } from "../../features/agents/service";
-import type { AgentMemories } from "../../features/agents/MemoryPanel";
+import type {
+  AgentMemories,
+  MemoryLinks,
+} from "../../features/agents/MemoryPanel";
 import type { CommunityReader } from "../../features/communities/service";
 import { agentSections } from "../../features/agents/tabs";
 import { Tabs } from "../../shared/design-system/ui/Tabs";
@@ -35,6 +38,7 @@ export function AgentTabs(props: {
   channels: readonly ChannelChoice[];
   settingsHost: AgentSettingsHost;
   memories: AgentMemories | undefined;
+  memoryLinks?: MemoryLinks | undefined;
   communities?: CommunityReader | undefined;
   settingsContent: ReactNode;
   conversation?: AgentConversation | undefined;
@@ -42,6 +46,8 @@ export function AgentTabs(props: {
   initialTranscript?: TranscriptRequest | undefined;
   close?: (() => void) | undefined;
   openConversation?: AgentViewProps["openConversation"];
+  openLink?: ((target: string) => boolean) | undefined;
+  canOpenLink?: ((target: string) => boolean) | undefined;
   onDiscard?: () => void;
 }) {
   const split = props.type?.tabs?.some(

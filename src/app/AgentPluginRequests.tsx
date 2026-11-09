@@ -206,6 +206,7 @@ function ChangeReview({
   useEffect(() => holdReview?.(), [holdReview]);
   const [working, setWorking] = useState(false);
   const [failure, setFailure] = useState<string | null>(null);
+  const cancel = useRef<HTMLButtonElement>(null);
   const plugin = catalog.plugins.find(
     (item) => item.manifest.id === request.pluginId,
   );
@@ -246,11 +247,12 @@ function ChangeReview({
         title={`Delete ${name}?`}
         description={`Requested by ${request.requester.name}. Removes this plugin and its rollback history from Buzz. You can install it again later.`}
         pending={working}
+        initialFocus={cancel}
         finalFocus={returnFocus}
         onClose={onClose}
         actions={
           <>
-            <Button disabled={working} onClick={onClose}>
+            <Button ref={cancel} disabled={working} onClick={onClose}>
               Cancel
             </Button>
             <Button
@@ -276,10 +278,11 @@ function ChangeReview({
       description={`Requested by ${request.requester.name}. Only enable code you trust.`}
       preventClose={working}
       dismissOnOutsideClick
+      initialFocus={cancel}
       finalFocus={returnFocus}
       actions={
         <>
-          <Button disabled={working} onClick={onClose}>
+          <Button ref={cancel} disabled={working} onClick={onClose}>
             Cancel
           </Button>
           <Button

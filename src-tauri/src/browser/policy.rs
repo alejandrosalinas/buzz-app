@@ -51,6 +51,64 @@ impl NavigationPolicy {
     }
 }
 
+/// The Builderlab portal's tool-app approval page. Approving needs the
+/// portal's own web login, which a Buzz guest never has (it only holds an app
+/// viewer cookie), so Buzz opens this page in the system browser instead.
+#[derive(Clone)]
+pub(super) struct ApprovalGate {
+    url: Url,
+    apps_domain: &'static str,
+}
+
+impl ApprovalGate {
+    const SUFFIX: &'static str = "/v1/hosted-app-tools/gate";
+
+    /// The gate of the portal whose API lives at `adapter_base`, for apps
+    /// under `apps_domain`. A build without an Apps domain has none.
+    pub(super) fn new(adapter_base: &str, apps_domain: &'static str) -> Option<Self> {
+        if apps_domain.is_empty() {
+            return None;
+        }
+        let url = Url::parse(&format!("{adapter_base}{}", Self::SUFFIX)).ok()?;
+        Some(Self { url, apps_domain })
+    }
+
+    /// When `target` is this gate for a Builderlab app, the approval to hand
+    /// off: the gate rebuilt with only its app, and the app's address to
+    /// return to once approved.
+    pub(super) fn approval(&self, target: &str) -> Option<Approval> {
+        let target = Url::parse(target).ok()?;
+        if target.origin() != self.url.origin()
+            || target.path().trim_end_matches('/') != self.url.path()
+        {
+            return None;
+        }
+        let mut apps = target
+            .query_pairs()
+            .filter(|(name, _)| name == "app")
+            .map(|(_, value)| value.into_owned());
+        let app = apps.next().filter(|_| apps.next().is_none())?;
+        let app_url = Url::parse(&format!("https://{app}/")).ok()?;
+        let host = app_url.host_str()?;
+        if host != app.to_ascii_lowercase() {
+            return None;
+        }
+        let root = super::builderlab::app_root(self.apps_domain, app_url.as_str()).ok()?;
+        let mut gate = self.url.clone();
+        gate.query_pairs_mut().append_pair("app", host);
+        Some(Approval {
+            gate: gate.into(),
+            app: root,
+        })
+    }
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub(super) struct Approval {
+    pub(super) gate: String,
+    pub(super) app: String,
+}
+
 /// Coordinates relative to the main webview's CSS viewport.
 #[derive(Clone, Copy, Debug, serde::Deserialize, PartialEq)]
 pub struct BrowserBounds {
@@ -93,6 +151,48 @@ impl BrowserBounds {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn recognizes_only_the_portal_approval_gate() {
+        let gate = ApprovalGate::new(
+            "https://app.builderlab.xyz/api/goose",
+            "apps.builderlab.xyz",
+        )
+        .unwrap();
+        assert!(ApprovalGate::new("https://app.builderlab.xyz/api/goose", "").is_none());
+        let expected = Approval {
+            gate: "https://app.builderlab.xyz/api/goose/v1/hosted-app-tools/gate?app=eggy--bpsites.apps.builderlab.xyz".into(),
+            app: "https://eggy--bpsites.apps.builderlab.xyz/".into(),
+        };
+        assert_eq!(
+            gate.approval("https://APP.builderlab.xyz/api/goose/v1/hosted-app-tools/gate/?app=Eggy--bpsites.apps.builderlab.xyz&next=https://evil.example"),
+            Some(expected)
+        );
+        for other in [
+            "https://app.builderlab.xyz/api/goose/v1/hosted-app-tools/gate",
+            "https://app.builderlab.xyz/api/goose/v1/hosted-app-tools/gate?app=",
+            "https://app.builderlab.xyz/api/goose/v1/hosted-app-tools/gate?app=a.apps.builderlab.xyz&app=b.apps.builderlab.xyz",
+            "https://app.builderlab.xyz/api/goose/v1/hosted-app-tools/gate?app=a.example",
+            "https://app.builderlab.xyz/api/goose/v1/hosted-app-tools/gate?app=localhost",
+            "https://app.builderlab.xyz/api/goose/v1/hosted-app-tools/gate?app=127.0.0.1",
+            "https://app.builderlab.xyz/api/goose/v1/hosted-app-tools/gate?app=tauri.localhost",
+            "https://app.builderlab.xyz/api/goose/v1/hosted-app-tools/gate?app=apps.builderlab.xyz",
+            "https://app.builderlab.xyz/api/goose/v1/hosted-app-tools/gate?app=a.b.apps.builderlab.xyz",
+            "https://app.builderlab.xyz/api/goose/v1/hosted-app-tools/gate?app=login.apps.builderlab.xyz",
+            "https://app.builderlab.xyz/api/goose/v1/hosted-app-tools/gate?app=a.apps.builderlab.xyz.evil.example",
+            "https://app.builderlab.xyz:8443/api/goose/v1/hosted-app-tools/gate?app=a.apps.builderlab.xyz",
+            "https://app.builderlab.xyz/api/goose/v1/hosted-app-tools/gate?app=a.apps.builderlab.xyz/path",
+            "https://app.builderlab.xyz/api/goose/v1/hosted-app-tools/gate?app=a.apps.builderlab.xyz:8443",
+            "https://app.builderlab.xyz/api/goose/v1/hosted-app-tools/gate?app=user@a.apps.builderlab.xyz",
+            "https://app.builderlab.xyz/api/goose/v1/hosted-app-tools/consent.js?app=a.apps.builderlab.xyz",
+            "https://app.builderlabstaging.xyz/api/goose/v1/hosted-app-tools/gate?app=a.apps.builderlab.xyz",
+            "http://app.builderlab.xyz/api/goose/v1/hosted-app-tools/gate?app=a.apps.builderlab.xyz",
+            "https://eggy--bpsites.apps.builderlab.xyz/",
+            "not a url",
+        ] {
+            assert_eq!(gate.approval(other), None, "{other}");
+        }
+    }
 
     #[test]
     fn permits_websites_and_normalizes_host_names() {

@@ -22,7 +22,9 @@ import {
   render,
   screen,
   waitFor,
+  within,
 } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import type { RelaySession } from "../relay/session";
 import { WorkspaceSettings } from "./WorkspaceSettings";
@@ -790,4 +792,297 @@ it("a saved title stays visible during a lifetime-only save", async () => {
     ["about", ""],
     ["ttl", ""],
   ]);
+});
+
+// A chat's settings with Canvas only; tests that need details use combined().
+function chat(
+  save = vi.fn(async (_id: string, content: string, _base?: string) => ({
+    id: "revision-two",
+    content,
+  })),
+) {
+  const close = vi.fn();
+  const session = {
+    canvas: {
+      available: true,
+      read: async () => ({ id: "revision-one", content: "Original" }),
+      save,
+    },
+  } as unknown as RelaySession;
+  const view = () => (
+    <WorkspaceSettings
+      session={session}
+      scope="test"
+      target={{ kind: "chat", id: "chat", name: "Plan" }}
+      close={close}
+    />
+  );
+  return { close, save, view, mounted: render(view()) };
+}
+const instructions = () =>
+  screen.findByRole("textbox", { name: /^Instructions/ });
+const prompt = () =>
+  screen.findByRole("alertdialog", { name: "Discard changes?" });
+const backdrop = () =>
+  [...document.querySelectorAll(".buzz-dialog-backdrop")].at(-1) as Element;
+
+it.each(["Escape", "Close", "backdrop"] as const)(
+  "asks before %s drops a chat's unsaved settings, and Keep editing keeps them",
+  async (dismiss) => {
+    const user = userEvent.setup();
+    const h = chat();
+    const field = await instructions();
+    fireEvent.change(field, { target: { value: "My draft" } });
+    const settings = screen.getByRole("dialog", { name: "Edit chat" });
+    if (dismiss === "Escape") await user.keyboard("{Escape}");
+    else if (dismiss === "Close")
+      await user.click(within(settings).getByRole("button", { name: "Close" }));
+    else await user.click(backdrop());
+    const asked = await prompt();
+    expect(asked).toHaveAccessibleDescription(
+      "Your settings have unsaved changes.",
+    );
+    const keep = within(asked).getByRole("button", { name: "Keep editing" });
+    await waitFor(() => expect(keep).toHaveFocus());
+    // The prompt needs a deliberate answer; its own backdrop does nothing.
+    await user.click(backdrop());
+    expect(asked).toBeVisible();
+    await user.click(keep);
+    await waitFor(() => expect(screen.queryByRole("alertdialog")).toBeNull());
+    expect(screen.getByRole("dialog", { name: "Edit chat" })).toBe(settings);
+    if (dismiss === "Close")
+      await waitFor(() =>
+        expect(
+          within(settings).getByRole("button", { name: "Close" }),
+        ).toHaveFocus(),
+      );
+    expect(field).toHaveValue("My draft");
+    expect(h.close).not.toHaveBeenCalled();
+  },
+);
+
+it("closes untouched settings at once, and Cancel discards edits without asking", async () => {
+  const user = userEvent.setup();
+  const h = chat();
+  const field = await instructions();
+  await user.keyboard("{Escape}");
+  await user.click(backdrop());
+  expect(h.close).toHaveBeenCalledTimes(2);
+  fireEvent.change(field, { target: { value: "My draft" } });
+  await user.click(screen.getByRole("button", { name: "Cancel" }));
+  expect(h.close).toHaveBeenCalledTimes(3);
+  expect(screen.queryByRole("alertdialog")).toBeNull();
+  expect(h.save).not.toHaveBeenCalled();
+});
+
+function project(entries: unknown[] = []) {
+  const close = vi.fn();
+  const session = {
+    scope: "https://relay.example.test:viewer",
+    channelKit: {
+      refresh: async () => {},
+      snapshot: () => ({ status: "ready", entries }),
+      save: vi.fn(),
+    },
+  } as unknown as RelaySession;
+  render(
+    <WorkspaceSettings
+      session={session}
+      scope="test"
+      target={{ kind: "project", id: "work", name: "Work" }}
+      close={close}
+    />,
+  );
+  return { close };
+}
+
+it("asks before closing Workspace settings with edited instructions", async () => {
+  const user = userEvent.setup();
+  const h = project();
+  fireEvent.change(await instructions(), {
+    target: { value: "Work carefully" },
+  });
+  await user.click(
+    within(
+      screen.getByRole("dialog", { name: "Workspace settings" }),
+    ).getByRole("button", { name: "Close" }),
+  );
+  expect(await prompt()).toBeVisible();
+  expect(h.close).not.toHaveBeenCalled();
+});
+
+it("asks before closing Workspace settings with a different agent lineup", async () => {
+  const user = userEvent.setup();
+  const template = (id: string, name: string, agent: string) => ({
+    eventId: `${id}-event`,
+    createdAt: 1,
+    record: {
+      version: 2,
+      community: "https://relay.example.test",
+      deleted: false,
+      value: {
+        type: "template",
+        id,
+        name,
+        description: "",
+        agents: [agent.repeat(64)],
+        teamIds: [],
+        canvas: "Shared",
+      },
+    },
+  });
+  const h = project([
+    template(await projectTemplateId("work"), "Work chats", "a"),
+    template("review", "Review kit", "b"),
+  ]);
+  expect(await instructions()).toHaveValue("Shared");
+  // The saved defaults' agents are where the dialog starts, not an edit.
+  await user.keyboard("{Escape}");
+  expect(h.close).toHaveBeenCalledOnce();
+  // Review kit changes only the agents; its instructions are the same.
+  const choice = screen.getByRole("combobox", {
+    name: "Start from a template",
+  });
+  await user.click(choice);
+  await user.click(await screen.findByRole("option", { name: "Review kit" }));
+  await waitFor(() => expect(screen.queryByRole("listbox")).toBeNull());
+  expect(await instructions()).toHaveValue("Shared");
+  await user.keyboard("{Escape}");
+  await user.click(
+    within(await prompt()).getByRole("button", { name: "Keep editing" }),
+  );
+  expect(choice).toHaveTextContent("Review kit");
+  expect(h.close).toHaveBeenCalledOnce();
+});
+
+it.each(["name", "lifetime"] as const)(
+  "asks before Escape drops an edited chat %s",
+  async (edit) => {
+    const user = userEvent.setup();
+    const h = combined();
+    const name = await screen.findByRole("textbox", { name: "Chat name" });
+    const ongoing = screen.getByRole("radio", { name: /^Ongoing/ });
+    await waitFor(() =>
+      expect(ongoing).not.toHaveAttribute("aria-disabled", "true"),
+    );
+    await instructions();
+    // Loaded details are not an edit.
+    await user.keyboard("{Escape}");
+    expect(h.close).toHaveBeenCalledOnce();
+    if (edit === "name")
+      fireEvent.change(name, { target: { value: "Better name" } });
+    else fireEvent.click(ongoing);
+    await user.keyboard("{Escape}");
+    expect(await prompt()).toBeVisible();
+    expect(h.close).toHaveBeenCalledOnce();
+  },
+);
+
+it("a kept draft from a failed save closes without asking and reopens intact", async () => {
+  const user = userEvent.setup();
+  const h = chat(
+    vi.fn(async () => {
+      throw new Error("Canvas changed elsewhere");
+    }),
+  );
+  fireEvent.change(await instructions(), { target: { value: "My draft" } });
+  // A draft this device couldn't keep still asks.
+  const storage = vi
+    .spyOn(Storage.prototype, "setItem")
+    .mockImplementationOnce(() => {
+      throw new Error("Device full");
+    });
+  try {
+    fireEvent.click(saveChanges());
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      "No new changes were sent",
+    );
+  } finally {
+    storage.mockRestore();
+  }
+  await user.keyboard("{Escape}");
+  await user.click(
+    within(await prompt()).getByRole("button", { name: "Keep editing" }),
+  );
+  fireEvent.click(saveChanges());
+  expect(await screen.findByRole("alert")).toHaveTextContent(
+    "Canvas changed elsewhere",
+  );
+  await user.keyboard("{Escape}");
+  expect(h.close).toHaveBeenCalledOnce();
+  expect(screen.queryByRole("alertdialog")).toBeNull();
+  h.mounted.unmount();
+  render(h.view());
+  expect(await instructions()).toHaveValue("My draft");
+  // The restored draft is what reopening shows, so it isn't an edit either.
+  await user.keyboard("{Escape}");
+  expect(h.close).toHaveBeenCalledTimes(2);
+  expect(screen.queryByRole("alertdialog")).toBeNull();
+});
+
+it.each([
+  ["closes without asking after an uncertain", new Error("Lost ack"), false],
+  ["asks after a refused", new PublishRejected("Lifetime refused"), true],
+] as const)(
+  "%s lifetime save once Canvas is confirmed",
+  async (_, failure, asks) => {
+    const user = userEvent.setup();
+    const h = combined();
+    h.publish.mockRejectedValueOnce(failure);
+    await editBoth();
+    fireEvent.click(saveChanges());
+    await waitFor(() =>
+      expect(screen.getByRole("button", { name: "Cancel" })).toBeEnabled(),
+    );
+    expect(screen.getByRole("alert")).toHaveTextContent(
+      asks ? "Lifetime refused" : "may have been saved",
+    );
+    await user.keyboard("{Escape}");
+    if (asks) {
+      // A refused lifetime is held only by this dialog.
+      expect(await prompt()).toBeVisible();
+      expect(h.close).not.toHaveBeenCalled();
+      return;
+    }
+    // An uncertain one stays with its owner and reopens to be checked.
+    expect(h.close).toHaveBeenCalledOnce();
+    expect(screen.queryByRole("alertdialog")).toBeNull();
+    h.mounted.unmount();
+    render(h.view());
+    expect(
+      await screen.findByRole("button", { name: "Check save status" }),
+    ).toBeVisible();
+    expect(await instructions()).toHaveValue("Draft Canvas");
+    expect(screen.getByRole("radio", { name: /^Ongoing/ })).toBeChecked();
+  },
+);
+
+it("a saving dialog ignores Escape, Close and outside clicks", async () => {
+  const user = userEvent.setup();
+  const h = combined();
+  let release!: () => void;
+  const held = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  h.canvas.save.mockImplementationOnce(async (_id, content) => {
+    await held;
+    return { id: "revision-two", content };
+  });
+  await editBoth();
+  fireEvent.click(saveChanges());
+  try {
+    await waitFor(() => expect(h.canvas.save).toHaveBeenCalledOnce());
+    expect(screen.getByRole("button", { name: "Close" })).toBeDisabled();
+    await user.keyboard("{Escape}");
+    await user.click(backdrop());
+    expect(screen.queryByRole("alertdialog")).toBeNull();
+    expect(h.close).not.toHaveBeenCalled();
+  } finally {
+    await act(async () => {
+      release();
+      await held;
+    });
+  }
+  await waitFor(() => expect(h.close).toHaveBeenCalledOnce());
+  expect(screen.queryByRole("alertdialog")).toBeNull();
 });

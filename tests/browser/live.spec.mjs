@@ -18,14 +18,10 @@ test.use({
 const history = (page) =>
   page.getByRole("region", { name: "Channel message history" });
 const notice = (page) =>
-  page.getByRole("status", { name: "Reconnecting to relay…", exact: true });
-const retry = (page) =>
-  notice(page).getByRole("button", { name: "Retry now", exact: true });
-/** Retry now if the notice still shows; automatic recovery may close it first. */
-const retryIfShown = (page) =>
-  retry(page)
-    .click({ timeout: 500 })
-    .catch(() => {});
+  page.getByRole("dialog", {
+    name: "Buzz is having trouble connecting",
+    exact: true,
+  });
 const heads = (app, channel) =>
   app.report.queries.filter(
     ({ filter }) =>
@@ -45,26 +41,6 @@ async function crossCooldown(page, app) {
   // and a second refusal would arm a new deadline that the clock never passes.
   await expect.poll(() => app.relay.brokerCooldownOver()).toBe(true);
   await page.clock.runFor(app.relay.rejected[0].retryAfterMs);
-}
-/** Cross a quota cooldown in real time, for a page whose timeline must keep
- * the browser's own clock. The app arms its deadline when it consumes the
- * refusal, after the broker paused its lane and the fixture stamped the
- * response, so the broker's reopening is the earliest useful moment and only
- * the page knows the last one. Clicks before it are ignored, as asserted
- * before the crossing. Automatic recovery sends the catch-up on its own;
- * Retry now only shortens the wait, and a click while that request is in
- * flight only promotes it. */
-async function retryAfterCooldown(page, app, sent) {
-  await expect.poll(() => app.relay.brokerCooldownOver()).toBe(true);
-  await expect
-    .poll(
-      async () => {
-        if (!sent()) await retryIfShown(page);
-        return sent();
-      },
-      { message: "Retry after the quota cooldown sends the catch-up" },
-    )
-    .toBe(true);
 }
 async function ready(page, app) {
   await open(page, app);
@@ -138,10 +114,8 @@ test("production WS → broker → mounted UI delivers messages and retries a pa
   const globalRequests = app.relay.requests.filter(({ filters }) =>
     filters.every((filter) => !filter["#h"]),
   ).length;
-  // The app arms its cooldown when it consumes the refusal, and the ignored
-  // clicks below must land before that deadline. Pause the page clock before
-  // the failure and step it in 250 ms slices: the clicks then land within
-  // 250 ms of page time after the 3 s notice delay, inside the 6 s cooldown.
+  // Pause the page clock before the failure and step it in 250 ms slices, so
+  // the checks below land inside the 6 s cooldown.
   await pauseClock(page, 1000);
   const step = (done) =>
     expect
@@ -181,11 +155,10 @@ test("production WS → broker → mounted UI delivers messages and retries a pa
   expect(app.relay.rejected).toHaveLength(0);
   // No click: automatic recovery sends the head catch-up.
   await step(() => app.relay.rejected.length === 1);
-  // The notice appears once recovery lasts 3 s (RECOVERY_NOTICE_DELAY_MS).
-  await step(() => notice(page).isVisible());
   const calls = heads(app, "alpha").length;
-  await retry(page).click();
-  await retry(page).click();
+  // Recovery inside the 30 s notice delay stays quiet.
+  await page.clock.runFor(3_000);
+  await expect(notice(page)).toHaveCount(0);
   expect(heads(app, "alpha")).toHaveLength(calls);
   expect(app.relay.sockets).toHaveLength(socketCount);
   expect(
@@ -196,7 +169,12 @@ test("production WS → broker → mounted UI delivers messages and retries a pa
   // The timeline keeps the browser's own clock from here.
   await page.clock.resume();
   await expectAnchor(page, reading);
-  await retryAfterCooldown(page, app, () => heads(app, "alpha").length > calls);
+  // The broker's lane reopens in real time; automatic recovery then sends the
+  // catch-up on its own.
+  await expect.poll(() => app.relay.brokerCooldownOver()).toBe(true);
+  await expect
+    .poll(() => heads(app, "alpha").length, { timeout: 30_000 })
+    .toBeGreaterThan(calls);
   await expect(notice(page)).toHaveCount(0);
   await expect.poll(() => heads(app, "alpha").length).toBe(calls + 1);
   await settle(page);
@@ -214,10 +192,9 @@ test("production WS → broker → mounted UI delivers messages and retries a pa
   ).toBeInViewport();
 });
 
-test("post-reconnect finite catch-up keeps paged history, cursor and reading position", async ({
-  page,
-  app,
-}) => {
+/** Page once into alpha's history and read from its upper edge, so a
+ * reconnect must keep both the paged range and the reading position. */
+async function pagedReader(page, app) {
   await ready(page, app);
   await edge(page, -1);
   await expect.poll(() => app.pending.length).toBe(1);
@@ -230,7 +207,23 @@ test("post-reconnect finite catch-up keeps paged history, cursor and reading pos
   ).toBeAttached();
   await settle(page);
   await expectAnchor(page, before);
-  const reading = await upper(page);
+  return { pageOne, reading: await upper(page) };
+}
+
+/** The paged cursor survived: the next older page continues below page one. */
+async function pageOnward(page, app, pageOne) {
+  await edge(page, -1);
+  await expect.poll(() => app.pending.length).toBe(1);
+  const pageTwo = app.pending.shift();
+  expect(pageTwo.filter.until).toBeLessThan(pageOne.filter.until);
+  pageTwo.release();
+}
+
+test("post-reconnect finite catch-up after a cut replay keeps paged history, cursor and reading position", async ({
+  page,
+  app,
+}) => {
+  const { pageOne, reading } = await pagedReader(page, app);
   const calls = heads(app, "alpha").length;
   app.relay.disconnect("primary");
   const missed = app.append(
@@ -239,18 +232,54 @@ test("post-reconnect finite catch-up keeps paged history, cursor and reading pos
     "Reconnect gap repaired",
     false,
   );
+  // A replay that reaches the filter's limit may have lost older events.
+  app.relay.replayNext(
+    "primary",
+    "alpha",
+    Array.from({ length: 500 }, () => missed),
+  );
   await expect.poll(() => heads(app, "alpha").length).toBeGreaterThan(calls);
   await expect(notice(page)).toHaveCount(0);
   await settle(page);
   await expectAnchor(page, reading);
-  await edge(page, -1);
-  await expect.poll(() => app.pending.length).toBe(1);
-  const pageTwo = app.pending.shift();
-  expect(pageTwo.filter.until).toBeLessThan(pageOne.filter.until);
-  pageTwo.release();
+  await pageOnward(page, app, pageOne);
   await end(page);
   await expect(
     history(page).locator(`[data-message-id="${missed.id}"]`),
+  ).toBeInViewport();
+});
+
+test("a reconnect near startup repairs an under-limit replay and keeps paged history, cursor and reading position", async ({
+  page,
+  app,
+}) => {
+  const { pageOne, reading } = await pagedReader(page, app);
+  const calls = heads(app, "alpha").length;
+  app.relay.disconnect("primary");
+  const missed = app.append(
+    "primary",
+    "alpha",
+    "Reconnect gap replayed",
+    false,
+  );
+  app.relay.replayNext("primary", "alpha", [missed]);
+  // The session's startup floor truncates the full backdate allowance, so
+  // even this under-limit replay needs a repair read.
+  await expect.poll(() => heads(app, "alpha").length).toBeGreaterThan(calls);
+  await expect(
+    history(page).locator(`[data-message-id="${missed.id}"]`),
+  ).toBeAttached();
+  await expect(notice(page)).toHaveCount(0);
+  await settle(page);
+  await expectAnchor(page, reading);
+  await pageOnward(page, app, pageOne);
+  await end(page);
+  await expect(
+    history(page).locator(`[data-message-id="${missed.id}"]`),
+  ).toBeInViewport();
+  const after = app.append("primary", "alpha", "Live after the replay");
+  await expect(
+    history(page).locator(`[data-message-id="${after.id}"]`),
   ).toBeInViewport();
 });
 
@@ -262,10 +291,9 @@ test("automatic recovery restores an empty paused roster without restarting heal
   // selected channel or on an interest change replacing the global stream.
   app.relay.emptyRoster();
   app.relay.quotaNextRoster(6);
-  // The app arms its cooldown when it consumes the refusal, and the ignored
-  // clicks below must land before that deadline. Navigation needs a running
-  // page clock, so hold the first roster read until it is done, then pause the
-  // clock before the refusal arms the deadline: only crossCooldown passes it.
+  // Navigation needs a running page clock, so hold the first roster read until
+  // it is done, then pause the clock before the refusal arms its deadline:
+  // only crossCooldown passes it.
   const roster = Promise.withResolvers();
   let rosterHeld = false;
   await page.route("**/api/relay/primary/query", async (route) => {
@@ -290,11 +318,10 @@ test("automatic recovery restores an empty paused roster without restarting heal
     roster.resolve();
   }
   await expect.poll(() => app.relay.rejected.length).toBe(1);
-  // The notice appears once recovery lasts 3 s (RECOVERY_NOTICE_DELAY_MS).
-  // Run the paused clock only that far: the 6 s cooldown still holds, so the
-  // ignored clicks below land before it ends.
+  // Recovery inside the 30 s notice delay stays quiet. Run the paused clock
+  // only partway: the 6 s cooldown still holds for the checks below.
   await page.clock.runFor(3_000);
-  await expect(notice(page)).toBeVisible();
+  await expect(notice(page)).toHaveCount(0);
   await expect(
     page.getByRole("button", { name: "Alpha", exact: true }),
   ).toHaveCount(0);
@@ -331,11 +358,14 @@ test("automatic recovery restores an empty paused roster without restarting heal
   const rosters = () =>
     app.report.queries.filter(({ filter }) => filter.kinds?.includes(39002));
   const calls = rosters().length;
-  await retry(page).click();
-  await retry(page).click();
-  expect(rosters()).toHaveLength(calls);
   await crossCooldown(page, app);
-  await retryIfShown(page);
+  // No click: the next scheduled retry after the cooldown reads the roster.
+  await expect
+    .poll(async () => {
+      if (rosters().length === calls) await page.clock.runFor(1_000);
+      return rosters().length;
+    })
+    .toBe(calls + 1);
   await expect(
     page.getByText("No channels yet.", { exact: true }),
   ).toBeVisible();

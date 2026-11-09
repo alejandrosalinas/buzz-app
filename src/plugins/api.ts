@@ -31,6 +31,13 @@ export type PluginManifest = Readonly<{
       maxInputBytes?: number;
       /** Maximum UTF-8 stdout bytes; defaults to 4096, bounded at 1048576. */
       maxOutputBytes?: number;
+      /** Run an installed executable only when its bytes and declared sibling
+       * files match this descriptor, never a program found on PATH. */
+      artifact?: Readonly<{
+        path: string;
+        sha256: string;
+        siblings?: readonly Readonly<{ name: string; sha256: string }>[];
+      }>;
     }>[];
     networkOrigins?: readonly string[];
     /** Separate authority access; ordinary HTTPS grants never authorize a session. */

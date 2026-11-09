@@ -71,6 +71,12 @@ export function inventoryReader(
       retryRead(relay, signal),
     ]);
     signal.throwIfAborted();
+    for (const [source, result] of [
+      ["Local agent library", saved],
+      ["Relay agent inventory", remote],
+    ] as const)
+      if (result.status === "rejected")
+        console.warn(`${source} read failed`, result.reason);
     if (remote.status === "rejected" && (!local || saved.status === "rejected"))
       throw new Error("Agent inventory sources unavailable");
     const error =

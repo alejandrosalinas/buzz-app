@@ -4,6 +4,7 @@ import { act, cleanup, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, expect, it, vi } from "vitest";
 import { LinkSettings } from "./LinkSettings";
+import type { GitHubCli } from "./gh";
 import { GitHubSettings } from "./GitHubSettings";
 import {
   openGitHubLinksInBuzz,
@@ -112,4 +113,15 @@ it("groups links and comment authors under a single GitHub heading", async () =>
     screen.getByRole("switch", { name: "Open GitHub links in Buzz" }),
   );
   expect(screen.getByRole("button", { name: "Save" })).toBeDisabled();
+});
+
+it("shows the signed-in account alongside the link setting", async () => {
+  const gh = (async () => ({ viewer: { login: "octocat" } })) as GitHubCli;
+  render(<GitHubSettings active={() => true} gh={gh} />);
+  expect(
+    screen.getByRole("switch", { name: "Open GitHub links in Buzz" }),
+  ).toBeInTheDocument();
+  expect(
+    await screen.findByText("Signed in to GitHub as octocat through gh."),
+  ).toBeInTheDocument();
 });

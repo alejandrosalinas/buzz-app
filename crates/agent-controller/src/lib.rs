@@ -13,12 +13,12 @@ mod profile;
 mod secret;
 
 pub use app_agent::{
-    AppAgent, AppAgents, NewAppAgent, Published, Removal, CANVAS_MAX_EVENT_BYTES, JOINED,
-    LIVE_CANVAS_BYTES,
+    bounded, framed, AppAgent, AppAgents, NewAppAgent, Published, Removal, CANVAS_MAX_EVENT_BYTES,
+    JOINED, LIVE_CANVAS_BYTES,
 };
 mod protection;
 pub use create::CreationProfile;
-pub use credentials::{PlatformCredentials, BUSY as CREDENTIALS_BUSY};
+pub use credentials::{LegacyHumanError, PlatformCredentials, BUSY as CREDENTIALS_BUSY};
 pub use import::LegacySource;
 pub use legacy::delete_local_agent_keys;
 pub use port::{

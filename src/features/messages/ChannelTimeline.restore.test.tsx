@@ -6,6 +6,7 @@ import {
   fireEvent,
   render,
   screen,
+  within,
 } from "@testing-library/react";
 import { StrictMode, type ReactNode } from "react";
 import { ChannelTimeline } from "./ChannelTimeline";
@@ -16,6 +17,8 @@ import type { ReadTarget } from "../relay/read-state-model";
 import { keypair, message, scriptedTransport } from "../relay/testing";
 import { readView, writeView } from "../../shared/view-state";
 import { MessageManagement } from "./MessageManagement";
+import type { PageNavigation } from "../navigation/service";
+import type { JsonValue } from "../navigation/targets";
 
 // Real React lifecycle; only the virtualizer's imperative layout boundary is
 // modeled here. Browser journeys retain the actual same-message/4px contract.
@@ -96,6 +99,7 @@ afterEach(() => {
   vi.restoreAllMocks();
   vi.unstubAllGlobals();
   localStorage.clear();
+  delete (HTMLElement.prototype as Partial<HTMLElement>).scrollIntoView;
 });
 async function frame() {
   await act(async () => {
@@ -489,7 +493,10 @@ it("waits for entry and unread evidence before selecting a verified entry bounda
   h.unreadIds.add(laterUnread.id);
   const rows = [own, agents, joined, firstUnread, laterUnread];
   const mounted = render(h.tree("c", rows));
-  expect(h.enterChannel).toHaveBeenCalledExactlyOnceWith("c");
+  expect(h.enterChannel).toHaveBeenCalledExactlyOnceWith(
+    "c",
+    document.hasFocus(),
+  );
   expect(screen.queryByText("New messages", { exact: true })).toBeNull();
   await h.completeEntry();
   expect(screen.queryByText("New messages", { exact: true })).toBeNull();
@@ -1013,7 +1020,10 @@ it.each(
     const mounted = render(
       h.tree("c", rows, false, true, timing !== "delayed mount"),
     );
-    expect(h.enterChannel).toHaveBeenCalledExactlyOnceWith("c");
+    expect(h.enterChannel).toHaveBeenCalledExactlyOnceWith(
+      "c",
+      document.hasFocus(),
+    );
     if (position === "before" || timing === "delayed mount")
       await h.completeEntry();
     try {
@@ -2541,3 +2551,429 @@ it.each([false, true])(
       expect(screen.getByText("Saved work step")).not.toBeNull();
   },
 );
+
+/** Link visits as navigation keeps them: a visit's place outlives each presentation. */
+function linkVisits() {
+  HTMLElement.prototype.scrollIntoView = vi.fn();
+  // Rows are on screen, so a reveal can complete.
+  vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockReturnValue(
+    new DOMRect(0, 0, 800, 100),
+  );
+  const viewer = keypair(),
+    relay = keypair();
+  const owner = createRelaySession(
+    scriptedTransport(viewer.pubkey, relay.pubkey).transport,
+  );
+  owners.push(owner);
+  const rows = ["Linked message", "Reading place", "Latest message"].map(
+    (content, index) => {
+      const event = message(viewer, "c", content, index);
+      return {
+        id: event.id,
+        channelId: "c",
+        authorId: viewer.pubkey,
+        content,
+        createdAt: index,
+        mentions: [],
+        participants: [],
+        attachments: [],
+        reactions: [],
+        replyCount: 0,
+      };
+    },
+  );
+  const [linked, place, latest] = rows;
+  if (!linked || !place || !latest) throw new Error("Missing fixture rows");
+  const window: ChannelWindow = {
+    channelId: "c",
+    status: "ready",
+    freshness: "verified",
+    hasMore: false,
+    loadingOlder: false,
+    error: undefined,
+    rows,
+  };
+  const places = new Map<string, JsonValue>();
+  const visit = (entryId: string, messageId: string, traversal?: true) =>
+    ({
+      entryId,
+      target: {
+        version: 1,
+        kind: "conversation",
+        channelId: "c",
+        messageId,
+        scope: { viewer: viewer.pubkey, communityOrigin: "https://c.invalid" },
+      },
+      signal: new AbortController().signal,
+      ...(traversal && { traversal }),
+      complete: vi.fn<PageNavigation["complete"]>(() => true),
+      resolve: vi.fn(() => true),
+      forSession: vi.fn<PageNavigation["forSession"]>(),
+      position: (key: string) => places.get(`${entryId}:${key}`),
+      savePosition(key: string, value: JsonValue) {
+        places.set(`${entryId}:${key}`, value);
+      },
+      passThrough: () => () => {},
+    }) satisfies PageNavigation;
+  type InlineTarget = { messageId: string; signal: AbortSignal };
+  const tree = (
+    navigation?: PageNavigation,
+    snapshot = window,
+    inlineTarget?: InlineTarget,
+  ) => (
+    <StrictMode>
+      <ChannelTimeline
+        channelId="c"
+        scope="scope"
+        queries={owner.session}
+        window={snapshot}
+        navigation={navigation}
+        inlineTarget={inlineTarget}
+        onOpenLink={() => false}
+      />
+    </StrictMode>
+  );
+  let result: ReturnType<typeof render> | undefined;
+  const history = () =>
+    screen.getByRole("region", { name: "Channel message history" });
+  return {
+    linked,
+    place,
+    latest,
+    window,
+    places,
+    visit,
+    get history() {
+      return history();
+    },
+    /** The reader's place: the "Reading place" row 42 px below the top. */
+    saved: { bottom: false, anchor: { id: place.id, y: 42 } },
+    row: (id: string) =>
+      history().querySelector<HTMLElement>(`[data-message-id="${id}"]`),
+    /** Mounts the timeline for a visit, or presents another on the mounted one. */
+    show(
+      navigation?: PageNavigation,
+      snapshot = window,
+      inlineTarget?: InlineTarget,
+    ) {
+      if (result) result.rerender(tree(navigation, snapshot, inlineTarget));
+      else result = render(tree(navigation, snapshot, inlineTarget));
+    },
+    unmount() {
+      result?.unmount();
+      result = undefined;
+    },
+    /** Rows on screen, each `top` px below the top of the history. */
+    layout(tops: Record<string, number>) {
+      vi.spyOn(
+        HTMLElement.prototype,
+        "getBoundingClientRect",
+      ).mockImplementation(function (this: HTMLElement) {
+        const id =
+          this.closest<HTMLElement>("[data-message-id]")?.dataset.messageId;
+        if (!id) return new DOMRect(0, 0, 800, 600);
+        return new DOMRect(0, tops[id] ?? 300, 800, 100);
+      });
+    },
+    /** Run frames until a reveal or restoration has finished. */
+    async settle() {
+      for (let i = 0; i < 6; i++) await frame();
+    },
+  };
+}
+
+it("Back to a link's visit returns to where the reader left it, without revealing the link", async () => {
+  const h = linkVisits();
+  h.places.set("link:timeline", h.saved);
+  const back = h.visit("link", h.linked.id, true);
+  // The timeline mounts for the return, as it does coming back from another channel.
+  h.show(back);
+  await h.settle();
+  expect(scroll.toIndex).toHaveBeenLastCalledWith(1, {
+    align: "start",
+    offset: -42,
+  });
+  expect(scroll.toIndex).not.toHaveBeenCalledWith(0, expect.anything());
+  expect(HTMLElement.prototype.scrollIntoView).not.toHaveBeenCalled();
+  // Nothing else completes a link's visit once its reveal is skipped, and
+  // StrictMode's second effect pass doesn't complete it again.
+  expect(back.complete).toHaveBeenCalledTimes(1);
+  expect(back.complete).toHaveBeenCalledWith({ status: "opened" });
+  // Focus the opener left behind moves to the restored reading.
+  expect(document.activeElement).toBe(h.history);
+});
+
+it("leaving a visit Back returned to records where the reader read on to", async () => {
+  const h = linkVisits();
+  h.places.set("link:timeline", h.saved);
+  h.show(h.visit("link", h.linked.id, true));
+  await h.settle();
+  // The reader reads on until "Latest message" is the first whole row.
+  fireEvent.wheel(h.history, { deltaY: 200 });
+  h.layout({ [h.linked.id]: -300, [h.place.id]: -150, [h.latest.id]: 20 });
+  h.history.scrollTop = 600;
+  fireEvent.scroll(h.history);
+  h.show(h.visit("next", h.latest.id));
+  expect(h.places.get("link:timeline")).toEqual({
+    bottom: false,
+    anchor: { id: h.latest.id, y: 20 },
+  });
+});
+
+it("a mounted timeline records a link's place as the reader leaves it, and Back returns there", async () => {
+  const h = linkVisits();
+  h.show();
+  const first = h.visit("first", h.linked.id);
+  h.show(first);
+  await h.settle();
+  expect(document.activeElement).toBe(h.row(h.linked.id));
+  expect(first.complete).toHaveBeenCalledWith({ status: "opened" });
+  // The reader scrolls on until "Reading place" is the first whole row.
+  h.layout({ [h.linked.id]: -200, [h.place.id]: 42 });
+  h.history.scrollTop = 500;
+  fireEvent.scroll(h.history);
+  expect(h.places.has("first:timeline")).toBe(false);
+  // Following another link in the same channel leaves the first visit.
+  const second = h.visit("second", h.latest.id);
+  h.show(second);
+  expect(h.places.get("first:timeline")).toEqual(h.saved);
+  await h.settle();
+  expect(document.activeElement).toBe(h.row(h.latest.id));
+  scroll.toIndex.mockClear();
+  vi.mocked(HTMLElement.prototype.scrollIntoView).mockClear();
+  const back = h.visit("first", h.linked.id, true);
+  h.show(back);
+  expect(h.places.has("second:timeline")).toBe(true);
+  await h.settle();
+  expect(scroll.toIndex).toHaveBeenLastCalledWith(1, {
+    align: "start",
+    offset: -42,
+  });
+  expect(HTMLElement.prototype.scrollIntoView).not.toHaveBeenCalled();
+  expect(back.complete).toHaveBeenCalledTimes(1);
+  expect(back.complete).toHaveBeenCalledWith({ status: "opened" });
+  // Focus on the row the second link revealed moves to the restored reading.
+  expect(document.activeElement).toBe(h.history);
+});
+
+it("Back leaves focus the reader moved to another row where it is", async () => {
+  const h = linkVisits();
+  h.show(h.visit("first", h.linked.id));
+  await h.settle();
+  h.show(h.visit("second", h.latest.id));
+  await h.settle();
+  h.row(h.linked.id)?.focus();
+  h.show(h.visit("first", h.linked.id, true));
+  await h.settle();
+  expect(HTMLElement.prototype.scrollIntoView).toHaveBeenCalledTimes(2);
+  expect(document.activeElement).toBe(h.row(h.linked.id));
+});
+
+it("Back leaves focus on a row's control when this timeline revealed nothing", async () => {
+  const h = linkVisits();
+  h.places.set("link:timeline", h.saved);
+  h.show();
+  await h.settle();
+  const row = h.row(h.latest.id);
+  if (!row) throw new Error("Missing latest row");
+  const actions = within(row).getByRole("button", {
+    name: "More message actions",
+  });
+  actions.focus();
+  h.show(h.visit("link", h.linked.id, true));
+  await h.settle();
+  expect(scroll.toIndex).toHaveBeenLastCalledWith(1, {
+    align: "start",
+    offset: -42,
+  });
+  expect(document.activeElement).toBe(actions);
+});
+
+it("Back to a place inside agent activity opens its group", async () => {
+  const h = linkVisits();
+  h.places.set("link:timeline", h.saved);
+  const step = (id: string, content: string) => ({
+    ...h.place,
+    id,
+    audience: "agents" as const,
+    agentEnvelope: true,
+    content,
+  });
+  h.show(h.visit("link", h.linked.id, true), {
+    ...h.window,
+    // No reply follows the steps, so their group stays shown, folded.
+    rows: [
+      h.linked,
+      step(h.place.id, "Saved work step"),
+      step("later-step", "Later work step"),
+    ],
+  });
+  await h.settle();
+  expect(
+    screen
+      .getByRole("button", { name: /activity history/ })
+      .getAttribute("aria-expanded"),
+  ).toBe("true");
+  expect(screen.getByText("Saved work step")).not.toBeNull();
+  expect(scroll.toIndex).toHaveBeenLastCalledWith(
+    1,
+    expect.objectContaining({ align: "start" }),
+  );
+  expect(HTMLElement.prototype.scrollIntoView).not.toHaveBeenCalled();
+});
+
+it("a relay rebind of the visit Back returned to leaves the reader where they are", async () => {
+  const h = linkVisits();
+  h.places.set("link:timeline", h.saved);
+  const back = h.visit("link", h.linked.id, true);
+  h.show(back);
+  await h.settle();
+  // The reader reads on and puts focus down before the session's snapshot changes.
+  fireEvent.wheel(h.history, { deltaY: 200 });
+  h.layout({ [h.linked.id]: -400, [h.place.id]: -200, [h.latest.id]: 0 });
+  h.history.scrollTop = 200;
+  fireEvent.scroll(h.history);
+  h.history.blur();
+  scroll.toIndex.mockClear();
+  const rebound = {
+    ...back,
+    signal: new AbortController().signal,
+    complete: vi.fn<PageNavigation["complete"]>(() => true),
+  };
+  // The page passes no navigation for the render that rebinds it.
+  h.show();
+  h.show(rebound);
+  await h.settle();
+  expect(scroll.toIndex).not.toHaveBeenCalled();
+  expect(document.activeElement).toBe(document.body);
+  expect(rebound.complete).toHaveBeenCalledTimes(1);
+});
+
+it("Forward to a link's visit past an inline reveal restores the link's place", async () => {
+  const h = linkVisits();
+  // Open in channel reveals a thread's root inline, with no page navigation.
+  const inline = () => ({
+    messageId: h.latest.id,
+    signal: new AbortController().signal,
+  });
+  h.show(undefined, h.window, inline());
+  await h.settle();
+  const link = h.visit("link", h.linked.id);
+  h.show(link);
+  await h.settle();
+  expect(link.complete).toHaveBeenCalledWith({ status: "opened" });
+  // The reader scrolls on until "Reading place" is the first whole row.
+  h.layout({ [h.linked.id]: -200, [h.place.id]: 42 });
+  h.history.scrollTop = 500;
+  fireEvent.scroll(h.history);
+  // Back to the Open in channel visit reveals the root again, inline.
+  h.show(undefined, h.window, inline());
+  expect(h.places.get("link:timeline")).toEqual(h.saved);
+  await h.settle();
+  expect(document.activeElement).toBe(h.row(h.latest.id));
+  scroll.toIndex.mockClear();
+  const forward = h.visit("link", h.linked.id, true);
+  h.show(forward);
+  await h.settle();
+  expect(scroll.toIndex).toHaveBeenLastCalledWith(1, {
+    align: "start",
+    offset: -42,
+  });
+  expect(forward.complete).toHaveBeenCalledTimes(1);
+  // Leaving again keeps the link's place, not the root's.
+  h.show(h.visit("next", h.latest.id));
+  expect(h.places.get("link:timeline")).toEqual(h.saved);
+});
+
+it("a link's place is where its reveal left the reader, even if nothing scrolled", async () => {
+  const h = linkVisits();
+  // The link's row, the second-latest message, already sits near the top.
+  h.layout({ [h.linked.id]: -90, [h.place.id]: 10, [h.latest.id]: 110 });
+  h.show(h.visit("link", h.place.id));
+  await h.settle();
+  // The reader leaves for another channel without scrolling.
+  h.unmount();
+  scroll.toIndex.mockClear();
+  vi.mocked(HTMLElement.prototype.scrollIntoView).mockClear();
+  h.show(h.visit("link", h.place.id, true));
+  await h.settle();
+  expect(scroll.toIndex).toHaveBeenLastCalledWith(1, {
+    align: "start",
+    offset: -10,
+  });
+  expect(HTMLElement.prototype.scrollIntoView).not.toHaveBeenCalled();
+});
+
+it("a reveal that ends just short of the end saves the channel's place at the end, and its visit's at the row", async () => {
+  const h = linkVisits();
+  h.layout({ [h.linked.id]: -90, [h.place.id]: 10, [h.latest.id]: 110 });
+  h.show();
+  // The reveal leaves the reader 40 px above the end: near it, not clamped.
+  h.history.scrollTop = 2000 - 600 - 40;
+  h.show(h.visit("link", h.place.id));
+  await h.settle();
+  // The reader leaves for another channel without scrolling.
+  h.unmount();
+  // A plain visit opens at the latest message, as after scrolling this close.
+  expect(readView("scope", "scroll:c", null)).toEqual({ bottom: true });
+  // Back keeps the row where the reveal placed it.
+  expect(h.places.get("link:timeline")).toEqual({
+    bottom: false,
+    anchor: { id: h.place.id, y: 10 },
+  });
+});
+
+it("an inline reveal that ends just short of the end saves the channel's place at the end", async () => {
+  const h = linkVisits();
+  h.layout({ [h.linked.id]: -90, [h.place.id]: 10, [h.latest.id]: 110 });
+  h.show();
+  h.history.scrollTop = 2000 - 600 - 40;
+  h.show(undefined, h.window, {
+    messageId: h.place.id,
+    signal: new AbortController().signal,
+  });
+  await h.settle();
+  expect(document.activeElement).toBe(h.row(h.place.id));
+  h.unmount();
+  expect(readView("scope", "scroll:c", null)).toEqual({ bottom: true });
+});
+
+it.each([
+  ["Back to a place no longer loaded", "gone", true],
+  ["An opening that isn't Back/Forward, such as Retry", undefined, undefined],
+] as const)("%s reveals the link again", async (_, anchor, traversal) => {
+  const h = linkVisits();
+  h.places.set("link:timeline", {
+    bottom: false,
+    anchor: { id: anchor ?? h.place.id, y: 42 },
+  });
+  const navigation = h.visit("link", h.linked.id, traversal);
+  h.show(navigation);
+  await h.settle();
+  const row = h.row(h.linked.id);
+  expect(document.activeElement).toBe(row);
+  expect(
+    vi.mocked(HTMLElement.prototype.scrollIntoView).mock.contexts,
+  ).toContain(row);
+  // Nothing positions at the place this visit can't return to.
+  expect(scroll.toIndex).not.toHaveBeenCalledWith(
+    expect.anything(),
+    expect.objectContaining({ offset: -42 }),
+  );
+  expect(navigation.complete).toHaveBeenCalledTimes(1);
+  expect(navigation.complete).toHaveBeenCalledWith({ status: "opened" });
+});
+
+it("records a link's place only once its visit was presented", async () => {
+  const h = linkVisits();
+  h.show();
+  await h.settle();
+  // The reader has a place in the channel before following a link.
+  fireEvent.scroll(h.history);
+  // A link to a message not loaded: its reveal never runs.
+  h.show(h.visit("pending", "f".repeat(64)));
+  await h.settle();
+  h.show(h.visit("next", h.latest.id));
+  h.unmount();
+  expect(h.places.has("pending:timeline")).toBe(false);
+});

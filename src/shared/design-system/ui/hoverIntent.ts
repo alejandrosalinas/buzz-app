@@ -7,6 +7,9 @@
 export const HELPFUL_HINT_REST_MS = 250;
 /** Hints naming an icon whose meaning is already obvious. */
 export const FAMILIAR_HINT_REST_MS = 500;
+/** Labels for the app dock's icon-only tiles: the label is their only visible
+ * name, so it appears as soon as the pointer reaches a tile. */
+export const DOCK_LABEL_REST_MS = 0;
 /** Rich previews cover more of the page, so they wait longer than a hint. */
 export const PREVIEW_REST_MS = 300;
 /** Controls that expand in place under the pointer, such as video volume. */

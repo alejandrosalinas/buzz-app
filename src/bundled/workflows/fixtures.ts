@@ -7,6 +7,7 @@ import type {
   WorkflowRunCursor,
   WorkflowDefinitions,
 } from "../../features/workflows/types";
+import type { ProfileQueries } from "../../features/relay/profile-directory";
 
 export const fixtureViewer = "11".repeat(32);
 export const fixtureChannel = "44444444-4444-4444-8444-444444444444";
@@ -77,7 +78,9 @@ export function fixtureView<T>(data: T) {
 }
 
 /** Explicit offline test capability; never used by the bundled plugin entry. */
-export function createWorkflowFixture() {
+export function createWorkflowFixture(
+  profiles?: Pick<ProfileQueries, "owner" | "subscribe">,
+) {
   let definitionState: ReturnType<
     WorkflowView<WorkflowDefinitions>["snapshot"]
   > = {
@@ -138,6 +141,12 @@ export function createWorkflowFixture() {
   let dismissGate: Promise<void> | undefined;
   let releaseDismiss: (() => void) | undefined;
   const capability: WorkflowCapability = {
+    permissions: {
+      canDelete: (workflow) =>
+        workflow.owner === fixtureViewer ||
+        profiles?.owner?.(workflow.owner) === fixtureViewer,
+      subscribe: (listener) => profiles?.subscribe(listener) ?? (() => {}),
+    },
     availability: {
       definitions: true,
       history: true,

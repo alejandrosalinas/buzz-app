@@ -1,3 +1,6 @@
+import { fileStore } from "../../features/agents/state";
+import type { AgentExecution } from "../../features/agents/execution";
+import { executionSpawn } from "./execution";
 // Turns Agents deliveries into Claude turns. Each agent of this type has its
 // own sessions; a delivery becomes a prompt in the harness format, sent to the
 // session for its conversation; a standalone turn, such as a watch's or a
@@ -19,6 +22,7 @@ import {
   unverifiedSynced,
 } from "../../features/agents/agent-config";
 import { fromOwner, workflowOf } from "../../features/agents/owner-attestation";
+import type { TranscriptTurn } from "../../features/agents/activity-transcript";
 import type { AgentReads } from "../../features/agents/reads";
 import { localStore, type AgentStore } from "../../features/agents/store";
 import type {
@@ -65,6 +69,7 @@ import {
 import { AgentSessions, localSessions, Spare } from "./sessions";
 import { protectionHistoryEntry } from "./security";
 import {
+  readLatestTurns,
   readSessionTitle,
   readTranscript,
   type Conversation,
@@ -157,8 +162,8 @@ const where = ({ workspace, model, effort }: Config) => ({
 /** How Claude lists the session tools: in full up front only those marked
  * `alwaysLoad`, and the rest by name until its tool search loads them, with
  * the server's instructions saying what they are. */
-const listing = (added: readonly AddedTool[]): Listing => ({
-  instructions: sessionHint(added),
+const listing = (added: readonly AddedTool[], owner = false): Listing => ({
+  instructions: sessionHint(added, owner),
   tool: ({ load, ...tool }) =>
     load === "always"
       ? { ...tool, _meta: { "anthropic/alwaysLoad": true } }
@@ -169,6 +174,26 @@ const listing = (added: readonly AddedTool[]): Listing => ({
 const NOTES_WAIT_MS = 2_000;
 
 export class ClaudeRuntime {
+  private disposed = false;
+  private readonly confirmedRemote = new Set<AgentKey>();
+  private readonly remote = new Map<
+    string,
+    {
+      agent: AgentKey;
+      conversation: string;
+      runtime: ClaudeRuntime;
+      execution: AgentExecution;
+    }
+  >();
+  private readonly opening = new Map<
+    string,
+    {
+      agent: AgentKey;
+      conversation: string;
+      abort: AbortController;
+      ready: Promise<ClaudeRuntime>;
+    }
+  >();
   private readonly agents = new Map<AgentKey, Entry>();
   private readonly memoryReads = new MemoryReads();
   private readonly listeners = new Set<() => void>();
@@ -180,13 +205,16 @@ export class ClaudeRuntime {
   >();
   /** Solo chats whose title was already offered to the host this app run. */
   private readonly titled = new Set<string>();
+  /** Counts changes of credentials, which start processes again. */
+  private credentials = 0;
   /** One process started ahead of need, for any agent's next new conversation. */
   private readonly spare = new Spare(
     (id, options) => this.spawn(id, options),
     (_conversation, message) =>
       respond(undefined, {}, message, this.added(), listing(this.added())),
     undefined,
-    () => addedKey(this.added()),
+    // A spare started with old credentials is not handed over either.
+    () => JSON.stringify([addedKey(this.added()), this.credentials]),
   );
 
   constructor(
@@ -196,7 +224,10 @@ export class ClaudeRuntime {
     /** The agent's `core` memory as the host keeps it (`Agents.core`). */
     private readonly core: Agents["core"],
     private readonly storage: AgentStore = localStore(),
-    private readonly resolveConfig: (raw: unknown) => Config = config,
+    private readonly resolveConfig: (
+      raw: unknown,
+      remote?: boolean,
+    ) => Config = config,
     /** The tools plugins add to every session now. */
     private readonly added: () => readonly AddedTool[] = () => [],
     /** Desktop-local repository instructions; standalone hosts keep their own layout. */
@@ -208,8 +239,141 @@ export class ClaudeRuntime {
       event: string,
       input: unknown,
     ) => Promise<Record<string, unknown>> = async () => ({}),
+    private readonly execution?: Agents["execution"],
+    private readonly inspect?: Agents["inspectExecution"],
+    private readonly bound: (agent: AgentKey) => boolean = () => false,
+    private readonly target?: AgentExecution,
+    private readonly targetKey?: string,
   ) {}
 
+  /** A failed turn's error as its report says it, such as where to fix
+   * Claude's credentials. */
+  explain: (error: string) => string = (error) => error;
+
+  private executionKey(agent: AgentKey, conversation: string) {
+    const scope = this.reads(agent)?.scope;
+    if (!scope) throw new Error("Buzz is not connected");
+    return `buzz.claude-code.sessions.execution.v1:${JSON.stringify([scope, agent, conversation])}`;
+  }
+  private savedSessions(agent: AgentKey) {
+    return localSessions(
+      this.storage,
+      agent,
+      this.targetKey
+        ? `buzz.claude-code.sessions.remote.v1:${this.targetKey}`
+        : undefined,
+      !!this.target,
+    );
+  }
+  private record(text: string) {
+    const value = JSON.parse(text) as { key?: unknown; intent?: unknown };
+    if (
+      typeof value?.key !== "string" ||
+      !value.key ||
+      (value.intent !== "new" && value.intent !== "existing")
+    )
+      throw new Error("Invalid saved Claude execution session");
+    return value as { key: string; intent: "new" | "existing" };
+  }
+  private async connection(
+    agent: AgentKey,
+    conversation: string,
+    signal?: AbortSignal,
+  ): Promise<ClaudeRuntime> {
+    if (this.disposed) throw new Error("Claude runtime is disposed");
+    if (!this.execution)
+      throw new Error("The remote Claude execution is unavailable");
+    this.confirmedRemote.add(agent);
+    if (this.disposed || this.retirements.has(agent))
+      throw new Error("Claude runtime is retired");
+    const key = this.executionKey(agent, conversation);
+    const held = this.remote.get(key);
+    if (held && !held.execution.signal.aborted) return held.runtime;
+    const pending = this.opening.get(key);
+    if (pending) return pending.ready;
+    const abort = new AbortController();
+    const cancel = () => abort.abort(signal?.reason);
+    signal?.addEventListener("abort", cancel, { once: true });
+    if (signal?.aborted) cancel();
+    const ready = (async () => {
+      const saved = this.record(
+        (await this.storage.read(key)) ??
+          (await this.storage.add(
+            key,
+            JSON.stringify({ key: crypto.randomUUID(), intent: "new" }),
+          )),
+      );
+      abort.signal.throwIfAborted();
+      const execution = await this.execution?.(agent, {
+        ...saved,
+        signal: abort.signal,
+      });
+      if (!execution)
+        throw new Error("The remote Claude binding is unavailable");
+      try {
+        if (this.disposed) throw new Error("Claude runtime is disposed");
+        abort.signal.throwIfAborted();
+        execution.signal.throwIfAborted();
+        await this.storage.set(
+          key,
+          JSON.stringify({ key: saved.key, intent: "existing" }),
+        );
+        const savedKey = `buzz.claude-code.sessions.remote.v1:${saved.key}:${agent}`;
+        const savedText = await this.storage.read(savedKey);
+        const storage = fileStore(
+          new Map(savedText === null ? [] : [[savedKey, savedText]]),
+          (key, value) => this.storage.set(key, value),
+          (key, value) => this.storage.add(key, value),
+          (key) => this.storage.read(key),
+          (prefix) => this.storage.scan(prefix),
+        );
+        abort.signal.throwIfAborted();
+        execution.signal.throwIfAborted();
+        const runtime = new ClaudeRuntime(
+          { spawn: executionSpawn(execution) },
+          (key) => (key === agent ? this.reads(key) : undefined),
+          this.core,
+          storage,
+          (raw) => ({
+            ...this.resolveConfig(raw, true),
+            workspace: execution.workspace,
+          }),
+          this.added,
+          () => "",
+          this.hook,
+          undefined,
+          undefined,
+          undefined,
+          execution,
+          saved.key,
+        );
+        runtime.subscribe(() => this.notify());
+        this.remote.set(key, { agent, conversation, runtime, execution });
+        execution.signal.addEventListener(
+          "abort",
+          () => {
+            runtime.dispose();
+            this.notify();
+          },
+          { once: true },
+        );
+        this.notify();
+        return runtime;
+      } catch (error) {
+        await execution.dispose();
+        throw error;
+      }
+    })();
+    this.opening.set(key, { agent, conversation, abort, ready });
+    this.notify();
+    try {
+      return await ready;
+    } finally {
+      signal?.removeEventListener("abort", cancel);
+      if (this.opening.get(key)?.ready === ready) this.opening.delete(key);
+      this.notify();
+    }
+  }
   /** The host's own spawn, not a copy: history read with it is kept for it,
    * and shared with the agents' usage. */
   private get spawn(): Spawn {
@@ -228,7 +392,30 @@ export class ClaudeRuntime {
       retiring = (async () => {
         const entry = this.agents.get(pubkey);
         this.agents.delete(pubkey);
+        for (const pending of this.opening.values())
+          if (pending.agent === pubkey)
+            pending.abort.abort(new Error("Claude is retired"));
+        await Promise.allSettled(
+          [...this.opening.values()]
+            .filter((item) => item.agent === pubkey)
+            .map((item) => item.ready),
+        );
         await entry?.sessions.shutdown();
+        const cleaned = await Promise.allSettled(
+          [...this.remote]
+            .filter(([, remote]) => remote.agent === pubkey)
+            .map(async ([key, remote]) => {
+              await remote.runtime.retire(pubkey);
+              await remote.execution.dispose();
+              this.remote.delete(key);
+            }),
+        );
+        const failed = cleaned.filter((result) => result.status === "rejected");
+        if (failed.length)
+          throw new AggregateError(
+            failed.map((result) => result.reason),
+            "Claude target cleanup failed",
+          );
       })();
       this.retirements.set(pubkey, retiring);
     }
@@ -249,7 +436,10 @@ export class ClaudeRuntime {
       if (!current.has(key)) void this.retire(key).catch(() => undefined);
     for (const agent of agents) {
       if (this.retirements.has(agent.key)) continue;
-      const next = this.resolveConfig(agent.config);
+      const next = this.resolveConfig(
+        agent.config,
+        this.bound(agent.key) || this.confirmedRemote.has(agent.key),
+      );
       const entry = this.agents.get(agent.key);
       if (!entry) {
         const created = this.entry(agent, next);
@@ -266,18 +456,55 @@ export class ClaudeRuntime {
         entry.sessions.reconfigure();
       }
     }
+    for (const remote of this.remote.values())
+      remote.runtime.sync(agents.filter((agent) => agent.key === remote.agent));
     this.spare.warm(
       ...agents
-        .filter((agent) => !agent.protection)
+        .filter(
+          (agent) =>
+            !agent.protection &&
+            !this.target &&
+            !(this.bound(agent.key) || this.confirmedRemote.has(agent.key)),
+        )
         .map((agent) => where(this.resolveConfig(agent.config))),
     );
     this.notify();
   }
 
+  async isRemote(agent: AgentKey) {
+    const remote = !!(this.target || (await this.inspect?.(agent)));
+    if (remote) this.confirmedRemote.add(agent);
+    return remote;
+  }
+  /** A file as the agent's processes read one here: in its saved workspace.
+   * On an execution target only a conversation's session can read it. */
+  async workspaceFile(agent: Agent, path: string, signal: AbortSignal) {
+    if (await this.isRemote(agent.key))
+      throw new Error(
+        `This agent reads files only in a conversation on its execution target, not ${path}`,
+      );
+    return readFile(
+      this.spawn,
+      this.resolveConfig(agent.config).workspace,
+      path,
+      signal,
+    );
+  }
+
   /** The models the agent's next turn can run on, with their effort levels.
    * Without a pick it uses its own: the configured one, or else the one its
    * sessions report. `default` duplicates a listed model, so it is not offered. */
-  async models(agent: AgentKey): Promise<Models> {
+  async models(agent: AgentKey, raw?: unknown): Promise<Models> {
+    if (await this.isRemote(agent)) {
+      const current = this.resolveConfig(
+        raw ?? this.agents.get(agent)?.config,
+        true,
+      ).model;
+      return {
+        current,
+        models: current ? [{ id: current, label: current, efforts: [] }] : [],
+      };
+    }
     const { current, models } = await this.catalog(agent);
     return { current, models };
   }
@@ -330,10 +557,15 @@ export class ClaudeRuntime {
   }
 
   /** Conversations each agent has running, for its status view. */
-  sessions(agent: AgentKey) {
+  sessions(agent: AgentKey): ReturnType<AgentSessions["snapshot"]> {
     let view = this.views.get(agent);
     if (!view) {
-      view = this.agents.get(agent)?.sessions.snapshot() ?? [];
+      view =
+        this.bound(agent) || this.confirmedRemote.has(agent)
+          ? [...this.remote.values()]
+              .filter((item) => item.agent === agent)
+              .flatMap((item) => item.runtime.sessions(agent))
+          : (this.agents.get(agent)?.sessions.snapshot() ?? []);
       this.views.set(agent, view);
     }
     return view;
@@ -341,28 +573,48 @@ export class ClaudeRuntime {
   /** The agent's saved sessions, most recently used first. */
   conversations(agent: AgentKey): SavedConversation[] {
     const reads = this.reads(agent);
-    return localSessions(this.storage, agent)
-      .list()
-      .map(([key, saved]) => {
-        const [channelId = key, root] = key.split("/");
-        return {
-          key,
-          agent,
-          sessionId: saved.id,
-          channelId,
-          ...(root ? { root } : {}),
-          ...reads?.channelLabel(channelId),
-          at: saved.at,
-        };
-      });
+    const saved =
+      this.bound(agent) || this.confirmedRemote.has(agent)
+        ? this.storage
+            .keys()
+            .filter((key) =>
+              key.startsWith("buzz.claude-code.sessions.execution.v1:"),
+            )
+            .flatMap((key) => {
+              const [scope, owner] = JSON.parse(
+                key.slice("buzz.claude-code.sessions.execution.v1:".length),
+              ) as string[];
+              if (owner !== agent || scope !== reads?.scope) return [];
+              const session = this.record(this.storage.get(key) ?? "null");
+              return localSessions(
+                this.storage,
+                agent,
+                `buzz.claude-code.sessions.remote.v1:${session.key}`,
+              ).list();
+            })
+        : this.savedSessions(agent).list();
+    return saved.map(([key, saved]) => {
+      const [channelId = key, root] = key.split("/");
+      return {
+        key,
+        agent,
+        sessionId: saved.id,
+        channelId,
+        ...(root ? { root } : {}),
+        ...reads?.channelLabel(channelId),
+        at: saved.at,
+      };
+    });
   }
   /** A conversation's transcript, found from the workspace it ran in. */
-  transcript(
+  async transcript(
     conversation: Conversation,
     workspace: string,
     working: boolean,
     signal: AbortSignal,
   ) {
+    if (await this.inspect?.(conversation.agent))
+      throw new Error("Transcripts are unavailable for remote Claude agents.");
     const prompts = this.prompts(conversation.agent);
     return readTranscript(
       this.spawn,
@@ -376,6 +628,44 @@ export class ClaudeRuntime {
         transcript && { ...transcript, turns: prompts.shown(transcript.turns) },
     );
   }
+  /** The latest whole turns of a conversation's saved session, or undefined
+   * when it has none to read that way. Its sessions' prompts are shown
+   * once: not again on a session whose earlier turns `held` keeps. */
+  async latestTurns(
+    conversation: Conversation,
+    workspace: string,
+    working: boolean,
+    signal: AbortSignal,
+    held: readonly TranscriptTurn[],
+  ) {
+    if (await this.inspect?.(conversation.agent)) return undefined;
+    const read = await readLatestTurns(
+      this.spawn,
+      workspace,
+      conversation,
+      working,
+      signal,
+      (pubkey) => this.reads(conversation.agent)?.name(pubkey),
+    );
+    if (!read) return undefined;
+    // Turns older than all `held` keeps are left.
+    const ids = new Set(held.map((turn) => turn.turnId));
+    const turns = read.slice(
+      Math.max(
+        read.findIndex((turn) => ids.has(turn.turnId)),
+        0,
+      ),
+    );
+    const at = held.findIndex((turn) => turn.turnId === turns[0]?.turnId);
+    const kept = new Set(
+      held.slice(0, Math.max(at, 0)).map((t) => t.sessionId),
+    );
+    return this.prompts(conversation.agent)
+      .shown(turns)
+      .map((turn, index) =>
+        kept.has(turn.sessionId) ? (turns[index] ?? turn) : turn,
+      );
+  }
   /** What each of the agent's sessions started with. */
   private prompts(agent: AgentKey) {
     return sessionPrompts(this.storage, "claude-code", agent);
@@ -388,6 +678,7 @@ export class ClaudeRuntime {
     workspace: string,
     signal: AbortSignal,
   ): Promise<SavedConversation | undefined> {
+    if (await this.inspect?.(agent)) return undefined;
     const transcript = await readTranscript(
       this.spawn,
       workspace,
@@ -435,6 +726,23 @@ export class ClaudeRuntime {
   sessionState(agent: Agent, place: SessionPlace): SessionState {
     const key = this.controlKey(agent, place);
     if (this.controls.compacting(`${agent.key}/${key}`)) return "compacting";
+    if (this.controls.active(`${agent.key}/${key}`)) return "active";
+    if (this.bound(agent.key) || this.confirmedRemote.has(agent.key)) {
+      if (
+        [...this.opening.values()].some(
+          (entry) => entry.agent === agent.key && entry.conversation === key,
+        )
+      )
+        return "active";
+      return (
+        [...this.remote.values()]
+          .find(
+            (entry) => entry.agent === agent.key && entry.conversation === key,
+          )
+          ?.runtime.sessionState(agent, place) ?? "idle"
+      );
+    }
+    if (this.controls.compacting(`${agent.key}/${key}`)) return "compacting";
     const entry = this.agents.get(agent.key);
     return this.controls.active(`${agent.key}/${key}`) ||
       entry?.policies.has(key) ||
@@ -446,10 +754,63 @@ export class ClaudeRuntime {
     agent: Agent,
     place: SessionPlace,
     action: SessionControlAction,
-  ) {
+  ): Promise<void> {
     const key = this.controlKey(agent, place);
+    if (await this.inspect?.(agent.key)) {
+      if (action === "interrupt") {
+        const control = `${agent.key}/${key}`;
+        const compacting = this.controls.compacting(control);
+        if (this.controls.interrupt(control) && !compacting) return;
+        for (const pending of this.opening.values())
+          if (pending.agent === agent.key && pending.conversation === key)
+            pending.abort.abort(new Error("Claude was stopped"));
+        const remote = [...this.remote.values()].find(
+          (entry) => entry.agent === agent.key && entry.conversation === key,
+        );
+        await remote?.runtime.session(agent, place, action);
+        return;
+      }
+      const remoteKey = this.executionKey(agent.key, key);
+      if (this.sessionState(agent, place) !== "idle")
+        throw new Error("Wait for the active turn to finish first.");
+      return this.controls.run(
+        `${agent.key}/${key}`,
+        action,
+        async (signal) => {
+          if (action === "new") {
+            const held = this.remote.get(remoteKey);
+            if (held) {
+              await held.runtime.retire(agent.key);
+              await held.execution.dispose();
+            }
+            signal.throwIfAborted();
+            await this.storage.set(
+              remoteKey,
+              JSON.stringify({ key: crypto.randomUUID(), intent: "new" }),
+            );
+            this.remote.delete(remoteKey);
+            this.notify();
+            return;
+          }
+          const stored = await this.storage.read(remoteKey);
+          if (!stored) return;
+          const saved = this.record(stored);
+          const text = await this.storage.read(
+            `buzz.claude-code.sessions.remote.v1:${saved.key}:${agent.key}`,
+          );
+          const session = JSON.parse(text ?? "{}")[key];
+          if (!session?.id || session.pending) return;
+          signal.throwIfAborted();
+          const runtime = await this.connection(agent.key, key, signal);
+          await runtime.session(agent, place, action);
+        },
+      );
+    }
     const control = `${agent.key}/${key}`;
-    const entry = this.entry(agent, config(agent.config));
+    const entry = this.entry(
+      agent,
+      this.target ? this.resolveConfig(agent.config) : config(agent.config),
+    );
     if (action === "interrupt") {
       this.controls.interrupt(control);
       entry.policies.get(key)?.cancel();
@@ -469,33 +830,55 @@ export class ClaudeRuntime {
     });
   }
 
+  /** The credentials changed: idle sessions stop, to start again with the new
+   * ones, and busy ones when they next fall idle. */
+  restart() {
+    this.credentials++;
+    for (const entry of this.agents.values()) entry.sessions.reconfigure();
+  }
+
   dispose() {
+    this.disposed = true;
+    for (const pending of this.opening.values())
+      pending.abort.abort(new Error("Claude was stopped"));
+    for (const held of this.remote.values()) {
+      held.runtime.dispose();
+      void held.execution
+        .dispose()
+        .catch((error) =>
+          console.error(`Claude agent ${held.agent} cleanup failed`, error),
+        );
+    }
     this.spare.dispose();
     for (const entry of this.agents.values()) entry.sessions.dispose();
     this.agents.clear();
   }
 
-  async run({
-    trigger,
-    agent,
-    config: raw,
-    channelId,
-    model,
-    effort,
-    synced,
-    team,
-    workingUntil,
-    current,
-    wakeText,
-    ignored,
-    signal,
-    step,
-    acknowledged,
-    superseded,
-    interruptible,
-    named,
-  }: Delivery) {
-    const settings = this.resolveConfig(raw);
+  async run(delivery: Delivery): Promise<void> {
+    const {
+      trigger,
+      agent,
+      config: raw,
+      channelId,
+      model,
+      effort,
+      synced,
+      team,
+      workingUntil,
+      current,
+      wakeText,
+      ignored,
+      signal,
+      step,
+      acknowledged,
+      superseded,
+      interruptible,
+      named,
+    } = delivery;
+    const settings = this.resolveConfig(
+      raw,
+      this.bound(agent.key) || this.confirmedRemote.has(agent.key),
+    );
     // Unaddressed watches and timers come as standalone turns (`runOnce`).
     if (
       trigger.type !== "mention" &&
@@ -543,6 +926,28 @@ export class ClaudeRuntime {
     // its prompt to another conversation than the one it is delivered to.
     const key = await this.key(entry, agent, event, channel, topLevel);
     signal.throwIfAborted();
+    if (this.execution && (await this.inspect?.(agent.key))) {
+      const handoff = this.controls.deliver(
+        `${agent.key}/${key}`,
+        async (deferred) => {
+          if (this.agents.get(agent.key) !== entry) return;
+          const runtime = await this.connection(
+            agent.key,
+            key,
+            deferred ? undefined : signal,
+          );
+          const accepted = deferred ? runtime.target?.signal : signal;
+          if (!accepted)
+            throw new Error("The remote Claude lifetime is unavailable");
+          await runtime.run({ ...delivery, signal: accepted });
+        },
+      );
+      if (handoff.deferred) {
+        workingUntil(handoff.done);
+        return;
+      }
+      return handoff.done;
+    }
     const handoff = this.controls.deliver(
       `${agent.key}/${key}`,
       async (deferred) => {
@@ -664,9 +1069,10 @@ export class ClaudeRuntime {
             prior?.cancel();
           },
           handed: handed.catch(() => undefined),
-          settled: Promise.all([same ? prior.settled : undefined, done]).then(
-            () => undefined,
-          ),
+          settled: Promise.allSettled([
+            same ? prior.settled : undefined,
+            done,
+          ]).then(() => undefined),
         };
         entry.policies.set(key, policy);
         void policy.settled.then(() => {
@@ -707,6 +1113,7 @@ export class ClaudeRuntime {
     workspace: string,
     named: (title: string) => void,
   ) {
+    if (this.target) return;
     const once = `${agent}:${key}`;
     if (this.titled.has(once)) return;
     this.titled.add(once);
@@ -719,7 +1126,7 @@ export class ClaudeRuntime {
     // Claude Code writes the title alongside the first reply; give it a moment.
     for (const wait of [0, 3_000, 10_000]) {
       if (wait) await new Promise((resolve) => setTimeout(resolve, wait));
-      const session = localSessions(this.storage, agent).get(key)?.id;
+      const session = this.savedSessions(agent).get(key)?.id;
       if (!session || signal.aborted) return;
       try {
         const title = await readSessionTitle(
@@ -745,6 +1152,22 @@ export class ClaudeRuntime {
     prompt,
   }: StandaloneTurn): Promise<TurnResult> {
     const { agent, team } = delivery;
+    if (await this.inspect?.(agent.key)) {
+      const conversation = `once:${crypto.randomUUID()}`;
+      const record = this.executionKey(agent.key, conversation);
+      try {
+        const remote = await this.connection(agent.key, conversation, signal);
+        return await remote.runOnce({ delivery, key, signal, prompt });
+      } finally {
+        const held = this.remote.get(record);
+        if (held) {
+          await held.runtime.retire(agent.key);
+          await held.execution.dispose();
+          this.remote.delete(record);
+        }
+        await this.storage.set(record, null);
+      }
+    }
     const entry = this.entry(agent, this.resolveConfig(delivery.config));
     entry.handle = agent;
     entry.team = team ?? "";
@@ -800,7 +1223,7 @@ export class ClaudeRuntime {
     return agent
       .publish({
         kind: 9,
-        content: `⚠️ I couldn't finish that: ${error.slice(0, 500)}`,
+        content: `⚠️ I couldn't finish that: ${this.explain(error.slice(0, 500))}`,
         tags: [
           ["h", channel],
           ...(topLevel
@@ -930,7 +1353,8 @@ export class ClaudeRuntime {
     {
       key: agent,
       protection,
-    }: Readonly<{ key: AgentKey; protection?: unknown }>,
+      name,
+    }: Readonly<{ key: AgentKey; protection?: unknown; name?: string }>,
     initial: Config,
   ): Entry {
     if (this.retirements.has(agent))
@@ -939,6 +1363,7 @@ export class ClaudeRuntime {
     if (existing) return existing;
     const entry: Entry = {
       protected: !!protection,
+      ...(name ? { name } : {}),
       config: initial,
       team: "",
       sessions: undefined as unknown as AgentSessions,
@@ -967,13 +1392,15 @@ export class ClaudeRuntime {
             relayAuthor: this.reads(agent)?.relayAuthor?.(),
             signingAuthority: this.reads(agent)?.workflowAuthority(),
             read: (path) =>
-              readFile(
-                this.spawn,
-                cwd,
-                path,
-                undefined,
-                handle.protection?.processProtection,
-              ),
+              this.target
+                ? this.target.readFile(path, { cwd })
+                : readFile(
+                    this.spawn,
+                    cwd,
+                    path,
+                    undefined,
+                    handle.protection?.processProtection,
+                  ),
             memories: (slug) => this.memories(agent, slug),
             remembered: () => this.forget(agent),
             signal,
@@ -985,13 +1412,14 @@ export class ClaudeRuntime {
           context,
           message,
           this.added(),
-          listing(this.added()),
+          listing(this.added(), !!client?.ownerAccess),
         );
       };
-    const saved = localSessions(this.storage, agent);
+    const saved = this.savedSessions(agent);
     entry.sessions = new AgentSessions({
       spawn: (id, options) => this.spawn(id, options),
-      spare: this.spare,
+      ...(!this.target ? { spare: this.spare } : {}),
+      strictResume: !!this.target,
       store: {
         get: (key) => {
           const value = saved.get(key);
@@ -1008,8 +1436,10 @@ export class ClaudeRuntime {
           }),
         delete: (key) => saved.delete(key),
       },
-      started: (session, text) =>
-        void this.prompts(agent).save(session, [{ label: "", text }]),
+      started: (session, text) => {
+        if (!this.target)
+          void this.prompts(agent).save(session, [{ label: "", text }]);
+      },
       onChange: () => this.notify(),
       fingerprint: (key) =>
         JSON.stringify([
@@ -1022,6 +1452,7 @@ export class ClaudeRuntime {
           entry.team,
           entry.name,
           addedKey(this.added()),
+          this.credentials,
         ]),
       launch: async (key) => {
         const { workspace, instructions, scope } = entry.config;
@@ -1038,6 +1469,7 @@ export class ClaudeRuntime {
           ),
         ]);
         const directories = key ? entry.directories.get(key) : undefined;
+        const handle = entry.handle;
         return {
           ...where(entry.config),
           ...(gate
@@ -1067,7 +1499,10 @@ export class ClaudeRuntime {
                 },
               }
             : {}),
-          ...(directories ? { directories } : {}),
+          ...(!this.target && directories ? { directories } : {}),
+          ...(handle
+            ? { agent: { pubkey: handle.pubkey, relay: handle.relay } }
+            : {}),
           hook: (session, event, input) =>
             this.hook(agent, session, event, input),
           tools: tools(workspace),

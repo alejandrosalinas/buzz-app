@@ -25,3 +25,19 @@ export const LinkThreadTabContext = createContext<
   | ((channelId: string, messageId: string, rootId: string) => boolean)
   | undefined
 >(undefined);
+
+/** A bundled link renderer's hover card, shown in the host's preview card for
+ * its link. Not part of the plugin contract: `LinkRenderer` stays presentation
+ * only. `open` opens a target as a message link would, such as a `buzz://`
+ * link, and closes the card; false when nothing can open it, and the host says
+ * so. */
+export type LinkPreview = Readonly<{
+  label: string;
+  render(open: (target: string) => boolean): ReactNode;
+}>;
+
+/** Offers the link's hover card; undefined withdraws it. Undefined when the
+ * link is not live in a message, so it has no card. */
+export const LinkPreviewContext = createContext<
+  ((preview: LinkPreview | undefined) => void) | undefined
+>(undefined);

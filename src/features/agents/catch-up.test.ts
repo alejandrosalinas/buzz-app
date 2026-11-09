@@ -199,6 +199,59 @@ it("keeps the progress each program saves for its own agents", async () => {
   );
 });
 
+it("writes the agents whose streams changed, and no other", async () => {
+  const storage = memoryStorage();
+  const set = vi.spyOn(storage, "set");
+  const c = streamKey(id(10), "watch/other");
+  const first = { through: 100 };
+  const saved = { [a]: first, [b]: { through: 100 } };
+  await writeCheckpoints(storage, saved, {});
+  set.mockClear();
+  // Nothing changed, even when the saved copy is equal but not the same.
+  await writeCheckpoints(storage, saved, structuredClone(saved));
+  expect(set).not.toHaveBeenCalled();
+  // A changed stream writes only its agent.
+  await writeCheckpoints(storage, { ...saved, [b]: { through: 200 } }, saved);
+  expect(set.mock.calls.map(([key]) => key)).toEqual([catchUpKey(id(11))]);
+  // A new stream of an agent writes it.
+  set.mockClear();
+  await writeCheckpoints(storage, { ...saved, [c]: { through: 100 } }, saved);
+  expect(set.mock.calls.map(([key]) => key)).toEqual([catchUpKey(id(10))]);
+  expect(Object.keys(readCheckpoints(storage))).toEqual(
+    expect.arrayContaining([a, b, c]),
+  );
+  // Removing an agent's last stream removes its key.
+  await writeCheckpoints(storage, { [a]: first }, saved);
+  expect(storage.get(catchUpKey(id(11)))).toBeNull();
+  expect(storage.get(catchUpKey(id(10)))).not.toBeNull();
+});
+
+it("serialises the same however many agents did not change", async () => {
+  const serialised = async (agents: number) => {
+    const saved = Object.fromEntries(
+      Array.from({ length: agents }, (_, n) => [
+        streamKey(id(100 + n), "watch/chat"),
+        { through: 100 },
+      ]),
+    );
+    const key = streamKey(id(100), "watch/chat");
+    const stringify = vi.spyOn(JSON, "stringify");
+    try {
+      await writeCheckpoints(
+        memoryStorage(),
+        { ...saved, [key]: { through: 200 } },
+        saved,
+      );
+      return stringify.mock.calls.length;
+    } finally {
+      stringify.mockRestore();
+    }
+  };
+  const few = await serialised(2);
+  expect(few).toBeGreaterThan(0);
+  expect(await serialised(20)).toBe(few);
+});
+
 it("moves the old shared progress into each agent's key, and a late move keeps newer progress", async () => {
   const { disk, open } = sharedFiles({
     [CATCH_UP_KEY]: JSON.stringify({

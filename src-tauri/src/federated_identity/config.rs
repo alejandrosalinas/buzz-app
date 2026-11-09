@@ -37,6 +37,107 @@ impl SignIn {
 
 const INVALID: &str = "Invalid BUZZ_BUILD_FEDERATED_IDENTITY_CONFIG";
 
+/// The sign-in server every build trusts unless it opts out: Builderlab for
+/// the public hosted communities. Shaped like the descriptors that builds add.
+#[allow(dead_code)] // Compiled in by build.rs.
+/// Only native reads it; `BUILT_IN_BUILDERLAB` in vite.config.ts repeats its
+/// origin.
+pub(crate) const BUILT_IN: &str =
+    include_str!("../../../src/features/federated-identity/built-in-server.json");
+
+/// A build's pinned development viewer (`BUZZ_DEV_VIEWER`), kept only for a
+/// `tauri dev` run, which serves the development broker. Tauri marks that run
+/// by building without `custom-protocol` (`DEP_TAURI_DEV`); a packaged build,
+/// debug or release, keeps NIP-FI whatever its pin.
+#[allow(dead_code)] // Called by build.rs.
+pub(crate) fn dev_viewer(viewer: Option<String>, tauri_dev: Option<&str>) -> Option<String> {
+    viewer.filter(|_| tauri_dev == Some("true"))
+}
+
+/// The most servers a build trusts, the built-in one included.
+const MAX_SERVERS: usize = 16;
+
+/// The compiled list of trusted sign-in servers, from the build's
+/// `BUZZ_BUILD_FEDERATED_IDENTITY_CONFIG` (`added`) and `BUZZ_BUILDERLAB_URL`.
+/// Unset: the built-in server only. Empty: none. A descriptor or a list of
+/// them: those servers, then the built-in one. A Builderlab URL for another
+/// deployment turns the built-in server off when nothing is added, so that
+/// build has no first-run Builderlab sign-in, and none at all outside live
+/// development. The first server is the build's Builderlab, used by the
+/// Builderlab plugin. A development build with a pinned viewer (`dev_viewer`)
+/// and nothing added keeps the development broker's Builderlab sign-in for the
+/// Builderlab plugin, as before the built-in server; first run never uses it.
+#[allow(dead_code)] // Called by build.rs.
+pub(crate) fn compiled(
+    added: Option<&str>,
+    builderlab_url: Option<&str>,
+    dev_viewer: Option<&str>,
+) -> Result<Vec<Config>, String> {
+    let built_in = Config::parse(BUILT_IN)?;
+    let servers = match added {
+        Some("") => return Ok(Vec::new()),
+        Some(raw) => {
+            let mut servers = Config::parse_list(raw)?;
+            // The built-in server joins them, within the runtime list's limit.
+            if servers.len() == MAX_SERVERS {
+                return Err(INVALID.into());
+            }
+            servers.push(built_in);
+            servers
+        }
+        None if dev_viewer.is_some_and(|viewer| !viewer.trim().is_empty()) => return Ok(Vec::new()),
+        None if builderlab_url.is_none_or(is_built_in_builderlab) => vec![built_in],
+        None => return Ok(Vec::new()),
+    };
+    distinct(&servers)?;
+    Ok(servers)
+}
+
+/// Whether a Builderlab build URL names the built-in server's deployment.
+#[allow(dead_code)]
+fn is_built_in_builderlab(raw: &str) -> bool {
+    Url::parse(raw).is_ok_and(|url| {
+        url.origin().ascii_serialization() == "https://app.builderlab.xyz"
+            && url.path().trim_end_matches('/').is_empty()
+            && url.query().is_none()
+            && url.fragment().is_none()
+    })
+}
+
+/// Each community has at most one server: no two share an id, a host
+/// pattern, or a host that another's wildcard covers.
+fn distinct(servers: &[Config]) -> Result<(), String> {
+    for (index, server) in servers.iter().enumerate() {
+        for other in &servers[index + 1..] {
+            if server.id == other.id
+                || server.community_hosts.iter().any(|host| {
+                    other.community_hosts.contains(host)
+                        || covers(&other.community_hosts, host)
+                        || other
+                            .community_hosts
+                            .iter()
+                            .any(|theirs| covers(&server.community_hosts, theirs))
+                })
+            {
+                return Err(INVALID.into());
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Whether a one-label wildcard in `patterns` matches the exact `host`.
+fn covers(patterns: &[String], host: &str) -> bool {
+    !host.starts_with("*.")
+        && patterns.iter().any(|pattern| {
+            pattern.strip_prefix("*.").is_some_and(|suffix| {
+                host.strip_suffix(suffix)
+                    .and_then(|prefix| prefix.strip_suffix('.'))
+                    .is_some_and(|label| !label.is_empty() && !label.contains(['.', ':']))
+            })
+        })
+}
+
 impl Config {
     pub(crate) fn parse(raw: &str) -> Result<Self, String> {
         if raw.len() > 8192 {
@@ -99,6 +200,33 @@ impl Config {
         }
         config.community_hosts = hosts;
         Ok(config)
+    }
+
+    /// One descriptor, or a JSON list of them.
+    pub(crate) fn parse_list(raw: &str) -> Result<Vec<Self>, String> {
+        if !raw.trim_start().starts_with('[') {
+            return Ok(vec![Self::parse(raw)?]);
+        }
+        let entries: Vec<serde_json::Value> = serde_json::from_str(raw).map_err(|_| INVALID)?;
+        if entries.is_empty() || entries.len() > MAX_SERVERS {
+            return Err(INVALID.into());
+        }
+        let servers = entries
+            .iter()
+            .map(|entry| Self::parse(&entry.to_string()))
+            .collect::<Result<Vec<_>, _>>()?;
+        distinct(&servers)?;
+        Ok(servers)
+    }
+
+    /// Whether this is the built-in server, which Builderlab customers'
+    /// servers (`customers::builderlab_customer`) come with.
+    #[allow(dead_code)] // Called by the app, not build.rs.
+    pub(crate) fn is_built_in(&self) -> bool {
+        Self::parse(BUILT_IN).is_ok_and(|built_in| {
+            serde_json::to_value(built_in.identity()).ok()
+                == serde_json::to_value(self.identity()).ok()
+        })
     }
 
     /// The deployment as it identifies saved sessions, without presentation.
@@ -224,6 +352,176 @@ mod tests {
             "wss://evilcommunities.example",
         ] {
             assert!(!config.matches_relay(relay).unwrap(), "{relay}");
+        }
+    }
+
+    /// The cases the front end's `coversCommunity` and `isBuiltInBuilderlab`
+    /// also run (community-hosts.test.ts).
+    #[test]
+    fn shared_fixtures_match_the_front_end() {
+        let fixtures: serde_json::Value = serde_json::from_str(include_str!(
+            "../../../src/features/federated-identity/community-hosts.fixtures.json"
+        ))
+        .unwrap();
+        for case in fixtures["communities"].as_array().unwrap() {
+            let mut descriptor = descriptor();
+            descriptor["communityHosts"] = case["hosts"].clone();
+            let config = Config::parse(&descriptor.to_string()).unwrap();
+            let relay = case["relay"].as_str().unwrap();
+            assert_eq!(
+                config.matches_relay(relay).unwrap_or(false),
+                case["covered"].as_bool().unwrap(),
+                "{relay}"
+            );
+        }
+        for case in fixtures["builtInBuilderlab"].as_array().unwrap() {
+            let url = case["url"].as_str().unwrap();
+            assert_eq!(
+                is_built_in_builderlab(url),
+                case["builtIn"].as_bool().unwrap(),
+                "{url}"
+            );
+        }
+    }
+
+    const BB_ACME: &str = r#"{"version":1,"id":"bb-acme","identityOrigin":"https://acme.builderlab.xyz","communityHosts":["buzz.acme.builderlab.xyz"],"adapterBase":"https://acme.builderlab.xyz/api/goose","apiBasePath":"/api/goose/","signIn":"at-launch","organization":"Acme"}"#;
+
+    fn ids(servers: &[Config]) -> Vec<&str> {
+        servers.iter().map(|server| server.id.as_str()).collect()
+    }
+
+    #[test]
+    fn a_build_without_configuration_trusts_the_built_in_server() {
+        let servers = compiled(None, None, None).unwrap();
+        assert_eq!(ids(&servers), ["bb-public"]);
+        let built_in = &servers[0];
+        assert_eq!(built_in.identity_origin, "https://app.builderlab.xyz");
+        assert_eq!(
+            built_in.endpoint("/v1/login/start").as_str(),
+            "https://app.builderlab.xyz/api/goose/v1/login/start"
+        );
+        assert!(built_in.sign_in == SignIn::OnDemand);
+        for relay in [
+            "wss://team.communities.buzz.xyz",
+            "wss://communities.buzz.xyz",
+        ] {
+            assert!(built_in.matches_relay(relay).unwrap(), "{relay}");
+        }
+        assert!(!built_in
+            .matches_relay("wss://buzz.acme.builderlab.xyz")
+            .unwrap());
+        // The default Builderlab URL, however written, keeps it.
+        for url in ["https://app.builderlab.xyz", "https://app.builderlab.xyz/"] {
+            assert_eq!(
+                ids(&compiled(None, Some(url), None).unwrap()),
+                ["bb-public"]
+            );
+        }
+    }
+
+    #[test]
+    fn an_empty_value_or_another_builderlab_opts_out() {
+        assert!(compiled(Some(""), None, None).unwrap().is_empty());
+        // Only a `tauri dev` run keeps the pin; packaged builds drop it.
+        let pin = || Some("npub1viewer".to_owned());
+        assert_eq!(dev_viewer(pin(), Some("true")), pin());
+        assert_eq!(dev_viewer(pin(), Some("false")), None);
+        assert_eq!(dev_viewer(pin(), None), None);
+        // A pinned development viewer keeps the development broker's sign-in,
+        // unless the build adds a server.
+        assert!(compiled(None, None, Some("npub1viewer"))
+            .unwrap()
+            .is_empty());
+        assert_eq!(
+            ids(&compiled(None, None, Some(" ")).unwrap()),
+            ["bb-public"]
+        );
+        assert_eq!(
+            ids(&compiled(Some(BB_ACME), None, Some("npub1viewer")).unwrap()),
+            ["bb-acme", "bb-public"]
+        );
+        assert!(compiled(Some(""), Some("https://app.builderlab.xyz"), None)
+            .unwrap()
+            .is_empty());
+        for url in [
+            "",
+            "https://staging.example",
+            "https://app.builderlab.xyz/other",
+        ] {
+            assert!(compiled(None, Some(url), None).unwrap().is_empty(), "{url}");
+        }
+    }
+
+    #[test]
+    fn an_internal_build_adds_its_server_before_the_built_in_one() {
+        let servers = compiled(Some(BB_ACME), None, None).unwrap();
+        assert_eq!(ids(&servers), ["bb-acme", "bb-public"]);
+        assert!(servers[0].sign_in == SignIn::AtLaunch);
+        let list = format!("[{BB_ACME}]");
+        assert_eq!(
+            ids(&compiled(Some(&list), None, None).unwrap()),
+            ["bb-acme", "bb-public"]
+        );
+        // build.rs compiles the list; the app parses the same bytes back.
+        let rebuilt = Config::parse_list(&serde_json::to_string(&servers).unwrap()).unwrap();
+        assert_eq!(ids(&rebuilt), ["bb-acme", "bb-public"]);
+    }
+
+    /// The staging descriptor docs/configuration.md documents, verbatim.
+    #[test]
+    fn the_documented_staging_descriptor_is_valid() {
+        const STAGING: &str = r#"{"version":1,"id":"bb-public-staging","identityOrigin":"https://app.builderlabstaging.xyz","communityHosts":["*.communities.public.builderlabstaging.xyz","communities.public.builderlabstaging.xyz"],"adapterBase":"https://app.builderlabstaging.xyz/api/goose","apiBasePath":"/api/goose/"}"#;
+        assert!(include_str!("../../../docs/configuration.md").contains(STAGING));
+        let config = Config::parse(STAGING).unwrap();
+        assert_eq!(
+            config.endpoint("/v1/login/start").as_str(),
+            "https://app.builderlabstaging.xyz/api/goose/v1/login/start"
+        );
+        for relay in [
+            "wss://one.communities.public.builderlabstaging.xyz",
+            "wss://communities.public.builderlabstaging.xyz",
+        ] {
+            assert!(config.matches_relay(relay).unwrap(), "{relay}");
+        }
+        assert_eq!(
+            ids(&compiled(Some(STAGING), None, None).unwrap()),
+            ["bb-public-staging", "bb-public"]
+        );
+    }
+
+    #[test]
+    fn a_community_has_at_most_one_server() {
+        let mut value = descriptor();
+        for hosts in [
+            serde_json::json!(["*.communities.buzz.xyz"]),
+            serde_json::json!(["team.communities.buzz.xyz"]),
+            serde_json::json!(["communities.buzz.xyz"]),
+        ] {
+            value["communityHosts"] = hosts;
+            assert!(compiled(Some(&value.to_string()), None, None).is_err());
+        }
+        value["communityHosts"] = serde_json::json!(["a.b.communities.buzz.xyz"]);
+        assert!(compiled(Some(&value.to_string()), None, None).is_ok());
+        let mut same_id = descriptor();
+        same_id["id"] = serde_json::json!("bb-public");
+        assert!(compiled(Some(&same_id.to_string()), None, None).is_err());
+        // Added servers leave room for the built-in one.
+        let list = |count: usize| {
+            let entries: Vec<_> = (0..count)
+                .map(|index| {
+                    let mut entry = descriptor();
+                    entry["id"] = serde_json::json!(format!("s{index}"));
+                    entry["communityHosts"] = serde_json::json!([format!("s{index}.example")]);
+                    entry
+                })
+                .collect();
+            serde_json::to_string(&entries).unwrap()
+        };
+        let full = compiled(Some(&list(15)), None, None).unwrap();
+        assert!(Config::parse_list(&serde_json::to_string(&full).unwrap()).is_ok());
+        assert!(compiled(Some(&list(16)), None, None).is_err());
+        for bad in ["[]", "{}", "[1]"] {
+            assert!(Config::parse_list(bad).is_err(), "{bad}");
         }
     }
 

@@ -59,7 +59,7 @@ if (base.status === 0) {
   const shared =
     /^(?:package\.json|pnpm-lock\.yaml|vitest\.config\.[cm]?[jt]s|tsconfig[^/]*\.json|tests\/relay-config\.ts|bin\/)/;
   const rust =
-    /^(?:crates\/|src-tauri\/|bin\/|rust-toolchain[^/]*|Cargo\.(?:toml|lock)|clippy\.toml)/;
+    /^(?:crates\/|src-tauri\/|src\/bundled\/mesh-compute\/compute\/|bin\/|rust-toolchain[^/]*|Cargo\.(?:toml|lock)|clippy\.toml)/;
   if (clippy) {
     if (!files.some((file) => rust.test(file))) {
       console.log(

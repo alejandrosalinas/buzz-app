@@ -11,7 +11,7 @@ import {
 } from "react";
 import { ProviderDialogActions } from "../../features/agents/ProviderDialogActions";
 import activityStyles from "../../features/agents/ActivityLayout.module.css";
-import { ActivityTranscript } from "../../features/agents/ActivityTranscript";
+import { TranscriptPanel } from "../../features/agents/TranscriptPanel";
 import { AgentSaveButton } from "../../features/agents/AgentSaveButton";
 import { AgentInstructions } from "../../features/agents/AgentInstructions";
 import {
@@ -55,7 +55,6 @@ import {
 } from "./setup";
 import {
   type GooseHistory,
-  type GooseTranscript,
   type Place,
   RECENT_LIMIT,
   TURN_LIMIT,
@@ -621,32 +620,46 @@ export function createTabs({
     revision = 0,
     choice,
     value,
+    compact = false,
+    disabled = false,
     onChange,
   }: Readonly<{
     choice: Choice;
     revision?: number;
     value: string;
+    /** A trailing choice in a host's row, as Create agent places it. */
+    compact?: boolean;
+    disabled?: boolean;
     onChange(effort: string): void;
   }>) {
-    const [efforts] = useRead(
+    const [efforts, retry] = useRead(
       () => setup.efforts(choice),
       `${choice.provider}\u0000${choice.model.trim()}:${revision}`,
     );
+    const failed =
+      efforts.status === "error"
+        ? `Could not read goose's levels: ${efforts.error}`
+        : undefined;
     const levels = efforts.value?.levels ?? [];
     const named = (level: string) =>
       level.charAt(0).toUpperCase() + level.slice(1);
     const fallback = efforts.value?.current
       ? named(efforts.value.current)
       : "Automatic";
-    return (
+    const select = (
       <Select
         label="Thinking"
-        variant="preference"
+        variant={compact ? "compact" : "preference"}
+        {...(compact && { align: "end" as const })}
         value={value}
-        {...(!value ? { valueLabel: fallback } : {})}
-        {...(efforts.status === "error"
-          ? { description: `Could not read goose's levels: ${efforts.error}` }
+        {...(!value
+          ? {
+              valueLabel: fallback,
+              ...(compact && { valueSuffix: " · Default" }),
+            }
           : {})}
+        disabled={disabled}
+        {...(failed && !compact ? { description: failed } : {})}
         groups={[
           {
             label: "",
@@ -673,6 +686,20 @@ export function createTabs({
         ]}
         onValueChange={onChange}
       />
+    );
+    // A compact choice shows no description, so a failed read says so beside
+    // it and offers another try, as the model field does.
+    return compact ? (
+      <ModelDiscoveryRecovery
+        error={failed}
+        loading={efforts.status === "loading"}
+        retry={retry}
+        disabled={disabled}
+      >
+        {select}
+      </ModelDiscoveryRecovery>
+    ) : (
+      select
     );
   }
 
@@ -788,131 +815,92 @@ export function createTabs({
     );
   }
 
-  /** One session's turns, or a place's across its sessions, read on open and
-   * on Refresh. A refresh keeps the last result until the new one arrives. */
+  /** One session's turns, or a place's across its sessions, kept current
+   * while goose works. */
   function TranscriptView({
     agent,
     row,
     working,
-    openConversation,
   }: {
     agent: AgentViewProps<Config>["agent"];
     row: Row;
     working?: string | undefined;
-    openConversation: AgentViewProps<Config>["openConversation"];
   }) {
     const workspace = readConfig(agent.config).workspace;
-    const [read, setRead] = useState<
-      | { status: "ready"; transcript: GooseTranscript }
-      | { status: "missing" }
-      | { status: "error"; error: string }
-    >();
-    const [loading, setLoading] = useState(true);
-    const [attempt, setAttempt] = useState(0);
     // Searching goose's history takes seconds, so only on request.
     const [search, setSearch] = useState(false);
-    // A turn ending rereads, so its last steps show without a Refresh.
     // Read again when the conversation saves or opens another session.
     const ids = [row.sessionId, ...(row.sessions ?? [])].join(" ");
-    // biome-ignore lint/correctness/useExhaustiveDependencies: row is read by its key and ids; attempt is the explicit Refresh.
-    useEffect(() => {
-      const abort = new AbortController();
-      setLoading(true);
-      history
-        .transcript(
-          {
-            agent: agent.key,
-            workspace,
-            ...(row.sessionId ? { sessionId: row.sessionId } : {}),
-            ...(row.sessions ? { sessions: row.sessions } : {}),
-            ...(row.channelId ? { place: placeOf(row.key), search } : {}),
-            ...(working ? { working } : {}),
-          },
-          abort.signal,
-          (pubkey) => runtime.name(agent.key, pubkey),
-        )
-        .then(
-          (transcript) =>
-            transcript
-              ? ({
-                  status: "ready",
-                  transcript: {
-                    ...transcript,
-                    turns: runtime.prompts(agent.key).shown(transcript.turns),
-                  },
-                } as const)
-              : ({ status: "missing" } as const),
-          (reason: unknown) =>
-            ({ status: "error", error: message(reason) }) as const,
-        )
-        .then((next) => {
-          if (abort.signal.aborted) return;
-          setRead(next);
-          setLoading(false);
-        });
-      return () => abort.abort();
-    }, [row.key, ids, workspace, working, attempt, search]);
+    /** With `reuse`, sessions that aren't working keep their last export. */
+    const read = async (signal: AbortSignal, reuse = false) => {
+      const transcript = await history.transcript(
+        {
+          agent: agent.key,
+          workspace,
+          ...(row.sessionId ? { sessionId: row.sessionId } : {}),
+          ...(row.sessions ? { sessions: row.sessions } : {}),
+          ...(row.channelId ? { place: placeOf(row.key), search } : {}),
+          ...(working ? { working } : {}),
+        },
+        signal,
+        (pubkey) => runtime.name(agent.key, pubkey),
+        reuse,
+      );
+      return (
+        transcript && {
+          ...transcript,
+          turns: runtime.prompts(agent.key).shown(transcript.turns),
+        }
+      );
+    };
     return (
-      <div className="grid gap-4">
-        <div>
-          <Button
-            type="button"
-            variant="ghost"
-            loading={loading}
-            onClick={() => setAttempt((value) => value + 1)}
-          >
-            Refresh
-          </Button>
-        </div>
-        {!read ? (
-          <p role="status" className="m-0">
-            Reading the goose session…
-          </p>
-        ) : read.status === "missing" && row.channelId && !search ? (
-          <div className="grid gap-2">
-            <p className="m-0 text-body-sm text-subtle">
-              {row.sessions?.length
-                ? "goose no longer has the sessions Buzz saved for this conversation."
-                : "Buzz saved no goose session for this conversation."}{" "}
-              One from an earlier version of Buzz can be found by searching
-              goose's history, which can take a while.
-            </p>
-            <div>
-              <Button
-                type="button"
-                variant="subtle"
-                size="sm"
-                onClick={() => setSearch(true)}
-              >
-                Search older sessions
-              </Button>
+      <TranscriptPanel
+        agent={agent}
+        read={read}
+        // Automatic reads while working; open, Refresh and a turn starting
+        // or ending export every session.
+        readLatest={async (signal) => (await read(signal, true))?.turns}
+        readKey={`${row.key}\u0000${workspace}`}
+        readAgain={`${ids}\u0000${search}`}
+        working={Boolean(working)}
+        reading="Reading the goose session…"
+        failed="Could not read the goose session"
+        missing={
+          row.channelId && !search ? (
+            <div className="grid gap-2">
+              <p className="m-0 text-body-sm text-subtle">
+                {row.sessions?.length
+                  ? "goose no longer has the sessions Buzz saved for this conversation."
+                  : "Buzz saved no goose session for this conversation."}{" "}
+                One from an earlier version of Buzz can be found by searching
+                goose's history, which can take a while.
+              </p>
+              <div>
+                <Button
+                  type="button"
+                  variant="subtle"
+                  size="sm"
+                  onClick={() => setSearch(true)}
+                >
+                  Search older sessions
+                </Button>
+              </div>
             </div>
-          </div>
-        ) : read.status === "missing" ? (
-          <p className="m-0 text-body-sm text-subtle">
-            goose has no session for this conversation on this computer. It may
-            have been deleted, or it ran in a different workspace.
-          </p>
-        ) : read.status === "error" ? (
-          <p role="alert" className="m-0">
-            Could not read the goose session: {read.error}
-          </p>
-        ) : (
-          <ActivityTranscript
-            transcript={read.transcript}
-            agentName={agent.name}
-            openConversation={openConversation}
-            state={() => (working ? "working" : undefined)}
-            before={
-              read.transcript.more && (
-                <p className="m-0 text-body-sm text-subtle">
-                  Showing the latest {TURN_LIMIT} turns.
-                </p>
-              )
-            }
-          />
-        )}
-      </div>
+          ) : (
+            <p className="m-0 text-body-sm text-subtle">
+              goose has no session for this conversation on this computer. It
+              may have been deleted, or it ran in a different workspace.
+            </p>
+          )
+        }
+        notes={(transcript) =>
+          transcript.more && (
+            <p className="m-0 text-body-sm text-subtle">
+              Showing the latest {TURN_LIMIT} turns.
+            </p>
+          )
+        }
+      />
     );
   }
 
@@ -923,13 +911,11 @@ export function createTabs({
     conversation,
     initialTranscript,
     close,
-    openConversation,
   }: {
     agent: AgentViewProps<Config>["agent"];
     conversation?: AgentViewProps<Config>["conversation"];
     initialTranscript?: AgentViewProps<Config>["initialTranscript"];
     close?: AgentViewProps<Config>["close"];
-    openConversation?: AgentViewProps<Config>["openConversation"];
   }) {
     useClockFormat();
     const live = useSyncExternalStore(
@@ -1076,7 +1062,6 @@ export function createTabs({
               agent={agent}
               row={shown}
               working={busy(shown.sessionId) ? shown.sessionId : undefined}
-              openConversation={openConversation}
             />
           </PanelSubview>
         )}
@@ -1174,6 +1159,7 @@ export function createTabs({
   function CreateModel({
     config,
     onChange,
+    onReadyChange,
     disabled,
     modelAppearance,
     showEffort = true,
@@ -1196,6 +1182,11 @@ export function createTabs({
             ?.defaultModel
         : listing.value?.defaults.model) || "";
     const selectedModel = current.model || fallback;
+    const ready =
+      listing.status === "ready" &&
+      !!listing.value.providers.find((item) => item.id === provider) &&
+      !!selectedModel.trim();
+    useEffect(() => onReadyChange?.(ready), [onReadyChange, ready]);
     const [thinking] = useRead(
       () =>
         provider && selectedModel
@@ -1293,6 +1284,36 @@ export function createTabs({
           />
         )}
       </>
+    );
+  }
+
+  /** Create agent's Thinking row: goose's levels for the chosen model. */
+  function CreateThinking({
+    config,
+    onChange,
+    disabled,
+  }: AgentCreateProps<Config>) {
+    const current = readConfig(config);
+    // A setup check, such as the model field's Try again, clears goose's
+    // levels; read them again once it settles.
+    const checking =
+      useSyncExternalStore(setup.subscribe, setup.snapshot).readiness ===
+      "checking";
+    const wasChecking = useRef(checking);
+    const [checks, setChecks] = useState(0);
+    useEffect(() => {
+      if (wasChecking.current && !checking) setChecks((count) => count + 1);
+      wasChecking.current = checking;
+    }, [checking]);
+    return (
+      <ThinkingField
+        compact
+        revision={checks}
+        choice={current}
+        value={current.effort}
+        disabled={disabled}
+        onChange={(effort) => onChange({ ...current, effort })}
+      />
     );
   }
 
@@ -1412,6 +1433,7 @@ export function createTabs({
     DefaultControl,
     Create,
     CreateModel,
+    CreateThinking,
     SettingsTab,
     ActivityTab,
   };

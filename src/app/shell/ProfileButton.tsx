@@ -295,6 +295,8 @@ export function ProfileButton({
         />
         <MenuPopup
           data-profile-menu=""
+          side="right"
+          collisionAvoidance={{ fallbackAxisSide: "start" }}
           align="end"
           sideOffset={8}
           aria-labelledby={accountLabel}

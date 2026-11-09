@@ -21,6 +21,7 @@ export type MemoryListing = Memories;
 /** What a turn needs to know of its channel. */
 export type ChannelFacts = Readonly<{
   name?: string;
+  about?: string;
   dm: boolean;
   members: readonly string[];
   /** The owner's device is still creating it, so it has nothing to read yet. */
@@ -34,6 +35,8 @@ export type AgentReads = Readonly<{
   connection: object;
   /** The community these reads are of; it changes when the agent's does. */
   scope: string;
+  /** That community's normalized origin, when known. */
+  origin?: string | undefined;
   /** The channel as the community lists it, or undefined when unknown. */
   channel(id: string): Promise<ChannelFacts | undefined>;
   read(
@@ -89,6 +92,7 @@ export function ownerReads(
   return Object.freeze({
     connection: session,
     scope: snapshot.scope ?? "",
+    origin: snapshot.origin,
     channel: async (id: string) => {
       const summary =
         session.channels.list().channels.find((item) => item.id === id) ??
@@ -96,6 +100,7 @@ export function ownerReads(
       return summary
         ? {
             ...(summary.name ? { name: summary.name } : {}),
+            ...(summary.description ? { about: summary.description } : {}),
             dm: summary.channelType === "dm",
             members: summary.members ?? [],
             ...(summary.pending ? { starting: true as const } : {}),

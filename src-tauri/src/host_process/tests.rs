@@ -58,7 +58,14 @@ async fn streams_stdin_to_stdout_until_input_closes() {
     let processes = HostProcesses::default();
     let (channel, mut events) = channel();
     let handle = processes
-        .start(0, "a.plugin".into(), "cat", command("cat", &[]), channel)
+        .start(
+            0,
+            "a.plugin".into(),
+            "cat",
+            command("cat", &[]),
+            None,
+            channel,
+        )
         .unwrap();
     processes
         .write("a.plugin", handle, "one\n".into(), false)
@@ -82,6 +89,136 @@ async fn streams_stdin_to_stdout_until_input_closes() {
 
 #[cfg(unix)]
 #[tokio::test]
+async fn its_buzz_credential_is_revoked_once_it_exits() {
+    use crate::credential_service::tests::{ask, error, fixture, issued, RELAY};
+    use hyper::StatusCode;
+    let fixture = fixture();
+    let (credential, token) = issued(&fixture).await;
+    let processes = HostProcesses::default();
+    let (channel, mut events) = channel();
+    let handle = processes
+        .start(
+            0,
+            "p".into(),
+            "cat",
+            command("cat", &[]),
+            Some(credential),
+            channel,
+        )
+        .unwrap();
+    let held = processes
+        .owned("p", handle, |entry| entry.credential.clone())
+        .unwrap()
+        .unwrap();
+    fixture
+        .service
+        .bind(&held, "p", None, fixture.agent.pubkey.clone(), RELAY.into())
+        .await
+        .unwrap();
+    drop(held);
+    let reply = ask(&fixture, &token, "get_public_key", &[]).await;
+    assert_eq!(reply.0, StatusCode::OK);
+
+    processes
+        .write("p", handle, String::new(), true)
+        .await
+        .unwrap();
+    until_exit(&mut events).await;
+    let reply = ask(&fixture, &token, "get_public_key", &[]).await;
+    assert_eq!(error(&reply), (StatusCode::UNAUTHORIZED, "revoked"));
+}
+
+/// A descendant that left the process group keeps the output pipes open, so
+/// the entry outlives the process; its token must not.
+#[cfg(unix)]
+#[tokio::test]
+async fn its_buzz_credential_is_revoked_while_a_detached_descendant_holds_its_output() {
+    use crate::credential_service::tests::{ask, error, fixture, issued, RELAY};
+    use hyper::StatusCode;
+    let fixture = fixture();
+    let (credential, token) = issued(&fixture).await;
+    let processes = HostProcesses::default();
+    let (channel, _events) = channel();
+    let dir = tempfile::tempdir().unwrap();
+    let ready = dir.path().join("detached");
+    // Ends the descendant however the test ends, releasing its pipes.
+    struct Detached(std::path::PathBuf);
+    impl Drop for Detached {
+        fn drop(&mut self) {
+            if let Ok(pid) = std::fs::read_to_string(&self.0) {
+                let _ = std::process::Command::new("kill")
+                    .args(["-9", pid.trim()])
+                    .status();
+            }
+        }
+    }
+    let detached = Detached(ready.clone());
+    let handle = processes
+        .start(
+            0,
+            "p".into(),
+            "sh",
+            command(
+                "sh",
+                // `sh` waits for the descendant to report it left the group,
+                // then for a line; the descendant holds the pipes until killed.
+                &[
+                    "-c",
+                    r#"perl -e 'setpgrp(0, 0); open(F, ">", "$ARGV[0].tmp") or die; print F $$; close F; rename("$ARGV[0].tmp", $ARGV[0]); sleep' "$0" &
+                    while [ ! -e "$0" ]; do sleep 0.01; done; read line"#,
+                    ready.to_str().unwrap(),
+                ],
+            ),
+            Some(credential),
+            channel,
+        )
+        .unwrap();
+    let held = processes
+        .owned("p", handle, |entry| entry.credential.clone())
+        .unwrap()
+        .unwrap();
+    fixture
+        .service
+        .bind(&held, "p", None, fixture.agent.pubkey.clone(), RELAY.into())
+        .await
+        .unwrap();
+    assert_eq!(
+        ask(&fixture, &token, "get_public_key", &[]).await.0,
+        StatusCode::OK
+    );
+    processes
+        .write("p", handle, "\n".into(), false)
+        .await
+        .unwrap();
+    tokio::time::timeout(Duration::from_secs(2), async {
+        while ask(&fixture, &token, "get_public_key", &[]).await.0 == StatusCode::OK {
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+    })
+    .await
+    .expect("the token outlived its process");
+    // The output is still held open, so the entry has not gone yet.
+    assert!(processes.registry().entries.contains_key(&handle));
+    let reply = ask(&fixture, &token, "get_public_key", &[]).await;
+    assert_eq!(error(&reply), (StatusCode::UNAUTHORIZED, "revoked"));
+    assert!(fixture
+        .service
+        .bind(&held, "p", None, fixture.agent.pubkey.clone(), RELAY.into())
+        .await
+        .is_err());
+    // Releasing the pipes lets the entry go.
+    drop(detached);
+    tokio::time::timeout(Duration::from_secs(5), async {
+        while processes.registry().entries.contains_key(&handle) {
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+    })
+    .await
+    .expect("the entry outlived its output");
+}
+
+#[cfg(unix)]
+#[tokio::test]
 async fn reports_stderr_and_exit_code() {
     let processes = HostProcesses::default();
     let (channel, mut events) = channel();
@@ -91,6 +228,7 @@ async fn reports_stderr_and_exit_code() {
             "a.plugin".into(),
             "sh",
             command("sh", &["-c", "echo oops >&2; exit 3"]),
+            None,
             channel,
         )
         .unwrap();
@@ -105,7 +243,14 @@ async fn only_the_owning_plugin_can_write_or_kill() {
     let processes = HostProcesses::default();
     let (channel, mut events) = channel();
     let handle = processes
-        .start(0, "a.plugin".into(), "cat", command("cat", &[]), channel)
+        .start(
+            0,
+            "a.plugin".into(),
+            "cat",
+            command("cat", &[]),
+            None,
+            channel,
+        )
         .unwrap();
     assert!(processes
         .write("b.plugin", handle, "x".into(), false)
@@ -129,6 +274,7 @@ async fn kill_ends_the_process_and_its_descendants() {
             "a.plugin".into(),
             "sh",
             command("sh", &["-c", "trap '' TERM; sleep 30 & echo $!; wait"]),
+            None,
             channel,
         )
         .unwrap();
@@ -151,10 +297,24 @@ async fn stop_all_ends_every_process() {
     let (first, mut first_events) = channel();
     let (second, mut second_events) = channel();
     processes
-        .start(0, "a.plugin".into(), "cat", command("cat", &[]), first)
+        .start(
+            0,
+            "a.plugin".into(),
+            "cat",
+            command("cat", &[]),
+            None,
+            first,
+        )
         .unwrap();
     processes
-        .start(0, "b.plugin".into(), "cat", command("cat", &[]), second)
+        .start(
+            0,
+            "b.plugin".into(),
+            "cat",
+            command("cat", &[]),
+            None,
+            second,
+        )
         .unwrap();
     processes.stop_all();
     // The page that reloaded hears no exit: each channel closes without one.
@@ -180,6 +340,7 @@ async fn a_page_that_stops_listening_stops_the_process() {
             "a.plugin".into(),
             "sh",
             command("sh", &["-c", "echo hi; sleep 30"]),
+            None,
             channel,
         )
         .unwrap();
@@ -199,7 +360,14 @@ async fn a_spawn_from_before_a_reload_is_refused() {
     let page = processes.page();
     processes.stop_all();
     let (channel, _events) = channel();
-    let refused = processes.start(page, "a.plugin".into(), "cat", command("cat", &[]), channel);
+    let refused = processes.start(
+        page,
+        "a.plugin".into(),
+        "cat",
+        command("cat", &[]),
+        None,
+        channel,
+    );
     assert_eq!(refused.err().as_deref(), Some("The page reloaded"));
     assert!(processes.registry().entries.is_empty());
 }
@@ -215,6 +383,7 @@ async fn a_process_may_close_its_output_and_carry_on() {
             "a.plugin".into(),
             "sh",
             command("sh", &["-c", "exec >&- 2>&-; sleep 1; exit 4"]),
+            None,
             channel,
         )
         .unwrap();
@@ -233,6 +402,7 @@ async fn shutdown_kills_every_group_without_waiting() {
             "a.plugin".into(),
             "sh",
             command("sh", &["-c", "trap '' TERM; sleep 30 & echo $!; wait"]),
+            None,
             channel,
         )
         .unwrap();
@@ -342,9 +512,11 @@ async fn the_hook_guard_says_why_it_stopped_a_worker() {
             "a.plugin".into(),
             "sh",
             command("/bin/sh", &["-c", script]),
+            None,
             sender,
             None,
             true,
+            None,
         )
         .unwrap();
     let (stdout, stderr, _) = until_exit(&mut events).await;
@@ -395,9 +567,11 @@ async fn a_guarded_worker_s_last_frame_reaches_the_page_after_it_exits() {
             "a.plugin".into(),
             "sh",
             command("/bin/sh", &["-c", script, "sh", &path]),
+            None,
             channel,
             None,
             true,
+            None,
         )
         .unwrap();
     let (stdout, stderr, exit) = until_exit(&mut events).await;
@@ -653,4 +827,361 @@ fn snapshot_mcp_and_containment_keep_the_verified_target_and_argument_order() {
         .status()
         .unwrap()
         .success());
+}
+
+/// A shared host never carries a token; each agent's tools get their own,
+/// the same each time, which dies with the host.
+#[cfg(unix)]
+#[tokio::test]
+async fn a_shared_hosts_tool_credential_is_its_agents_and_ends_with_it() {
+    use crate::credential_service::tests::{ask, fixture, RELAY};
+    use hyper::StatusCode;
+    let fixture = fixture();
+    let processes = HostProcesses::default();
+    let (channel, _events) = channel();
+    let handle = processes
+        .start(
+            0,
+            "p".into(),
+            "sh",
+            command("sh", &["-c", "read line"]),
+            None,
+            channel,
+        )
+        .unwrap();
+    let pubkey = fixture.agent.pubkey.clone();
+    let env = processes
+        .tool_credential(&fixture.service, "p", handle, pubkey.clone(), RELAY.into())
+        .await
+        .unwrap()
+        .unwrap();
+    let again = processes
+        .tool_credential(&fixture.service, "p", handle, pubkey.clone(), RELAY.into())
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(env, again);
+    let token: serde_json::Value = serde_json::from_str(&env).unwrap();
+    let token = token["token"].as_str().unwrap();
+    let reply = ask(&fixture, token, "get_public_key", &[]).await;
+    assert_eq!(reply.0, StatusCode::OK);
+    assert_eq!(reply.1["result"], pubkey.as_str());
+    // Only the plugin's own agents.
+    assert!(processes
+        .tool_credential(
+            &fixture.service,
+            "other",
+            handle,
+            pubkey.clone(),
+            RELAY.into()
+        )
+        .await
+        .is_err());
+    processes
+        .write("p", handle, "\n".into(), false)
+        .await
+        .unwrap();
+    tokio::time::timeout(Duration::from_secs(5), async {
+        while ask(&fixture, token, "get_public_key", &[]).await.0 == StatusCode::OK {
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+    })
+    .await
+    .expect("the token outlived its host");
+}
+
+/// A shared host serving `fixture`'s agent and a second one that keeps it
+/// alive, with the second agent's token issued first.
+#[cfg(unix)]
+async fn shared_host(
+    fixture: &crate::credential_service::tests::Fixture,
+) -> (HostProcesses, u64, String) {
+    use crate::credential_service::tests::RELAY;
+    let second = buzz_agent_controller::Secret::generate().unwrap();
+    let mut other = fixture.agent.clone();
+    other.pubkey = second.pubkey().into();
+    fixture.host.also_holding_for_test(
+        fixture._dir.path().join("identities.json"),
+        &[&fixture.agent, &other],
+        second,
+    );
+    let processes = HostProcesses::default();
+    let (channel, _events) = channel();
+    let handle = processes
+        .start(
+            0,
+            "p".into(),
+            "sh",
+            command("sh", &["-c", "read line"]),
+            None,
+            channel,
+        )
+        .unwrap();
+    processes
+        .tool_credential(
+            &fixture.service,
+            "p",
+            handle,
+            other.pubkey.clone(),
+            RELAY.into(),
+        )
+        .await
+        .unwrap()
+        .unwrap();
+    (processes, handle, other.pubkey)
+}
+
+#[cfg(unix)]
+fn env_token(env: &str) -> String {
+    serde_json::from_str::<serde_json::Value>(env).unwrap()["token"]
+        .as_str()
+        .unwrap()
+        .to_owned()
+}
+
+/// A token outlived by its agent's removal and re-adding, or by a sign-out,
+/// is replaced while the host lives on; the old one stays revoked.
+#[cfg(unix)]
+#[tokio::test]
+async fn a_shared_host_replaces_a_token_its_agent_outlived() {
+    use crate::credential_service::tests::{ask, fixture, RELAY};
+    use hyper::StatusCode;
+    for sign_out in [false, true] {
+        let fixture = fixture();
+        let (processes, handle, other) = shared_host(&fixture).await;
+        let pubkey = fixture.agent.pubkey.clone();
+        let credential = || {
+            processes.tool_credential(&fixture.service, "p", handle, pubkey.clone(), RELAY.into())
+        };
+        let old = env_token(&credential().await.unwrap().unwrap());
+        let other_env = processes
+            .tool_credential(&fixture.service, "p", handle, other.clone(), RELAY.into())
+            .await
+            .unwrap()
+            .unwrap();
+        if sign_out {
+            fixture.identity.sign_out(None).await;
+        } else {
+            fixture.host.forget_row_for_test(&pubkey, RELAY);
+            fixture.host.reopen_row_for_test(&pubkey, RELAY);
+        }
+        let fresh = env_token(&credential().await.unwrap().unwrap());
+        assert_ne!(fresh, old, "sign_out={sign_out}");
+        let reply = ask(&fixture, &fresh, "get_public_key", &[]).await;
+        assert_eq!(reply.0, StatusCode::OK, "sign_out={sign_out}");
+        assert_eq!(reply.1["result"], pubkey.as_str());
+        assert_eq!(env_token(&credential().await.unwrap().unwrap()), fresh);
+        let reply = ask(&fixture, &old, "get_public_key", &[]).await;
+        assert_eq!(reply.0, StatusCode::UNAUTHORIZED, "sign_out={sign_out}");
+        // The other agent's token is untouched by a removal, and replaced
+        // after a sign-out like every other.
+        let other_again = processes
+            .tool_credential(&fixture.service, "p", handle, other.clone(), RELAY.into())
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(other_again == other_env, !sign_out, "sign_out={sign_out}");
+    }
+}
+
+/// Two calls replacing the same stale token at once, both held past their
+/// cache miss so each issues a replacement, settle on one fresh one.
+#[cfg(unix)]
+#[tokio::test(flavor = "multi_thread")]
+async fn concurrent_replacements_of_a_stale_token_keep_one() {
+    use crate::credential_service::tests::{ask, fixture, RELAY};
+    use hyper::StatusCode;
+    let fixture = fixture();
+    let (processes, handle, _other) = shared_host(&fixture).await;
+    let pubkey = fixture.agent.pubkey.clone();
+    let old = env_token(
+        &processes
+            .tool_credential(&fixture.service, "p", handle, pubkey.clone(), RELAY.into())
+            .await
+            .unwrap()
+            .unwrap(),
+    );
+    fixture.host.forget_row_for_test(&pubkey, RELAY);
+    fixture.host.reopen_row_for_test(&pubkey, RELAY);
+    let missed = tokio::sync::Barrier::new(2);
+    let replace = || {
+        processes.tool_credential_after_miss(
+            &fixture.service,
+            "p",
+            handle,
+            pubkey.clone(),
+            RELAY.into(),
+            async {
+                missed.wait().await;
+            },
+        )
+    };
+    let (first, second) = tokio::join!(replace(), replace());
+    let (first, second) = (
+        env_token(&first.unwrap().unwrap()),
+        env_token(&second.unwrap().unwrap()),
+    );
+    assert_eq!(first, second);
+    assert_ne!(first, old);
+    assert_eq!(
+        ask(&fixture, &first, "get_public_key", &[]).await.0,
+        StatusCode::OK
+    );
+    // The losing replacement was revoked, so only one token for this agent is held.
+    assert_eq!(
+        env_token(
+            &processes
+                .tool_credential(&fixture.service, "p", handle, pubkey.clone(), RELAY.into())
+                .await
+                .unwrap()
+                .unwrap()
+        ),
+        first
+    );
+}
+
+/// A protected Codex host's tool credential: only for the agent its
+/// protection provider launched it for, and only to that provider.
+#[cfg(unix)]
+#[tokio::test]
+async fn a_protected_hosts_tool_credential_is_only_its_launched_agents() {
+    use crate::credential_service::tests::{ask, protected_fixture, second_agent, GUARD, RELAY};
+    let fixture = protected_fixture();
+    let pubkey = fixture.agent.pubkey.clone();
+    let other = second_agent(&fixture);
+    let launch = fixture
+        .service
+        .protected_launch(GUARD, pubkey.clone(), RELAY.into())
+        .await
+        .unwrap();
+    let processes = HostProcesses::default();
+    let start = |launch| {
+        let (channel, _events) = channel();
+        processes
+            .start_guarded(
+                0,
+                GUARD.into(),
+                "sh",
+                command("sh", &["-c", "read line"]),
+                None,
+                channel,
+                None,
+                false,
+                launch,
+            )
+            .unwrap()
+    };
+    let launched = start(Some(launch));
+    let unlaunched = start(None);
+    let env = processes
+        .tool_credential(
+            &fixture.service,
+            GUARD,
+            launched,
+            pubkey.clone(),
+            RELAY.into(),
+        )
+        .await
+        .unwrap()
+        .unwrap();
+    let token: serde_json::Value = serde_json::from_str(&env).unwrap();
+    let reply = ask(
+        &fixture,
+        token["token"].as_str().unwrap(),
+        "get_public_key",
+        &[],
+    )
+    .await;
+    assert_eq!(reply.1["result"], pubkey.as_str());
+    for (handle, agent) in [(launched, &other.pubkey), (unlaunched, &pubkey)] {
+        assert!(processes
+            .tool_credential(&fixture.service, GUARD, handle, agent.clone(), RELAY.into())
+            .await
+            .is_err());
+    }
+    // A protection change, or a switch of provider, revokes its token.
+    crate::credential_service::tests::reprotect(&fixture, "other");
+    let token = token["token"].as_str().unwrap();
+    assert_eq!(
+        ask(&fixture, token, "get_public_key", &[]).await.0,
+        hyper::StatusCode::UNAUTHORIZED
+    );
+    assert!(processes
+        .tool_credential(
+            &fixture.service,
+            GUARD,
+            launched,
+            pubkey.clone(),
+            RELAY.into()
+        )
+        .await
+        .is_err());
+}
+
+/// The same for a change of policy under the same provider.
+#[cfg(unix)]
+#[tokio::test]
+async fn a_protection_change_revokes_a_protected_hosts_tool_credential() {
+    use crate::credential_service::tests::{ask, protected_fixture, reprotect, GUARD, RELAY};
+    let fixture = protected_fixture();
+    let pubkey = fixture.agent.pubkey.clone();
+    let launch = fixture
+        .service
+        .protected_launch(GUARD, pubkey.clone(), RELAY.into())
+        .await
+        .unwrap();
+    let processes = HostProcesses::default();
+    let (channel, _events) = channel();
+    let handle = processes
+        .start_guarded(
+            0,
+            GUARD.into(),
+            "sh",
+            command("sh", &["-c", "read line"]),
+            None,
+            channel,
+            None,
+            false,
+            Some(launch),
+        )
+        .unwrap();
+    let credential = || {
+        processes.tool_credential(
+            &fixture.service,
+            GUARD,
+            handle,
+            pubkey.clone(),
+            RELAY.into(),
+        )
+    };
+    let env = credential().await.unwrap().unwrap();
+    let token = env_token(&env);
+    reprotect(&fixture, GUARD);
+    assert!(credential().await.is_err());
+    assert_eq!(
+        ask(&fixture, &token, "get_public_key", &[]).await.0,
+        hyper::StatusCode::UNAUTHORIZED
+    );
+}
+
+#[test]
+fn every_process_is_told_the_buzz_version_a_plugin_cannot_change() {
+    let get = |command: &Command, name: &str| {
+        command
+            .as_std()
+            .get_envs()
+            .find(|(key, _)| *key == name)
+            .and_then(|(_, value)| value.map(|value| value.to_string_lossy().into_owned()))
+    };
+    for plugin_value in [Some("spoofed".to_string()), None] {
+        let mut command = Command::new("/usr/bin/true");
+        let environment = HashMap::from([
+            ("BUZZ_VERSION".to_string(), plugin_value),
+            ("PLUGIN_SETTING".to_string(), Some("kept".to_string())),
+        ]);
+        set_environment(&mut command, OsStr::new("/bin"), &environment, "0.7.12").unwrap();
+        assert_eq!(get(&command, "BUZZ_VERSION").as_deref(), Some("0.7.12"));
+        assert_eq!(get(&command, "PLUGIN_SETTING").as_deref(), Some("kept"));
+        assert_eq!(get(&command, "PATH").as_deref(), Some("/bin"));
+    }
 }

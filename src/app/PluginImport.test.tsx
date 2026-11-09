@@ -1279,11 +1279,27 @@ it("uses the live enabled state after checking a saved Git update", async () => 
     plugins: [{ ...rememberedPlugin, enabled, updateSource }],
   });
   const view = render(<PluginImport {...props} catalog={catalog(false)} />);
-  fireEvent.click(screen.getByRole("button", { name: "Check for updates" }));
-  await waitFor(() => expect(git).toHaveBeenCalledOnce());
-  await act(async () => finish(rememberedPreview));
+  const check = screen.getByRole("button", { name: "Check for updates" });
+  fireEvent.click(check);
+  try {
+    await waitFor(() => expect(git).toHaveBeenCalledOnce());
+    expect(check).toBeDisabled();
+  } finally {
+    await act(async () => finish(rememberedPreview));
+  }
   await screen.findByRole("button", { name: "Update" });
   view.rerender(<PluginImport {...props} catalog={catalog(true)} />);
+  fireEvent.click(screen.getByRole("button", { name: "Update" }));
+  const review = await screen.findByRole("dialog", {
+    name: "Update Remembered",
+  });
+  fireEvent.click(within(review).getByRole("button", { name: "Close" }));
+  await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+  expect(check).toBeVisible();
+  expect(check).toBeEnabled();
+  fireEvent.click(check);
+  await waitFor(() => expect(git).toHaveBeenCalledTimes(2));
+  await waitFor(() => expect(check).toBeEnabled());
   fireEvent.click(screen.getByRole("button", { name: "Update" }));
   await screen.findByRole("dialog", { name: "Update Remembered" });
   expect(screen.queryByText("This plugin will stay disabled.")).toBeNull();

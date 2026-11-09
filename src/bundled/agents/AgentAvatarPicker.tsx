@@ -172,6 +172,39 @@ export function AgentAvatarPicker({
     onScroll: (event: React.UIEvent<HTMLFieldSetElement>) =>
       magnifier.move(event.currentTarget, dockPointer.current),
   };
+  const dockSurface = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    const surface = dockSurface.current;
+    if (!surface) return;
+    // The dock hides its scrollbar, so a mouse wheel's vertical travel is the
+    // only way through it; the dominant axis of any wheel moves the strip.
+    const wheel = (event: WheelEvent) => {
+      const dock = surface.querySelector("fieldset");
+      if (!dock || event.ctrlKey) return;
+      const unit =
+        event.deltaMode === WheelEvent.DOM_DELTA_PAGE
+          ? dock.clientWidth
+          : event.deltaMode === WheelEvent.DOM_DELTA_LINE
+            ? 16
+            : 1;
+      const delta =
+        (Math.abs(event.deltaX) > Math.abs(event.deltaY)
+          ? event.deltaX
+          : event.deltaY) * unit;
+      const room = dock.scrollWidth - dock.clientWidth;
+      if (
+        !delta ||
+        room <= 0 ||
+        (delta < 0 && dock.scrollLeft <= 0) ||
+        (delta > 0 && dock.scrollLeft >= room)
+      )
+        return;
+      event.preventDefault();
+      dock.scrollBy({ left: delta, behavior: "instant" });
+    };
+    surface.addEventListener("wheel", wheel, { passive: false });
+    return () => surface.removeEventListener("wheel", wheel);
+  }, []);
   const preview = useAvatarPreview(selected ? "" : picture, community, "small");
   useEffect(() => () => pending.current?.abort(), []);
   useImperativeHandle(avatarRef, () => ({
@@ -277,7 +310,7 @@ export function AgentAvatarPicker({
                     alt=""
                     fallback={lastAvatar.label}
                     size="fill"
-                    shape="circle"
+                    shape="squircle"
                   />
                 ),
               },
@@ -340,7 +373,7 @@ export function AgentAvatarPicker({
                   alt="Uploading avatar"
                   fallback={name}
                   size="fill"
-                  shape="circle"
+                  shape="squircle"
                 />
                 <span className={styles.uploadCancel}>
                   <IconButton
@@ -402,13 +435,18 @@ export function AgentAvatarPicker({
                   render={
                     <SurfaceButton
                       className={styles.emojiAvatarButton}
-                      style={{ backgroundColor: color }}
                       aria-label="Choose emoji"
                       disabled={locked}
                     />
                   }
                 >
-                  <EmojiSwap emoji={emoji} animate={animateEmoji} />
+                  <span
+                    data-avatar-shape="squircle"
+                    className={styles.emojiAvatarArtwork}
+                    style={{ backgroundColor: color }}
+                  >
+                    <EmojiSwap emoji={emoji} animate={animateEmoji} />
+                  </span>
                 </PopoverTrigger>
                 <PopoverPopup
                   aria-label="Choose emoji"
@@ -443,11 +481,11 @@ export function AgentAvatarPicker({
                 alt="Selected avatar"
                 fallback={name}
                 size="fill"
-                shape="circle"
+                shape="squircle"
               />
             )}
           </div>
-          <div className={styles.dockSurface}>
+          <div ref={dockSurface} className={styles.dockSurface}>
             <div
               ref={filmCorners}
               aria-hidden="true"

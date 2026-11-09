@@ -58,6 +58,8 @@ import {
   readApiFailure,
   presenceFilter,
   presenceText,
+  type CommunityRefusal,
+  BROKER_REFUSAL_HEADER,
 } from "./http-admission";
 import { yieldToHost } from "./yield";
 import { clientMetrics } from "../developer/client-metrics";
@@ -94,6 +96,12 @@ export interface RelayWriter {
   ): Promise<string> | Promise<void>;
 }
 export interface ReadTransport {
+  /** Hear the relay refuse this account for the whole community, on any
+   * request after connecting: its sign-in ended, or it has no access. One
+   * item's refusal (a gated channel, say) stays with whoever asked for it. */
+  readonly observeRefusal?: (
+    listener: (kind: CommunityRefusal) => void,
+  ) => () => void;
   readonly artifactIncremental?: ArtifactIncrementalReader;
   readonly projectGit?: RepoGit;
   readonly readAgentMemories?: MemoryReader;
@@ -183,6 +191,9 @@ export interface ReadTransport {
     signal: AbortSignal,
   ): Promise<string | undefined>;
   readonly profiling?: RelayProfiler;
+  /** Verifies events read back from device storage as a relay read does, with
+   * the host's native batch check; only present with one. Rejects on any bad record or host failure. */
+  verifyStored?(values: readonly unknown[]): Promise<RelayEvent[]>;
   /** Verified incoming traffic. The session owns this subscription and fences late delivery. */
   subscribe?(callbacks: LiveCallbacks): LiveSubscription;
   /** Stable community endpoint identity for durable session partitioning. */
@@ -244,7 +255,7 @@ export function mediaUrl(
       size === "small"
         ? still.replace(
             /\/([0-9a-f]{64})(?:\.[a-z0-9]{1,8})?$/,
-            "/$1.thumb.jpg",
+            "/$1.thumb.webp",
           )
         : still;
     return relayProxy?.(media);
@@ -280,7 +291,7 @@ export function relayHttpBase(
     : undefined;
 }
 
-async function parseEvents(
+export async function parseEvents(
   raw: unknown,
   verify: EventVerifier,
   signal?: AbortSignal,
@@ -485,12 +496,34 @@ async function readResponseError(response: Response) {
   );
 }
 
+/** The broker marks any response whose upstream relay request met a community
+ * refusal with `x-buzz-refusal` (`relay-broker.mjs`), whatever its route does
+ * with the relay's body. Every broker request below goes through here. */
+function brokerRefusals() {
+  const listeners = new Set<(kind: CommunityRefusal) => void>();
+  return {
+    observe(listener: (kind: CommunityRefusal) => void) {
+      listeners.add(listener);
+      return () => void listeners.delete(listener);
+    },
+    async fetch(input: RequestInfo | URL, init?: RequestInit) {
+      const response = await fetch(input, init);
+      const kind = response.headers.get(BROKER_REFUSAL_HEADER);
+      if (kind === "sign-in" || kind === "access")
+        for (const listener of [...listeners]) listener(kind);
+      return response;
+    },
+  };
+}
+
 /** Dev-only: a same-origin broker (see browser-host/relay-broker.mjs) holds the key and signs reads. */
 export async function connectBrokerTransport(
   base = "",
   signal?: AbortSignal,
   community?: string,
 ): Promise<ReadTransport> {
+  // Every broker read below, the session's included, goes through here.
+  const { fetch, observe: observeRefusal } = brokerRefusals();
   if (community) await registerBrokerCommunity(community, signal, base);
   const endpoint = `${base}/api/relay${community ? `/${encodeURIComponent(community)}` : ""}`;
   const profiling = createRelayProfiler();
@@ -609,8 +642,9 @@ export async function connectBrokerTransport(
   });
   return {
     profiling,
+    observeRefusal,
     ...(session.attachmentUploads === true && session.relayUrl
-      ? { uploadAttachment: brokerUpload(endpoint, session.relayUrl) }
+      ? { uploadAttachment: brokerUpload(endpoint, session.relayUrl, fetch) }
       : {}),
     ...(session.presence && session.live
       ? {
@@ -1411,6 +1445,9 @@ export async function connectSignedTransport(
   const upload = signer.upload?.bind(signer);
   return {
     profiling,
+    ...(verify.native
+      ? { verifyStored: (values) => parseEvents(values, verify) }
+      : {}),
     ...(upload ? { uploadAttachment: hostUpload(upload, httpOrigin) } : {}),
     observePresence: presence.observe,
     async presenceSnapshot(authors, signal) {

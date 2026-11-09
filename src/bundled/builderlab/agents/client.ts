@@ -1,4 +1,5 @@
 import { transientStatus } from "../../../features/relay/errors";
+import { terminalOutcome } from "../../../features/agents/observer";
 import { retryRead } from "../../../features/relay/read-retry";
 import { invoke } from "@tauri-apps/api/core";
 import { nativeIdentityEnabled } from "../../../features/identity/service";
@@ -34,6 +35,14 @@ export type RemoteAgentModel = Readonly<{
   id: string;
   displayName: string;
   supportedReasoningEfforts: readonly string[];
+  /** Served on low-latency inference hardware, such as Cerebras. */
+  fast?: boolean;
+}>;
+
+export type RemoteAgentModelCatalog = Readonly<{
+  models: readonly RemoteAgentModel[];
+  /** Builderlab's creation default; present only when the catalog offers it. */
+  recommended?: Readonly<{ modelId: string; reasoningEffort: string }>;
 }>;
 
 function modelSelectionStatus(
@@ -101,6 +110,16 @@ const nativeOwner: OwnerIdentity = {
 
 class BuilderlabUnavailable extends Error {}
 
+export function isRetryableAgentRead(error: unknown): boolean {
+  return (
+    error instanceof BuilderlabUnavailable ||
+    (error instanceof Error &&
+      "status" in error &&
+      typeof error.status === "number" &&
+      transientStatus(error.status))
+  );
+}
+
 const LINK_ERRORS: Record<string, string> = {
   identity_already_bound:
     "This Builderlab account is linked to a different Buzz identity.",
@@ -114,11 +133,15 @@ export function createAgentClient(
   // dev broker, which has no binding signer, so linking is skipped.
   owner: OwnerIdentity | null = nativeIdentityEnabled() ? nativeOwner : null,
 ) {
-  function remoteCredential() {
-    const credential = session.credential();
+  /** The sign-in's credential, once its permissions are fresh and allow
+   * remote agents. Stop is urgent: it acts on the permissions already known. */
+  async function remoteCredential(signal: AbortSignal, urgent = false) {
+    const credential = urgent
+      ? session.credential()
+      : await session.freshCredential(signal);
     if (!credential.account.canUseRemoteAgents)
       throw new Error(
-        "Builderlab remote agents are coming soon for your account.",
+        "Builderlab remote agents are unavailable for this account.",
       );
     return credential;
   }
@@ -130,9 +153,8 @@ export function createAgentClient(
     )
       throw new DOMException("Builderlab session changed.", "AbortError");
   }
-  function signOutIfExpired(credential: Credential, response: HostResponse) {
+  function refuseExpired(response: HostResponse) {
     if (response.status !== 401) return;
-    session.expired(credential);
     throw Object.assign(
       new Error("Your Builderlab session expired. Sign in again."),
       { status: 401 },
@@ -144,7 +166,10 @@ export function createAgentClient(
     signal: AbortSignal,
   ): Promise<Record<string, unknown>> {
     signal.throwIfAborted();
-    const credential = remoteCredential();
+    const credential = await remoteCredential(
+      signal,
+      path === "cancel-agent-turn",
+    );
     let response: HostResponse;
     try {
       response = await session.request(credential, {
@@ -161,7 +186,7 @@ export function createAgentClient(
       throw new BuilderlabUnavailable("Could not reach Builderlab. Try again.");
     }
     check(credential, signal);
-    signOutIfExpired(credential, response);
+    refuseExpired(response);
     if (response.status === 403)
       throw Object.assign(
         new Error("This Builderlab account cannot manage remote agents."),
@@ -182,23 +207,19 @@ export function createAgentClient(
     }
   }
   function readRequest(
-    path: "get-model-catalog" | "list-agents",
+    path: "get-model-catalog" | "list-agents" | "get-agent-turn-status",
     body: unknown,
     signal: AbortSignal,
   ) {
-    const credential = remoteCredential();
+    signal.throwIfAborted();
+    const credential = session.credential();
     return retryRead(
       (signal) => {
         check(credential, signal);
         return request(path, body, signal);
       },
       signal,
-      (error) =>
-        error instanceof BuilderlabUnavailable ||
-        (error instanceof Error &&
-          "status" in error &&
-          typeof error.status === "number" &&
-          transientStatus(error.status)),
+      isRetryableAgentRead,
     );
   }
   /** Builderlab's identity routes answer failures with `{ error: { code } }`. */
@@ -228,7 +249,7 @@ export function createAgentClient(
       throw new Error("Could not reach Builderlab. Try again.");
     }
     check(credential, signal);
-    signOutIfExpired(credential, response);
+    refuseExpired(response);
     let result: Record<string, unknown> | undefined;
     try {
       const parsed = JSON.parse(response.body);
@@ -320,9 +341,7 @@ export function createAgentClient(
   }
   function backupLinkedIdentity() {
     if (nativeIdentityEnabled())
-      void invoke("nsec_backup_retry", { source: "builderlab" }).catch(
-        () => {},
-      );
+      void invoke("nsec_backup_retry").catch(() => {});
   }
   async function activate(
     pubkey: string,
@@ -350,11 +369,40 @@ export function createAgentClient(
       );
   }
   return {
+    /** Reads only terminal outcomes for exact tasks in the owner's agent session. */
+    async turnStatus(
+      sessionId: string,
+      taskIds: readonly string[],
+      signal: AbortSignal,
+    ) {
+      const result = await readRequest(
+        "get-agent-turn-status",
+        {
+          session_id: sessionId,
+          task_ids: taskIds,
+        },
+        signal,
+      );
+      const outcomes = result.outcomes;
+      if (!outcomes || typeof outcomes !== "object" || Array.isArray(outcomes))
+        throw new Error("Builderlab returned invalid turn status.");
+      const statuses = new Map<string, "ended" | "error" | "stopped">();
+      for (const [taskId, value] of Object.entries(outcomes)) {
+        const outcome = terminalOutcome("turn_completed", value);
+        if (
+          !taskIds.includes(taskId) ||
+          !outcome ||
+          outcome === "unknown" ||
+          value === undefined
+        )
+          throw new Error("Builderlab returned invalid turn status.");
+        statuses.set(taskId, outcome);
+      }
+      return statuses;
+    },
     link,
     activate,
-    async modelCatalog(
-      signal: AbortSignal,
-    ): Promise<readonly RemoteAgentModel[]> {
+    async modelCatalog(signal: AbortSignal): Promise<RemoteAgentModelCatalog> {
       const result = await readRequest("get-model-catalog", {}, signal);
       const models = result.models ?? [];
       if (
@@ -374,11 +422,22 @@ export function createAgentClient(
         )
       )
         throw new Error("Builderlab returned an invalid model catalog.");
-      return models.map((model) => ({
-        id: model.id,
-        displayName: model.display_name,
-        supportedReasoningEfforts: model.supported_reasoning_efforts,
-      }));
+      const { model_id: modelId, reasoning_effort: reasoningEffort } =
+        (result.recommended_selection ?? {}) as Record<string, unknown>;
+      const recommended = models.find((model) => model.id === modelId);
+      return {
+        models: models.map((model) => ({
+          id: model.id,
+          displayName: model.display_name,
+          supportedReasoningEfforts: model.supported_reasoning_efforts,
+          fast: model.fast === true,
+        })),
+        // Advisory: an unknown or unsupported pair is dropped, never an error.
+        ...(typeof reasoningEffort === "string" &&
+        recommended?.supported_reasoning_efforts.includes(reasoningEffort)
+          ? { recommended: { modelId: recommended.id, reasoningEffort } }
+          : {}),
+      };
     },
     async updateModel(
       agent: RemoteAgent,
@@ -535,7 +594,7 @@ export function createAgentClient(
       signal.throwIfAborted();
       const agentName = name.trim();
       if (!AGENT_NAME.test(agentName)) throw new Error(INVALID_NAME);
-      const credential = remoteCredential();
+      const credential = await remoteCredential(signal);
       const { account } = credential;
       const intent = registrationIntent(
         oauthTarget(),

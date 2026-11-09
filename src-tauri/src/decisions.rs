@@ -132,7 +132,7 @@ pub(crate) enum Decided {
 
 /// The Builderlab sign-in a call sends.
 pub(crate) enum SignIn {
-    /// The legacy OAuth credential the webview holds.
+    /// The development broker's public session revision.
     Session(Zeroizing<String>),
     /// An FI build's native session, which Builderlab takes as Bearer.
     Bearer(Zeroizing<String>),
@@ -666,9 +666,9 @@ async fn decide_federated(
     }
 }
 
-/// An FI session asks Builderlab only, and never with another sign-in.
-fn federated_alone(backend: Backend, session: bool, broker: bool) -> Result<(), String> {
-    if backend != Backend::Builderlab || session || broker {
+/// An FI session asks Builderlab only, and never with the broker's sign-in.
+fn federated_alone(backend: Backend, broker: bool) -> Result<(), String> {
+    if backend != Backend::Builderlab || broker {
         return Err("Invalid federated session".into());
     }
     Ok(())
@@ -682,13 +682,12 @@ pub(crate) async fn decide(
     fi: tauri::State<'_, FederatedIdentity>,
     backend: Backend,
     request: Request,
-    session: Option<String>,
     broker: Option<DevelopmentSession>,
     federated: Option<String>,
 ) -> Result<Decided, String> {
     // An FI build names its native session by revision; the token stays here.
     if let Some(revision) = federated {
-        federated_alone(backend, session.is_some(), broker.is_some())?;
+        federated_alone(backend, broker.is_some())?;
         return Ok(decide_federated(&host, &keys, &fi, &revision, request).await);
     }
     if let Some(broker) = broker {
@@ -699,7 +698,7 @@ pub(crate) async fn decide(
         }
         #[cfg(debug_assertions)]
         {
-            if backend != Backend::Builderlab || session.is_some() || broker.revision.is_empty() {
+            if backend != Backend::Builderlab || broker.revision.is_empty() {
                 return Err("Invalid development session".into());
             }
             let scoped = DecisionsHost {
@@ -720,8 +719,8 @@ pub(crate) async fn decide(
                 .await);
         }
     }
-    let session = session.map(|s| SignIn::Session(Zeroizing::new(s)));
-    Ok(host.decide(&keys, backend, session, request).await)
+    // Builderlab answers only an FI or broker sign-in.
+    Ok(host.decide(&keys, backend, None, request).await)
 }
 
 #[cfg(test)]

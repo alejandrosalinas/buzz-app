@@ -46,16 +46,31 @@ test("a stacked own video keeps its size without a byline", async ({
       return {
         preview: preview.getBoundingClientRect().width,
         body: body.getBoundingClientRect().width,
+        row: preview.closest("[data-layout]").getBoundingClientRect().width,
       };
     });
   // The default 16:9 ratio at 11.25rem tall.
   await expect.poll(async () => Math.round((await widths()).preview)).toBe(320);
   // A narrow row still fits the preview inside the message body.
   await page.setViewportSize({ width: 360, height: 720 });
+  // The dock and native scrollbar reduce the available row width. Preserve
+  // a substantial preview relative to that row, rather than the viewport.
+  await expect
+    .poll(async () => {
+      const { preview, row } = await widths();
+      return preview / row;
+    })
+    .toBeGreaterThan(0.5);
   await expect
     .poll(async () => {
       const { preview, body } = await widths();
-      return preview > 160 && preview <= body + 0.5;
+      return Math.abs(preview - Math.min(320, body));
     })
-    .toBe(true);
+    .toBeLessThanOrEqual(0.5);
+  await expect
+    .poll(async () => {
+      const { preview, body } = await widths();
+      return preview - body;
+    })
+    .toBeLessThanOrEqual(0.5);
 });

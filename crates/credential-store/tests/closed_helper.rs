@@ -1,6 +1,6 @@
 #![cfg(all(target_os = "macos", debug_assertions))]
 
-use buzz_credential_store::dev_agent_store;
+use buzz_credential_store::dev_item;
 use std::{fs, process::Command};
 
 #[test]
@@ -46,7 +46,7 @@ int main(void) {
         .unwrap()
         .success());
     std::env::set_var("BUZZ_DEV_CREDENTIAL_HELPER", &closing_helper);
-    let reply = dev_agent_store(
+    let reply = dev_item(
         "read",
         "xyz.block.buzz.desktop.agents",
         "agent-bundle-v1",

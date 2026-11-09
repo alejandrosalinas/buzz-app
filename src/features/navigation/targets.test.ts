@@ -81,6 +81,12 @@ describe("open target boundary", () => {
     expect(Object.isFrozen(target)).toBe(true);
     expect(() => parseOpenTarget({ ...target, scope: undefined })).toThrow();
   });
+  it("keeps Open in channel's thread context as its own visit", () => {
+    const thread = { ...conversation, threadRootId: "C".repeat(64) };
+    const target = parseOpenTarget({ ...thread, context: "channel" });
+    expect(target).toEqual({ ...parseOpenTarget(thread), context: "channel" });
+    expect(targetKey(target)).not.toBe(targetKey(thread));
+  });
   it("opens a saved Shared sessions target as its conversation", () => {
     const target = parseOpenTarget({
       ...conversation,
@@ -152,6 +158,9 @@ describe("open target boundary", () => {
     { ...conversation, panel: { kind: "members", remove: "someone" } },
     { ...conversation, panel: null },
     { ...conversation, messageId: undefined, threadRootId: "b".repeat(64) },
+    // Context names where a thread's root shows; it needs that root.
+    { ...conversation, context: "channel" },
+    { ...conversation, threadRootId: "b".repeat(64), context: "timeline" },
     { ...conversation, channelId: "../../other" },
     { version: 1, kind: "page", pluginId: "a/b", pageId: "board" },
     {

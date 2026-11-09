@@ -42,15 +42,65 @@ fn undiscovered(adapter_base: String, relay: &str) -> FederatedIdentity {
     owner
 }
 
+/// Signed in as a@example.com, through a loopback adapter that renews the
+/// session once, into b@example.com (see `renew_for_test`).
+pub(crate) async fn renewing_into_another_account() -> FederatedIdentity {
+    let (base, _server) = tests::adapter(vec![
+        serde_json::json!({"session_token":"other-session-token","expires_at":"2099-02-01T00:00:00Z"}),
+        serde_json::json!({"expires_at":"2099-02-01T00:00:00Z","email":"b@example.com"}),
+    ])
+    .await;
+    tests::signed_in_at(Arc::new(tests::Memory::default()), base, "a@example.com").0
+}
+
+/// Where a paused renewal waits: `reached` once it is there, then `resume`.
+#[derive(Clone, Default)]
+pub(crate) struct Gate {
+    pub(crate) reached: Arc<tokio::sync::Notify>,
+    pub(crate) resume: Arc<tokio::sync::Notify>,
+}
+
 impl FederatedIdentity {
+    /// Pauses the next renewal after its retirement is recorded, before it installs.
+    pub(crate) fn gate_install_for_test(&self) -> Gate {
+        let gate = Gate::default();
+        *self.0.install_gate.lock().unwrap() = Some(gate.clone());
+        gate
+    }
+    pub(super) async fn pass_install_gate(&self) {
+        let gate = self.0.install_gate.lock().unwrap().take();
+        if let Some(gate) = gate {
+            gate.reached.notify_one();
+            gate.resume.notified().await;
+        }
+    }
+    /// Finishes a renewal through this session's adapter.
+    pub(crate) async fn renew_for_test(&self) -> Result<(), String> {
+        let revision = self.snapshot().revision;
+        let cancel = self.state().cancellation.child_token();
+        self.finish_login("code", "secret", &revision, &cancel)
+            .await
+            .map_err(|failure| failure.code.to_owned())
+    }
+    pub(crate) fn email_for_test(&self) -> Option<String> {
+        self.snapshot().email
+    }
     fn install(&self, session: Arc<super::Session>) {
         let mut state = self.state();
         state.session = Some(session);
         state.snapshot.status = Status::SignedIn;
         state.restored = true;
     }
+    pub(crate) fn expire_for_test(&self) {
+        self.retire(Status::ReauthenticationRequired, None);
+    }
     pub(crate) fn sign_out_for_test(&self) {
         self.retire(Status::SignedOut, None);
+    }
+    /// A sign-out after which the same account came back: the account is
+    /// unchanged, but derived credentials are retired.
+    pub(crate) fn same_account_again_for_test(&self) {
+        self.state().retirements += 1;
     }
     /// Retires the current account and installs another in its place.
     pub(crate) fn switch_account_for_test(&self) {
@@ -345,4 +395,20 @@ pub(crate) fn reply(status: &str, body: &str) -> String {
         "HTTP/1.1 {status}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
         body.len()
     )
+}
+
+/// A configured session still restoring, as at launch; [`FederatedIdentity::finish_restore_for_test`] signs it in.
+pub(crate) fn restoring() -> FederatedIdentity {
+    tests::at_adapter(
+        Arc::new(tests::Memory::default()),
+        "http://127.0.0.1:9".into(),
+    )
+}
+impl FederatedIdentity {
+    /// The restore found the saved session, as `restore` does: signed in.
+    pub(crate) fn finish_restore_for_test(&self) {
+        let mut state = self.state();
+        self.install_session(&mut state, tests::record());
+        state.restored = true;
+    }
 }

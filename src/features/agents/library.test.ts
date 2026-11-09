@@ -148,6 +148,102 @@ it("establishment retries a failed retained read without turning idle inventory 
   owner.dispose();
 });
 
+it("establishment rereads a retained partial result, and leaves a complete one", async () => {
+  const partial = { ...library, error: "Relay inventory unavailable" };
+  const read = vi
+    .fn()
+    .mockResolvedValueOnce(partial)
+    .mockResolvedValue(library);
+  const owner = createAgentLibrary(read);
+  const stop = owner.queries.retain();
+  await owner.queries.refresh();
+  expect(owner.queries.snapshot()).toMatchObject({
+    status: "ready",
+    error: "Relay inventory unavailable",
+  });
+  owner.reconnect();
+  await vi.waitFor(() =>
+    expect(owner.queries.snapshot()).toMatchObject({ status: "ready" }),
+  );
+  expect(read).toHaveBeenCalledTimes(2);
+  expect(owner.queries.snapshot().error).toBeUndefined();
+  owner.reconnect();
+  expect(owner.queries.snapshot().status).toBe("ready");
+  expect(read).toHaveBeenCalledTimes(2);
+  stop();
+  owner.dispose();
+});
+
+it("establishment reuses a read in flight and rereads once if it ends partial", async () => {
+  let finish!: (value: AgentLibrary) => void;
+  const read = vi
+    .fn()
+    .mockImplementationOnce(
+      () =>
+        new Promise<AgentLibrary>((resolve) => {
+          finish = resolve;
+        }),
+    )
+    .mockResolvedValue(library);
+  const owner = createAgentLibrary(read);
+  const stop = owner.queries.retain();
+  const early = owner.queries.refresh();
+  await vi.waitFor(() => expect(read).toHaveBeenCalledOnce());
+  owner.reconnect();
+  // The early read ends partial after establishment; it must not stick.
+  const partial = { ...library, error: "Relay inventory unavailable" };
+  finish(partial);
+  await early;
+  await vi.waitFor(() => {
+    const { status, error } = owner.queries.snapshot();
+    expect([status, error]).toEqual(["ready", undefined]);
+  });
+  expect(read).toHaveBeenCalledTimes(2);
+  owner.reconnect();
+  expect(owner.queries.snapshot().status).toBe("ready");
+  expect(read).toHaveBeenCalledTimes(2);
+  stop();
+  owner.dispose();
+});
+
+it("a read joined at establishment does not reread after a disconnect clears it", async () => {
+  let finish!: (value: AgentLibrary) => void;
+  let finishLater!: (value: AgentLibrary) => void;
+  const partial = { ...library, error: "Relay inventory unavailable" };
+  const read = vi
+    .fn()
+    .mockImplementationOnce(
+      () =>
+        new Promise<AgentLibrary>((resolve) => {
+          finish = resolve;
+        }),
+    )
+    .mockImplementationOnce(
+      () =>
+        new Promise<AgentLibrary>((resolve) => {
+          finishLater = resolve;
+        }),
+    )
+    .mockResolvedValue(library);
+  const owner = createAgentLibrary(read);
+  const stop = owner.queries.retain();
+  void owner.queries.refresh();
+  await vi.waitFor(() => expect(read).toHaveBeenCalledOnce());
+  owner.reconnect();
+  // A disconnect clears it; a new read starts before the next connection.
+  owner.clear();
+  finish(library);
+  const later = owner.queries.refresh();
+  await vi.waitFor(() => expect(read).toHaveBeenCalledTimes(2));
+  finishLater(partial);
+  await later;
+  await Promise.resolve();
+  expect(owner.queries.snapshot()).toMatchObject({ status: "ready" });
+  expect(read).toHaveBeenCalledTimes(2);
+  stop();
+  owner.dispose();
+});
+
 it("every library snapshot carries definition art to identities without their own", async () => {
   const owner = createAgentLibrary(async () => ({
     definitions: [{ id: "local:brain", name: "Brain", avatar: "art" }],

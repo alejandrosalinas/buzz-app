@@ -4,10 +4,20 @@
 // local storage to the relay's encrypted addressable events.
 import type { EventData } from "../relay/events";
 import { threadReference } from "../relay/thread-reference";
+import { channelSourceKind } from "../relay/channel-kinds";
+import { reactionTarget } from "../relay/reaction-target";
 
 export const ATTENTION_SCHEMA = "agent-attention/v1";
 
-export type Interest = Readonly<{ type: "interest"; instructions: string }>;
+export type Interest = Readonly<{
+  type: "interest";
+  /** What the owner sees as the Interest's name. */
+  title?: string;
+  /** One or two sentences under the title on the owner's card. */
+  summary?: string;
+  instructions: string;
+  paused?: boolean;
+}>;
 export type ClassifierQuestion = Readonly<{
   question: string;
   true?: string;
@@ -301,8 +311,13 @@ export function validateObject(
     if (parsed.space === "interest") {
       if (object.type !== "interest")
         fail('An interest/ value has type "interest"');
-      fields(object, ["type", "instructions"]);
+      fields(object, ["type", "instructions"], ["title", "summary", "paused"]);
+      if (object.paused !== undefined && typeof object.paused !== "boolean")
+        fail("paused must be true or false");
       filled(object.instructions, "instructions", TEXT_LIMIT);
+      if (object.title !== undefined && !label(object.title, "title").trim())
+        fail("title is empty");
+      if (object.summary !== undefined) filled(object.summary, "summary", 1024);
     } else if (object.type === "event") eventWatch(object);
     else if (object.type === "timer") timer(object);
     else if (object.type === "source") {
@@ -358,6 +373,11 @@ export const tagsAgent = (event: EventData, agent: string) =>
  * agent's own events) belongs to the caller; classifiers are not run here. */
 export function watchMatches(watch: EventWatch, event: EventData): boolean {
   if (!watch.enabled || event.created_at < watch.since) return false;
+  // Watches need a channel source whether delivered live or polled. Global
+  // events cannot gain one by supplying h tags; multiple homes are ambiguous.
+  const homes = event.tags.filter(([name]) => name === "h");
+  if (!channelSourceKind(event.kind) || homes.length !== 1 || !homes[0]?.[1])
+    return false;
   if (watch.channels !== "all") {
     const channel = event.tags.find((tag) => tag[0] === "h")?.[1];
     if (!channel || !watch.channels.includes(channel)) return false;
@@ -367,10 +387,12 @@ export function watchMatches(watch: EventWatch, event: EventData): boolean {
   if (watch.exclude_authors?.includes(event.pubkey)) return false;
   for (const [key, values] of Object.entries(watch.tags ?? {}))
     if (
-      !event.tags.some(
-        (tag) =>
-          tag[0] === key && tag[1] !== undefined && values.includes(tag[1]),
-      )
+      event.kind === 7 && key === "e"
+        ? !values.includes(reactionTarget(event) ?? "")
+        : !event.tags.some(
+            (tag) =>
+              tag[0] === key && tag[1] !== undefined && values.includes(tag[1]),
+          )
     )
       return false;
   // The relay's NIP-10 rule: only a `reply` marker makes a reply.
@@ -502,4 +524,13 @@ export function sourceCompleted(
     object?.value.type === "source" &&
     runs?.[object.slug] === sourceSignature(object)
   );
+}
+
+/** Interest pause leaves each watch's own enabled setting intact. */
+export function interestPaused(
+  attention: Readonly<Record<string, AttentionObject>>,
+  id: string,
+): boolean {
+  const value = attention[`interest/${id}`]?.value;
+  return value?.type === "interest" && value.paused === true;
 }

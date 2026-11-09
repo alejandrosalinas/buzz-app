@@ -26,6 +26,10 @@
   padding: var(--space-2);
 }
 .emulator {
+  /* Installed terminal fonts may have only one face; preserve ANSI styles. */
+  font-synthesis: weight style;
+  letter-spacing: 0;
+  line-height: 1;
   height: 100%;
   position: relative;
   background: var(--surface-panel);

@@ -21,7 +21,7 @@ test.describe("held setup", () => {
       window.__bannerSeen = [];
       window.__bannerObserver = new MutationObserver(() => {
         for (const status of document.querySelectorAll(
-          '[role="status"][aria-label="Reconnecting to relay…"], [role="status"][aria-label="Live updates limited"]',
+          '[role="status"][aria-label="Live updates limited"], .buzz-toast',
         )) {
           window.__bannerSeen.push(status.textContent);
         }
@@ -37,9 +37,9 @@ test.describe("held setup", () => {
     await expect(
       page.getByRole("textbox", { name: "Message #Alpha", exact: true }),
     ).toBeVisible();
-    const warning = page.getByRole("status", {
-      name: /^(Reconnecting to relay…|Live updates limited)$/,
-    });
+    const warning = page
+      .getByRole("status", { name: "Live updates limited" })
+      .or(notice(page));
     await expect.poll(() => app.relay.hasRoute("primary", "beta")).toBe(true);
     await expect(warning).toHaveCount(0);
     const streams = () =>
@@ -87,9 +87,10 @@ test.describe("held setup", () => {
 });
 
 const notice = (page) =>
-  page.getByRole("status", { name: "Reconnecting to relay…", exact: true });
-const retryNow = (page) =>
-  notice(page).getByRole("button", { name: "Retry now", exact: true });
+  page.getByRole("dialog", {
+    name: "Buzz is having trouble connecting",
+    exact: true,
+  });
 
 for (const target of ["alpha", "profiles"]) {
   test(`quota recovery for ${target} stays quiet until attempts exhaust, then keeps retrying automatically until EOSE`, async ({
@@ -156,15 +157,17 @@ for (const target of ["alpha", "profiles"]) {
         await expect(recovery).toBeVisible();
         await expect(warning).toHaveCount(0);
       } else {
-        // Exhausted stream recovery hands over to session recovery: one
-        // notice, and a new REQ with no click.
+        // Exhausted stream recovery hands over to session recovery: a new
+        // REQ with no click, and one notice once it lasts 30 s. Jump the
+        // quiet delay only after that REQ shows the app received the failure.
+        await expect.poll(() => requests().length).toBeGreaterThan(before);
+        await page.clock.fastForward(30_000);
         await expect(notice(page)).toBeVisible();
         await expect(warning).toHaveCount(0);
-        await expect.poll(() => requests().length).toBeGreaterThan(before);
       }
     }
     // The notice keeps showing while the retried REQ waits for EOSE, and it
-    // must not block the header, composer, or narrow navigation.
+    // floats above the composer without covering Send.
     for (const width of [390, 800, 1440]) {
       await page.setViewportSize({ width, height: 950 });
       await page
@@ -178,10 +181,7 @@ for (const target of ["alpha", "profiles"]) {
         .fill("Unsent recovery draft");
       await expect(notice(page)).toHaveCount(1); // Diagnostics must not duplicate it.
       await expect(warning).toHaveCount(0);
-      await expect(
-        page.getByRole("dialog", { name: "Reconnecting to relay…" }),
-      ).toHaveCount(0); // Nor a floating copy.
-      await expect(notice(page)).toHaveCSS("opacity", "1");
+      await expect(notice(page)).toBeInViewport({ ratio: 1 });
       const composer = page
         .getByRole("textbox", {
           name: "Message #Alpha",
@@ -208,39 +208,9 @@ for (const target of ["alpha", "profiles"]) {
       await openDiagnostics(page);
       await expect(notice(page)).toHaveCount(1);
     }
-    // The held request may still be busy after the layout checks. Retry now
-    // skips a failed source's wait; it does not restart an in-flight request.
-    // Hold that wait and observe a fresh refusal before testing keyboard Retry.
-    const pausedAt = new Date();
-    await page.clock.setFixedTime(pausedAt);
-    await page.clock.pauseAt(pausedAt);
-    await page.clock.setSystemTime(pausedAt);
-    try {
-      // Drain any automatic retry control already in flight when the clock
-      // stopped. A missing route after that is the broker's setup timeout;
-      // an active route can be refused directly without a preliminary Retry.
-      await expect
-        .poll(() => page.evaluate(() => window.retryControls))
-        .toBe(0);
-      const active = app.relay.hasRoute("primary", target);
-      const reason = active
-        ? "error: Fixture manual retry failure"
-        : "Live subscription setup timed out; retry available";
-      if (active) app.relay.failRoute("primary", target, reason);
-      await expect(
-        page.getByText(`Last rejection: ${reason}`, { exact: true }),
-      ).toBeVisible();
-      const beforeManual = requests().length;
-      await retryNow(page).focus();
-      await expect(retryNow(page)).toBeFocused();
-      await retryNow(page).press("Enter");
-      await expect.poll(() => requests().length).toBeGreaterThan(beforeManual);
-      await expect(notice(page)).toBeVisible();
-      app.relay.releaseEose(target);
-      await expect(notice(page)).toHaveCount(0);
-    } finally {
-      await page.clock.resume();
-    }
+    // No click: the retried REQ reaching EOSE ends recovery.
+    app.relay.releaseEose(target);
+    await expect(notice(page)).toHaveCount(0);
     await expect(
       page.getByText("Live updates: stream established", { exact: true }),
     ).toBeVisible();
@@ -250,14 +220,14 @@ for (const target of ["alpha", "profiles"]) {
   });
 }
 
-// Browser layout: a long, unbroken relay reason stays out of the inline
-// recovery notice, which sits above the composer with keyboard Retry now
-// reachable at enlarged text size.
-test("long recovery stays bounded above the composer at enlarged text size", async ({
+// Browser layout: a long, unbroken relay reason stays out of the notice,
+// which floats above the composer at enlarged text size without covering Send.
+test("long recovery stays above the composer at enlarged text size", async ({
   page,
   app,
 }, testInfo) => {
   await page.setViewportSize({ width: 390, height: 600 });
+  await page.clock.install();
   await page.goto(app.origin);
   await openPage(page, "Messages");
   const input = page.getByRole("textbox", {
@@ -270,12 +240,21 @@ test("long recovery stays bounded above the composer at enlarged text size", asy
     document.documentElement.style.fontSize = "20px";
   });
   app.relay.holdEose("alpha");
+  const requests = () =>
+    app.relay.requests.filter(
+      (r) => r.community === "primary" && r.routes.includes("alpha"),
+    ).length;
+  const before = requests();
   app.relay.failRoute(
     "primary",
     "alpha",
     `error: ${"Unavailable".repeat(160)}`,
   );
   const warning = notice(page);
+  // Jump the quiet delay only once recovery has started: its retry REQ shows
+  // the app received the failure.
+  await expect.poll(requests).toBeGreaterThan(before);
+  await page.clock.fastForward(30_000);
   await expect(warning).toBeVisible();
   await input.fill("Unsent recovery draft");
   const form = input.locator("xpath=ancestor::form");
@@ -286,23 +265,22 @@ test("long recovery stays bounded above the composer at enlarged text size", asy
       return (
         !!box &&
         !!composer &&
+        box.y >= 0 &&
         box.y + box.height <= composer.y &&
         composer.y + composer.height <= 600
       );
     })
     .toBe(true);
-  await expect(warning).toHaveText(/^Reconnecting to relay…Retry now$/);
+  await expect(warning).toHaveText(
+    /^Buzz is having trouble connectingRetrying automatically\.$/,
+  );
+  await expect(warning.getByRole("button")).toHaveCount(0);
   await form
     .getByRole("button", { name: "Send message", exact: true })
     .click({ trial: true });
-  await input.focus();
-  await page.keyboard.press("Shift+Tab");
-  await expect(retryNow(page)).toBeFocused();
-  await expect(retryNow(page)).toBeInViewport();
   await page.screenshot({
     path: testInfo.outputPath("recovery-long-enlarged.png"),
   });
-  await retryNow(page).press("Enter");
   app.relay.releaseEose("alpha");
   await expect(notice(page)).toHaveCount(0);
   await expect(input).toHaveText("Unsent recovery draft");
@@ -318,9 +296,9 @@ async function openDiagnostics(page) {
 
 test.describe("public preview recovery", () => {
   test.use({ openSearch: true });
-  // Browser focus must survive both removal of Retry now and replacement of the
-  // empty loading/error placeholder by the real timeline.
-  test("restores focus when empty preview catch-up fails before loading rows", async ({
+  // The empty loading/error placeholder is replaced by the real timeline once
+  // automatic recovery reads the head again, with no Retry to press.
+  test("recovers an empty preview whose catch-up fails before loading rows", async ({
     page,
     app,
   }) => {
@@ -381,24 +359,19 @@ test.describe("public preview recovery", () => {
         app.openChannelId,
         "error: Preview stream interrupted",
       );
-      // Both failures are outages: one recovery notice owns them, with one
-      // Retry now and no per-panel Retry messages.
+      // Both failures are outages: recovery owns them, quietly at first, with
+      // no per-panel Retry messages.
       const warning = notice(page);
-      const retry = retryNow(page);
-      await expect(warning).toBeVisible();
       await expect
         .poll(() => app.report.startupFailures?.length ?? 0)
         .toBeGreaterThan(0);
-      await expect(page.getByRole("button", { name: /Retry/ })).toHaveCount(1);
+      await expect(page.getByRole("button", { name: /Retry/ })).toHaveCount(0);
       const history = page.locator("[data-channel-history]");
       await expect(history.locator("[data-message-scroller]")).toHaveCount(0);
       failHead = false;
       app.histories.set(`primary/${app.openChannelId}`, originalHistory);
-      await retry.focus();
-      await retry.press("Enter");
-      await expect.poll(() => retryRequested).toBe(true);
-      // The notice stays while the retried head is in flight.
-      await expect(retry).toBeFocused();
+      // No click: a scheduled retry reads the head again.
+      await expect.poll(() => retryRequested, { timeout: 20_000 }).toBe(true);
       await expect(
         history.getByText("Loading messages…", { exact: true }),
       ).toBeVisible();
@@ -406,20 +379,15 @@ test.describe("public preview recovery", () => {
       await expect(history.locator("[data-message-scroller]")).toBeVisible();
       await expect(history).toContainText("Public conversation root");
       await expect(warning).toHaveCount(0);
-      // Recovery removed the focused Retry now; a preview has no composer, so
-      // focus moves to its loaded history.
-      await expect(history.locator("[data-message-scroller]")).toBeFocused();
     } finally {
       releaseHead();
     }
   });
-  // Real browser geometry and focus: the wrapped recovery must remain outside
-  // the floating invitation, and removing Retry now must leave focus in history.
-  test("keeps wrapped recovery clear of Join and restores keyboard focus to history", async ({
-    page,
-    app,
-  }) => {
+  // Real browser geometry: the wrapped notice floats above the invitation and
+  // leaves Join usable.
+  test("keeps wrapped recovery clear of Join", async ({ page, app }) => {
     await page.setViewportSize({ width: 390, height: 700 });
+    await page.clock.install();
     await page.goto(app.origin);
     await expect(page.locator("[data-message-id]").first()).toBeVisible();
     await page
@@ -451,34 +419,40 @@ test.describe("public preview recovery", () => {
     // Hold EOSE so automatic recovery cannot settle before the checks.
     app.relay.holdEose(app.openChannelId);
     const warning = notice(page);
-    const retry = retryNow(page);
+    const requests = () =>
+      app.relay.requests.filter(
+        (r) =>
+          r.community === "primary" && r.routes.includes(app.openChannelId),
+      ).length;
+    const before = requests();
     try {
       app.relay.failRoute(
         "primary",
         app.openChannelId,
         "error: Live updates are temporarily unavailable. Try reconnecting to this channel.",
       );
+      // Jump the quiet delay only once recovery has started: its retry REQ
+      // shows the app received the failure.
+      await expect.poll(requests).toBeGreaterThan(before);
+      await page.clock.fastForward(30_000);
       await expect(warning).toBeVisible();
       await expect
         .poll(async () => {
           const capsule = await invitation.boundingBox();
           const recovery = await warning.boundingBox();
           return (
-            !!capsule && !!recovery && capsule.y + capsule.height <= recovery.y
+            !!capsule && !!recovery && recovery.y + recovery.height <= capsule.y
           );
         })
         .toBe(true);
-      await retry.click({ trial: true });
-      await retry.focus();
-      await retry.press("Enter");
-      // Retry now stays while the retried stream waits for EOSE.
-      await expect(retry).toBeFocused();
+      await invitation
+        .getByRole("button", { name: "Join", exact: true })
+        .click({ trial: true });
     } finally {
       app.relay.releaseEose(app.openChannelId);
     }
     await expect(warning).toHaveCount(0);
-    // Recovery removed the focused Retry now; focus moves to history.
-    await expect(history).toBeFocused();
+    await expect(history).toBeVisible();
     await expect(
       invitation.getByRole("button", { name: "Join", exact: true }),
     ).toBeVisible();

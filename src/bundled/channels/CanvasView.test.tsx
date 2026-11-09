@@ -16,11 +16,13 @@ import type { RelayEvent } from "../../features/relay/events";
 import { clearView, readView } from "../../shared/view-state";
 import { MAX_MARKDOWN_DEPTH } from "../../features/relay/message-content";
 import type { ChannelCanvas } from "../../features/channel-templates/capability";
+import { LIVE_CANVAS_BYTES } from "../../features/channel-templates/model";
 import { CanvasEditor } from "./CanvasEditor";
 import {
   CANVAS_RENDER_CELLS,
   CANVAS_RENDER_CHARS,
   CanvasMarkdown,
+  renderable,
 } from "./CanvasView";
 
 // Counts Markdown renders while passing them through unchanged.
@@ -303,6 +305,11 @@ it("never runs raw HTML, inline images or unsafe links", () => {
   expect(links.map((link) => link.getAttribute("href"))).toEqual([
     "https://example.test/doc",
   ]);
+});
+
+it("renders every Canvas within the save limit", () => {
+  const largest = "x".repeat(LIVE_CANVAS_BYTES);
+  expect(renderable(largest)).toBe(true);
 });
 
 it("falls back to labelled source past the render budget or nesting limit", () => {

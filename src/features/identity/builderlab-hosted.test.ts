@@ -1,75 +1,69 @@
 import { expect, it } from "vitest";
 import { relayOrigin } from "../communities/destination";
-import type { FoundCommunity } from "../communities/find-community";
+import type { SessionSnapshot } from "../federated-identity/service";
 import {
   atPublicBuilderlab,
   hostedByThisBuilderlab,
 } from "./builderlab-hosted";
 
-const PUBLIC = "https://app.builderlab.xyz";
-const PUBLIC_SELF =
-  "12f6870117eff1a6318bd38c82a65d51dd19879b7489f57247114d0ee8a96de3";
-/** As `findCommunity` reports it: the canonical origin, plus `self` when given. */
-const found = (input: string, self?: string): FoundCommunity => ({
-  url: relayOrigin(input),
-  host: new URL(relayOrigin(input)).host,
-  self,
-  policy: null,
-});
-/** Whether a public build signs in for `input` at once. */
-const hosted = (input: string, self?: string) =>
-  hostedByThisBuilderlab(found(input, self), PUBLIC);
+const server = (id: string, communityHosts: string[]) =>
+  ({
+    status: "signed-out",
+    authority: {
+      id,
+      identityOrigin: `https://${id}.example`,
+      apiBasePath: "/api/goose/",
+      signIn: "on-demand",
+      organization: null,
+      communityHosts,
+    },
+    revision: "",
+    email: null,
+    failure: null,
+    expiresAt: null,
+    expiring: false,
+    cleanup: false,
+  }) satisfies SessionSnapshot;
+const PUBLIC = server("bb-public", [
+  "*.communities.buzz.xyz",
+  "communities.buzz.xyz",
+]);
+const ACME = server("bb-acme", ["buzz.acme.builderlab.xyz"]);
+const hosted = (input: string, servers: SessionSnapshot[]) =>
+  hostedByThisBuilderlab({ url: relayOrigin(input) }, async () => servers);
 
-it.each([
-  "wss://communities.buzz.xyz",
-  "https://design.communities.buzz.xyz",
-  "WSS://Design.Communities.BUZZ.xyz.",
-  "https://communities.buzz.xyz:443",
-])("%s is hosted by a public build's Builderlab", (input) => {
-  expect(hosted(input)).toBe(true);
-});
-
-it.each([
-  "wss://communities.buzz.xyz.evil.com",
-  "wss://notcommunities.buzz.xyz",
-  "wss://xcommunities.buzz.xyz",
-  "wss://buzz.xyz",
-  "wss://buzz.block.builderlab.xyz",
-  "wss://buzz.acme.builderlab.xyz",
-  "wss://relay.example.com",
-  "https://communities.buzz.xyz:8443",
-])("%s is not hosted by a public build's Builderlab", (input) => {
-  expect(hosted(input)).toBe(false);
-});
-
-it.each([
-  ["", false],
-  ["not a url", false],
-  // Only the origin counts: the build URL carries the API's base path.
-  ["https://app.builderlab.xyz/api/goose/", true],
-  // Another deployment's portal, as a federated-identity build derives it.
-  ["https://block.builderlab.xyz", false],
-])("a build URL of %j hosts communities.buzz.xyz: %s", (build, expected) => {
+it("follows the build's first compiled server, by its community hosts", async () => {
+  expect(await hosted("wss://design.communities.buzz.xyz", [PUBLIC])).toBe(
+    true,
+  );
+  expect(await hosted("wss://communities.buzz.xyz", [PUBLIC])).toBe(true);
+  // Deeper than the one-label wildcard: native attaches no token there.
+  expect(await hosted("wss://a.b.communities.buzz.xyz", [PUBLIC])).toBe(false);
+  // Another server covers it, but first run signs in to the first only.
   expect(
-    hostedByThisBuilderlab(found("wss://design.communities.buzz.xyz"), build),
-  ).toBe(expected);
+    await hosted("wss://design.communities.buzz.xyz", [ACME, PUBLIC]),
+  ).toBe(false);
+  expect(await hosted("wss://buzz.acme.builderlab.xyz", [ACME, PUBLIC])).toBe(
+    true,
+  );
 });
 
-it("falls back to the relay key when the hostname is unknown, on the default port only", () => {
-  // A deployment moved to a new domain keeps its relay key.
-  expect(hosted("wss://buzz.example", PUBLIC_SELF)).toBe(true);
-  expect(hosted("https://buzz.example:8443", PUBLIC_SELF)).toBe(false);
-  expect(hosted("wss://buzz.example", "ab".repeat(32))).toBe(false);
-  // An unknown relay with no `self` never matches, even with no build URL.
-  expect(hostedByThisBuilderlab(found("wss://buzz.example"), "")).toBe(false);
+it("treats every community as unhosted without a compiled server", async () => {
+  expect(await hosted("wss://design.communities.buzz.xyz", [])).toBe(false);
+  expect(
+    await hostedByThisBuilderlab(
+      { url: relayOrigin("wss://design.communities.buzz.xyz") },
+      () => Promise.reject(new Error("native unavailable")),
+    ),
+  ).toBe(false);
 });
 
 it.each([
-  PUBLIC,
-  `${PUBLIC}/`,
+  "https://app.builderlab.xyz",
+  "https://app.builderlab.xyz/",
   // A federated-identity build at the public portal, as vite.config.ts
   // derives it from an `apiBasePath` of /buzz/api/goose/.
-  `${PUBLIC}/buzz`,
+  "https://app.builderlab.xyz/buzz",
 ])("%s is the public Builderlab", (build) => {
   expect(atPublicBuilderlab(build)).toBe(true);
 });

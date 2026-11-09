@@ -1,3 +1,4 @@
+import { FadingLabel } from "./FadingLabel";
 import { prepareSoloMove } from "../../features/channel-navigation/solo-navigation";
 import { useChatConversions } from "../../features/solo/conversion";
 import { ConvertToChannel } from "../../features/solo/ConvertToChannel";
@@ -20,6 +21,7 @@ import {
 } from "../../features/channel-navigation/ChannelSidebarDnd";
 import { WorkspaceSettings } from "../../features/solo/WorkspaceSettings";
 import {
+  memo,
   useCallback,
   useEffect,
   useLayoutEffect,
@@ -28,10 +30,12 @@ import {
   useSyncExternalStore,
   type ComponentProps,
   type ReactNode,
+  type RefObject,
 } from "react";
 import type { RelaySession } from "../../features/relay/session";
 import { readView, writeView } from "../../shared/view-state";
 import { Button } from "../../shared/design-system/ui/Button";
+import { NavigationSectionHeading } from "../../shared/design-system/ui/NavigationSection";
 import { IconButton } from "../../shared/design-system/ui/IconButton";
 import {
   ContextMenuRoot,
@@ -85,9 +89,11 @@ export function SoloWorkspaces({
   scope: string;
   chats: readonly ChatListItem[];
   renderChatMenu?: ((channelId: string) => ReactNode) | undefined;
+  /** A stable function lets a chat's row skip renders when nothing it shows changed. */
   renderChat: (
     item: ChatListItem,
     rename: (() => boolean) | undefined,
+    channel: ChannelSummary | undefined,
   ) => ReactNode;
   onNew?: (projectId?: string) => void;
 }) {
@@ -367,6 +373,46 @@ export function SoloWorkspaces({
   useEffect(() => {
     if (overflow) hold(overflow.split(" "));
   }, [overflow, hold]);
+  const canRename = (projectId: string, channel: ChannelSummary | undefined) =>
+    !renaming && deleting !== projectId && canEditLifetime(session, channel);
+  // Rows find their actions here when used, so their props stay stable.
+  const actions: ChatEntryActions = {
+    share: (id, trigger) =>
+      setSharing({
+        id,
+        visit: currentVisit.current,
+        ...(trigger ? { trigger } : {}),
+      }),
+    convert: (id) => setConverting({ id, visit: currentVisit.current }),
+    move,
+    newWorkspace: (id) => setCreatingFor(chats.find((item) => item.id === id)),
+    settings: (id) => {
+      const item = chats.find((item) => item.id === id);
+      if (item) setChatSettings({ item, visit: currentVisit.current });
+    },
+    rename: (id) => {
+      const project = projects.find((project) =>
+        project.rows.some((item) => item.id === id),
+      );
+      const channel = channels.channels.find((channel) => channel.id === id);
+      if (!project || !canRename(project.id, channel)) return false;
+      setRenaming(id);
+      return true;
+    },
+    lifecycle: chooseLifecycle,
+    readResult: (id, error) =>
+      setReadError((current) =>
+        error
+          ? { id, message: error }
+          : current?.id === id
+            ? undefined
+            : current,
+      ),
+  };
+  const entryActions = useRef(actions);
+  useLayoutEffect(() => {
+    entryActions.current = actions;
+  });
   const moves =
     snapshot.moves?.filter((move) =>
       chats.some((item) => item.id === move.channelId),
@@ -434,21 +480,8 @@ export function SoloWorkspaces({
             <ChatActionsMenu
               id={`project-${project.id}`}
               title={project.name}
-              className={`${channelStyles.sectionHeader} ${styles.projectHeader}`}
+              className={undefined}
               enabled={!!project.id}
-              trailing={
-                <div className={channelStyles.sectionActions}>
-                  {onNew && (
-                    <IconButton
-                      size="compact"
-                      aria-label={`New chat in ${project.name}`}
-                      title="New chat"
-                      icon={<PlusIcon size={15} strokeWidth={2.5} />}
-                      onClick={() => onNew(project.id || undefined)}
-                    />
-                  )}
-                </div>
-              }
               content={
                 <>
                   <MenuItem onClick={() => setSettingsFor(project)}>
@@ -482,25 +515,47 @@ export function SoloWorkspaces({
                 </>
               }
             >
-              <Collapsible.Trigger
-                type="button"
-                className={`${channelStyles.sidebarSectionHeading} ${styles.projectHeading}`}
-                aria-expanded={
-                  !collapsed.includes(project.id) ||
-                  renamingProject === project.id
-                }
-                onClick={(event) => setAnimate(event.detail > 0)}
-              >
-                <span className={channelStyles.sectionTitle}>
-                  {project.name}
-                </span>
-                <span
-                  className={channelStyles.sectionChevron}
-                  aria-hidden="true"
+              {(overflow) => (
+                <NavigationSectionHeading
+                  disclosure
+                  revealActions
+                  actions={
+                    <>
+                      {overflow}
+                      {onNew && (
+                        <IconButton
+                          size="compact"
+                          aria-label={`New chat in ${project.name}`}
+                          title="New chat"
+                          icon={<PlusIcon size={15} strokeWidth={2.5} />}
+                          onClick={() => onNew(project.id || undefined)}
+                        />
+                      )}
+                    </>
+                  }
                 >
-                  <CaretDownIcon size={15} strokeWidth={2.5} />
-                </span>
-              </Collapsible.Trigger>
+                  <Collapsible.Trigger
+                    type="button"
+                    className={styles.projectHeading}
+                    aria-expanded={
+                      !collapsed.includes(project.id) ||
+                      renamingProject === project.id
+                    }
+                    onClick={(event) => setAnimate(event.detail > 0)}
+                  >
+                    <FadingLabel className={channelStyles.sectionTitle}>
+                      {project.name}
+                    </FadingLabel>
+                    <span
+                      className={channelStyles.sectionChevron}
+                      aria-hidden="true"
+                      data-navigation-reveal=""
+                    >
+                      <CaretDownIcon size={15} strokeWidth={2.5} />
+                    </span>
+                  </Collapsible.Trigger>
+                </NavigationSectionHeading>
+              )}
             </ChatActionsMenu>
             <Collapsible.Panel
               className={styles.projectPanel}
@@ -521,21 +576,6 @@ export function SoloWorkspaces({
                 const channel = channels.channels.find(
                   (channel) => channel.id === item.id,
                 );
-                const rename =
-                  !renaming &&
-                  deleting !== project.id &&
-                  canEditLifetime(session, channel)
-                    ? () => {
-                        if (
-                          renaming ||
-                          deleting === project.id ||
-                          !canEditLifetime(session, channel)
-                        )
-                          return false;
-                        setRenaming(item.id);
-                        return true;
-                      }
-                    : undefined;
                 if (renaming === item.id)
                   return (
                     <SoloChatName
@@ -550,60 +590,20 @@ export function SoloWorkspaces({
                     />
                   );
                 return (
-                  <ChatActionsMenu
+                  <SoloChatEntry
                     key={item.id}
                     id={item.id}
                     title={item.title}
-                    indicator={
-                      <ChatSharedMark
-                        session={session}
-                        channel={channel}
-                        onOpen={(trigger) =>
-                          setSharing({ id: item.id, visit, trigger })
-                        }
-                      />
-                    }
-                    className={styles.organizedRow}
-                    content={
-                      channel && (
-                        <>
-                          {renderChatMenu?.(item.id)}
-                          <SoloChatMenuItems
-                            session={session}
-                            channel={channel}
-                            onShare={() => setSharing({ id: item.id, visit })}
-                            onConvert={() =>
-                              setConverting({ id: item.id, visit })
-                            }
-                            onMove={(projectId) => move(item.id, projectId)}
-                            onNewWorkspace={() => setCreatingFor(item)}
-                            onSettings={() => setChatSettings({ item, visit })}
-                            onRename={rename && (() => void rename())}
-                            onLifecycle={
-                              handoff &&
-                              ((action) => chooseLifecycle(channel, action))
-                            }
-                            onReadResult={(error) =>
-                              setReadError((current) =>
-                                error
-                                  ? { id: item.id, message: error }
-                                  : current?.id === item.id
-                                    ? undefined
-                                    : current,
-                              )
-                            }
-                          />
-                        </>
-                      )
-                    }
-                  >
-                    <DraggableChannel
-                      channelId={item.id}
-                      sectionKey={DROP + project.id}
-                    >
-                      {renderChat(item, rename)}
-                    </DraggableChannel>
-                  </ChatActionsMenu>
+                    pinned={item.pinned}
+                    projectKey={DROP + project.id}
+                    channel={channel}
+                    renameable={canRename(project.id, channel)}
+                    lifecycle={!!handoff}
+                    session={session}
+                    actions={entryActions}
+                    renderChat={renderChat}
+                    renderChatMenu={renderChatMenu}
+                  />
                 );
               })}
               {(project.hidden > 0 || project.foldable) && (
@@ -782,6 +782,93 @@ export function SoloWorkspaces({
 
 const DROP = "project:";
 
+/** A listed chat's actions, read when used so a row's props stay stable. */
+type ChatEntryActions = {
+  share(id: string, trigger?: HTMLElement): void;
+  convert(id: string): void;
+  move(id: string, projectId?: string): void;
+  newWorkspace(id: string): void;
+  settings(id: string): void;
+  rename(id: string): boolean;
+  lifecycle(channel: ChannelSummary, action: ChannelLifecycleAction): void;
+  readResult(id: string, error?: string): void;
+};
+
+/** One listed chat. The roster changes often; a row renders again only when
+ * what it shows changes, not for every other chat's update. */
+const SoloChatEntry = memo(function SoloChatEntry({
+  id,
+  title,
+  pinned,
+  projectKey,
+  channel,
+  renameable,
+  lifecycle,
+  session,
+  actions,
+  renderChat,
+  renderChatMenu,
+}: {
+  id: string;
+  title: string;
+  pinned: boolean | undefined;
+  projectKey: string;
+  channel: ChannelSummary | undefined;
+  renameable: boolean;
+  lifecycle: boolean;
+  session: RelaySession;
+  actions: RefObject<ChatEntryActions>;
+  renderChat: ComponentProps<typeof SoloWorkspaces>["renderChat"];
+  renderChatMenu: ((channelId: string) => ReactNode) | undefined;
+}) {
+  const rename = renameable ? () => actions.current.rename(id) : undefined;
+  return (
+    <ChatActionsMenu
+      id={id}
+      title={title}
+      indicator={
+        <ChatSharedMark
+          session={session}
+          channel={channel}
+          onOpen={(trigger) => actions.current.share(id, trigger)}
+        />
+      }
+      className={styles.organizedRow}
+      content={
+        channel && (
+          <>
+            {renderChatMenu?.(id)}
+            <SoloChatMenuItems
+              session={session}
+              channel={channel}
+              onShare={() => actions.current.share(id)}
+              onConvert={() => actions.current.convert(id)}
+              onMove={(projectId) => actions.current.move(id, projectId)}
+              onNewWorkspace={() => actions.current.newWorkspace(id)}
+              onSettings={() => actions.current.settings(id)}
+              onRename={rename && (() => void rename())}
+              onLifecycle={
+                lifecycle
+                  ? (action) => actions.current.lifecycle(channel, action)
+                  : undefined
+              }
+              onReadResult={(error) => actions.current.readResult(id, error)}
+            />
+          </>
+        )
+      }
+    >
+      <DraggableChannel channelId={id} sectionKey={projectKey}>
+        {renderChat(
+          { id, title, ...(pinned === undefined ? {} : { pinned }) },
+          rename,
+          channel,
+        )}
+      </DraggableChannel>
+    </ChatActionsMenu>
+  );
+});
+
 /** A drop reports only its destination, so it saves exactly like Move to. */
 function DropProject({
   projectKey,
@@ -808,17 +895,16 @@ export function ChatActionsMenu({
   content,
   indicator,
   enabled = true,
-  trailing,
 }: {
   id: string;
   title: string;
   className: string | undefined;
-  children: ReactNode;
+  /** A function places the overflow action itself, such as in a heading's
+   * actions; otherwise it follows the children. */
+  children: ReactNode | ((overflow: ReactNode) => ReactNode);
   content: ReactNode;
   indicator?: ReactNode;
   enabled?: boolean;
-  /** Follows the overflow action, preserving header action keyboard order. */
-  trailing?: ReactNode;
 }) {
   const [open, setOpen] = useState(false);
   const [anchor, setAnchor] = useState<HTMLElement>();
@@ -833,10 +919,35 @@ export function ChatActionsMenu({
   if (!enabled)
     return (
       <div className={className} data-solo-menu-id={id}>
-        {children}
-        {trailing}
+        {typeof children === "function" ? children(null) : children}
       </div>
     );
+  const overflow = (
+    <MenuRoot>
+      <MenuTrigger
+        render={(props) => (
+          <IconButton
+            {...props}
+            // A heading reveals its own actions; rows reveal theirs here.
+            data-solo-row-action={
+              typeof children === "function" ? undefined : ""
+            }
+            variant="bare"
+            size="compact"
+            aria-label={`Actions for ${title}`}
+            icon={<DotsThreeIcon size={15} strokeWidth={2.5} />}
+          />
+        )}
+      />
+      <MenuPopup
+        aria-label={`Actions for ${title}`}
+        align="end"
+        finalFocus={restoreFocus}
+      >
+        {content}
+      </MenuPopup>
+    </MenuRoot>
+  );
   return (
     <ContextMenuRoot
       open={open}
@@ -859,31 +970,15 @@ export function ChatActionsMenu({
           }
         }}
       >
-        {children}
-        {indicator}
-        <MenuRoot>
-          <MenuTrigger
-            render={(props) => (
-              <IconButton
-                {...props}
-                data-solo-row-action=""
-                variant="bare"
-                size="compact"
-                data-solo-overflow-action=""
-                aria-label={`Actions for ${title}`}
-                icon={<DotsThreeIcon size={15} strokeWidth={2.5} />}
-              />
-            )}
-          />
-          <MenuPopup
-            aria-label={`Actions for ${title}`}
-            align="end"
-            finalFocus={restoreFocus}
-          >
-            {content}
-          </MenuPopup>
-        </MenuRoot>
-        {trailing}
+        {typeof children === "function" ? (
+          children(overflow)
+        ) : (
+          <>
+            {children}
+            {indicator}
+            {overflow}
+          </>
+        )}
       </ContextMenuTrigger>
       <MenuPopup
         aria-label={`Actions for ${title}`}

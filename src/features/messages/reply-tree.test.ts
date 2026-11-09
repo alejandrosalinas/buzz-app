@@ -56,3 +56,76 @@ it("does not lose rows to self references, cycles, or chains entering cycles", (
   expect(tree.children.get(undefined)).toEqual(rows);
   expect(tree.ancestors("a")).toEqual([]);
 });
+
+it("shows automatic failure captions beside their request without a nested branch", () => {
+  const request = row("request", "root");
+  const notice: ChannelMessage = {
+    ...row("failure", request.id),
+    notice: "execution-failure",
+  };
+  const tree = replyTree([request, notice], "root");
+  expect(tree.children.get(undefined)).toEqual([request, notice]);
+  expect(tree.children.get(request.id)).toBeUndefined();
+  expect(notice.replyParentId).toBe(request.id);
+});
+
+it("keeps failure captions at their request's displayed level inside a branch", () => {
+  const branch = row("branch", "root");
+  const request = row("request", branch.id);
+  const notice: ChannelMessage = {
+    ...row("failure", request.id),
+    notice: "execution-failure",
+  };
+  const reply = row("normal-reply", notice.id);
+  const tree = replyTree([branch, request, notice, reply], "root");
+  expect(tree.children.get(undefined)).toEqual([branch]);
+  expect(tree.children.get(branch.id)).toEqual([request, notice, reply]);
+  expect(tree.ancestors(notice.id)).toEqual([branch.id]);
+});
+
+it("preserves replies to a lifted failure notice", () => {
+  const request = row("request", "root");
+  const notice: ChannelMessage = {
+    ...row("failure", request.id),
+    notice: "execution-failure",
+  };
+  const reply = row("normal-reply", notice.id);
+  const tree = replyTree([request, notice, reply], "root");
+  expect(tree.children.get(undefined)).toEqual([request, notice]);
+  expect(tree.children.get(notice.id)).toEqual([reply]);
+});
+
+it("lifts captions beside loaded requests without ancestry and preserves orphan notices", () => {
+  const request = row("request");
+  const notice: ChannelMessage = {
+    ...row("failure", request.id),
+    notice: "execution-failure",
+  };
+  expect(replyTree([request, notice], "root").children.get(undefined)).toEqual([
+    request,
+    notice,
+  ]);
+  expect(replyTree([notice], "root").children.get(undefined)).toEqual([notice]);
+});
+
+it("preserves normal nesting for edited failure messages and messages with attachments", () => {
+  const request = row("request", "root");
+  const edited: ChannelMessage = {
+    ...row("edited", request.id),
+    notice: "execution-failure",
+    edited: true,
+  };
+  const attachment: ChannelMessage = {
+    ...row("attachment", request.id),
+    notice: "execution-failure",
+    attachments: [
+      {
+        url: "https://example.com/image.png",
+        kind: "image",
+        mime: "image/png",
+      },
+    ],
+  };
+  const tree = replyTree([request, edited, attachment], "root");
+  expect(tree.children.get(request.id)).toEqual([edited, attachment]);
+});

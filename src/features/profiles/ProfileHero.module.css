@@ -54,7 +54,10 @@
 
 /* Detail panels retain their content inset; artwork sits 4px from the edge. */
 .panelHero {
-  margin-inline: calc(var(--space-1) - var(--space-5));
+  margin-inline: calc(
+    var(--space-1) -
+    var(--profile-content-inset, var(--space-5))
+  );
 }
 .panelHero:first-child {
   margin-top: calc(var(--space-1) - var(--space-5));

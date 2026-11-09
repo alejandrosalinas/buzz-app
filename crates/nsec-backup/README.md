@@ -27,7 +27,7 @@ suite, metadata, and recipient public key. Upload sends the supplied JSON bytes
 unchanged, up to 4096 bytes, with no automatic retries. Keep those same bytes for
 a caller-initiated retry. Redirects are rejected and requests time out after 30 seconds.
 
-Recovery implements the JSON list contract in squareup/cash-server#133899. It
+Recovery reads the backup service's JSON list of backups and failed IDs. It
 preserves every returned backup and failed ID in order, including successful
 responses with only failed IDs. `Error::HttpStatus(404)` can mean no backups or an
 unavailable recovery endpoint; it does not prove that no backups exist. Other

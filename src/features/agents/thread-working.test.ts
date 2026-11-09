@@ -2,6 +2,7 @@ import { afterEach, expect, it, vi } from "vitest";
 import { createAgentActivity } from "./activity";
 import { threadWorkingAgents } from "./thread-working";
 import { messageActivity } from "../../bundled/agent-activity/message-activity";
+import { requestWork } from "./request-work";
 
 const agent = "a".repeat(64),
   root = "b".repeat(64),
@@ -142,12 +143,15 @@ it("keeps pulse-only and other-thread agents without animating stale known reque
   f.message(sibling);
   f.send("turn_started", "two", sibling);
   await vi.advanceTimersByTimeAsync(31_000);
-  expect(f.bubble(sibling)[0]?.working).toBe(false);
+  expect(f.bubble(sibling)).toEqual([]);
+  expect(requestWork(f.snapshot(), "channel", sibling)[0]?.state).toBe(
+    "unknown",
+  );
   expect(f.thread()).toEqual([]);
   f.send("turn_liveness", "two");
   expect(f.thread()).toEqual([agent]);
   f.activity.state({ status: "retrying", routes: [] });
-  expect(f.bubble(sibling)[0]?.working).toBe(false);
+  expect(f.bubble(sibling)).toEqual([]);
   f.activity.state(f.connected);
   expect(f.thread()).toEqual([]);
   f.activity.dispose();
@@ -157,6 +161,14 @@ it("does not let ambiguous duplicate starts produce a thread animation absent fr
   f.message();
   f.send("turn_started");
   f.send("turn_started");
+  expect(f.bubble()).toEqual([]);
+  expect(f.thread()).toEqual([]);
+  // Evict the first start, then both: retained associations must not revive it.
+  for (let i = 0; i < 199; i++) f.send("acp_read", "other", sibling);
+  expect(f.bubble()).toEqual([]);
+  expect(f.thread()).toEqual([]);
+  f.send("acp_read", "other", sibling);
+  f.send("turn_completed");
   expect(f.bubble()).toEqual([]);
   expect(f.thread()).toEqual([]);
   f.activity.dispose();

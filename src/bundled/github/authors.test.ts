@@ -233,18 +233,20 @@ allow org:Block body:/bug/s`);
   });
 
   it("ask which organizations each author is in, and read the answer", () => {
-    expect(membershipQuery(["alice", "bob"], ["block", "squareup"])).toContain(
-      'u1:user(login:"bob"){o0:organization(login:"block"){id} o1:organization(login:"squareup"){id}}',
+    expect(
+      membershipQuery(["alice", "bob"], ["block", "example-org"]),
+    ).toContain(
+      'u1:user(login:"bob"){o0:organization(login:"block"){id} o1:organization(login:"example-org"){id}}',
     );
     const answer = {
       u0: { o0: null, o1: { id: "O" } },
       u1: { o0: null, o1: null },
     };
     expect(
-      parseMembership(answer, ["Alice", "bob"], ["block", "SquareUp"]),
+      parseMembership(answer, ["Alice", "bob"], ["block", "Example-Org"]),
     ).toEqual(
       new Map([
-        ["alice", new Set(["squareup"])],
+        ["alice", new Set(["example-org"])],
         ["bob", new Set()],
       ]),
     );

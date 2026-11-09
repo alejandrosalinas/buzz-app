@@ -3,8 +3,8 @@ use crate::{
     access::{AccessRules, Transport},
     artifact_from_parts, err, hash, icon_revision,
     managed::{valid_commit, valid_reference},
-    Catalog, GitSource, InstallSource, Manager, Manifest, Release, ReloadSource, Result, BASE64,
-    LIMIT, MAX_ICON_BYTES, MAX_README_BYTES,
+    Catalog, GitSource, InstallSource, Manager, Manifest, Release, ReloadSource, Result, UrlSource,
+    BASE64, LIMIT, MAX_ICON_BYTES, MAX_README_BYTES,
 };
 use base64::Engine as _;
 use nostr::event::Event;
@@ -49,6 +49,7 @@ pub struct PreparedImport {
     pub preview: Preview,
     folder_root: Option<PathBuf>,
     git_source: Option<GitSource>,
+    url_source: Option<UrlSource>,
     artifacts: BTreeMap<String, Release>,
     unbuilt: Vec<(String, Option<String>, String)>,
 }
@@ -66,6 +67,7 @@ impl PreparedImport {
             },
             folder_root,
             git_source: None,
+            url_source: None,
             artifacts: BTreeMap::new(),
             unbuilt: vec![],
         })
@@ -159,7 +161,8 @@ impl PreparedImport {
                     source.path = path.to_owned();
                     InstallSource::Git(source)
                 })
-            });
+            })
+            .or_else(|| self.url_source.clone().map(InstallSource::Url));
         manager.install_artifact(release, source)
     }
 }
@@ -596,6 +599,74 @@ pub fn repository_url(input: &str) -> Result<String> {
     Ok(url.to_string())
 }
 
+/// An HTTPS URL for a single plugin artifact: no credentials, query string or fragment,
+/// so the URL itself is a stable, shareable identity.
+pub fn plugin_url(input: &str) -> Result<String> {
+    let input = input.trim();
+    if input.len() > 2048 {
+        return Err("Plugin URL is too long".into());
+    }
+    let url = url::Url::parse(input).map_err(|_| "Enter an HTTPS plugin URL")?;
+    if url.scheme() != "https"
+        || url.host_str().is_none_or(|host| host.starts_with('-'))
+        || !url.username().is_empty()
+        || url.password().is_some()
+        || url.query().is_some()
+        || url.fragment().is_some()
+        || url.path().trim_matches('/').is_empty()
+    {
+        return Err(
+            "Use an HTTPS plugin URL without credentials, a query string or a fragment".into(),
+        );
+    }
+    Ok(url.to_string())
+}
+
+pub fn valid_sha256(digest: &str) -> bool {
+    digest.len() == 64
+        && digest
+            .bytes()
+            .all(|c| matches!(c, b'0'..=b'9' | b'a'..=b'f'))
+}
+
+/// Previews a downloaded artifact. The caller fetches `bytes` from `url`; nothing is
+/// accepted unless it hashes to `sha256`, so the download itself needs no trust.
+pub fn prepare_url(url: &str, sha256: &str, bytes: Vec<u8>) -> Result<PreparedImport> {
+    let url = plugin_url(url)?;
+    let sha256 = sha256.trim().to_ascii_lowercase();
+    if !valid_sha256(&sha256) {
+        return Err("sha256 must be 64 hexadecimal digits".into());
+    }
+    if bytes.len() as u64 > LIMIT {
+        return Err("Plugin artifact exceeds 8 MiB".into());
+    }
+    let actual = hash(&bytes);
+    if actual != sha256 {
+        return Err(format!(
+            "The downloaded plugin has SHA-256 {actual}, not the expected {sha256}"
+        ));
+    }
+    let mut prepared = PreparedImport::new(url.clone(), None, None)?;
+    prepared.url_source = Some(UrlSource { url, sha256 });
+    prepared.add(
+        ".".into(),
+        Ok(Release {
+            bytes,
+            signature: None,
+        }),
+    )?;
+    if prepared.preview.candidates.is_empty() {
+        return Err(prepared
+            .preview
+            .warnings
+            .pop()
+            .unwrap_or_else(|| "Not a plugin artifact".into())
+            .trim_start_matches("Selected folder: ")
+            .to_owned());
+    }
+    Ok(prepared)
+}
+
 struct Git {
     scratch: tempfile::TempDir,
     deadline: Instant,
@@ -604,6 +675,15 @@ struct Git {
     authorization: Option<(String, String)>,
     federated_header: Option<String>,
     retired: Option<Box<dyn Fn() -> bool + Send>>,
+}
+/// HTTPS imports cannot prompt or use credential helpers, so point private repositories at SSH.
+fn git_failure(stderr: &str) -> String {
+    let hint = if stderr.contains("could not read Username") {
+        " Private repositories need an SSH URL, such as git@github.com:owner/repo.git."
+    } else {
+        ""
+    };
+    format!("Git could not read this repository: {stderr}{hint}")
 }
 impl Git {
     fn new() -> Result<Self> {
@@ -729,10 +809,7 @@ impl Git {
                         return Err("Git could not read the protected repository".into());
                     }
                     let text = read_output(errors, 4096)?;
-                    return Err(format!(
-                        "Git could not read this repository: {}",
-                        String::from_utf8_lossy(&text).trim()
-                    ));
+                    return Err(git_failure(String::from_utf8_lossy(&text).trim()));
                 }
                 return read_output(output, limit);
             }
@@ -1095,6 +1172,18 @@ fn directory_size(root: &Path) -> Result<u64> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn https_credential_failures_suggest_ssh() {
+        let prompt =
+            "fatal: could not read Username for 'https://github.com': terminal prompts disabled";
+        assert!(git_failure(prompt).ends_with(
+            "Private repositories need an SSH URL, such as git@github.com:owner/repo.git."
+        ));
+        assert_eq!(
+            git_failure("fatal: repository not found"),
+            "Git could not read this repository: fatal: repository not found"
+        );
+    }
     fn uploaded(files: &[(&str, &str)]) -> FolderUpload {
         FolderUpload {
             source: "example".into(),
@@ -1139,6 +1228,64 @@ mod tests {
         assert_eq!(
             manager.module("example.drop", &plugin.revision).unwrap(),
             "export function apply() {}"
+        );
+    }
+
+    #[test]
+    fn url_artifacts_install_only_at_their_pinned_hash() {
+        let bytes = crate::artifact_from_text(
+            r#"{"id":"example.url","name":"From URL","apiVersion":1}"#,
+            "export function apply() {}".into(),
+        )
+        .unwrap();
+        let digest = hash(&bytes);
+        let url = "https://cdn.example.com/plugins/example.url.json";
+        let wrong = prepare_url(url, &"0".repeat(64), bytes.clone())
+            .err()
+            .unwrap();
+        assert!(wrong.contains("not the expected"), "{wrong}");
+        for (bad_url, bad_hash) in [
+            ("http://cdn.example.com/p.json", digest.as_str()),
+            ("https://cdn.example.com/p.json?sig=1", digest.as_str()),
+            ("https://u:p@cdn.example.com/p.json", digest.as_str()),
+            (url, "not-a-hash"),
+        ] {
+            assert!(prepare_url(bad_url, bad_hash, bytes.clone()).is_err());
+        }
+        assert!(prepare_url(url, &digest, b"{}".to_vec()).is_err());
+
+        let prepared = prepare_url(url, &digest.to_ascii_uppercase(), bytes).unwrap();
+        assert_eq!(prepared.preview.source, url);
+        assert_eq!(prepared.preview.candidates.len(), 1);
+        assert_eq!(prepared.preview.candidates[0].path, ".");
+        assert_eq!(prepared.preview.candidates[0].revision, digest);
+        let home = tempfile::tempdir().unwrap();
+        let manager = Manager::open(Some(home.path().into()), "test", false).unwrap();
+        let catalog = prepared
+            .install(&manager, &prepared.preview.token, ".")
+            .unwrap();
+        let plugin = catalog
+            .plugins
+            .iter()
+            .find(|p| p.manifest.id == "example.url")
+            .unwrap();
+        assert_eq!(plugin.revision, digest);
+        assert_eq!(
+            plugin.update_source,
+            Some(InstallSource::Url(UrlSource {
+                url: url.into(),
+                sha256: digest.clone(),
+            }))
+        );
+        let reopened = Manager::open(Some(home.path().into()), "test", false).unwrap();
+        let again = reopened.catalog().unwrap();
+        assert_eq!(
+            again
+                .plugins
+                .iter()
+                .find(|p| p.manifest.id == "example.url")
+                .and_then(|p| p.update_source.clone()),
+            plugin.update_source
         );
     }
 
@@ -1751,8 +1898,8 @@ mod tests {
             "ssh://git@github.com/block/plugins.git"
         );
         assert_eq!(
-            repository_url("org-49461806@github.com:squareup/buzz-context-manager.git").unwrap(),
-            "ssh://org-49461806@github.com/squareup/buzz-context-manager.git"
+            repository_url("org-1@github.com:example-org/example-plugin.git").unwrap(),
+            "ssh://org-1@github.com/example-org/example-plugin.git"
         );
         assert_eq!(
             repository_url("dev.user@git.example.org:team/repo.git").unwrap(),
@@ -2280,7 +2427,7 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn access_rule_socket_reaches_git() {
-        use std::os::unix::{fs::PermissionsExt, net::UnixListener};
+        use std::os::unix::{fs::symlink, net::UnixListener};
 
         let home = tempfile::tempdir_in("/tmp").unwrap();
         let socket = home.path().join("team.sock");
@@ -2303,8 +2450,12 @@ mod tests {
         let bin = home.path().join("bin");
         fs::create_dir(&bin).unwrap();
         let executable = bin.join("git");
-        fs::write(&executable, "#!/bin/sh\n/usr/bin/printenv SSH_AUTH_SOCK\n").unwrap();
-        fs::set_permissions(&executable, fs::Permissions::from_mode(0o755)).unwrap();
+        // A parallel fork can retain a runtime-written executable's writer (ETXTBSY).
+        symlink(
+            Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/ssh-auth-sock.sh"),
+            &executable,
+        )
+        .unwrap();
         let mut command = git.command();
         command.env("PATH", &bin);
         let output = git.run_command(command, 1024).unwrap();

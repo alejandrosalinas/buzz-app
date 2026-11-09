@@ -18,7 +18,11 @@ import {
   type Workspace,
 } from "./workspace";
 import { useLifetime } from "./Lifetime";
-import { ChatInstructions, ChatSettingsDialog } from "./ChatSettingsDialog";
+import {
+  ChatInstructions,
+  ChatSettingsDialog,
+  instructionsCanvas,
+} from "./ChatSettingsDialog";
 import { ChannelDurationField } from "../../bundled/channels/ChannelDurationField";
 
 type Target =
@@ -58,6 +62,10 @@ export function WorkspaceSettings({
   const alive = useRef(true);
   const inFlight = useRef(false);
   const confirmedCanvas = useRef("");
+  // What reopening would show: the saved settings, or this device's kept draft.
+  const kept = useRef("");
+  const snapshot = (canvas: string | undefined, { agents, teamIds }: Lineup) =>
+    JSON.stringify([canvas, agents, teamIds]);
   const canvasAvailable =
     target.kind === "project" || !!session.canvas?.available;
   const lifetime = useLifetime({
@@ -85,7 +93,8 @@ export function WorkspaceSettings({
     setCanvasError(false);
     try {
       let content = "",
-        revision: string | undefined;
+        revision: string | undefined,
+        defaults = emptyLineup();
       if (target.kind === "project") {
         await session.channelKit.refresh();
         if (!active()) return;
@@ -103,7 +112,8 @@ export function WorkspaceSettings({
         const template = projectDefault(kit.entries, target.id, id);
         setRecipeId(id);
         setEntries(kit.entries);
-        setLineup(template ?? emptyLineup());
+        defaults = template ?? emptyLineup();
+        setLineup(defaults);
         content = template?.canvas ?? "";
         revision = entry?.eventId;
       } else {
@@ -114,6 +124,7 @@ export function WorkspaceSettings({
       }
       confirmedCanvas.current = content;
       const saved = replace ? null : readView<unknown>(scope, key, null);
+      let adopted = content;
       if (
         saved &&
         typeof saved === "object" &&
@@ -122,9 +133,12 @@ export function WorkspaceSettings({
         "base" in saved &&
         (saved.base === null || typeof saved.base === "string")
       ) {
-        if (target.kind === "project" && "lineup" in saved)
-          setLineup(parseLineup(saved.lineup));
+        if (target.kind === "project" && "lineup" in saved) {
+          defaults = parseLineup(saved.lineup);
+          setLineup(defaults);
+        }
         adopt(saved.canvas);
+        adopted = saved.canvas;
         setBase(saved.base ?? undefined);
         if ((saved.base ?? undefined) !== revision) {
           setError(
@@ -136,6 +150,7 @@ export function WorkspaceSettings({
         adopt(content);
         setBase(revision);
       }
+      kept.current = snapshot(adopted, defaults);
       setLoaded(true);
       setReloadConfirmed(false);
       if (replace && !writeView(scope, key, null))
@@ -207,6 +222,7 @@ export function WorkspaceSettings({
           throw new CanvasSettingsError(
             "Your draft couldn’t be saved on this device. No new changes were sent.",
           );
+        if (canvas !== undefined) kept.current = snapshot(canvas, lineup);
         if (
           canvas !== undefined &&
           (target.kind === "project" || canvas !== confirmedCanvas.current)
@@ -284,6 +300,12 @@ export function WorkspaceSettings({
     <ChatSettingsDialog
       finalFocus={finalFocus}
       close={close}
+      dirty={
+        // An uncertain details save stays with its owner and reopens to be checked.
+        (lifetime.changed && !lifetime.checkOnly) ||
+        (loaded &&
+          snapshot(instructionsCanvas(workspace, raw), lineup) !== kept.current)
+      }
       busy={busy || lifetime.busy}
       title={target.kind === "project" ? "Workspace settings" : undefined}
       saveLabel={

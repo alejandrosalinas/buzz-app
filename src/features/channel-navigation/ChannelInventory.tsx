@@ -60,6 +60,7 @@ import {
   FolderSimpleIcon,
   MinusIcon,
   PlusIcon,
+  XIcon,
 } from "../../shared/design-system/icons";
 import { ChannelReadMenuItem } from "../../bundled/channels/ChannelReadMenuItem";
 import { ChannelCopyLinkMenuItem } from "../../bundled/channels/ChannelCopyLinkMenuItem";
@@ -938,8 +939,8 @@ export function ChannelInventory({
           key="lifecycle"
           separator={false}
           noun={lifecycleNoun(channel)}
-          channelId={channel.id}
-          lifecycle={lifecycle}
+          channel={channel}
+          session={queries}
           disabled={!!lifecycleDialog}
           choose={(action) => chooseLifecycle(channel, action)}
         />,
@@ -976,9 +977,9 @@ export function ChannelInventory({
           }}
         >
           <MenuIcon>
-            <MinusIcon size={14} />
+            <XIcon size={14} />
           </MenuIcon>
-          Remove from Team
+          Close conversation
         </MenuItem>,
       );
     }
@@ -1543,6 +1544,7 @@ export function ChannelInventory({
                       selected={composingMessage ? undefined : selected}
                       onSelect={select}
                       onOpenThread={openActivityThread}
+                      onOpenMessage={openActivityMessage}
                       onOpenWorkingAgent={openWorkingAgent}
                       onOpenAgentActivity={openAgentActivity}
                       menuEnabled

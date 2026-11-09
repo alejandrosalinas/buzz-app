@@ -1,6 +1,12 @@
 // @vitest-environment jsdom
 import "@testing-library/jest-dom/vitest";
-import { cleanup, render, screen, waitFor } from "@testing-library/react";
+import {
+  cleanup,
+  render,
+  screen,
+  waitFor,
+  within,
+} from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, expect, it, vi } from "vitest";
 import type {
@@ -99,6 +105,19 @@ it.each([false, true])(
     const hosted = await screen.findByRole("menuitemradio", {
       name: "Builderlab",
     });
+    expect(screen.getAllByRole("group", { name: /^(Remote|Local)$/ })).toEqual([
+      screen.getByRole("group", { name: "Remote" }),
+      screen.getByRole("group", { name: "Local" }),
+    ]);
+    expect(screen.getByRole("group", { name: "Remote" })).toContainElement(
+      hosted,
+    );
+    expect(
+      within(screen.getByRole("group", { name: "Local" })).getByRole(
+        "menuitemradio",
+        { name: "Echo" },
+      ),
+    ).toBeChecked();
     expect(hosted).toHaveAttribute("aria-disabled", "true");
     expect(hosted).not.toBeChecked();
     expect(hosted.querySelector("svg")).not.toBeNull();
@@ -135,16 +154,16 @@ it.each([false, true])(
         screen.queryByRole("dialog", { name: "Harness availability" }),
       ).toBeNull(),
     );
-    await user.keyboard("{End}{Enter}");
+    await user.keyboard("{Home}{Enter}");
     expect(hosted).toHaveFocus();
     expect(
       await screen.findByRole("dialog", { name: "Harness availability" }),
     ).toBeVisible();
     expect(hosted).toHaveAccessibleDescription(/runs on your device/);
-    await user.keyboard("{ArrowUp}");
+    await user.keyboard("{ArrowDown}");
     expect(
       screen.getByRole("menuitemradio", {
-        name: anotherLocal ? "Next" : "Echo",
+        name: "Echo",
       }),
     ).toHaveFocus();
     await waitFor(() =>
@@ -152,7 +171,7 @@ it.each([false, true])(
         screen.queryByRole("dialog", { name: "Harness availability" }),
       ).toBeNull(),
     );
-    await user.keyboard("{ArrowDown}{Enter}");
+    await user.keyboard("{ArrowUp}{Enter}");
     expect(
       await screen.findByRole("dialog", { name: "Harness availability" }),
     ).toBeVisible();
@@ -178,6 +197,10 @@ it("keeps the existing local migration flow available", async () => {
   await user.click(
     screen.getByRole("button", { name: "Change harness from Echo" }),
   );
+  expect(await screen.findByRole("group", { name: "Local" })).toBeVisible();
+  expect(
+    screen.queryByRole("group", { name: "Remote" }),
+  ).not.toBeInTheDocument();
   expect(
     screen.queryByRole("menuitemradio", { name: "Builderlab" }),
   ).toBeNull();
@@ -186,6 +209,9 @@ it("keeps the existing local migration flow available", async () => {
     await screen.findByRole("dialog", { name: "Move Ada to Next?" }),
   ).toBeVisible();
   expect(previewRetype).toHaveBeenCalledWith("a".repeat(64), "local/next");
+  await waitFor(() =>
+    expect(screen.getByRole("button", { name: "Cancel" })).toHaveFocus(),
+  );
   await user.click(screen.getByRole("button", { name: "Continue" }));
   expect(screen.getByLabelText("Selected harness")).toHaveTextContent(
     "local/next",

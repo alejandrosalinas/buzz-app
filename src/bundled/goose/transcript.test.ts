@@ -309,6 +309,39 @@ describe("GooseHistory", () => {
     ).toBeUndefined();
   });
 
+  it("reuses another session's export only on automatic reads, so a full read shows its final messages", async () => {
+    const a = [...conversation()];
+    const sessions = [
+      session("a", "Gander · DM", a),
+      session("b", "Gander · DM", conversation()),
+    ];
+    const goose = history(sessions);
+    const lookup = { agent, workspace: "~/.buzz", sessions: ["a", "b"] };
+    await goose.transcript(
+      { ...lookup, working: "a" },
+      signal,
+      undefined,
+      true,
+    );
+    // Session a ends with a last reply, and b starts working.
+    a.push(assistant([text("a's final reply")]));
+    const shows = (read: unknown) =>
+      JSON.stringify(read).includes("a's final reply");
+    expect(
+      shows(
+        await goose.transcript(
+          { ...lookup, working: "b" },
+          signal,
+          undefined,
+          true,
+        ),
+      ),
+    ).toBe(false);
+    expect(
+      shows(await goose.transcript({ ...lookup, working: "b" }, signal)),
+    ).toBe(true);
+  });
+
   it("reads one session by its id, and none that goose deleted", async () => {
     const goose = history([session("s1", "Gander · DM", conversation())]);
     const read = await goose.transcript(

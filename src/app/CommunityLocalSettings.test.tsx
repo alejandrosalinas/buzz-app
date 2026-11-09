@@ -10,6 +10,7 @@ import { createCommunities } from "../features/communities/service";
 import { localCommunityNameKey } from "../features/communities/names";
 import { flush } from "../features/relay/testing";
 import { ToastProvider } from "../shared/design-system/ui/Toast";
+import { readDefaultLifetime } from "../features/solo/default-lifetime";
 
 const viewer = "a".repeat(64);
 const origin = "https://community.example";
@@ -154,4 +155,52 @@ it("copies the exact community URL, keeps it selectable on clipboard failure, an
   expect(await screen.findByText("Community URL copied.")).toBeVisible();
   expect(screen.queryByRole("alert")).toBeNull();
   expect(communities.snapshot().selected).toBe(origin);
+});
+
+it("saves the lifetime new Solo chats start with for this community and account only", async () => {
+  const { user } = await setup();
+  const scope = `${origin}:${viewer}`;
+  const lifetime = () =>
+    screen.getByRole("combobox", { name: "New Solo chats" });
+  const choose = async (name: RegExp) => {
+    await user.click(lifetime());
+    await user.click(await screen.findByRole("option", { name }));
+  };
+  expect(lifetime()).toHaveTextContent("Ongoing");
+  await choose(/^Temporary, 7 days/);
+  expect(readDefaultLifetime(scope)).toBe(604800);
+  expect(lifetime()).toHaveTextContent("Temporary, 7 days");
+  expect(readDefaultLifetime(`${origin}:${"b".repeat(64)}`)).toBeUndefined();
+  await choose(/^Temporary, 2 weeks/);
+  expect(readDefaultLifetime(scope)).toBe(1209600);
+  await choose(/^Ongoing/);
+  expect(readDefaultLifetime(scope)).toBeUndefined();
+});
+
+it("says so when this device can't save the lifetime, and keeps the saved one", async () => {
+  const { user } = await setup();
+  const scope = `${origin}:${viewer}`;
+  const setItem = vi
+    .spyOn(Storage.prototype, "setItem")
+    .mockImplementation(() => {
+      throw new Error("quota");
+    });
+  await user.click(screen.getByRole("combobox", { name: "New Solo chats" }));
+  await user.click(
+    await screen.findByRole("option", { name: /^Temporary, 1 day/ }),
+  );
+  expect(screen.getByRole("alert")).toHaveTextContent(
+    "Couldn’t save this on this device. Try again.",
+  );
+  expect(readDefaultLifetime(scope)).toBeUndefined();
+  expect(
+    screen.getByRole("combobox", { name: "New Solo chats" }),
+  ).toHaveTextContent("Ongoing");
+  setItem.mockRestore();
+  await user.click(screen.getByRole("combobox", { name: "New Solo chats" }));
+  await user.click(
+    await screen.findByRole("option", { name: /^Temporary, 1 day/ }),
+  );
+  expect(readDefaultLifetime(scope)).toBe(86400);
+  expect(screen.queryByRole("alert")).toBeNull();
 });

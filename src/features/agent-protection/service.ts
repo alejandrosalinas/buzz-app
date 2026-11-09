@@ -323,6 +323,7 @@ export class AgentProtectionService extends Service {
     id: string,
     provider: NonNullable<ReturnType<typeof this.providers.get>>,
     runtime: string,
+    agent?: Readonly<{ pubkey: string; relay: string }>,
   ): ProtectedSpawn {
     const processId = provider.value.runtimeProcesses?.[runtime];
     const spawn = provider.spawn;
@@ -344,6 +345,7 @@ export class AgentProtectionService extends Service {
         process = await spawn(processId, {
           ...options,
           protection: copy(provider.value.processProtection),
+          ...(agent && { protectedAgent: agent }),
         });
         assertAvailable();
       } catch (error) {
@@ -418,6 +420,7 @@ export class AgentProtectionService extends Service {
             binding.provider,
             provider,
             agent.type.split("/")[0] ?? "",
+            { pubkey: agent.pubkey, relay: agent.relay },
           )
         : async () => {
             throw new Error("The required protection plugin is unavailable");

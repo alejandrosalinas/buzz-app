@@ -7,6 +7,8 @@ import {
   readJournal,
   releaseReadingFocus,
 } from "./reading.mjs";
+import { openPage } from "./navigation.mjs";
+import { channelUnread } from "./unread-state.mjs";
 
 test.use({
   productionBroker: true,
@@ -29,9 +31,10 @@ test.describe("mentioned reply priority", () => {
     await holdReadingFocus(page);
     await open(page, app);
     const alpha = page.locator('button[data-channel-id="alpha"]');
-    await expect(
-      alpha.getByRole("img", { name: /unread threads?/ }),
-    ).toBeVisible();
+    // The open channel's row is quiet; its activity popover still lists threads.
+    await expect
+      .poll(async () => (await channelUnread(page, "alpha")).threads)
+      .toBe(2);
     await alpha.hover();
     const popover = page.getByRole("dialog", { name: "Activity in Alpha" });
     await expect(popover).toBeVisible();
@@ -346,6 +349,73 @@ test.describe("mentioned reply priority", () => {
     await expect(composer).toBeFocused();
     await expect(composer).toHaveText("Still typing");
   });
+
+  test("search's Unread row opens the previewed thread reply with focus, and reading it updates the row", async ({
+    page,
+    app,
+  }) => {
+    await open(page, app);
+    const unread = () =>
+      page.evaluate(() => {
+        const { unread } = window.fixtureRelay.snapshot().session;
+        return {
+          count: unread.snapshot({ kind: "channel", channelId: "alpha" })
+            .observedCount,
+          items: unread.activity("alpha").items ?? [],
+        };
+      });
+    // Reading the channel leaves Alpha unread only through its threads.
+    await page
+      .getByRole("textbox", { name: "Message #Alpha", exact: true })
+      .focus();
+    await expect
+      .poll(async () => {
+        const { count, items } = await unread();
+        return (
+          items.length === 2 &&
+          items[0].unreadCount + items[1].unreadCount === count
+        );
+      })
+      .toBe(true);
+    await page.locator('button[data-channel-id="beta"]').click();
+    await expect(
+      page.getByRole("textbox", { name: "Message #Beta", exact: true }),
+    ).toBeVisible();
+    const [newest, other] = (await unread()).items;
+    const dialog = page.getByRole("dialog", { name: "Search Buzz" });
+    const row = dialog
+      .getByRole("group", { name: "Unread" })
+      .getByRole("option")
+      .filter({ hasText: /^Alpha/ });
+    await page.keyboard.press("ControlOrMeta+k");
+    await dialog.getByRole("combobox", { name: "Search Buzz" }).fill("");
+    await expect(row).toContainText(`Alice Fixture: ${newest.preview}`);
+    await expect(row).toHaveAttribute("aria-selected", "true");
+    await page.keyboard.press("Enter");
+    await expect(dialog).toBeHidden();
+    const thread = page.getByRole("complementary", {
+      name: "Thread",
+      exact: true,
+    });
+    await expect(
+      thread.locator(`[data-message-id="${newest.latestMessageId}"]`),
+    ).toBeVisible();
+    // The thread takes focus from search, so it reads without another gesture.
+    await expect
+      .poll(() =>
+        page.evaluate(
+          () => !!document.activeElement?.closest("[data-reading-surface]"),
+        ),
+      )
+      .toBe(true);
+    await expect
+      .poll(async () => (await unread()).items.map(({ rootId }) => rootId))
+      .toEqual([other.rootId]);
+    await page.locator('button[data-channel-id="beta"]').click();
+    await page.keyboard.press("ControlOrMeta+k");
+    await dialog.getByRole("combobox", { name: "Search Buzz" }).fill("");
+    await expect(row).toContainText(`Alice Fixture: ${other.preview}`);
+  });
 });
 
 test("thread buttons show observed unread independently, clear only after reading, and expose hover/focus affordance", async ({
@@ -385,8 +455,12 @@ test("thread buttons show observed unread independently, clear only after readin
   await expect(broadcast).toHaveAccessibleName(/Observed unread replies/);
   const alpha = page.locator('button[data-channel-id="alpha"]');
   const activity = alpha.getByRole("img", { name: /unread threads?/ });
-  await expect(activity).toBeVisible();
-  await expect(alpha.getByText("Alpha", { exact: true })).toHaveCSS(
+  // The open channel's row is quiet while its threads stay unread.
+  await expect
+    .poll(async () => (await channelUnread(page, "alpha")).threads)
+    .toBe(2);
+  await expect(activity).toHaveCount(0);
+  await expect(alpha.getByText("Alpha", { exact: true })).not.toHaveCSS(
     "font-weight",
     "600",
   );
@@ -401,6 +475,7 @@ test("thread buttons show observed unread independently, clear only after readin
   await expect(
     alpha.getByRole("img", { name: /Marked unread on this device only/ }),
   ).toBeAttached();
+  // Marking it unread shows the whole row again, its threads included.
   await expect(activity).toHaveAccessibleName(/unread threads?/);
   await page.evaluate(() => {
     document.documentElement.dataset.colorMode = "dark";
@@ -670,9 +745,10 @@ test("same-thread sidebar activity replaces timeline focus return", async ({
     .get("primary/alpha")
     .find((row) => row.content === "Thread root 0");
   const alpha = page.locator('button[data-channel-id="alpha"]');
-  await expect(
-    alpha.getByRole("img", { name: /unread threads?/ }),
-  ).toBeVisible();
+  // The open channel's row is quiet; its activity popover still lists threads.
+  await expect
+    .poll(async () => (await channelUnread(page, "alpha")).threads)
+    .toBeGreaterThan(0);
   let release;
   const held = new Promise((resolve) => {
     release = resolve;
@@ -1084,4 +1160,157 @@ test("a live reply in a main-pane thread stays unread while focus is in the side
   await expect.poll(() => unread(x.id)).toBeGreaterThan(0);
   await page.clock.runFor(1000);
   expect(await unread(x.id)).toBeGreaterThan(0);
+});
+
+test.describe("top-level mention activity", () => {
+  test.use({ historyCounts: { alpha: 20, beta: 0 } });
+
+  // Browser-only: hover opening, the exact opening in the timeline and the
+  // visibility read depend on real layout and focus.
+  test("a mention-only row opens Activity, and opening its mention reads it", async ({
+    page,
+    app,
+  }) => {
+    await open(page, app);
+    // Load Beta's window first: an exact opening that arrives while the window
+    // is still settling opens the message as its own tab instead.
+    const beta = page.locator('button[data-channel-id="beta"]');
+    await beta.click();
+    await expect(
+      page.getByRole("textbox", { name: "Message #Beta", exact: true }),
+    ).toBeVisible();
+    await page.locator('button[data-channel-id="alpha"]').click();
+    await expect(
+      page.getByRole("textbox", { name: "Message #Alpha", exact: true }),
+    ).toBeVisible();
+    const mention = app.append(
+      "primary",
+      "beta",
+      "Can you sign off on Beta?",
+      true,
+      false,
+      undefined,
+      undefined,
+      [["p", app.viewer]],
+    );
+    await openPage(page, "Activity");
+    const inbox = page.getByRole("region", { name: "Activity", exact: true });
+    const row = inbox
+      .getByRole("list", { name: "Activity", exact: true })
+      .getByRole("listitem")
+      .filter({ has: page.getByRole("button", { name: / in #Beta$/ }) });
+    await expect(row.getByRole("img", { name: "Unread" })).toBeVisible();
+    await openPage(page, "Messages");
+    // A mention alone keeps the priority dot.
+    await expect(beta.locator("[data-channel-priority]")).toBeVisible();
+    await expect(beta.locator("[data-channel-activity]")).toHaveCount(0);
+    await beta.hover();
+    const popover = page.getByRole("dialog", { name: "Activity in Beta" });
+    const item = popover
+      .getByRole("region", { name: "Mentions" })
+      .getByRole("button", {
+        name: /^Open unread mention from .+: Can you sign off on Beta\?$/,
+      });
+    await expect(item).toBeVisible();
+    await expect(
+      popover.getByRole("region", { name: "Unread threads" }),
+    ).toHaveCount(0);
+    await item.click();
+    const message = page.locator(
+      `[data-channel-timeline] [data-message-id="${mention.id}"]`,
+    );
+    await expect(message).toBeInViewport();
+    await expect(message).toBeFocused();
+    await expect
+      .poll(() =>
+        page.evaluate(
+          (id) =>
+            window.fixtureRelay.snapshot().session.unread.attention("beta", id)
+              .unread,
+          mention.id,
+        ),
+      )
+      .toBe(false);
+    await openPage(page, "Activity");
+    await expect(row).toBeVisible();
+    await expect(row.getByRole("img", { name: "Unread" })).toHaveCount(0);
+  });
+
+  // Browser-only: the reveal's fractional scroll position and the visibility
+  // read depend on real layout.
+  test("opening a mention above the bottom from Activity reads it there", async ({
+    page,
+    app,
+  }) => {
+    await open(page, app);
+    // Leave Alpha, its window loaded, so its new messages arrive unseen.
+    await page.locator('button[data-channel-id="beta"]').click();
+    await expect(
+      page.getByRole("textbox", { name: "Message #Beta", exact: true }),
+    ).toBeVisible();
+    const mention = app.append(
+      "primary",
+      "alpha",
+      "Can you sign off on Alpha?",
+      true,
+      false,
+      undefined,
+      undefined,
+      [["p", app.viewer]],
+    );
+    // Enough later messages that revealing the mention cannot reach the
+    // bottom, whose catch-up would read it anyway.
+    for (let index = 0; index < 40; index++)
+      app.append("primary", "alpha", `Later update ${index}`, true, false);
+    await openPage(page, "Activity");
+    const row = page
+      .getByRole("region", { name: "Activity", exact: true })
+      .getByRole("list", { name: "Activity", exact: true })
+      .getByRole("listitem")
+      .filter({ hasText: "Can you sign off on Alpha?" });
+    await expect(row.getByRole("img", { name: "Unread" })).toBeVisible();
+    await openPage(page, "Messages");
+    const alpha = page.locator('button[data-channel-id="alpha"]');
+    await alpha.hover();
+    const popover = page.getByRole("dialog", { name: "Activity in Alpha" });
+    const mentions = popover.getByRole("region", { name: "Mentions" });
+    await mentions
+      .getByRole("button", {
+        name: /^Open unread mention from .+: Can you sign off on Alpha\?$/,
+      })
+      .click();
+    const message = page.locator(
+      `[data-channel-timeline] [data-message-id="${mention.id}"]`,
+    );
+    await expect(message).toBeInViewport();
+    await expect(message).toBeFocused();
+    expect(
+      await page
+        .getByRole("region", { name: "Channel message history" })
+        .evaluate(
+          (element) =>
+            element.scrollHeight - element.clientHeight - element.scrollTop,
+        ),
+      "the reveal stops above the bottom",
+    ).toBeGreaterThan(1);
+    await expect
+      .poll(() =>
+        page.evaluate(
+          (id) =>
+            window.fixtureRelay.snapshot().session.unread.attention("alpha", id)
+              .unread,
+          mention.id,
+        ),
+      )
+      .toBe(false);
+    // Alpha's unread threads keep Activity open; the mention has left it.
+    await alpha.hover();
+    await expect(
+      popover.getByRole("region", { name: "Unread threads" }),
+    ).toBeVisible();
+    await expect(mentions).toHaveCount(0);
+    await openPage(page, "Activity");
+    await expect(row).toBeVisible();
+    await expect(row.getByRole("img", { name: "Unread" })).toHaveCount(0);
+  });
 });

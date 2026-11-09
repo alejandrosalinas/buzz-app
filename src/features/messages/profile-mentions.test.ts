@@ -1,7 +1,7 @@
 import { expect, it } from "vitest";
 import { profileMentionParts } from "./profile-mentions";
 import { profileTarget } from "../profiles/target";
-import type { ChannelMessage } from "../relay/contracts";
+import type { ChannelMessage, Profile } from "../relay/contracts";
 const alice = "a".repeat(64),
   mic = "b".repeat(64),
   other = "c".repeat(64);
@@ -121,5 +121,38 @@ it("binds signed references without making them notification recipients", () => 
   ]);
   expect(parts("@Mic", { ...reference, edited: true })).toEqual([
     { text: "@Mic" },
+  ]);
+});
+it("binds a verified person's prose written under either name preference", () => {
+  const reader = "d".repeat(64);
+  const verified = {
+    displayName: "reader",
+    username: "reader",
+    fullName: "Reader Full",
+  } as NonNullable<Profile["verified"]>;
+  const content = "@reader and @Reader Full";
+  for (const name of ["reader", "Reader Full"]) {
+    const result = profileMentionParts(
+      { ...row, content, mentions: [reader] },
+      new Map([[reader, { name, username: "reader", verified }]]),
+    );
+    expect(result.filter((part) => part.target)).toEqual([
+      { text: "@reader", target: profileTarget(reader) },
+      { text: "@Reader Full", target: profileTarget(reader) },
+    ]);
+  }
+});
+it("does not bind by an unverified kind-0 handle", () => {
+  const sam = "e".repeat(64);
+  const handle = "f".repeat(64);
+  const result = profileMentionParts(
+    { ...row, content: "hi @sam", mentions: [sam, handle] },
+    new Map([
+      [sam, { name: "Sam Lee", username: "sam" }],
+      [handle, { name: "sam" }],
+    ]),
+  );
+  expect(result.filter((part) => part.target)).toEqual([
+    { text: "@sam", target: profileTarget(handle) },
   ]);
 });

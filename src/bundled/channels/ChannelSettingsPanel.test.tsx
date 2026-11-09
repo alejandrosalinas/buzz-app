@@ -10,7 +10,7 @@ import {
 } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { createPortal } from "react-dom";
-import { afterEach, assert, expect, it, vi } from "vitest";
+import { afterEach, assert, expect, it, onTestFinished, vi } from "vitest";
 import { ChannelSettingsPanel } from "./ChannelSettingsPanel";
 import type { ChannelSummary } from "../../features/relay/contracts";
 import {
@@ -64,6 +64,9 @@ it("shows known channel details with diagnostics collapsed until requested", asy
 it("closes with Escape or its close button without swallowing other keys", async () => {
   const user = userEvent.setup();
   const close = vi.fn();
+  const windowKeyDown = vi.fn();
+  window.addEventListener("keydown", windowKeyDown);
+  onTestFinished(() => window.removeEventListener("keydown", windowKeyDown));
   render(
     <ChannelSettingsPanel
       scope="community:viewer"
@@ -75,8 +78,18 @@ it("closes with Escape or its close button without swallowing other keys", async
   );
   await user.keyboard("{ArrowDown}");
   expect(close).not.toHaveBeenCalled();
+  // Shift+Escape is Mark all as read; only plain Escape dismisses.
+  await user.keyboard("{Shift>}{Escape}{/Shift}");
+  expect(close).not.toHaveBeenCalled();
+  expect(windowKeyDown).toHaveBeenCalledWith(
+    expect.objectContaining({ key: "Escape", shiftKey: true }),
+  );
+  windowKeyDown.mockClear();
   await user.keyboard("{Escape}");
   expect(close).toHaveBeenCalledTimes(1);
+  expect(windowKeyDown).not.toHaveBeenCalledWith(
+    expect.objectContaining({ key: "Escape" }),
+  );
   await user.click(
     screen.getByRole("button", { name: "Close Channel settings tab" }),
   );

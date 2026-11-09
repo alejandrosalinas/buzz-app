@@ -1,5 +1,8 @@
 import { useSyncExternalStore } from "react";
-import type { ExternalApps } from "../../features/agents/external-connection";
+import {
+  type ExternalApps,
+  fullAgentAccess,
+} from "../../features/agents/external-connection";
 import { Header } from "../../shared/design-system/ui/Header";
 import { SettingsGroup } from "../../shared/design-system/ui/SettingsGroup";
 import { PreferenceRow } from "../../shared/design-system/ui/PreferenceRow";
@@ -28,15 +31,17 @@ export function ExternalConnectionSettings({
           <PreferenceRow
             title={state.grant.client}
             subtitle={
-              state.grant.phase === "connected"
-                ? "Connected"
-                : state.grant.phase === "waiting"
-                  ? "Authorized. Waiting for the app to connect."
-                  : state.grant.phase === "starting"
-                    ? "Authorizing…"
-                    : state.pairing
-                      ? "Approved. The app can restore this connection."
-                      : "Connection ended. Start setup again in the external app."
+              state.pairing && !fullAgentAccess(state.pairing.approval.scopes)
+                ? "This older approval gives limited access, which no longer works. Update the app and start setup again to approve full agent access."
+                : state.grant.phase === "connected"
+                  ? "Connected"
+                  : state.grant.phase === "waiting"
+                    ? "Authorized. Waiting for the app to connect."
+                    : state.grant.phase === "starting"
+                      ? "Authorizing…"
+                      : state.pairing
+                        ? "Approved. The app can restore this connection."
+                        : "Connection ended. Start setup again in the external app."
             }
             trailing={
               state.pairing || state.grant.phase !== "ended" ? (

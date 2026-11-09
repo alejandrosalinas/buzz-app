@@ -25,7 +25,7 @@ export function isNativeMediaSource(source: string): boolean {
       !media.password &&
       !media.search &&
       !media.hash &&
-      /^\/media\/[0-9a-f]{64}(?:\.(?:[a-z0-9]{1,8}|thumb\.jpg))?$/.test(
+      /^\/media\/[0-9a-f]{64}(?:\.(?:[a-z0-9]{1,8}|thumb\.(?:jpg|webp)))?$/.test(
         media.pathname,
       )
     );

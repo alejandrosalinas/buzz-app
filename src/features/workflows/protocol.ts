@@ -42,7 +42,9 @@ function one(event: Pick<EventData, "tags">, name: string): string {
     throw new Error(`Invalid workflow ${name} tag`);
   return tags[0][1];
 }
-export function workflowReference(event: EventData): WorkflowReference {
+export function workflowReference(
+  event: Pick<EventData, "kind" | "tags" | "pubkey">,
+): WorkflowReference {
   const channelId = one(event, "h");
   let id: string,
     owner = event.pubkey;
@@ -125,7 +127,12 @@ export function validateWorkflowEvent(event: EventData, viewer: string) {
   if (!WORKFLOW_KINDS.includes(event.kind as 30620 | 46020 | 5))
     throw new Error("Unsupported workflow operation");
   const reference = workflowReference(event);
-  if (reference.owner !== viewer || event.pubkey !== viewer)
+  // Deletions may target an agent owned by the signer. Ownership is checked
+  // by the session capability and authoritatively by the relay, not tag shape.
+  if (
+    (event.kind !== 5 && reference.owner !== viewer) ||
+    event.pubkey !== viewer
+  )
     throw new Error("Only the workflow author can manage it");
   const allowed =
     event.kind === 5

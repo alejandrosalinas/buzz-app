@@ -27,12 +27,22 @@ provides Compact session and Start a new session when idle, and Interrupt while
 working. There are no special chat commands.
 
 Thread scope is the default; channel scope shares a session across threads.
-DMs and the owner's Solo chat each share one conversation. Workspace or tool-schema
+DMs, huddle rooms and the owner's Solo chat each share one conversation. Workspace or tool-schema
 changes start a fresh session, as does a missing saved thread. Bindings persist
 locally per community and agent. Switching communities does not stop work;
 removing an agent, leaving its community or disabling the plugin does.
 
 To inspect a conversation, see [View a Codex session](../../../docs/view-codex-session.md).
+
+## Huddle voice
+
+An eligible voice seat uses the room's existing Codex thread with automatic
+WebRTC handoffs. The adapter carries 48 kHz mono PCM through the existing huddle
+capture worklet; Codex controls speech and interruption. Delegated work enters
+the ordinary active-turn and Buzz-tool path, and room mentions steer that work.
+The seat retains its resolved opening settings and thread subscription until
+close finishes. Protected agents and devices without WebRTC are refused.
+Final realtime transcripts go through the host's transcript policy.
 
 ## Conversation storage
 

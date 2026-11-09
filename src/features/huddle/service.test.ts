@@ -1,3 +1,7 @@
+import { addChannelMember } from "../channel-members/members";
+vi.mock("../channel-members/members", () => ({
+  addChannelMember: vi.fn(async () => {}),
+}));
 import { Context } from "@deepseek-ai/cordis";
 import { describe, expect, it, vi } from "vitest";
 import type { ChannelSummary } from "../relay/contracts";
@@ -30,6 +34,7 @@ function harness(
       members: [destination.viewer],
     },
   ],
+  dmAgent?: Parameters<typeof createHuddles>[3],
 ) {
   let channels = initialChannels;
   let partial = false;
@@ -52,6 +57,8 @@ function harness(
             accessListeners.delete(fn);
           };
         },
+        resolve: async () => {},
+        get: (id) => channels.find((channel) => channel.id === id),
         list: () => ({
           status: "ready",
           channels,
@@ -94,7 +101,7 @@ function harness(
     send = fn;
     return audio;
   });
-  const service = createHuddles(relay, bridge, openAudio);
+  const service = createHuddles(relay, bridge, openAudio, dmAgent);
   return {
     service,
     read,
@@ -341,7 +348,7 @@ it("joins an explicitly invited room without parent access, then leaves on revok
   const memberRoom: ChannelSummary = {
     id: room,
     name: "Huddle",
-    huddle: true,
+    huddle: true as const,
     parentChannelId: destination.channelId,
     members: [destination.viewer],
   };
@@ -455,6 +462,52 @@ it.each([
   },
 );
 
+it("accepts listening state only for the current connected call", async () => {
+  const h = harness();
+  await h.service.join(destination, "room");
+  h.receive({ type: "connected", room: "room", participants: [] });
+  const id = h.service.snapshot().id;
+  if (!id) throw new Error("Missing call id");
+  h.service.voiceListening("stale", "agent", true);
+  expect(h.service.snapshot().listening).toBeUndefined();
+  h.service.voiceListening(id, "agent", true);
+  expect(h.service.snapshot().listening).toEqual(["agent"]);
+  h.service.voiceListening("stale", "agent", false);
+  expect(h.service.snapshot().listening).toEqual(["agent"]);
+  h.service.voiceListening(id, "agent", false);
+  expect(h.service.snapshot().listening).toEqual([]);
+  await h.service.leave();
+  h.service.voiceListening(id, "agent", true);
+  expect(h.service.snapshot().listening).toBeUndefined();
+  await h.service.dispose();
+});
+
+it("ignores voice errors and dismissals from a previous call", async () => {
+  const h = harness();
+  try {
+    await h.service.join(destination, "room");
+    h.receive({ type: "connected", room: "room", participants: [] });
+    const previous = h.service.snapshot().id;
+    if (!previous) throw new Error("Missing previous call id");
+    await h.service.leave();
+    await h.service.join(destination, "room");
+    h.receive({ type: "connected", room: "room", participants: [] });
+    const current = h.service.snapshot().id;
+    if (!current) throw new Error("Missing current call id");
+    expect(current).not.toBe(previous);
+    h.service.voiceError(previous, "Late close failure");
+    expect(h.service.snapshot().error).toBeUndefined();
+    h.service.voiceError(current, "Current voice failure");
+    expect(h.service.snapshot().error).toBe("Current voice failure");
+    h.service.voiceError(previous);
+    expect(h.service.snapshot().error).toBe("Current voice failure");
+    h.service.voiceError(current);
+    expect(h.service.snapshot().error).toBeUndefined();
+  } finally {
+    await h.dispose();
+  }
+});
+
 it("publishes this document's call phase to optional consumers until Huddles unloads", async () => {
   const h = harness();
   const leaving = deferred<void>();
@@ -498,4 +551,236 @@ it("publishes this document's call phase to optional consumers until Huddles unl
   await vi.waitFor(() => expect(withdrawn).toBe(true));
   await consumer.dispose();
   await h.dispose();
+});
+
+it("preserves a five-frame capture burst while IPC is in flight", async () => {
+  const h = harness();
+  const gate = deferred<void>();
+  const send = vi.mocked(h.bridge.send);
+  send.mockImplementationOnce(() => gate.promise);
+  try {
+    await h.service.join(destination);
+    h.receive({
+      type: "connected",
+      room: "room",
+      participants: [destination.viewer],
+    });
+    for (let i = 0; i < 5; i++) h.send(Array(960).fill(i / 10));
+    expect(send).toHaveBeenCalledTimes(1);
+    gate.resolve();
+    await vi.waitFor(() => expect(send).toHaveBeenCalledTimes(5));
+    expect(send.mock.calls.map(([, pcm]) => pcm[0])).toEqual([
+      0, 0.1, 0.2, 0.3, 0.4,
+    ]);
+  } finally {
+    gate.resolve();
+    await h.dispose();
+  }
+});
+
+it.each(["mute", "leave", "failure"])(
+  "discards pending human audio on %s",
+  async (action) => {
+    const h = harness();
+    const gate = deferred<void>();
+    const send = vi.mocked(h.bridge.send);
+    send.mockImplementationOnce(async () => {
+      await gate.promise;
+      if (action === "failure") throw new Error("send failed");
+    });
+    try {
+      await h.service.join(destination);
+      h.receive({
+        type: "connected",
+        room: "room",
+        participants: [destination.viewer],
+      });
+      h.send(Array(960).fill(0.1));
+      h.send(Array(960).fill(0.2));
+      if (action === "mute") {
+        h.service.mute();
+        h.send(Array(960).fill(0.3));
+        h.service.mute();
+        h.send(Array(960).fill(0.4));
+      } else if (action === "leave") await h.service.leave();
+      gate.resolve();
+      if (action === "mute") {
+        await vi.waitFor(() => expect(send).toHaveBeenCalledTimes(2));
+        expect(send.mock.calls.map(([, pcm]) => pcm[0])).toEqual([0.1, 0.4]);
+      } else {
+        if (action === "failure")
+          await vi.waitFor(() =>
+            expect(h.service.snapshot().phase).toBe("error"),
+          );
+        await send.mock.results[0]?.value.catch(() => {});
+        h.send(Array(960).fill(0.5));
+        expect(send).toHaveBeenCalledTimes(1);
+      }
+    } finally {
+      gate.resolve();
+      await h.dispose();
+    }
+  },
+);
+
+describe("automatic DM voice invitation", () => {
+  const room = {
+    id: "room",
+    name: "Huddle",
+    channelType: "stream" as const,
+    huddle: true as const,
+    parentChannelId: destination.channelId,
+    members: [destination.viewer],
+  };
+  const parent = {
+    id: destination.channelId,
+    name: "DM",
+    channelType: "dm" as const,
+    members: [destination.viewer, "agent"],
+  };
+  it("adds the eligible agent once to the verified room after connection", async () => {
+    vi.mocked(addChannelMember).mockClear();
+    const h = harness([parent, room], () => "agent");
+    try {
+      await h.service.start(destination);
+      expect(addChannelMember).not.toHaveBeenCalled();
+      h.receive({ type: "connected", room: "room", participants: [] });
+      await vi.waitFor(() => expect(addChannelMember).toHaveBeenCalledTimes(1));
+      expect(addChannelMember).toHaveBeenCalledWith(
+        expect.anything(),
+        "room",
+        "agent",
+        expect.any(AbortSignal),
+      );
+      h.receive({ type: "connected", room: "room", participants: [] });
+      await Promise.resolve();
+      expect(addChannelMember).toHaveBeenCalledTimes(1);
+    } finally {
+      await h.dispose();
+    }
+  });
+  it.each(["leave", "ineligible", "wrong-parent", "already-member"])(
+    "does not grant access after %s",
+    async (scenario) => {
+      vi.mocked(addChannelMember).mockClear();
+      let eligible = true;
+      const h = harness(
+        [
+          parent,
+          {
+            ...room,
+            parentChannelId:
+              scenario === "wrong-parent" ? "other" : destination.channelId,
+            members:
+              scenario === "already-member"
+                ? [destination.viewer, "agent"]
+                : room.members,
+          },
+        ],
+        () => (eligible ? "agent" : undefined),
+      );
+      try {
+        await h.service.start(destination);
+        h.receive({ type: "connected", room: "room", participants: [] });
+        if (scenario === "leave") await h.service.leave();
+        if (scenario === "ineligible") eligible = false;
+        await Promise.resolve();
+        await Promise.resolve();
+        expect(addChannelMember).not.toHaveBeenCalled();
+      } finally {
+        await h.dispose();
+      }
+    },
+  );
+  it.each([
+    ["explicit room", "room"],
+    ["discovered room", undefined],
+  ])("never invites when joining an existing call (%s)", async (_, joined) => {
+    vi.mocked(addChannelMember).mockClear();
+    const h = harness([parent, room], () => "agent");
+    try {
+      await h.service.join(destination, joined);
+      h.receive({ type: "connected", room: "room", participants: [] });
+      await Promise.resolve();
+      await Promise.resolve();
+      expect(addChannelMember).not.toHaveBeenCalled();
+    } finally {
+      await h.dispose();
+    }
+  });
+  it("clears only its own invitation warning once the agent is in the room", async () => {
+    vi.mocked(addChannelMember).mockRejectedValueOnce(new Error("Offline"));
+    const h = harness([parent, room], () => "agent");
+    try {
+      await h.service.start(destination);
+      h.receive({ type: "connected", room: "room", participants: [] });
+      await vi.waitFor(() =>
+        expect(h.service.snapshot().error).toContain("Couldn’t add the agent"),
+      );
+      h.access([parent, { ...room, members: [destination.viewer, "agent"] }]);
+      expect(h.service.snapshot().error).toBeUndefined();
+      const id = h.service.snapshot().id ?? "";
+      h.service.voiceError(id, "Agent: Voice disconnected");
+      h.access([parent, { ...room, members: [destination.viewer, "agent"] }]);
+      expect(h.service.snapshot().error).toBe("Agent: Voice disconnected");
+    } finally {
+      await h.dispose();
+    }
+  });
+  it("does not resurrect a warning when the agent joins before the rejected invite settles", async () => {
+    let reject = (_: Error) => {};
+    vi.mocked(addChannelMember).mockImplementationOnce(
+      () =>
+        new Promise((_, fail) => {
+          reject = fail;
+        }),
+    );
+    const h = harness([parent, room], () => "agent");
+    try {
+      await h.service.start(destination);
+      h.receive({ type: "connected", room: "room", participants: [] });
+      await vi.waitFor(() => expect(addChannelMember).toHaveBeenCalled());
+      h.access([parent, { ...room, members: [destination.viewer, "agent"] }]);
+      reject(new Error("Timed out"));
+      await new Promise((resolve) => setTimeout(resolve));
+      expect(h.service.snapshot().error).toBeUndefined();
+    } finally {
+      await h.dispose();
+    }
+  });
+  it("keeps the human connected and exposes a failed invitation", async () => {
+    vi.mocked(addChannelMember).mockRejectedValueOnce(new Error("Offline"));
+    const h = harness([parent, room], () => "agent");
+    try {
+      await h.service.start(destination);
+      h.receive({ type: "connected", room: "room", participants: [] });
+      await vi.waitFor(() =>
+        expect(h.service.snapshot().error).toContain(
+          "Couldn’t add the agent: Offline",
+        ),
+      );
+      expect(h.service.snapshot().phase).toBe("connected");
+    } finally {
+      await h.dispose();
+    }
+  });
+});
+
+it("clears thinking on leave and ignores callbacks from an old call", async () => {
+  const h = harness();
+  try {
+    await h.service.join(destination);
+    h.receive({ type: "connected", room: "room", participants: ["agent"] });
+    const id = h.service.snapshot().id;
+    if (!id) throw new Error("Missing call id");
+    h.service.voiceThinking("old", "agent", true);
+    expect(h.service.snapshot().thinking).toBeUndefined();
+    h.service.voiceThinking(id, "agent", true);
+    expect(h.service.snapshot().thinking).toEqual(["agent"]);
+    await h.service.leave();
+    h.service.voiceThinking(id, "agent", true);
+    expect(h.service.snapshot().thinking).toBeUndefined();
+  } finally {
+    await h.dispose();
+  }
 });

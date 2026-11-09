@@ -9,22 +9,37 @@ import {
   type DraftAttachment,
 } from "./attachment-draft";
 
-const recoveryConflictNotice =
-  "Failed send was kept because this draft changed. Clear the draft, then retry recovery before leaving this session.";
-const recoveryStorageNotice =
-  "Could not restore the failed send. Retry recovery before leaving this session.";
+const recoveryNotice = (recovery: boolean | "conflict", to: string) =>
+  recovery === "conflict"
+    ? `Failed send to ${to} was kept because its draft changed. Clear that draft, then retry recovery before leaving this session.`
+    : `Could not restore the failed send to ${to}. Retry recovery before leaving this session.`;
 
-type Notice = Readonly<{ id: string; message: string; retry?: () => void }>;
+/** Where a send is going: its conversation's name and, unless only its own
+ * entry point opens it (a huddle), a link that opens it. */
+export type Destination = Readonly<{ name: string; link?: string }>;
+type Notice = Readonly<{
+  id: string;
+  title: string;
+  description?: string;
+  destination: Destination;
+  retry?: () => void;
+}>;
 export type BackgroundUploads = Readonly<{
   uploading: boolean;
-  phase: "Preparing" | "Uploading" | "Finishing";
+  phase: "Preparing upload" | "Uploading" | "Finishing upload";
   /** Fraction of bytes sent, or null while the host reports no byte counts. */
   progress: number | null;
+  /** The send Cancel stops, and how many other sends are running. */
+  destination: Destination | undefined;
+  others: number;
+  /** False while every listed send is cancelled but not yet settled. */
+  cancellable: boolean;
   notices: readonly Notice[];
   host: object | undefined;
 }>;
 type Job = {
   owner: string;
+  destination: Destination;
   store: AttachmentDraft;
   controller: AbortController;
 };
@@ -51,8 +66,11 @@ function queueFor(session: ComposerSession) {
       listeners,
       snapshot: {
         uploading: false,
-        phase: "Preparing",
+        phase: "Preparing upload",
         progress: null,
+        destination: undefined,
+        others: 0,
+        cancellable: false,
         notices: [],
         host: undefined,
       },
@@ -85,14 +103,20 @@ function update(queue: Queue) {
         : (item.transfer?.sent ?? 0)),
     0,
   );
+  // A cancelled send stays listed until it settles; name the one Cancel stops.
+  const running = live(queue);
+  const named = running.at(-1) ?? queue.jobs.at(-1);
   queue.snapshot = Object.freeze({
     uploading: queue.jobs.length > 0,
     phase: files.some((item) => item.status === "uploading")
       ? "Uploading"
       : files.every((item) => item.status === "ready")
-        ? "Finishing"
-        : "Preparing",
+        ? "Finishing upload"
+        : "Preparing upload",
     progress: known && total ? sent / total : null,
+    destination: named?.destination,
+    others: running.filter((job) => job !== named).length,
+    cancellable: running.length > 0,
     notices: queue.notices,
     host: queue.hosts[0],
   });
@@ -111,6 +135,7 @@ export function sendInBackground(
   session: ComposerSession,
   owner: string,
   channelId: string,
+  destination: Destination,
   files: readonly DraftAttachment[],
   publish: (uploaded: readonly UploadedAttachment[]) => void | Promise<void>,
   recover: (
@@ -124,14 +149,14 @@ export function sendInBackground(
   const store = attachmentDraft(session, key, channelId);
   if (source) transferAttachmentDraft(source, store);
   else store.adopt(files);
-  const job = { owner, store, controller: new AbortController() };
+  const job = { owner, destination, store, controller: new AbortController() };
   const { signal } = job.controller;
   queue.jobs.push(job);
   const stop = store.subscribe(() => update(queue));
   update(queue);
   void (async () => {
     let uploaded: readonly UploadedAttachment[] | undefined;
-    let notice: string | undefined;
+    let failure: { title: string; description: string } | undefined;
     let preparationError: unknown;
     try {
       uploaded = await store.prepareForSend(signal);
@@ -142,12 +167,15 @@ export function sendInBackground(
       // Session aborts (access change, cache clear, close) restore like failures.
       if (!signal.aborted) {
         if (uploaded) preparationError = error;
-        notice = uploaded
-          ? `Message failed to send: ${reason(error)}`
-          : `Upload failed: ${reason(error)}`;
+        failure = {
+          title: uploaded
+            ? `Message to ${destination.name} failed to send`
+            : `Upload to ${destination.name} failed`,
+          description: reason(error),
+        };
       }
     } finally {
-      if (notice !== undefined || signal.aborted) {
+      if (failure || signal.aborted) {
         let recovery: boolean | "conflict" = false;
         try {
           recovery = recover(store.snapshot(), preparationError);
@@ -161,10 +189,8 @@ export function sendInBackground(
             ...queue.notices,
             {
               id: key,
-              message:
-                recovery === "conflict"
-                  ? recoveryConflictNotice
-                  : recoveryStorageNotice,
+              title: recoveryNotice(recovery, destination.name),
+              destination,
               retry: () => {
                 let result: boolean | "conflict" = false;
                 try {
@@ -177,10 +203,7 @@ export function sendInBackground(
                     item.id === key
                       ? {
                           ...item,
-                          message:
-                            result === "conflict"
-                              ? recoveryConflictNotice
-                              : recoveryStorageNotice,
+                          title: recoveryNotice(result, destination.name),
                         }
                       : item,
                   );
@@ -194,10 +217,10 @@ export function sendInBackground(
           ];
         } else clearAttachmentDraft(session, key);
       } else clearAttachmentDraft(session, key);
-      if (notice !== undefined)
+      if (failure)
         queue.notices = [
           ...queue.notices,
-          { id: `${key}:failure`, message: notice },
+          { id: `${key}:failure`, ...failure, destination },
         ];
       queue.jobs = queue.jobs.filter((candidate) => candidate !== job);
       stop();
@@ -206,12 +229,18 @@ export function sendInBackground(
   })();
 }
 
+function live(queue: Queue) {
+  return queue.jobs.filter((job) => !job.controller.signal.aborted);
+}
+
 /** Desktop's Cancel stops the newest send and restores it like a failure. */
 export function cancelBackgroundUpload(session: ComposerSession) {
-  const live = queueFor(session).jobs.filter(
-    (job) => !job.controller.signal.aborted,
-  );
-  live.at(-1)?.controller.abort();
+  const queue = queueFor(session);
+  live(queue).at(-1)?.controller.abort();
+  // The abort does not stop a publish in flight: the message still sends, and
+  // the job then restores its draft as if cancelled. The pill leaves it
+  // uncounted either way.
+  update(queue);
 }
 
 /** Like Desktop, a conversation cannot send again until its upload settles. */

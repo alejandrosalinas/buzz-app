@@ -4,9 +4,11 @@ import type { ProfileQueries } from "./profile-directory";
 import { attachmentMessage, type UploadedAttachment } from "./attachments";
 import { validReactionContent, type CustomEmoji } from "./emoji";
 import type { EventTemplate } from "nostr-tools";
-import type { ChannelMessage } from "./contracts";
+import { MEDIA_TARGET_TAG, type ChannelMessage } from "./contracts";
 import { messageAuthor } from "./fold";
 import { threadReference } from "./thread-reference";
+import { reactionTarget as reactionTargetId } from "./reaction-target";
+import { safeMessageUrl } from "./message-content";
 import type { EventData } from "./events";
 import type { Outbox, OutboxRecovery } from "./outbox";
 
@@ -243,7 +245,7 @@ export function createMessages(
     const channel = (event: EventData) =>
       event.tags.find(([name]) => name === "h")?.[1] ??
       (event.kind === 7
-        ? find(event.tags.find(([name]) => name === "e")?.[1] ?? "")?.tags.find(
+        ? find(reactionTargetId(event) ?? "")?.tags.find(
             ([name]) => name === "h",
           )?.[1]
         : undefined);
@@ -415,12 +417,18 @@ export function createMessages(
       parentId: string = rootId,
       references: readonly string[] = [],
       picks: MentionPicks = {},
+      mediaTargetUrl?: string,
     ) {
       if (!channelId) throw new Error("A channel is required");
       if (!/^[0-9a-f]{64}$/.test(rootId))
         throw new Error("A valid thread root is required");
       if (!/^[0-9a-f]{64}$/.test(parentId))
         throw new Error("A valid reply parent is required");
+      const mediaTarget = mediaTargetUrl
+        ? safeMessageUrl(mediaTargetUrl)
+        : undefined;
+      if (mediaTargetUrl && !mediaTarget)
+        throw new Error("A valid media target is required");
       const message = attachmentMessage(content, attachments, relayOrigin);
       return writer(9, channelId).send({
         kind: 9,
@@ -432,6 +440,7 @@ export function createMessages(
           ...mentionTags(channelId, withDmAgents(channelId, mentions)),
           ...referenceTags(references),
           ...pickTags(channelId, mentions, picks),
+          ...(mediaTarget ? [[MEDIA_TARGET_TAG, mediaTarget]] : []),
           ...emojiTags(content),
           ...message.tags,
         ],
@@ -440,7 +449,9 @@ export function createMessages(
     /** Supply the current folded attachmentSourceId, or the row ID for original media. */
     edit: (messageId: string, content: string, attachmentSourceId: string) =>
       edit(messageId, content, attachmentSourceId),
-    /** Verified owner edit. Empty text removes the message, as in the composer. */
+    /** Verified owner edit. Empty text removes the message, as in the composer.
+     * As a guest it signs only once `profiles.owner` names the viewer; an
+     * earlier call fails delivery as read-only, and `retry(id)` resends it. */
     async editOwnedAgent(
       messageId: string,
       content: string,
@@ -480,6 +491,7 @@ export function createMessages(
         tags: [
           ["h", channelId],
           ["e", messageId],
+          ["p", messageAuthor(original, signingAuthority)],
           ...(emoji && value.toLowerCase() === `:${emoji.shortcode}:`
             ? [["emoji", emoji.shortcode, emoji.url]]
             : emojiTags(value)),
@@ -509,13 +521,11 @@ export function createMessages(
         }
       : undefined,
     reactionTarget(event: Pick<EventData, "kind" | "tags">) {
+      if (event.kind === 7) return reactionTargetId(event);
       const target = event.tags.find(([name]) => name === "e")?.[1];
-      if (event.kind === 7) return target;
       if (event.kind !== 5 || !target) return undefined;
       const original = find(target);
-      return original?.kind === 7
-        ? original.tags.find(([name]) => name === "e")?.[1]
-        : undefined;
+      return original?.kind === 7 ? reactionTargetId(original) : undefined;
     },
     retry(id: string) {
       outbox?.retry(id);

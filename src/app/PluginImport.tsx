@@ -34,6 +34,7 @@ import type { GitPluginSource } from "../features/navigation/targets";
 const importOperations = new WeakMap<object, Promise<void>>();
 import type {
   PluginInstallOutcome,
+  GitPluginInstallRequest,
   PluginInstallRequest,
 } from "../plugins/installer";
 
@@ -110,7 +111,7 @@ export function PluginImport({
   onReviewHandled?: () => void;
   returnFocus?: () => HTMLElement | null;
   /** A source to review, prefilled; the user still finds, reviews and confirms it. */
-  request?: PluginInstallRequest | undefined;
+  request?: GitPluginInstallRequest | undefined;
   onRequestSettled?:
     | ((id: number, outcome: PluginInstallOutcome) => void)
     | undefined;
@@ -133,7 +134,10 @@ export function PluginImport({
   const currentPlugin = catalog.plugins.find(
     (item) => item.manifest.id === updateId,
   );
-  const savedSource = updateAction?.source ?? currentPlugin?.updateSource;
+  const recordedSource = updateAction?.source ?? currentPlugin?.updateSource;
+  // A URL install is pinned to one artifact; it updates through its recommendation.
+  const savedSource =
+    recordedSource && "url" in recordedSource ? undefined : recordedSource;
   const [repository, setRepository] = useState(
     initialGit?.repository ??
       (savedSource && "repository" in savedSource
@@ -162,7 +166,7 @@ export function PluginImport({
   const [loading, setLoading] = useState(false);
   const [abandonable, setAbandonable] = useState(false);
   const mounted = useRef(true);
-  const [bound, setBound] = useState<PluginInstallRequest>();
+  const [bound, setBound] = useState<GitPluginInstallRequest>();
   const requested = !!bound && !updateId;
   const [preview, setPreview] = useState<ImportPreview | null>(null);
   const [checkedRevision, setCheckedRevision] = useState<string>();
@@ -255,7 +259,7 @@ export function PluginImport({
     if (!open || !holdReview) return;
     return holdReview();
   }, [open, holdReview]);
-  const claimRequest = useEffectEvent((next: PluginInstallRequest) => {
+  const claimRequest = useEffectEvent((next: GitPluginInstallRequest) => {
     // The store refuses a confirmed request first: its install, perhaps in a
     // replaced importer, still reports the outcome.
     if (onRequestClaimed && !onRequestClaimed(next.id)) return;
@@ -357,9 +361,11 @@ export function PluginImport({
       ? `${existing.manifest.name} is already installed from ${
           installedSource && "repository" in installedSource
             ? sourceLabel(installedSource.repository, installedSource.path)
-            : installedSource
-              ? sourceLabel(installedSource.root, installedSource.path)
-              : "an unknown source"
+            : installedSource && "url" in installedSource
+              ? installedSource.url
+              : installedSource
+                ? sourceLabel(installedSource.root, installedSource.path)
+                : "an unknown source"
         }; remove it first to install it from ${sourceLabel(preview.source, candidate.path)}.`
       : null;
   const constraint =
@@ -866,19 +872,17 @@ export function PluginImport({
   const updateActions = (
     <>
       {!savedSource && !preview && addButton}
-      {savedSource &&
-        "repository" in savedSource &&
-        !(preview && !error && !upToDate) && (
-          <Button
-            ref={checkAgain}
-            variant="subtle"
-            size="sm"
-            disabled={blocked || checking}
-            onClick={() => checkSavedGit()}
-          >
-            Check for updates
-          </Button>
-        )}
+      {savedSource && "repository" in savedSource && (
+        <Button
+          ref={checkAgain}
+          variant="subtle"
+          size="sm"
+          disabled={blocked || checking}
+          onClick={() => checkSavedGit()}
+        >
+          Check for updates
+        </Button>
+      )}
       {updateAvailable && (
         <Button
           ref={trigger}
@@ -1004,6 +1008,8 @@ export function PluginImport({
             ? "compact"
             : "wide"
         }
+        headerGap={reviewing && updating ? "compact" : "default"}
+        footerGap={reviewing && updating ? "compact" : "default"}
         leadingActions={
           !error &&
           !showUnchanged &&
@@ -1368,10 +1374,7 @@ export function PluginImport({
                     </p>
                   )}
                 {reviewing && updating && (
-                  <section
-                    aria-label="Update source"
-                    className="text-body-sm mb-4"
-                  >
+                  <section aria-label="Update source" className="text-body-sm">
                     <div className="flex items-center gap-2 mb-2">
                       <span className="text-muted">
                         {preview.commit ? "Source" : "Source folder"}

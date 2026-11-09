@@ -64,6 +64,12 @@ export class AppServer {
     private readonly toolCall?: (call: ToolCall) => Promise<ToolReply>,
   ) {}
 
+  /** The credential for only this agent's commands, never app-server's own
+   * environment. */
+  toolCredential(agent: Readonly<{ pubkey: string; relay: string }>) {
+    return this.process?.toolCredential?.(agent);
+  }
+
   async open(spawn: Spawn, cwd?: string, protectedRuntime = false) {
     if (this.failure) throw this.failure;
     this.opened = [spawn, cwd, protectedRuntime];

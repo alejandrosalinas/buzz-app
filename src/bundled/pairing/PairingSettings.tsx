@@ -28,6 +28,7 @@ import {
   type PairingNative,
 } from "../../features/pairing/client";
 import { writeClipboardText } from "../../shared/clipboard";
+import { QrCode } from "../../shared/QrCode";
 
 export function PairingSettings({
   communities,
@@ -35,16 +36,6 @@ export function PairingSettings({
   native = nativePairing,
   available = pairingAvailable(),
 }: PairingSettingsProps & { native?: PairingNative; available?: boolean }) {
-  const [reducedMotion, setReducedMotion] = useState(
-    () => window.matchMedia("(prefers-reduced-motion: reduce)").matches,
-  );
-  useEffect(() => {
-    const media = window.matchMedia("(prefers-reduced-motion: reduce)");
-    const update = () => setReducedMotion(media.matches);
-    update();
-    media.addEventListener("change", update);
-    return () => media.removeEventListener("change", update);
-  }, []);
   const client = useSyncExternalStore(
     communities.subscribe,
     communities.snapshot,
@@ -265,12 +256,9 @@ export function PairingSettings({
                     </div>
                   )}
                   {state.phase === "qr" && (
-                    <img
-                      className="block size-60 max-w-full shrink-0 bg-white"
-                      src={`data:image/svg+xml,${encodeURIComponent(reducedMotion ? state.svg.replace(/<style>[\s\S]*?<\/style>/g, "") : state.svg)}`}
+                    <QrCode
+                      svg={state.svg}
                       alt="Scan this QR code with Buzz on your phone"
-                      width={240}
-                      height={240}
                     />
                   )}
                   {state.phase === "code" && (

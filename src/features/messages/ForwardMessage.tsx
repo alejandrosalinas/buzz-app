@@ -219,6 +219,7 @@ export function ForwardMessageProvider({
             key={`${source.channelId}:${source.forward}`}
             session={session}
             scope={scope}
+            navigation={navigation}
             source={source}
             recovered={
               pending && isPendingSource(pending, source) ? pending : undefined
@@ -262,6 +263,7 @@ export function ForwardMessageProvider({
 function ForwardMessageDialog({
   session,
   scope,
+  navigation,
   source,
   recovered,
   open,
@@ -271,6 +273,7 @@ function ForwardMessageDialog({
 }: {
   session: RelaySession;
   scope: string;
+  navigation: Navigation;
   source: Source;
   recovered: PendingForward | undefined;
   open: boolean;
@@ -292,7 +295,11 @@ function ForwardMessageDialog({
   const [typed, setTyped] = useState(false);
   const [pending, setPending] = useState(false);
   const [error, setError] = useState("");
-  const [notice, setNotice] = useState<{ text: string; error: boolean }>();
+  const [notice, setNotice] = useState<{
+    text: string;
+    error: boolean;
+    navigation?: { label: string; open(): void };
+  }>();
   const fields = useRef<HTMLDivElement>(null);
   const noteField = useRef<HTMLTextAreaElement>(null);
   const operation = useRef<AbortController | undefined>(undefined);
@@ -328,10 +335,11 @@ function ForwardMessageDialog({
     setError("");
     setNotice(undefined);
     try {
-      let sent = recovered && {
-        id: recovered.id,
-        channelId: recovered.channelId,
-      };
+      // The confirmed record names its recipient: the outbox can turn up a
+      // saved forward to someone other than the person picked.
+      let sent:
+        | Pick<PendingForward, "id" | "channelId" | "person">
+        | undefined = recovered;
       if (!sent) {
         const validateRecipient = () => {
           if (
@@ -392,6 +400,7 @@ function ForwardMessageDialog({
             },
           ),
           channelId,
+          person,
         };
       }
       await session.directMessages.delivered(
@@ -407,7 +416,25 @@ function ForwardMessageDialog({
       setPeople([]);
       setNote("");
       close();
-      setNotice({ text: `Message forwarded to ${person.name}`, error: false });
+      const { id, channelId, person: to } = sent;
+      // You stay where you forwarded from; the notice opens what you sent.
+      setNotice({
+        text: `Message forwarded to ${to.name}`,
+        error: false,
+        navigation: {
+          label: `Open your DM with ${to.name}`,
+          open: () => {
+            setNotice(undefined);
+            void navigation.open({
+              version: 1,
+              kind: "conversation",
+              scope: source.scope,
+              channelId,
+              messageId: id,
+            });
+          },
+        },
+      });
     } catch (reason) {
       if (!controller.signal.aborted) {
         // A sent forward stays locked by its outbox recovery.
@@ -513,6 +540,7 @@ function ForwardMessageDialog({
           tone={notice.error ? "error" : "success"}
           timeout={notice.error ? 0 : 4000}
           onDismiss={() => setNotice(undefined)}
+          navigation={notice.navigation}
         />
       )}
     </>

@@ -173,8 +173,8 @@ export function SoloChatMenuItems({
         (!channel.readOnly || channel.viewerRole === "guest") &&
         !channel.cached && (
           <ChannelLifecycleMenu
-            channelId={channel.id}
-            lifecycle={session.channelLifecycle}
+            channel={channel}
+            session={session}
             disabled={!!handoff?.lifecycleDialog}
             separator
             noun="chat"

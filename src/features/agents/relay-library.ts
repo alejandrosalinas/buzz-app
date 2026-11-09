@@ -61,7 +61,9 @@ export async function readRelayLibrary(
           ...cursor,
         },
       ],
-      { signal, priority: "background" },
+      // Solo needs complete inventory to address a message; do not queue it
+      // behind a background snapshot that can outlast this read's deadline.
+      { signal, priority: "foreground" },
     );
     signal.throwIfAborted();
     // Reject mismatched pages rather than presenting another account's records.

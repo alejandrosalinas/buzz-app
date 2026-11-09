@@ -95,7 +95,7 @@ it("is unavailable without read sync, without anything unread, or while another 
   ).toBeUndefined();
 });
 
-it("asks first, focusing Cancel, and marks nothing when cancelled", async () => {
+it("asks first, focusing Mark all as read, and marks nothing when cancelled", async () => {
   const { shortcut, markAllChannelsRead } = setup();
   act(() => void shortcut()?.run());
   const dialog = await screen.findByRole("alertdialog", {
@@ -103,7 +103,9 @@ it("asks first, focusing Cancel, and marks nothing when cancelled", async () => 
   });
   expect(dialog).toHaveTextContent("Acme Relay");
   await waitFor(() =>
-    expect(screen.getByRole("button", { name: "Cancel" })).toHaveFocus(),
+    expect(
+      screen.getByRole("button", { name: "Mark all as read" }),
+    ).toHaveFocus(),
   );
   await userEvent.click(screen.getByRole("button", { name: "Cancel" }));
   await waitFor(() => expect(screen.queryByRole("alertdialog")).toBeNull());

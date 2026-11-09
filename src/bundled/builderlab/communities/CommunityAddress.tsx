@@ -1,4 +1,8 @@
 import { useEffect, useId, useState } from "react";
+import {
+  CheckCircleIcon,
+  XCircleIcon,
+} from "../../../shared/design-system/icons/index";
 import { Button } from "../../../shared/design-system/ui/Button";
 import { Field } from "../../../shared/design-system/ui/Field";
 import { Input } from "../../../shared/design-system/ui/Input";
@@ -65,13 +69,18 @@ export function useCommunityAddress(
   };
 }
 
-/** The address field with its fixed suffix, and the availability check's status or failure. */
+/**
+ * The address field with its fixed suffix, and the availability check's
+ * status or failure; a create's `refusal` of this address replaces both.
+ */
 export function CommunityAddressField({
   address,
   busy,
+  refusal,
 }: {
   address: CommunityAddress;
   busy: boolean;
+  refusal?: string | undefined;
 }) {
   const suffixId = useId();
   const { name, enabled, valid, available, failed } = address;
@@ -82,11 +91,14 @@ export function CommunityAddressField({
         labelVisibility="hidden"
         invalid={Boolean(name) && !valid}
         error={
-          name && !valid
-            ? "Use lowercase letters, numbers, and single hyphens."
-            : available === false
-              ? "That address is already taken."
-              : undefined
+          name && !valid ? (
+            "Use lowercase letters, numbers, and single hyphens."
+          ) : available === false ? (
+            <span className="inline-flex items-center gap-1.5">
+              <XCircleIcon size={16} aria-hidden="true" />
+              That address is already taken.
+            </span>
+          ) : undefined
         }
       >
         <div className="flex max-w-xl flex-wrap items-center gap-2">
@@ -109,7 +121,11 @@ export function CommunityAddressField({
           </span>
         </div>
       </Field>
-      {valid && enabled && failed ? (
+      {refusal ? (
+        <p role="alert" className="m-0 break-words text-body-sm text-danger">
+          {refusal}
+        </p>
+      ) : valid && enabled && failed ? (
         <div role="alert" className="text-body-sm">
           <p className="error m-0 break-words">{failed}</p>
           <div className="mt-2">
@@ -117,14 +133,20 @@ export function CommunityAddressField({
           </div>
         </div>
       ) : (
-        <p role="status" className="text-body-sm text-muted">
-          {valid && enabled
-            ? available === null
-              ? "Checking availability…"
-              : available
-                ? "That address is available."
-                : ""
-            : ""}
+        <p
+          role="status"
+          className={`flex items-center gap-1.5 text-body-sm ${valid && enabled && available ? "text-success" : "text-muted"}`}
+        >
+          {valid && enabled ? (
+            available === null ? (
+              "Checking availability…"
+            ) : available ? (
+              <>
+                <CheckCircleIcon size={16} aria-hidden="true" />
+                That address is available.
+              </>
+            ) : null
+          ) : null}
         </p>
       )}
     </>

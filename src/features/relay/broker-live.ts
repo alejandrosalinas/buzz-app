@@ -13,6 +13,7 @@ import {
   liveJoined,
   liveProvenance,
   liveGlobal,
+  liveContinuous,
   type LiveCallbacks,
   type LiveSnapshot,
   type LiveRoute,
@@ -63,6 +64,7 @@ export function subscribeBrokerTraffic(
   let receiving = false;
   const routeState = new Map<string, LiveRoute>();
   let latest: LiveSnapshot = { status: "connecting", routes: [] };
+  let retryControlError: string | undefined;
   const publish = (snapshot: LiveSnapshot) => {
     latest = snapshot;
     callbacks.state(snapshot);
@@ -388,15 +390,32 @@ export function subscribeBrokerTraffic(
                 const ids = (data as { channels?: unknown }).channels;
                 const revision = (data as { interestRevision?: unknown })
                   .interestRevision;
+                const continuous = (current: readonly string[]) =>
+                  liveContinuous(
+                    (data as { continuous?: unknown }).continuous,
+                    current,
+                  );
                 if (ids !== undefined) {
-                  const current = liveChannels(ids).filter((id) =>
+                  const all = liveChannels(ids);
+                  const current = all.filter((id) =>
                     currentChannel(id, revision),
                   );
-                  if (current.length) callbacks.established(current);
+                  // Traffic naming a channel no longer current was dropped
+                  // for the whole batch, so no channel of it is continuous.
+                  const resumed =
+                    current.length < all.length ? [] : continuous(current);
+                  if (resumed.length)
+                    callbacks.established(current, undefined, resumed);
+                  else if (current.length) callbacks.established(current);
                 } else {
                   const id = channelField(data);
                   if (id) {
-                    if (currentChannel(id, revision)) callbacks.established(id);
+                    if (currentChannel(id, revision)) {
+                      const resumed = continuous([id]);
+                      if (resumed.length)
+                        callbacks.established(id, undefined, resumed);
+                      else callbacks.established(id);
+                    }
                   } else
                     callbacks.established(
                       undefined,
@@ -713,18 +732,24 @@ export function subscribeBrokerTraffic(
         ]),
       })
         .then((response) => {
-          if (!closed && current === generation && !response.ok)
+          if (closed || current !== generation) return;
+          if (!response.ok)
             throw new Error(`Live retry control failed (${response.status})`);
+          if (retryControlError && latest.error === retryControlError) {
+            const { error: _error, ...recovered } = latest;
+            publish(recovered);
+          }
+          retryControlError = undefined;
         })
         .catch((error) => {
-          if (!closed && current === generation)
+          if (!closed && current === generation) {
+            retryControlError =
+              error instanceof Error ? error.message : "Live retry unavailable";
             publish({
               ...latest,
-              error:
-                error instanceof Error
-                  ? error.message
-                  : "Live retry unavailable",
+              error: retryControlError,
             });
+          }
         })
         .finally(() => {
           if (current === generation) controlPending = false;

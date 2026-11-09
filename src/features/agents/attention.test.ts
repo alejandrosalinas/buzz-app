@@ -38,6 +38,20 @@ describe("validateObject", () => {
         instructions: "x",
       }),
     ).toBeUndefined();
+    expect(
+      validateObject("interest/default", {
+        type: "interest",
+        instructions: "x",
+        paused: true,
+      }),
+    ).toBeUndefined();
+    expect(
+      validateObject("interest/default", {
+        type: "interest",
+        instructions: "x",
+        paused: "yes",
+      }),
+    ).toMatch(/paused must be/);
     expect(validateObject("watch/w", watch)).toBeUndefined();
     expect(
       validateObject("watch/t", {
@@ -86,6 +100,28 @@ describe("validateObject", () => {
     expect(validateObject("watch/w", { ...watch, is_reply: "yes" })).toMatch(
       /is_reply/,
     );
+  });
+  it("accepts an Interest's optional title and summary, but not empty or multiline titles", () => {
+    const interest = { type: "interest", instructions: "x" };
+    expect(
+      validateObject("interest/x", {
+        ...interest,
+        title: "Release checks",
+        summary: "Wakes on CI.\nReports failures to John.",
+      }),
+    ).toBeUndefined();
+    expect(validateObject("interest/x", { ...interest, title: " " })).toMatch(
+      /title is empty/,
+    );
+    expect(
+      validateObject("interest/x", { ...interest, title: "Two\nlines" }),
+    ).toMatch(/single line/);
+    expect(validateObject("interest/x", { ...interest, summary: "" })).toMatch(
+      /summary is empty/,
+    );
+    expect(
+      validateObject("interest/x", { ...interest, summary: "x".repeat(1025) }),
+    ).toMatch(/1,024 bytes/);
   });
   it("refuses values over the spec's limits", () => {
     expect(

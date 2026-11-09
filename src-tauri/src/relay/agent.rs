@@ -1655,13 +1655,12 @@ mod tests {
     }
 
     /// Reads `events` a page at a time through `read_memories`, each page
-    /// taking `fetch`, and decodes each on a blocking thread as the native
-    /// command does, sleeping `stall` after the first `decoded` events of the
-    /// first page.
+    /// arriving at once and the page after the last never, and decodes each
+    /// on a blocking thread as the native command does, sleeping `stall`
+    /// after the first `decoded` events of the first page.
     async fn read_through(
         events: Vec<Value>,
         deadline: std::time::Duration,
-        fetch: std::time::Duration,
         stall: Option<(usize, std::time::Duration)>,
     ) -> (Value, std::time::Duration) {
         let (secret, viewer, agent, _) = memory_events(1, 0);
@@ -1676,12 +1675,16 @@ mod tests {
             .collect::<Vec<_>>();
         pages.reverse();
         let first = std::sync::atomic::AtomicBool::new(true);
-        let listing = read_memories(
+        // The pending page would hang a read that ignored its deadline; this
+        // bound fails it instead. The callers assert the real time bound.
+        let read = read_memories(
             budget,
             |_| {
-                let page = pages.pop().unwrap_or_default();
+                let page = pages.pop();
                 async move {
-                    tokio::time::sleep(fetch).await;
+                    let Some(page) = page else {
+                        return std::future::pending().await;
+                    };
                     Ok(MemoryPage::Records(page.into_iter().map(Some).collect(), 1))
                 }
             },
@@ -1720,19 +1723,22 @@ mod tests {
                 }
             },
             |_| {},
-        )
-        .await
-        .unwrap();
+        );
+        let listing = tokio::time::timeout(std::time::Duration::from_secs(5), read)
+            .await
+            .expect("memory read outlived its deadline")
+            .unwrap();
         (listing, started.elapsed())
     }
 
     #[tokio::test(flavor = "multi_thread")]
     async fn memory_read_keeps_what_it_decoded_when_its_deadline_passes() {
         let ms = std::time::Duration::from_millis;
-        // Slow pages: two arrive and decode before the deadline, the third
-        // does not. Their entries come back, partial, within the grace.
-        let (_, _, _, events) = memory_events(3 * MEMORY_PAGE as u64, 64);
-        let (listing, took) = read_through(events, ms(300), ms(120), None).await;
+        // Two full pages arrive and decode, then the deadline passes while
+        // the third is awaited. Their entries come back, partial, within the
+        // grace.
+        let (_, _, _, events) = memory_events(2 * MEMORY_PAGE as u64, 64);
+        let (listing, took) = read_through(events, ms(300), None).await;
         assert_eq!(listing["partial"], true);
         assert_eq!(
             listing["entries"].as_array().unwrap().len(),
@@ -1745,7 +1751,6 @@ mod tests {
         let (listing, took) = read_through(
             events,
             ms(100),
-            ms(0),
             Some((6, std::time::Duration::from_secs(3))),
         )
         .await;

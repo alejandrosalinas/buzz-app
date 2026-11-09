@@ -214,7 +214,7 @@ function awaitCallback(signal, open, api, verifier) {
       const returnTo = `http://127.0.0.1:${server.address().port}/callback/${nonce}`;
       const login = new URL(`${api}/v1/auth/login`);
       login.searchParams.set("type", "cli");
-      login.searchParams.set("product", "builderlab");
+      login.searchParams.set("product", "buzz");
       login.searchParams.set("state", state);
       login.searchParams.set(
         "code_challenge",
@@ -227,6 +227,15 @@ function awaitCallback(signal, open, api, verifier) {
   });
 }
 
+// Only literal true grants a capability; sign-in and capability checks share this.
+const capabilityFlags = (capabilities) => ({
+  can_use_remote_agents: capabilities?.can_use_remote_agents === true,
+  can_use_builderlab_decisions:
+    capabilities?.can_use_builderlab_decisions === true,
+  can_delete_buzz_communities:
+    capabilities?.can_delete_buzz_communities === true,
+});
+
 export function createBuilderlab({
   key,
   fetch = globalThis.fetch,
@@ -236,6 +245,8 @@ export function createBuilderlab({
 }) {
   let credential;
   let account;
+  let capabilitiesCheckedAt;
+  let capabilityRead;
   let pending = false;
   let loginError;
   let linking = Promise.resolve();
@@ -246,6 +257,7 @@ export function createBuilderlab({
     revision,
     pending,
     auth: account ?? null,
+    capabilitiesCheckedAt,
     ...(loginError ? { error: loginError } : {}),
   });
   const notify = () => {
@@ -290,7 +302,7 @@ export function createBuilderlab({
     }
     throw new Error(`Builderlab request failed (HTTP ${response.status}).`);
   };
-  const me = async (session, signal) => {
+  const me = async (session, signal, capabilitiesOnly = false) => {
     const started = generation;
     const response = await fetch(`${api}/v1/auth/me`, {
       headers: { "X-BB-Session-Credential": session },
@@ -300,6 +312,7 @@ export function createBuilderlab({
     if (!response.ok) {
       if (
         response.status === 401 &&
+        !capabilitiesOnly &&
         started === generation &&
         credential === session
       )
@@ -307,6 +320,22 @@ export function createBuilderlab({
       throw new Error(
         `Builderlab session check failed with HTTP ${response.status}`,
       );
+    }
+    if (capabilitiesOnly) {
+      const value = await response.json();
+      if (!value || typeof value !== "object" || Array.isArray(value))
+        throw new Error("Builderlab returned invalid capabilities");
+      const { capabilities } = value;
+      if (
+        capabilities !== undefined &&
+        (!capabilities ||
+          typeof capabilities !== "object" ||
+          Array.isArray(capabilities))
+      )
+        throw new Error("Builderlab returned invalid capabilities");
+      return {
+        capabilities: capabilityFlags(capabilities),
+      };
     }
     const { subject, email, name, expires_at, capabilities } =
       await response.json();
@@ -321,13 +350,7 @@ export function createBuilderlab({
       email,
       name,
       expiresAt: expires_at,
-      capabilities: {
-        can_use_remote_agents: capabilities?.can_use_remote_agents === true,
-        can_use_builderlab_decisions:
-          capabilities?.can_use_builderlab_decisions === true,
-        can_delete_buzz_communities:
-          capabilities?.can_delete_buzz_communities === true,
-      },
+      capabilities: capabilityFlags(capabilities),
     };
   };
   // Sign-in and sign-out bump the generation; late results from an older one never
@@ -341,6 +364,8 @@ export function createBuilderlab({
     pending = false;
     loginError = undefined;
     account = undefined;
+    capabilitiesCheckedAt = undefined;
+    capabilityRead = undefined;
     session?.abort();
     session = new AbortController();
     credential = undefined;
@@ -360,6 +385,7 @@ export function createBuilderlab({
   };
   const publishAccount = (value) => {
     account = value;
+    capabilitiesCheckedAt = Date.now();
     notify();
   };
   const broker = {
@@ -367,6 +393,28 @@ export function createBuilderlab({
     subscribe(listener) {
       listeners.add(listener);
       return () => listeners.delete(listener);
+    },
+    async capabilities(expected) {
+      current(expected);
+      if (capabilityRead) return capabilityRead;
+      const started = generation;
+      const checkedAt = Date.now();
+      capabilityRead = (async () => {
+        try {
+          const result = await me(credential, session.signal, true);
+          if (started !== generation)
+            throw new Error("Builderlab session changed");
+          // Restored pages retain refreshed flags without changing the sign-in profile.
+          account = { ...account, capabilities: result.capabilities };
+          return { revision, ...result };
+        } finally {
+          if (started === generation) {
+            capabilitiesCheckedAt = checkedAt;
+            capabilityRead = undefined;
+          }
+        }
+      })();
+      return capabilityRead;
     },
     async auth() {
       const current = credential;

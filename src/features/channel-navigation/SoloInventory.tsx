@@ -1,6 +1,8 @@
 import { useSoloRowActivation } from "./useSoloRowActivation";
 import { useSoloNavigation } from "./solo-navigation-react";
 import {
+  useCallback,
+  useMemo,
   useRef,
   useState,
   useSyncExternalStore,
@@ -16,7 +18,10 @@ import { useWorkingAgents } from "../../bundled/channels/useWorkingAgents";
 import { WorkingAgentsBadge } from "../../bundled/channels/WorkingAgentsBadge";
 import { UnreadBadge } from "../../bundled/channels/UnreadBadge";
 import { useUnreadChannelIds } from "../../bundled/channels/useSidebarFilters";
-import { SoloWorkspaces } from "../../bundled/channels/SoloWorkspaces";
+import {
+  SoloWorkspaces,
+  type ChatListItem,
+} from "../../bundled/channels/SoloWorkspaces";
 import {
   soloSharedMarkId,
   useSharedWithPeople,
@@ -72,13 +77,12 @@ export function SoloInventory({
   /** Plugin icons that can stand in for a chat's own. */
   chatIcons?: ContributionReader<ChatIcon> | undefined;
   chatMenus?: ContributionReader<ChatMenu> | undefined;
+  /** Places the conversations in a host that titles them; creation then
+   * belongs to the host's own New menu, so only the standalone header has it. */
   renderContents?: (
     content: ReactNode,
-    actions: ReactNode,
     header: ReactNode,
-    trigger: RefObject<HTMLButtonElement | null>,
     pendingClick: RefObject<ReturnType<typeof setTimeout> | undefined>,
-    headerActions: ReactNode,
   ) => ReactNode;
 }) {
   const list = useChannelList(session.channels);
@@ -118,40 +122,99 @@ export function SoloInventory({
     chatMenus?.subscribe ?? noSubscription,
     () => chatMenus?.snapshot(),
   );
-  const workingChannels = new Set<string>(JSON.parse(workingIds));
-  const open = (channelId: string) =>
-    navigator.open(conversationTarget(scope, channelId));
-  const openMessage = (channelId: string, messageId?: string) => {
-    if (handoff && handoff.session !== session) return;
-    const destination =
-      messageId && session.viewer
-        ? buzzLinkTarget(
-            `buzz://message?channel=${channelId}&id=${messageId}`,
-            {
-              viewer: session.viewer,
-              communityOrigin: scope.slice(0, -(session.viewer.length + 1)),
-            },
-          )
-        : conversationTarget(scope, channelId);
-    if (destination) void navigator.open(destination);
-  };
-  const openAgentActivity = (channelId: string, agent: string) => {
-    if (!handoff || handoff.session !== session) return;
-    const intent = {
-      channelId,
-      agent,
-      trigger: document.querySelector<HTMLElement>(
-        `[data-solo-channel-id="${CSS.escape(channelId)}"]`,
-      ),
-      // A Solo chat is one conversation, so its transcript is known.
-      transcript: {},
-    };
-    handoff.activityAgent.current = intent;
-    void open(channelId).then(() => {
-      if (handoff.activityAgent.current === intent)
-        handoff.activityAgent.current = undefined;
-    });
-  };
+  const workingChannels = useMemo(
+    () => new Set<string>(JSON.parse(workingIds)),
+    [workingIds],
+  );
+  const open = useCallback(
+    (channelId: string) => navigator.open(conversationTarget(scope, channelId)),
+    [navigator, scope],
+  );
+  const openMessage = useCallback(
+    (channelId: string, messageId?: string) => {
+      if (handoff && handoff.session !== session) return;
+      const destination =
+        messageId && session.viewer
+          ? buzzLinkTarget(
+              `buzz://message?channel=${channelId}&id=${messageId}`,
+              {
+                viewer: session.viewer,
+                communityOrigin: scope.slice(0, -(session.viewer.length + 1)),
+              },
+            )
+          : conversationTarget(scope, channelId);
+      if (destination) void navigator.open(destination);
+    },
+    [handoff, session, navigator, scope],
+  );
+  const openAgentActivity = useCallback(
+    (channelId: string, agent: string) => {
+      if (!handoff || handoff.session !== session) return;
+      const intent = {
+        channelId,
+        agent,
+        trigger: document.querySelector<HTMLElement>(
+          `[data-solo-channel-id="${CSS.escape(channelId)}"]`,
+        ),
+        // A Solo chat is one conversation, so its transcript is known.
+        transcript: {},
+      };
+      handoff.activityAgent.current = intent;
+      void open(channelId).then(() => {
+        if (handoff.activityAgent.current === intent)
+          handoff.activityAgent.current = undefined;
+      });
+    },
+    [handoff, session, open],
+  );
+  const renderChat = useCallback(
+    (
+      item: ChatListItem,
+      rename: (() => boolean) | undefined,
+      channel: ChannelSummary | undefined,
+    ) => (
+      <SoloConversationRow
+        key={item.id}
+        session={session}
+        navigation={navigator}
+        pendingClick={pendingClick}
+        id={item.id}
+        channel={channel}
+        title={item.title}
+        selected={selected === item.id}
+        working={workingChannels.has(item.id)}
+        Icon={ChatIcon}
+        onSelect={() => void open(item.id)}
+        onRename={rename}
+        onOpenThread={(thread) => openMessage(thread.channelId, thread.rootId)}
+        onOpenMention={(mention) =>
+          openMessage(mention.channelId, mention.messageId)
+        }
+        onOpenWorkingAgent={(id, _agent, messageId) => {
+          if (messageId) openMessage(id, messageId);
+          else void open(id);
+        }}
+        onOpenAgentActivity={openAgentActivity}
+      />
+    ),
+    [
+      session,
+      navigator,
+      selected,
+      workingChannels,
+      ChatIcon,
+      open,
+      openMessage,
+      openAgentActivity,
+    ],
+  );
+  const renderChatMenu = useCallback(
+    (channelId: string) =>
+      menus?.map(({ key, component: Menu }) => (
+        <Menu key={key} session={session} channelId={channelId} />
+      )),
+    [menus, session],
+  );
   const conversations = list.channels
     // Solo chats the viewer belongs to: their own and those shared with them.
     // Opening one from a link without membership adds nothing here.
@@ -248,11 +311,7 @@ export function SoloInventory({
         />
       )}
       <SoloWorkspaces
-        renderChatMenu={(channelId) =>
-          menus?.map(({ key, component: Menu }) => (
-            <Menu key={key} session={session} channelId={channelId} />
-          ))
-        }
+        renderChatMenu={renderChatMenu}
         navigator={navigator}
         draft={
           draft
@@ -299,32 +358,7 @@ export function SoloInventory({
             unreadChats.has(item.id),
         }))}
         onNew={newChat}
-        renderChat={(item, rename) => (
-          <SoloConversationRow
-            key={item.id}
-            session={session}
-            navigation={navigator}
-            pendingClick={pendingClick}
-            id={item.id}
-            channel={conversations.find(
-              (conversation) => conversation.id === item.id,
-            )}
-            title={item.title}
-            selected={selected === item.id}
-            working={workingChannels.has(item.id)}
-            Icon={ChatIcon}
-            onSelect={() => void open(item.id)}
-            onRename={rename}
-            onOpenThread={(thread) =>
-              openMessage(thread.channelId, thread.rootId)
-            }
-            onOpenWorkingAgent={(id, _agent, messageId) => {
-              if (messageId) openMessage(id, messageId);
-              else void open(id);
-            }}
-            onOpenAgentActivity={openAgentActivity}
-          />
-        )}
+        renderChat={renderChat}
       />
       {list.status === "loading" && <p role="status">Loading conversations…</p>}
       {list.status === "error" && !rosterRecovers && (
@@ -338,14 +372,7 @@ export function SoloInventory({
       aria-label={`${regions.regions.find((region) => region.source)?.title ?? "Solo"} conversations`}
     >
       {renderContents ? (
-        renderContents(
-          content,
-          creationItems,
-          header,
-          trigger,
-          pendingClick,
-          actions,
-        )
+        renderContents(content, header, pendingClick)
       ) : (
         <>
           {header}
@@ -369,6 +396,7 @@ function SoloConversationRow({
   onSelect,
   onRename,
   onOpenThread,
+  onOpenMention,
   onOpenWorkingAgent,
   onOpenAgentActivity,
 }: {
@@ -385,7 +413,10 @@ function SoloConversationRow({
   onRename: (() => boolean) | undefined;
 } & Pick<
   ComponentProps<typeof ChannelActivityPopover>,
-  "onOpenThread" | "onOpenWorkingAgent" | "onOpenAgentActivity"
+  | "onOpenThread"
+  | "onOpenMention"
+  | "onOpenWorkingAgent"
+  | "onOpenAgentActivity"
 >) {
   const activation = useSoloRowActivation(
     navigation,
@@ -409,6 +440,7 @@ function SoloConversationRow({
       agents={agents}
       agentProfiles={agentProfiles}
       onOpenThread={onOpenThread}
+      onOpenMention={onOpenMention}
       {...(onOpenWorkingAgent ? { onOpenWorkingAgent } : {})}
       {...(onOpenAgentActivity ? { onOpenAgentActivity } : {})}
       trigger={

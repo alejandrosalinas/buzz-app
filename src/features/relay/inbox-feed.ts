@@ -1,3 +1,4 @@
+import { createInboxReactions } from "./inbox-reactions";
 import { byteSize } from "./budget";
 import type { ChannelQueries } from "./contracts";
 import type { RelayEvent, ReadFilter } from "./events";
@@ -22,6 +23,9 @@ export type InboxFeedSnapshot = Readonly<{
  * polling, or parallel channel store. Current membership gates completeness targets. */
 export function createInboxFeed({
   viewer,
+  reactionReader,
+  relayAuthor,
+  signingAuthority,
   channels,
   reader,
   addressedRead,
@@ -30,6 +34,9 @@ export function createInboxFeed({
   notify = (listener) => listener(),
 }: {
   viewer: string;
+  reactionReader?: RelayReader;
+  relayAuthor?: string | undefined;
+  signingAuthority?: string | undefined;
   channels: ChannelQueries;
   reader: RelayReader;
   /** Private lookups in the existing bounded unread evidence owner. */
@@ -43,6 +50,14 @@ export function createInboxFeed({
   ) => Promise<readonly RelayEvent[]>;
   notify?: (listener: () => void) => void;
 }) {
+  const reactions = createInboxReactions({
+    reader: reactionReader ?? reader,
+    viewer,
+    channels,
+    relayAuthor,
+    signingAuthority,
+    notify,
+  });
   let closed = false;
   let epoch = 0;
   let work: Promise<void> | undefined;
@@ -203,6 +218,7 @@ export function createInboxFeed({
     return work;
   }
   function clear(incomplete: readonly string[] = []) {
+    reactions.clear();
     epoch++;
     controller?.abort();
     controller = undefined;
@@ -213,6 +229,7 @@ export function createInboxFeed({
   const retainedIncomplete = () =>
     Object.freeze(snapshot.incomplete.filter((id) => retainedEvent(id)));
   return Object.freeze({
+    reactions,
     snapshot: () => snapshot,
     subscribe(listener: () => void) {
       listeners.add(listener);
@@ -235,11 +252,13 @@ export function createInboxFeed({
       });
     },
     reconnect() {
+      reactions.reconnect();
       if (requested) void refresh();
     },
     clear: () => clear(),
     purge: () => clear(retainedIncomplete()),
     dispose() {
+      reactions.dispose();
       closed = true;
       epoch++;
       controller?.abort();

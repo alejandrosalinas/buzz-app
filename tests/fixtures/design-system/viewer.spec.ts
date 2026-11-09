@@ -6,10 +6,9 @@ import { TABLER_ICONS } from "../../../src/shared/design-system/icons/inventory"
 const viewer = "/tests/fixtures/design-system.html";
 
 /**
- * The keyboard focus ring: 2px solid, drawn 2px outside the control, or inset
- * where a scrolling list would clip an outside ring. Every recipe is gated on
- * html[data-keyboard-navigation], so pointer and programmatic focus assert
- * `outline-style: none` instead of calling this.
+ * Keyboard focus rings are 2px with a 2px offset, or inset where a scrolling list
+ * would clip an outside ring. Outside dialogs,
+ * html[data-keyboard-navigation] gates pointer and programmatic focus.
  */
 const expectKeyboardRing = async (control: Locator, offset = "2px") => {
   await expect(control).toHaveCSS("outline-style", "solid");

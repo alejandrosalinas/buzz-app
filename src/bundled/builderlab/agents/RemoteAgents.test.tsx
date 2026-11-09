@@ -4,8 +4,7 @@ import { act, cleanup, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, expect, it, vi } from "vitest";
 import type { HostRequest, HostResponse } from "../../../features/host/service";
-import { createOAuthSession } from "../oauth/session";
-import { deferred } from "../test-helpers";
+import { deferred, createTestSession } from "../test-helpers";
 import { createAgentClient } from "./client";
 import { RemoteAgents } from "./RemoteAgents";
 
@@ -27,9 +26,9 @@ const response = (agents: unknown[], status = 200): HostResponse => ({
 });
 async function fixture() {
   vi.stubEnv("VITE_BUZZ_BUILDERLAB_URL", "https://builderlab.example");
-  const session = createOAuthSession(
+  const session = createTestSession(
     async () => ({
-      value: "secret",
+      revision: "secret",
       account: {
         subject: "user",
         email: "a@example.com",

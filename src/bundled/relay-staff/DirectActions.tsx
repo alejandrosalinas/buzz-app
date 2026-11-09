@@ -38,7 +38,6 @@ import {
   containsSecretKey,
   eventIdInput,
   NotConnected,
-  publicKeyInput,
   SECRET_KEY_WARNING,
   time,
   UNSUPPORTED_BROWSING,
@@ -46,6 +45,7 @@ import {
   type CommunityRef,
 } from "./ui";
 import { searchable, useDebounced } from "../../shared/search-debounce";
+import { typedPublicKey } from "../../shared/identity/public-key";
 
 type Action = "ban" | "timeout" | "delete";
 type Intent = Extract<StaffRequest, { route: "directAction" }>;
@@ -571,7 +571,7 @@ export function MemberPicker({
   const typed = query.trim();
   const q = useDebounced(typed);
   const secret = containsSecretKey(query);
-  const pasted = publicKeyInput(typed);
+  const pasted = typedPublicKey(typed);
   const searching = searchable(q) && q === typed && !secret && !pasted;
   const [results, reload] = useRead(
     searching ? { route: "searchMembers", communityHost, q } : null,

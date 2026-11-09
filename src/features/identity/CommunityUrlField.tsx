@@ -36,6 +36,7 @@ export function CommunityUrlField({
   onSubmit,
   disabled = false,
   onBack,
+  stacked = false,
 }: {
   url: string;
   onUrlChange: (url: string) => void;
@@ -43,6 +44,8 @@ export function CommunityUrlField({
   onSubmit: (origin: string, code: string) => void;
   disabled?: boolean;
   onBack?: () => void;
+  /** Continue fills the width right under the field, for a card whose only step this is. */
+  stacked?: boolean;
 }) {
   const [invalid, setInvalid] = useState(false);
   const entered = enteredCommunity(url);
@@ -65,7 +68,7 @@ export function CommunityUrlField({
               inputMode="url"
               autoComplete="off"
               spellCheck={false}
-              placeholder="community.example"
+              placeholder="Paste a link or address"
               value={url}
               disabled={disabled}
               onChange={(event) => {
@@ -81,17 +84,31 @@ export function CommunityUrlField({
             />
           </Field>
         </div>
-        <div className="flex flex-wrap items-center justify-between gap-2">
-          <div>{onBack && <OnboardingBack onClick={onBack} />}</div>
-          <Button
-            size="lg"
-            variant="prominent"
-            disabled={disabled}
-            onClick={submit}
-          >
-            Continue
-          </Button>
-        </div>
+        {stacked ? (
+          // A grid stretches the button to the field's width.
+          <div className="grid">
+            <Button
+              size="lg"
+              variant="prominent"
+              disabled={disabled}
+              onClick={submit}
+            >
+              Continue
+            </Button>
+          </div>
+        ) : (
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <div>{onBack && <OnboardingBack onClick={onBack} />}</div>
+            <Button
+              size="lg"
+              variant="prominent"
+              disabled={disabled}
+              onClick={submit}
+            >
+              Continue
+            </Button>
+          </div>
+        )}
       </div>
     </div>
   );

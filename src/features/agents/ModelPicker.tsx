@@ -35,6 +35,8 @@ export type ModelChoice = Readonly<{
   /** Catalog-owned family, when the plugin knows more than the ID/name matcher. */
   family?: string;
   description?: string | undefined;
+  /** Served on low-latency inference hardware; the family menu marks it Fast. */
+  fast?: boolean;
   efforts?: readonly { id: string; label: string }[];
   effortScope?: string;
   loadEfforts?: () => Promise<readonly { id: string; label: string }[]>;

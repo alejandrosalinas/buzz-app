@@ -30,7 +30,7 @@
 }
 
 .typing > [data-agent-response-preview] {
-  width: min(100%, var(--timeline-measure, 52rem));
+  width: min(100%, var(--timeline-measure, var(--buzz-message-width, 52rem)));
 }
 
 .dots {
@@ -81,7 +81,7 @@
 }
 
 .typing[data-in-flow] {
-  width: min(100%, var(--timeline-measure, 52rem));
+  width: min(100%, var(--timeline-measure, var(--buzz-message-width, 52rem)));
   margin-inline: auto;
   padding: 0;
 }
@@ -91,9 +91,16 @@
   position: absolute;
   inset-block-end: calc(100% + var(--space-half));
   inset-inline: var(--space-4);
-  inline-size: min(calc(100% - 2 * var(--space-4)), 52rem);
+  inline-size: min(
+    calc(100% - 2 * var(--space-4)),
+    var(--buzz-message-width, 52rem)
+  );
   margin-inline: auto;
   z-index: 1;
   padding: 0;
   pointer-events: none;
+}
+/* Matches the composer, which spans a compact list's full width. */
+:where(html[data-message-density="compact"]) .typing[data-audience="humans"] {
+  inline-size: calc(100% - 2 * var(--space-4));
 }

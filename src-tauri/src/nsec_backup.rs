@@ -31,35 +31,10 @@ const CANCELED: &str = "Restore was canceled. Try again.";
 // (`recoveryOff` in `src/features/identity/service.ts`).
 const UNAVAILABLE: &str = "Backup recovery is unavailable.";
 const REFUSED: &str = "Backup recovery is not offered for this account.";
+/// Restore's own callback slot, so it never waits on a server's FI sign-in.
+const RESTORE_CALLBACK_OWNER: &str = "nsec-restore";
 type Result<T> = std::result::Result<T, String>;
 
-#[derive(Clone, Copy, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "lowercase")]
-pub(crate) enum Source {
-    Builderlab,
-    Hosted,
-}
-impl Source {
-    fn index(self) -> usize {
-        match self {
-            Self::Builderlab => 0,
-            Self::Hosted => 1,
-        }
-    }
-}
-
-/// How a session authenticates to the backup service. A federated session
-/// keeps only the public NIP-FI revision; its token stays in `FederatedIdentity`.
-#[derive(Clone)]
-enum Auth {
-    Credential(Zeroizing<String>),
-    Federated(String),
-}
-#[derive(Clone)]
-struct Session {
-    source: Source,
-    auth: Auth,
-}
 struct Candidate {
     handle: String,
     pubkey: String,
@@ -244,8 +219,11 @@ fn classify(error: buzz_nsec_backup::Error, upload: bool) -> Failure {
 struct State {
     closed: bool,
     epoch: u64,
-    generations: [Option<u64>; 2],
-    sessions: Vec<Session>,
+    /// The latest renderer hand-off's counter.
+    generation: Option<u64>,
+    /// The NIP-FI session revision backups use. Only the public revision is
+    /// kept; its token stays in `FederatedIdentity`.
+    session: Option<String>,
     worker: Option<JoinHandle<()>>,
     rerun: bool,
     restore: Option<Restore>,
@@ -334,9 +312,9 @@ impl NsecBackupHost {
         let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
         state.retire();
         state.retire_restore();
-        state.sessions.clear();
-        // Source counters restart with each renderer document.
-        state.generations = [None, None];
+        state.session = None;
+        // The hand-off counter restarts with each renderer document.
+        state.generation = None;
         // The watcher stays: a stale channel drops sends, and the new document registers.
         // A consent wait belonged to a cleared session, so it ends too.
         if matches!(
@@ -354,7 +332,7 @@ impl NsecBackupHost {
         state.closed = true;
         state.retire();
         state.retire_restore();
-        state.sessions.clear();
+        state.session = None;
     }
     pub(crate) fn local_key_installed(&self, identity: IdentityHost) {
         if let Ok(mut state) = self.state.lock() {
@@ -372,7 +350,7 @@ impl NsecBackupHost {
         }
     }
     fn builderlab(&self) -> bool {
-        self.root.is_some() && self.source_allowed(Source::Builderlab)
+        self.root.is_some() && self.service_allowed()
     }
     fn status(&self) -> BackupStatus {
         let state = self.state.lock().unwrap_or_else(|e| e.into_inner());
@@ -399,93 +377,59 @@ impl NsecBackupHost {
     fn watch(&self, channel: Channel<BackupStatus>) {
         self.state.lock().unwrap_or_else(|e| e.into_inner()).watcher = Some(channel);
     }
-    fn source_allowed(&self, source: Source) -> bool {
-        source_allowed_for(
-            source,
+    fn service_allowed(&self) -> bool {
+        service_allowed_for(
             self.config.as_ref().as_ref(),
             buzzodz_plugins::BUILDERLAB_ORIGIN,
             buzzodz_plugins::BUILDERLAB_API_BASE_PATH,
         )
     }
+    /// Hands over the NIP-FI session revision backups use, or `None` once it
+    /// ended. A stale `generation` changes nothing.
     fn session(
         &self,
-        source: Source,
         generation: u64,
-        credential: Option<String>,
-        identity: IdentityHost,
-    ) -> Result<Option<u64>> {
-        // Wrap before any check so a rejected credential is still zeroized.
-        let auth = credential.map(|c| Auth::Credential(Zeroizing::new(c)));
-        self.handoff(source, generation, auth, identity)
-    }
-    /// At most one of `credential` and `federated` (an FI session revision).
-    fn session_from_ipc(
-        &self,
-        source: Source,
-        generation: u64,
-        credential: Option<String>,
         federated: Option<String>,
         identity: IdentityHost,
     ) -> Result<Option<u64>> {
-        match (credential, federated) {
-            (credential, None) => self.session(source, generation, credential, identity),
-            (None, Some(revision)) => {
-                let auth = Some(Auth::Federated(revision));
-                self.handoff(source, generation, auth, identity)
-            }
-            _ => Err("Invalid backup session".into()),
+        if !self.service_allowed() {
+            return Ok(None);
         }
+        self.handoff(generation, federated, identity)
     }
     fn handoff(
         &self,
-        source: Source,
         generation: u64,
-        auth: Option<Auth>,
+        federated: Option<String>,
         identity: IdentityHost,
     ) -> Result<Option<u64>> {
-        // Reject a foreign service before keeping a caller's already-held credential.
-        if !self.source_allowed(source) {
-            return Ok(None);
-        }
-        let invalid = match &auth {
-            Some(Auth::Credential(credential)) => !valid_credential(credential),
-            Some(Auth::Federated(revision)) => {
-                source != Source::Builderlab || !self.federated_current(revision)
-            }
-            None => false,
-        };
-        if invalid {
+        if federated
+            .as_deref()
+            .is_some_and(|revision| !self.federated_current(revision))
+        {
             return Err("Invalid backup session".into());
         }
         let mut state = self.state.lock().map_err(|_| "Backup unavailable")?;
-        if state.closed {
+        if state.closed || state.generation.is_some_and(|seen| generation <= seen) {
             return Ok(None);
         }
-        let previous = state.generations[source.index()];
-        if previous.is_some_and(|seen| generation <= seen) {
-            return Ok(None);
-        }
-        state.generations[source.index()] = Some(generation);
-        let active = state.sessions.last().is_some_and(|s| s.source == source);
-        state.sessions.retain(|s| s.source != source);
-        if auth.is_none() && !active {
+        state.generation = Some(generation);
+        let active = state.session.take().is_some();
+        if federated.is_none() && !active {
             return Ok(None);
         }
         state.retire();
-        if let Some(auth) = auth {
-            state.sessions.push(Session { source, auth });
-        }
+        state.session = federated;
         drop(state);
         Ok(self.trigger(identity))
     }
-    /// Stops a federated session as signed out once its revision is retired,
-    /// so a request built under it is not sent after a native sign-out.
-    fn still_signed_in(&self, session: &Session) -> std::result::Result<(), Stop> {
-        match &session.auth {
-            Auth::Federated(revision) if !self.federated_current(revision) => {
-                Err(Stop::Failed(Failure::SignedOut))
-            }
-            _ => Ok(()),
+    /// Stops a session as signed out once its revision is retired, so a
+    /// request built under it is not sent after a native sign-out.
+    fn still_signed_in(&self, revision: &str) -> std::result::Result<(), Stop> {
+        if self.federated_current(revision) {
+            Ok(())
+        } else {
+            Err(Stop::Failed(Failure::SignedOut))
         }
     }
     fn federated_current(&self, revision: &str) -> bool {
@@ -493,50 +437,28 @@ impl NsecBackupHost {
             .as_ref()
             .is_some_and(|fi| fi.with_session(|_, current, _| current == revision) == Some(true))
     }
-    /// The session's token and whether it is an FI bearer, resolved now. A
-    /// federated session whose revision is no longer current is signed out.
-    fn token(&self, session: &Session) -> Option<(Zeroizing<String>, bool)> {
-        match &session.auth {
-            Auth::Credential(credential) => Some((credential.clone(), false)),
-            Auth::Federated(revision) => self
-                .federated
-                .as_ref()?
-                .with_session(|token, current, _| (current == revision).then(|| token.clone()))
-                .flatten()
-                .map(|token| (token, true)),
-        }
+    /// The session's FI token, resolved now; `None` once the revision retired.
+    fn token(&self, revision: &str) -> Option<Zeroizing<String>> {
+        self.federated
+            .as_ref()?
+            .with_session(|token, current, _| (current == revision).then(|| token.clone()))
+            .flatten()
     }
-    fn api(&self, session: &Session, root: &str) -> std::result::Result<Api, Stop> {
-        let (token, bearer) = self
-            .token(session)
+    fn api(&self, revision: &str, root: &str) -> std::result::Result<Api, Stop> {
+        let token = self
+            .token(revision)
             .ok_or(Stop::Failed(Failure::SignedOut))?;
-        if bearer {
-            Api::bearer(root, &token)
-        } else {
-            Api::new(root, &token)
-        }
-        .map_err(|_| Stop::Failed(Failure::Unreachable))
+        Api::bearer(root, &token).map_err(|_| Stop::Failed(Failure::Unreachable))
     }
-    fn client(&self, session: &Session, root: &str) -> std::result::Result<Client, Stop> {
-        let (token, bearer) = self
-            .token(session)
+    fn client(&self, revision: &str, root: &str) -> std::result::Result<Client, Stop> {
+        let token = self
+            .token(revision)
             .ok_or(Stop::Failed(Failure::SignedOut))?;
-        if bearer {
-            Client::bearer(root, &token)
-        } else {
-            Client::new(root, &token)
-        }
-        .map_err(|error| Stop::Failed(classify(error, false)))
+        Client::bearer(root, &token).map_err(|error| Stop::Failed(classify(error, false)))
     }
-    fn retry(&self, source: Source, identity: IdentityHost) -> Option<u64> {
-        let mut state = self.state.lock().ok()?;
-        let index = state.sessions.iter().position(|s| s.source == source)?;
-        if index + 1 != state.sessions.len() {
-            state.retire();
-            let session = state.sessions.remove(index);
-            state.sessions.push(session);
-        }
-        drop(state);
+    fn retry(&self, identity: IdentityHost) -> Option<u64> {
+        // Only a handed-over session can be retried.
+        self.state.lock().ok()?.session.as_ref()?;
         self.trigger(identity)
     }
     /// Wake the uploader. The ticket is the number of a pass that starts after this
@@ -558,7 +480,7 @@ impl NsecBackupHost {
             state.rerun = true;
             return Some(state.requested);
         }
-        let Some(session) = state.sessions.last().cloned() else {
+        let Some(session) = state.session.clone() else {
             // A pass retired by a null handoff ends here, with no outcome of its own;
             // numbering it as the latest ticket settles a queued rerun's ticket too.
             // A consent wait belonged to the session that is gone, so it ends too.
@@ -620,7 +542,7 @@ impl NsecBackupHost {
     async fn backup(
         &self,
         identity: &IdentityHost,
-        session: &Session,
+        session: &str,
         epoch: u64,
     ) -> std::result::Result<Outcome, Stop> {
         let config = self.config.as_ref().as_ref().ok_or(UNAVAILABLE)?;
@@ -780,10 +702,11 @@ impl NsecBackupHost {
             return Err("A restore is already in progress".into());
         }
         let oauth = callback.begin(
+            RESTORE_CALLBACK_OWNER,
             OAuthRequest {
                 authorization_url: login.into(),
                 callback_path: format!("/callback/{}", uuid::Uuid::new_v4()),
-                use_state: Some(true),
+                use_state: true,
             },
             |url| {
                 app.opener()
@@ -1015,26 +938,21 @@ impl NsecBackupHost {
     }
 }
 
-fn source_allowed_for(
-    source: Source,
+/// Whether the backup service is the build's own Builderlab, whose NIP-FI
+/// session backs it up.
+fn service_allowed_for(
     config: Option<&Config>,
     builderlab_origin: &str,
     builderlab_api_base_path: &str,
 ) -> bool {
-    let Some(config) = config else {
-        return false;
-    };
-    match source {
-        Source::Hosted => config.service_url == "https://app.builderlab.xyz/api/goose",
-        Source::Builderlab => url::Url::parse(&config.service_url)
-            .ok()
-            .is_some_and(|url| {
-                let path = format!("{}/", url.path().trim_end_matches('/'));
-                !builderlab_origin.is_empty()
-                    && url.origin().ascii_serialization() == builderlab_origin
-                    && path == builderlab_api_base_path
-            }),
-    }
+    config
+        .and_then(|config| url::Url::parse(&config.service_url).ok())
+        .is_some_and(|url| {
+            let path = format!("{}/", url.path().trim_end_matches('/'));
+            !builderlab_origin.is_empty()
+                && url.origin().ascii_serialization() == builderlab_origin
+                && path == builderlab_api_base_path
+        })
 }
 
 fn valid_credential(value: &str) -> bool {
@@ -1272,31 +1190,34 @@ impl Api {
 pub(crate) fn nsec_backup_available(host: tauri::State<'_, NsecBackupHost>) -> bool {
     host.config.is_some()
 }
+/// Whether this device has confirmed that a backup of `pubkey` is stored, by any
+/// account: first-run sign-in replaces only a key that is safe to replace.
+#[tauri::command]
+pub(crate) fn nsec_backup_confirmed(
+    host: tauri::State<'_, NsecBackupHost>,
+    pubkey: String,
+) -> bool {
+    match (host.config.as_ref(), host.root.as_ref()) {
+        (Some(config), Some(root)) => persistence::confirmed(root, config, &pubkey),
+        _ => false,
+    }
+}
 /// The ticket of the pass this handoff starts, if any.
 #[tauri::command]
 pub(crate) fn nsec_backup_session(
     host: tauri::State<'_, NsecBackupHost>,
     identity: tauri::State<'_, IdentityHost>,
-    source: Source,
     generation: u64,
-    credential: Option<String>,
     federated: Option<String>,
 ) -> Result<Option<u64>> {
-    host.session_from_ipc(
-        source,
-        generation,
-        credential,
-        federated,
-        identity.inner().clone(),
-    )
+    host.session(generation, federated, identity.inner().clone())
 }
 #[tauri::command]
 pub(crate) fn nsec_backup_retry(
     host: tauri::State<'_, NsecBackupHost>,
     identity: tauri::State<'_, IdentityHost>,
-    source: Source,
 ) -> Option<u64> {
-    host.retry(source, identity.inner().clone())
+    host.retry(identity.inner().clone())
 }
 #[tauri::command]
 pub(crate) fn nsec_backup_state(host: tauri::State<'_, NsecBackupHost>) -> BackupStatus {

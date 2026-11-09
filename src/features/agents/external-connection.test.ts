@@ -3,6 +3,7 @@ import type { HostMcpServer } from "../host/service";
 import type { Agents } from "./service";
 import {
   createExternalApps,
+  legacyRequest,
   parseExternalAuthorization,
   type ExternalAuthorization,
 } from "./external-connection";
@@ -12,12 +13,12 @@ const request: ExternalAuthorization = {
   client: "Test client",
   callback: "http://127.0.0.1:1234/buzz/authorize",
   state: "A".repeat(43),
-  scope: ["read", "post"],
+  scope: ["agent"],
   code_challenge: `${"B".repeat(42)}A`,
   code_challenge_method: "S256",
 };
 const uri = () =>
-  `buzz://mcp-authorize?${new URLSearchParams({ version: "1", client: request.client, callback: request.callback, state: request.state, scope: "read post", code_challenge: request.code_challenge, code_challenge_method: "S256" })}`;
+  `buzz://mcp-authorize?${new URLSearchParams({ version: "1", client: request.client, callback: request.callback, state: request.state, scope: "agent", code_challenge: request.code_challenge, code_challenge_method: "S256" })}`;
 function deferred<T>() {
   let resolve!: (value: T) => void;
   const promise = new Promise<T>((accept) => {
@@ -39,7 +40,7 @@ afterEach(() => vi.useRealTimers());
 it("parses the generic authorization request without a bearer", () => {
   expect(parseExternalAuthorization(uri())).toEqual(request);
 });
-it.each(["read", "post", "create", "read create", "read post create"])(
+it.each(["agent", "read", "post", "create", "read create", "read post create"])(
   "parses explicitly requested access without adding scopes (%s)",
   (scope) => {
     const url = new URL(uri());
@@ -60,6 +61,8 @@ it.each([
   ["scope", "read read"],
   ["scope", "create create"],
   ["scope", "create manage"],
+  ["scope", "agent read"],
+  ["scope", "agent agent"],
   ["state", "short"],
   ["client", ""],
   ["version", "3"],
@@ -110,7 +113,7 @@ it("restores saved approval and closes only the session on unload", async () => 
   expect(pairing.mock.calls.map((call) => call[0])).not.toContain("revoke");
 });
 
-it.each(["revoked", "proof", "viewer", "scope"])(
+it.each(["revoked", "proof", "viewer", "scope", "widened scope"])(
   "refuses %s resume before connection",
   async (reason) => {
     const connect = vi.fn(async () => transport());
@@ -125,7 +128,10 @@ it.each(["revoked", "proof", "viewer", "scope"])(
     connection.open(
       reason === "scope"
         ? { ...resumeRequest, scope: ["read", "post"] }
-        : resumeRequest,
+        : // A saved narrow approval never resumes as full access.
+          reason === "widened scope"
+          ? { ...resumeRequest, scope: ["agent"] }
+          : resumeRequest,
       reason === "viewer" ? "other-viewer" : "viewer",
     );
     await vi.waitFor(() =>
@@ -349,6 +355,21 @@ it.each([
   { scope: ["create"] },
   { scope: ["read", "post", "create"] },
 ] as const)(
+  "denies a limited $scope request instead of approving it",
+  async ({ scope }) => {
+    const connect = vi.fn(async () => transport()),
+      deny = vi.fn(async () => {});
+    const connection = createExternalApps();
+    connection.bind({ connect, deny });
+    connection.open({ ...request, scope }, "viewer");
+    await connection.approve("test-agent");
+    expect(connect).not.toHaveBeenCalled();
+    expect(deny).toHaveBeenCalledOnce();
+    expect(connection.snapshot().pending).toBeUndefined();
+    expect(connection.snapshot().error).toBe(legacyRequest);
+  },
+);
+it.each([{ scope: ["agent"] }] as const)(
   "requires approval for exactly $scope and hides transport credentials",
   async ({ scope }) => {
     const server = transport(),

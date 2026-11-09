@@ -139,6 +139,7 @@ export function createPluginStorage(bundledCatalog: () => Catalog["plugins"]) {
             authorization,
             checkOnly: true,
           }),
+        url: (url, sha256) => invoke("plugin_import_url", { url, sha256 }),
         install: (token, path) =>
           invoke("plugin_import_install", { token, path }),
         discard: (token) => invoke("plugin_import_discard", { token }),

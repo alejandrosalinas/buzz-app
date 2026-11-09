@@ -11,6 +11,7 @@ import {
   within,
 } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import { useSyncExternalStore } from "react";
 import { ToastProvider } from "../shared/design-system/ui/Toast";
 import { Context } from "@deepseek-ai/cordis";
 import { afterEach, expect, it, vi } from "vitest";
@@ -189,6 +190,7 @@ it("opens the addressed plugin's update checkbox and keeps its action separate f
             pluginId: "example.notes",
           },
           complete: vi.fn(),
+          savePosition: vi.fn(),
         } as unknown as Parameters<typeof Settings>[0]["navigation"]
       }
       plugins={
@@ -1327,6 +1329,563 @@ it("opens Manage plugins from the Decisions API hint", async () => {
   expect(screen.getByRole("region", { name: "Manage plugins" })).toHaveFocus();
 });
 
+function pluginSectionsFixture(
+  cards: SettingsCards,
+  decisions?: DecisionsService,
+  manager?: object,
+) {
+  const plugin = (id: string, name: string) => ({
+    manifest: { id, name, apiVersion: 1 as const },
+    source: "bundled" as const,
+    enabled: true,
+    revision: "bundled",
+    previous: null,
+    reloadable: false,
+    error: null,
+  });
+  const snapshot = {
+    configuration: {
+      status: "ready" as const,
+      externalPluginsPaused: false,
+      catalog: {
+        profile: "test",
+        location: "test",
+        plugins: [
+          plugin("buzz.github", "GitHub"),
+          plugin("buzz.codex", "Codex"),
+          plugin("buzz.typesafe", "TypeSafe"),
+        ],
+      },
+    },
+    activation: {},
+    busy: false,
+    error: null,
+    refreshError: null,
+  };
+  const plugins = {
+    subscribe: () => () => {},
+    snapshot: () => snapshot,
+    requests: noRequests,
+    change: vi.fn(),
+    reload: vi.fn(),
+    dismissError: vi.fn(),
+    ...manager,
+  } as unknown as Parameters<typeof Settings>[0]["plugins"];
+  const onSection = vi.fn();
+  const onPluginDetailsClosed = vi.fn();
+  const onPluginImportClosed = vi.fn();
+  /** Per-visit positions, as the navigation service keeps them. */
+  const positions = new Map<string, unknown>();
+  const stored = (entryId: string) =>
+    positions.get(JSON.stringify([entryId, "settings.pluginDetails"]));
+  /** One request per visit, kept across renders as App's `route.request` is. */
+  const requests = new Map<string, unknown>();
+  const request = (section: string, visit: Visit = {}) => {
+    const { entryId = section, traversal, ...address } = visit;
+    const target = { version: 1, kind: "settings", section, ...address };
+    const key = JSON.stringify([entryId, traversal, target]);
+    if (!requests.has(key))
+      requests.set(key, {
+        entryId,
+        ...(traversal && { traversal }),
+        target,
+        signal: new AbortController().signal,
+        complete: () => true,
+        position: (name: string) =>
+          positions.get(JSON.stringify([entryId, name])),
+        savePosition: (name: string, value: unknown) =>
+          positions.set(JSON.stringify([entryId, name]), value),
+      });
+    return requests.get(key) as never;
+  };
+  const settings = (navigation: never, communities = host.communities) => (
+    <div id="settings-content" tabIndex={-1}>
+      <Settings
+        {...host}
+        communities={communities}
+        cards={cards}
+        plugins={plugins}
+        decisions={decisions}
+        navigation={navigation}
+        onSection={onSection}
+        onPluginDetailsClosed={onPluginDetailsClosed}
+        onPluginImportClosed={onPluginImportClosed}
+        navigationPane
+      />
+    </div>
+  );
+  const view = (
+    section: string,
+    communities = host.communities,
+    visit?: Visit,
+  ) => settings(request(section, visit), communities);
+  /** The named link line in a plugin's open details, or null without one. */
+  const links = (name: string) =>
+    within(
+      screen.getByRole("complementary", { name: `${name} details` }),
+    ).queryByRole("group", { name: `${name} settings` });
+  const linkNames = (name: string) =>
+    within(links(name) as HTMLElement)
+      .getAllByRole("button")
+      .map((button) => button.textContent);
+  return {
+    onSection,
+    onPluginDetailsClosed,
+    onPluginImportClosed,
+    request,
+    settings,
+    view,
+    links,
+    linkNames,
+    positions,
+    stored,
+  };
+}
+type Visit = {
+  entryId?: string;
+  traversal?: true;
+  pluginId?: string;
+  pluginImport?: { repository: string; reference: string };
+};
+
+it("links a plugin's details to the Settings sections it adds", async () => {
+  const user = userEvent.setup();
+  const owned = (id: string, title: string, group?: string) => ({
+    ...card(id, title, group),
+    key: `buzz.github/${id}`,
+    pluginId: "buzz.github",
+  });
+  const all = [
+    owned("authors", "GitHub comment authors", "Plugins"),
+    owned("reviews", "GitHub reviews"),
+    card("groups", "Personal groups"),
+  ];
+  const { cards, set } = registry(all);
+  const { onSection, view, links, linkNames } = pluginSectionsFixture(cards);
+  const noCommunityState = { ...communityState, selected: null };
+  const personal = {
+    retainPresentation: () => () => {},
+    subscribe: () => () => {},
+    snapshot: () => noCommunityState,
+    relay,
+  } as unknown as Parameters<typeof Settings>[0]["communities"];
+
+  const { rerender } = render(view("plugins"));
+  fireEvent.click(screen.getByRole("button", { name: "View Codex details" }));
+  expect(links("Codex")).toBeNull();
+
+  fireEvent.click(screen.getByRole("button", { name: "View GitHub details" }));
+  expect(links("GitHub")).toHaveTextContent(
+    "Settings: GitHub reviews, GitHub comment authors",
+  );
+  expect(linkNames("GitHub")).toEqual([
+    "GitHub reviews",
+    "GitHub comment authors",
+  ]);
+
+  // Disabling a plugin retires its cards; its details stay open without links.
+  act(() => set([card("groups", "Personal groups")]));
+  expect(links("GitHub")).toBeNull();
+  expect(
+    screen.getByRole("complementary", { name: "GitHub details" }),
+  ).toBeVisible();
+  act(() => set(all));
+
+  // Personal space has no community, so its community card is not linked.
+  rerender(view("plugins", personal));
+  expect(linkNames("GitHub")).toEqual(["GitHub comment authors"]);
+
+  await user.click(
+    screen.getByRole("button", { name: "GitHub comment authors" }),
+  );
+  expect(onSection).toHaveBeenCalledExactlyOnceWith("buzz.github/authors");
+  // Opening the section removes the pane, so focus moves into the section.
+  rerender(view("buzz.github/authors", personal));
+  expect(screen.getByText("GitHub comment authors body")).toBeVisible();
+  expect(
+    screen.queryByRole("complementary", { name: "GitHub details" }),
+  ).toBeNull();
+  expect(document.getElementById("settings-content")).toHaveFocus();
+});
+
+it("reopens the details a Manage plugins visit showed on Back or Forward, not on a new visit", async () => {
+  const user = userEvent.setup();
+  const { cards } = registry([
+    {
+      ...card("authors", "GitHub comment authors", "Plugins"),
+      key: "buzz.github/authors",
+      pluginId: "buzz.github",
+    },
+  ]);
+  const { view, positions, stored } = pluginSectionsFixture(cards);
+  const details = () =>
+    screen.queryByRole("complementary", { name: "GitHub details" });
+  const row = () => screen.getByRole("button", { name: "View GitHub details" });
+
+  const { rerender } = render(view("plugins", undefined, { entryId: "p1" }));
+  fireEvent.click(row());
+  await user.click(
+    screen.getByRole("button", { name: "GitHub comment authors" }),
+  );
+  rerender(view("buzz.github/authors", undefined, { entryId: "a2" }));
+  expect(details()).toBeNull();
+
+  // Back, then Forward and Back again, return to the details that visit showed.
+  for (const _pass of [1, 2]) {
+    rerender(view("plugins", undefined, { entryId: "p1", traversal: true }));
+    expect(details()).toBeVisible();
+    expect(row()).toHaveAttribute("aria-expanded", "true");
+    expect(
+      screen.getByRole("button", { name: "Close plugin details" }),
+    ).toHaveFocus();
+    rerender(
+      view("buzz.github/authors", undefined, {
+        entryId: "a2",
+        traversal: true,
+      }),
+    );
+  }
+
+  // Once closed, the visit comes back as the list.
+  rerender(view("plugins", undefined, { entryId: "p1", traversal: true }));
+  fireEvent.click(screen.getByRole("button", { name: "Close plugin details" }));
+  rerender(
+    view("buzz.github/authors", undefined, { entryId: "a2", traversal: true }),
+  );
+  rerender(view("plugins", undefined, { entryId: "p1", traversal: true }));
+  expect(details()).toBeNull();
+  expect(row()).toHaveAttribute("aria-expanded", "false");
+
+  // A new visit starts at the list, and a plugin removed since has no details.
+  fireEvent.click(row());
+  rerender(view("buzz.github/authors", undefined, { entryId: "a3" }));
+  rerender(view("plugins", undefined, { entryId: "p4" }));
+  expect(details()).toBeNull();
+  positions.set(
+    JSON.stringify(["p5", "settings.pluginDetails"]),
+    "buzz.removed",
+  );
+  rerender(view("plugins", undefined, { entryId: "p5", traversal: true }));
+  expect(screen.queryByRole("complementary")).toBeNull();
+  expect(stored("p5")).toBeNull();
+});
+
+/** The open details' plugin name, or null. */
+const shownDetails = () =>
+  screen
+    .queryByRole("complementary")
+    ?.getAttribute("aria-label")
+    ?.replace(/ details$/, "") ?? null;
+const toggleDetails = (name: string) =>
+  fireEvent.click(screen.getByRole("button", { name: `View ${name} details` }));
+
+/** Manage plugins visits from p1. */
+function pluginVisits() {
+  const fixture = pluginSectionsFixture(registry([]).cards);
+  const { rerender } = render(
+    fixture.view("plugins", undefined, { entryId: "p1" }),
+  );
+  return {
+    ...fixture,
+    visit: (section: string, visit: Visit) =>
+      rerender(fixture.view(section, undefined, visit)),
+    toggle: toggleDetails,
+    shown: shownDetails,
+  };
+}
+
+/** Settings under a visit store, as App renders `route.request`, so a
+ * dismissal can land inside its callback or later, as history does. */
+function pluginHost(manager: object, first: Visit) {
+  const fixture = pluginSectionsFixture(registry([]).cards, undefined, manager);
+  let current = fixture.request("plugins", first);
+  const listeners = new Set<() => void>();
+  const subscribe = (listener: () => void) => {
+    listeners.add(listener);
+    return () => listeners.delete(listener);
+  };
+  const land = (section: string, visit: Visit) => {
+    current = fixture.request(section, visit);
+    for (const listener of listeners) listener();
+  };
+  function Host() {
+    return fixture.settings(useSyncExternalStore(subscribe, () => current));
+  }
+  render(<Host />);
+  return {
+    ...fixture,
+    land,
+    visit: (section: string, visit: Visit) => act(() => land(section, visit)),
+    entry: () => (current as { entryId: string }).entryId,
+    toggle: toggleDetails,
+    shown: shownDetails,
+  };
+}
+const imported = { repository: "https://example.com/p.git", reference: "main" };
+/** A linked import of `id`; Codex is already installed. */
+const linkedImport = (id: string, install = Promise.resolve(true)) => ({
+  installImport: vi.fn(() => install),
+  imports: {
+    git: vi.fn(async () => ({
+      token: "linked",
+      source: imported.repository,
+      commit: null,
+      warnings: [],
+      candidates: [
+        {
+          path: ".",
+          revision: "two",
+          manifest: { id, name: id, apiVersion: 1 },
+        },
+      ],
+    })),
+    discard: vi.fn(async () => {}),
+  },
+});
+
+it("shows the list on Back to a visit that closed its details", () => {
+  const { visit, toggle, shown } = pluginVisits();
+  toggle("Codex");
+  toggle("Codex");
+  visit("plugins", { entryId: "p2", pluginId: "buzz.github" });
+  expect(shown()).toBe("GitHub");
+  visit("plugins", { entryId: "p1", traversal: true });
+  expect(shown()).toBeNull();
+});
+
+it("records the details an adjacent visit inherits", () => {
+  const { visit, toggle, shown } = pluginVisits();
+  toggle("GitHub");
+  visit("plugins", { entryId: "p2", pluginImport: imported });
+  expect(shown()).toBe("GitHub");
+  visit("plugins", { entryId: "p1", traversal: true });
+  expect(shown()).toBe("GitHub");
+  visit("plugins", { entryId: "p2", pluginImport: imported, traversal: true });
+  expect(shown()).toBe("GitHub");
+});
+
+it("shows the list on Back to a visit that never opened details", () => {
+  const { visit, shown } = pluginVisits();
+  visit("plugins", { entryId: "p2", pluginId: "buzz.github" });
+  expect(shown()).toBe("GitHub");
+  visit("plugins", { entryId: "p1", traversal: true });
+  expect(shown()).toBeNull();
+});
+
+it("records nothing for a section Manage plugins is left for", () => {
+  const { visit, toggle, stored } = pluginVisits();
+  toggle("GitHub");
+  visit("appearance", { entryId: "s2" });
+  expect(stored("s2")).toBeUndefined();
+});
+
+it("returns from addressed details to the details the earlier visit showed", () => {
+  const { visit, toggle, shown } = pluginVisits();
+  toggle("GitHub");
+  visit("plugins", { entryId: "p2", pluginId: "buzz.codex" });
+  expect(shown()).toBe("Codex");
+  visit("plugins", { entryId: "p1", traversal: true });
+  expect(shown()).toBe("GitHub");
+});
+
+it("returns through another section to addressed details, then the earlier visit's", () => {
+  const { visit, toggle, shown } = pluginVisits();
+  toggle("GitHub");
+  visit("plugins", { entryId: "p2", pluginId: "buzz.codex" });
+  visit("appearance", { entryId: "s3" });
+  expect(shown()).toBeNull();
+  visit("plugins", { entryId: "p2", pluginId: "buzz.codex", traversal: true });
+  expect(shown()).toBe("Codex");
+  visit("plugins", { entryId: "p1", traversal: true });
+  expect(shown()).toBe("GitHub");
+});
+
+it("lands on the list when Close dismisses addressed details", () => {
+  const { visit, toggle, shown, onPluginDetailsClosed } = pluginVisits();
+  toggle("GitHub");
+  visit("plugins", { entryId: "p2", pluginId: "buzz.codex" });
+  fireEvent.click(screen.getByRole("button", { name: "Close plugin details" }));
+  expect(onPluginDetailsClosed).toHaveBeenCalledOnce();
+  visit("plugins", { entryId: "p1", traversal: true });
+  expect(shown()).toBeNull();
+});
+
+it("keeps the plugin Open in Buzz shows when the import's dismissal lands later", async () => {
+  const { visit, land, entry, shown, stored, onPluginImportClosed } =
+    pluginHost(linkedImport("buzz.codex"), { entryId: "p1" });
+  visit("plugins", { entryId: "p2", pluginImport: imported });
+  // History returns to p1 after Open in Buzz has shown its plugin.
+  onPluginImportClosed.mockImplementation(() =>
+    setTimeout(() => land("plugins", { entryId: "p1", traversal: true })),
+  );
+  fireEvent.click(await screen.findByRole("button", { name: "Open in Buzz" }));
+  await waitFor(() => expect(entry()).toBe("p1"));
+  expect(shown()).toBe("Codex");
+  expect(stored("p1")).toBe("buzz.codex");
+});
+
+it("records the plugin Open in Buzz shows on the visit replacing its import", async () => {
+  const { visit, land, shown, stored, onPluginImportClosed } = pluginHost(
+    linkedImport("buzz.codex"),
+    { entryId: "i1", pluginImport: imported },
+  );
+  // Opened from a channel: the import is replaced while it closes.
+  onPluginImportClosed.mockImplementation(() =>
+    land("plugins", { entryId: "p2" }),
+  );
+  fireEvent.click(await screen.findByRole("button", { name: "Open in Buzz" }));
+  await waitFor(() => expect(shown()).toBe("Codex"));
+  expect(stored("p2")).toBe("buzz.codex");
+  visit("appearance", { entryId: "s3" });
+  visit("plugins", { entryId: "p2", traversal: true });
+  expect(shown()).toBe("Codex");
+});
+
+it("keeps an earlier visit's details when an import finishes after Back", async () => {
+  let finish!: (installed: boolean) => void;
+  const installed = new Promise<boolean>((resolve) => {
+    finish = resolve;
+  });
+  const { visit, toggle, shown, onPluginImportClosed } = pluginHost(
+    linkedImport("example.new", installed),
+    { entryId: "p0" },
+  );
+  toggle("Codex");
+  visit("plugins", { entryId: "p1", pluginId: "buzz.github" });
+  visit("plugins", { entryId: "p2", pluginImport: imported });
+  fireEvent.click(
+    await screen.findByRole("button", { name: "Install plugin" }),
+  );
+  visit("plugins", { entryId: "p1", pluginId: "buzz.github", traversal: true });
+  // The finished install closes a visit that is no longer shown.
+  await act(async () => finish(true));
+  await waitFor(() => expect(onPluginImportClosed).toHaveBeenCalledOnce());
+  visit("plugins", { entryId: "p0", traversal: true });
+  expect(shown()).toBe("Codex");
+});
+
+it("links a decision provider's details to Decisions API", async () => {
+  const user = userEvent.setup();
+  const provider = (pluginId: string, id: string) => ({
+    id,
+    key: `${pluginId}/${id}`,
+    pluginId,
+    revision: "bundled",
+    label: id,
+    description: `${id} provider`,
+    status: () => "ready" as const,
+    subscribe: () => () => {},
+    decide: vi.fn(),
+  });
+  const providers = [
+    provider("buzz.typesafe", "typesafe"),
+    provider("buzz.typesafe", "typesafe-fast"),
+    provider("buzz.github", "github"),
+  ];
+  const decisions = {
+    backend: () => undefined,
+    providers: () => providers,
+    subscribe: () => () => {},
+    setBackend: vi.fn(),
+  } as unknown as DecisionsService;
+  const { cards } = registry([
+    {
+      ...card("authors", "GitHub comment authors", "Plugins"),
+      key: "buzz.github/authors",
+      pluginId: "buzz.github",
+    },
+    {
+      ...card("reviews", "GitHub reviews"),
+      key: "buzz.github/reviews",
+      pluginId: "buzz.github",
+    },
+  ]);
+  const { onSection, view, links, linkNames } = pluginSectionsFixture(
+    cards,
+    decisions,
+  );
+  render(view("plugins"));
+
+  fireEvent.click(screen.getByRole("button", { name: "View Codex details" }));
+  expect(links("Codex")).toBeNull();
+  // Decisions API takes its sidebar place among the plugin's own sections.
+  fireEvent.click(screen.getByRole("button", { name: "View GitHub details" }));
+  expect(linkNames("GitHub")).toEqual([
+    "GitHub reviews",
+    "Decisions API",
+    "GitHub comment authors",
+  ]);
+  // Two providers from one plugin still make one link.
+  fireEvent.click(
+    screen.getByRole("button", { name: "View TypeSafe details" }),
+  );
+  expect(linkNames("TypeSafe")).toEqual(["Decisions API"]);
+
+  await user.click(
+    within(links("TypeSafe") as HTMLElement).getByRole("button", {
+      name: "Decisions API",
+    }),
+  );
+  expect(onSection).toHaveBeenCalledExactlyOnceWith("decisions");
+});
+
+it.each([
+  { start: "hidden", via: "link", top: -1100, scrolled: true },
+  { start: "in view", via: "link", top: 260, scrolled: false },
+  // A route change, such as Back or a sidebar click, keeps its own scrolling.
+  { start: "hidden", via: "route", top: -1100, scrolled: false },
+])(
+  "brings a section's start into view only when a link opens it hidden (start $start, via $via)",
+  async ({ via, top, scrolled }) => {
+    const user = userEvent.setup();
+    const { cards } = registry([
+      {
+        ...card("authors", "GitHub comment authors", "Plugins"),
+        key: "buzz.github/authors",
+        pluginId: "buzz.github",
+      },
+    ]);
+    const { view, links } = pluginSectionsFixture(cards);
+    // Stacked navigation and content share one scrollport, which keeps its
+    // offset when the section changes.
+    const stacked = (section: string) => (
+      <div data-testid="scrollport" style={{ overflowY: "auto" }}>
+        {view(section)}
+      </div>
+    );
+    const { rerender } = render(stacked("plugins"));
+    fireEvent.click(
+      screen.getByRole("button", { name: "View GitHub details" }),
+    );
+    if (via === "link")
+      await user.click(
+        within(links("GitHub") as HTMLElement).getByRole("button", {
+          name: "GitHub comment authors",
+        }),
+      );
+    const content = document.getElementById("settings-content") as HTMLElement;
+    const scrollIntoView = vi.fn();
+    content.scrollIntoView = scrollIntoView;
+    vi.spyOn(
+      screen.getByTestId("scrollport"),
+      "getBoundingClientRect",
+    ).mockReturnValue({ top: 240, bottom: 780 } as DOMRect);
+    vi.spyOn(content, "getBoundingClientRect").mockReturnValue({
+      top,
+      bottom: top + 3000,
+    } as DOMRect);
+
+    rerender(stacked("buzz.github/authors"));
+    expect(screen.getByText("GitHub comment authors body")).toBeVisible();
+    if (via === "link") expect(content).toHaveFocus();
+    if (scrolled)
+      expect(scrollIntoView).toHaveBeenCalledExactlyOnceWith({
+        block: "start",
+      });
+    else expect(scrollIntoView).not.toHaveBeenCalled();
+  },
+);
+
 it("gives contributed cards their own community sections and retires removed cards", async () => {
   const { cards, set } = registry([
     card("hosted", "Hosted communities", "Communities"),
@@ -2320,6 +2879,33 @@ it("allows Add to install while an independent folder check is pending, includin
   );
 });
 
+it("shows a URL-installed plugin's pinned file instead of offering a folder or Git update", async () => {
+  const fixture = reviewPluginFixture();
+  const sha256 = "e".repeat(64);
+  const checkFolder = vi.fn();
+  Object.assign(fixture.external, {
+    updateSource: { url: "https://plugins.example.org/zebra.json", sha256 },
+  });
+  Object.assign(fixture.manager, {
+    imports: { checkFolder, discard: vi.fn(async () => {}) },
+  });
+  act(fixture.publish);
+  fireEvent.click(
+    screen.getByRole("button", { name: "View Zebra external details" }),
+  );
+  const updates = await screen.findByRole("region", {
+    name: "Plugin updates",
+  });
+  expect(updates).toHaveTextContent("https://plugins.example.org/zebra.json");
+  expect(updates).toHaveTextContent(`SHA-256: ${sha256}`);
+  expect(updates).toHaveTextContent(/plugin marketplace or a new install link/);
+  expect(screen.queryByText(/No saved source/)).toBeNull();
+  expect(
+    screen.queryByRole("button", { name: "Check for updates" }),
+  ).toBeNull();
+  expect(checkFolder).not.toHaveBeenCalled();
+});
+
 const pinned = "0123456789abcdef0123456789abcdef01234567";
 const managedPolicy = (...states: ("missing" | "current" | "outdated")[]) => ({
   status: "ready" as const,
@@ -2383,7 +2969,7 @@ it("recommends managed plugins in Settings and points to them from navigation", 
     }),
   );
   const dialog = await screen.findByRole("dialog", {
-    name: "Review plugin access",
+    name: "Review Managed Plugin access",
   });
   await within(dialog).findByRole("button", { name: "Install plugin" });
   expect(git).toHaveBeenCalledWith(
@@ -2626,4 +3212,53 @@ it("leaves a confirmed install's request to the install when Settings closes", a
   requests.settle(id, "installed");
   unconfirm();
   await expect(outcome).resolves.toBe("installed");
+});
+
+it("reviews a requested plugin artifact in place of the add dialog and cancels it when Settings closes", async () => {
+  const url = vi.fn(async () => ({
+    token: "preview",
+    source: "https://cdn.example.com/a.json",
+    commit: null,
+    warnings: [],
+    candidates: [
+      {
+        path: ".",
+        revision: "d".repeat(64),
+        manifest: { id: "example.artifact", name: "Artifact", apiVersion: 1 },
+      },
+    ],
+  }));
+  const git = vi.fn();
+  const { cards, plugins, requests } = installRequestFixture({
+    git,
+    url,
+    discard: vi.fn(async () => {}),
+  });
+  const view = render(
+    <Settings
+      {...host}
+      cards={cards}
+      plugins={plugins}
+      installRequests={requests}
+    />,
+  );
+  fireEvent.click(screen.getByRole("button", { name: "Manage plugins" }));
+  const outcome = requests.request(
+    {
+      id: "example.artifact",
+      url: "https://cdn.example.com/a.json",
+      sha256: "d".repeat(64),
+    },
+    market,
+  );
+  const dialog = await screen.findByRole("dialog", {
+    name: "Review Artifact Plugin access",
+  });
+  expect(
+    await within(dialog).findByText(`SHA-256: ${"d".repeat(64)}`),
+  ).toBeVisible();
+  expect(screen.queryByRole("dialog", { name: "Add a plugin" })).toBeNull();
+  expect(git).not.toHaveBeenCalled();
+  view.unmount();
+  await expect(outcome).resolves.toBe("cancelled");
 });

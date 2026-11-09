@@ -3,8 +3,9 @@ import "@testing-library/jest-dom/vitest";
 import { act, cleanup, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, expect, it, vi } from "vitest";
-import { createRef, useLayoutEffect } from "react";
+import { createRef, useLayoutEffect, useState } from "react";
 import { ChannelHeaderMenu } from "./ChannelHeaderMenu";
+import { PanelWorkspace } from "../../features/panels/PanelWorkspace";
 import type { RelaySession } from "../../features/relay/session";
 import type { ChannelSummary } from "../../features/relay/contracts";
 import {
@@ -16,11 +17,20 @@ import { MenuItem } from "../../shared/design-system/ui/Menu";
 import type { RegisteredPanel } from "../../features/panels/service";
 import type { RelayData } from "../../features/relay/service";
 
+const viewer = "a".repeat(64),
+  other = "b".repeat(64);
 const channel: ChannelSummary = {
-  id: "alpha",
+  id: "11111111-1111-4111-8111-111111111111",
   name: "Alpha",
   channelType: "stream",
+  viewerRole: "owner",
+  members: [viewer, other],
+  owners: [viewer],
 };
+const member = {
+  viewerRole: "member",
+  owners: [other],
+} as const satisfies Partial<ChannelSummary>;
 afterEach(cleanup);
 function harness(value: ChannelSummary | undefined = channel) {
   const details = {
@@ -33,14 +43,7 @@ function harness(value: ChannelSummary | undefined = channel) {
   };
   const load = vi.fn(async () => details);
   const save = vi.fn(async () => {});
-  const lifecycleLoad = vi.fn(async () => ({
-    channelId: "alpha",
-    channelType: "stream",
-    canArchive: true,
-    canDelete: true,
-    canLeave: false,
-    canHide: false,
-  }));
+  const lifecycleLoad = vi.fn();
   const run = vi.fn();
   const session = {
     channelDetails: {
@@ -49,6 +52,12 @@ function harness(value: ChannelSummary | undefined = channel) {
       save,
       snapshot: () => undefined,
       subscribe: () => () => {},
+    },
+    viewer,
+    profiles: {
+      snapshot: () => new Map(),
+      subscribe: () => () => {},
+      ensure: vi.fn(async () => {}),
     },
     channelLifecycle: { available: true, load: lifecycleLoad, run },
     sidebarPreferences: { setMute: vi.fn(async () => []) },
@@ -73,9 +82,9 @@ function harness(value: ChannelSummary | undefined = channel) {
         <ChannelHeaderMenu {...props} />
       </ChannelNavigationProvider>,
     );
-  return { props, mount, load, save, run, lifecycleLoad, details };
+  return { props, relay, mount, load, save, run, lifecycleLoad, details };
 }
-it("loads only on demand, uses the non-compact shared menu, and opens details without mutation", async () => {
+it("loads details only on demand, offers lifecycle actions from live state, and opens details without mutation", async () => {
   const h = harness();
   h.mount();
   const user = userEvent.setup();
@@ -92,6 +101,7 @@ it("loads only on demand, uses the non-compact shared menu, and opens details wi
     screen.getAllByRole("menuitem").map((item) => item.textContent),
   ).toEqual(["View channel details", "Archive channel", "Delete channel"]);
   expect(h.load).not.toHaveBeenCalled();
+  expect(h.lifecycleLoad).not.toHaveBeenCalled();
   expect(h.run).not.toHaveBeenCalled();
   expect(h.save).not.toHaveBeenCalled();
   await user.click(
@@ -107,6 +117,60 @@ it("loads only on demand, uses the non-compact shared menu, and opens details wi
     await screen.findByRole("menuitem", { name: "View channel details" }),
   );
   expect(h.props.openDetails).toHaveBeenCalledTimes(2);
+});
+it("hands focus to the opened settings tab when the menu finishes closing after focus drops to the body", async () => {
+  const h = harness();
+  const close = vi.fn();
+  function Page() {
+    const [settings, setSettings] = useState(false);
+    return (
+      <ChannelNavigationProvider relay={h.relay}>
+        <ChannelHeaderMenu {...h.props} openDetails={() => setSettings(true)} />
+        {settings && (
+          <PanelWorkspace
+            value="settings"
+            select={() => {}}
+            items={[
+              {
+                id: "settings",
+                label: "Channel settings",
+                close,
+                content: <p>Settings</p>,
+              },
+            ]}
+          />
+        )}
+      </ChannelNavigationProvider>
+    );
+  }
+  render(<Page />, { reactStrictMode: true });
+  const user = userEvent.setup();
+  const trigger = screen.getByRole("button", { name: "Channel actions" });
+  await user.click(trigger);
+  const menu = await screen.findByRole("menu");
+  let release!: () => void;
+  const finished = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  const animations = vi.fn(() => [{ finished }]);
+  // Hold the menu's exit animation. WebKit can drop focus to the body while
+  // it runs; jsdom keeps it on the tab, so the test drops it.
+  Object.defineProperty(menu, "getAnimations", { value: animations });
+  try {
+    await user.click(
+      screen.getByRole("menuitem", { name: "View channel details" }),
+    );
+    await waitFor(() => expect(animations).toHaveBeenCalled());
+    (document.activeElement as HTMLElement | null)?.blur();
+    await act(async () => release());
+    await waitFor(() => expect(menu).not.toBeInTheDocument());
+    const tab = screen.getByRole("tab", { name: "Channel settings" });
+    await waitFor(() => expect(tab).toHaveFocus());
+    await user.keyboard("{Escape}");
+    expect(close).toHaveBeenCalledOnce();
+  } finally {
+    await act(async () => release());
+  }
 });
 it("supports keyboard dismissal, outside clicks, and Canvas with the stable header focus target", async () => {
   const h = harness();
@@ -175,14 +239,11 @@ it.each([{ readOnly: true as const }, { cached: true as const }])(
   },
 );
 it("keeps Leave available for a joined guest without offering channel administration", async () => {
-  const h = harness({ ...channel, readOnly: true, viewerRole: "guest" });
-  h.lifecycleLoad.mockResolvedValue({
-    channelId: "alpha",
-    channelType: "stream",
-    canArchive: false,
-    canDelete: false,
-    canLeave: true,
-    canHide: false,
+  const h = harness({
+    ...channel,
+    ...member,
+    readOnly: true,
+    viewerRole: "guest",
   });
   h.mount();
   const user = userEvent.setup();
@@ -197,14 +258,6 @@ it("keeps Leave available for a joined guest without offering channel administra
 });
 it("does not offer lifecycle actions for archived channels", async () => {
   const h = harness({ ...channel, archived: true });
-  h.lifecycleLoad.mockResolvedValue({
-    channelId: "alpha",
-    channelType: "stream",
-    canArchive: false,
-    canDelete: false,
-    canLeave: false,
-    canHide: false,
-  });
   h.mount();
   await userEvent
     .setup()
@@ -274,16 +327,8 @@ it("keeps shared read pending/errors in the header and retires dismissed complet
   expect(screen.queryByRole("alert")).not.toBeInTheDocument();
   expect(screen.queryByRole("status")).not.toBeInTheDocument();
 });
-it("offers DM Hide using the existing lifecycle permissions, not stream actions", async () => {
-  const h = harness({ ...channel, channelType: "dm" });
-  h.lifecycleLoad.mockResolvedValue({
-    channelId: "alpha",
-    channelType: "dm",
-    canLeave: false,
-    canArchive: false,
-    canDelete: false,
-    canHide: true,
-  });
+it("offers DM Hide, not stream actions", async () => {
+  const h = harness({ ...channel, ...member, channelType: "dm", owners: [] });
   h.mount();
   await userEvent
     .setup()
@@ -335,16 +380,13 @@ it("launches the exact menu contribution and removes it when unavailable", async
 });
 
 it.each([true, false])(
-  "Solo chats use verified lifecycle permissions (owner=%s)",
+  "Solo chats use the live roster's lifecycle permissions (owner=%s)",
   async (owner) => {
-    const h = harness({ ...channel, channelType: "solo", private: true });
-    h.lifecycleLoad.mockResolvedValue({
-      channelId: "alpha",
-      channelType: "stream",
-      canArchive: owner,
-      canDelete: owner,
-      canLeave: !owner,
-      canHide: false,
+    const h = harness({
+      ...channel,
+      ...(owner ? {} : member),
+      channelType: "solo",
+      private: true,
     });
     h.mount();
     await userEvent
@@ -359,10 +401,7 @@ it.each([true, false])(
     expect(!!screen.queryByRole("menuitem", { name: "Delete chat" })).toBe(
       owner,
     );
-    expect(h.lifecycleLoad).toHaveBeenCalledWith(
-      "alpha",
-      expect.any(AbortSignal),
-    );
+    expect(h.lifecycleLoad).not.toHaveBeenCalled();
     expect(h.run).not.toHaveBeenCalled();
   },
 );

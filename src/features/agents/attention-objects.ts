@@ -359,6 +359,18 @@ export async function checkedWrite(
         "invalid-operation",
         `Remove its watches first: ${users.map((watch) => watch.id).join(", ")}`,
       );
+    // A watch this app skipped, such as one over the limit, still belongs to
+    // the Interest; removing the Interest would leave it without one.
+    const skipped = Object.values(record.skipped ?? {}).filter(
+      (object) =>
+        (object.value as { interest_id?: unknown } | null)?.interest_id ===
+        parsed.id,
+    );
+    if (skipped.length)
+      throw new AttentionError(
+        "invalid-operation",
+        `${skipped.map(({ slug }) => slug).join(", ")} cannot be read by this app; your owner can remove the Interest with it on your Attention tab`,
+      );
   }
   let after: AgentRecord;
   try {

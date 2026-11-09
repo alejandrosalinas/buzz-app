@@ -223,3 +223,80 @@ it.each([
     expect(listeners.size).toBe(0);
   },
 );
+
+it("keeps a channel's menu tab while away and drops it if the channel became ineligible", () => {
+  const channels = [
+    { id: "alpha", name: "Alpha" },
+    { id: "beta", name: "Beta" },
+  ];
+  const panel = {
+    key: "canvas",
+    title: "Canvas",
+    channelMenu: { label: "View canvas", eligible: () => true },
+    component: () => <p>Canvas contents</p>,
+  } as unknown as RegisteredPanel;
+  const available = [panel];
+  const panels = {
+    snapshot: () => available,
+    subscribe: () => () => {},
+  } as unknown as Panels;
+  const session = {
+    viewer: "viewer",
+    channels: { list: () => ({ channels }), window: () => ({ rows: [] }) },
+  } as unknown as RelaySession;
+  const relay = {
+    snapshot: () => ({ status: "ready", session }),
+  } as unknown as RelayData;
+  // Stands in for ChannelsPage's membership/archive eligibility check.
+  const eligibleChannels = new Set(["alpha", "beta"]);
+  let state!: ReturnType<typeof useChannelTabState>;
+  let workspace!: ReturnType<typeof useConversationTabs>;
+  function Harness({ channelId }: { channelId: string }) {
+    state = useChannelTabState(session, channelId);
+    workspace = useConversationTabs({
+      profiles: new Map(),
+      state,
+      relay,
+      session,
+      panels,
+      current: channels.find((channel) => channel.id === channelId),
+      channels,
+      scope: "scope:viewer",
+      conversationIcon: () => null,
+      leadingIds: [],
+      continuingVisit: false,
+      mainPane: true,
+      isLive: () => true,
+      openLink: () => false,
+      eligible: (entry) =>
+        entry.channelId === channelId && eligibleChannels.has(channelId),
+    });
+    return (
+      <PanelWorkspace
+        key={channelId}
+        value={workspace.selectedTab}
+        select={(id) => workspace.selectPanelTab(id)}
+        items={workspace.items}
+      />
+    );
+  }
+  const view = render(<Harness channelId="alpha" />);
+  act(() =>
+    workspace.open({ panel, channelId: "alpha", target: "alpha" }, true),
+  );
+  expect(screen.getByText("Canvas contents")).toBeInTheDocument();
+  view.rerender(<Harness channelId="beta" />);
+  expect(screen.queryByText("Canvas contents")).not.toBeInTheDocument();
+  view.rerender(<Harness channelId="alpha" />);
+  expect(screen.getByText("Canvas contents")).toBeInTheDocument();
+  view.rerender(<Harness channelId="beta" />);
+  eligibleChannels.delete("alpha");
+  view.rerender(<Harness channelId="alpha" />);
+  expect(screen.queryByText("Canvas contents")).not.toBeInTheDocument();
+  expect(state.entries).toEqual([]);
+  // Regaining eligibility does not reopen what was dropped.
+  eligibleChannels.add("alpha");
+  view.rerender(<Harness channelId="beta" />);
+  view.rerender(<Harness channelId="alpha" />);
+  expect(screen.queryByText("Canvas contents")).not.toBeInTheDocument();
+});

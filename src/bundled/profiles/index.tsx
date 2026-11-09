@@ -11,6 +11,7 @@ export const inject = [
   "navigation",
   "agents",
   "communityReader",
+  "conversation",
 ];
 export const apply: PluginModule["apply"] = (ctx) => {
   ctx.panels.register({
@@ -25,6 +26,7 @@ export const apply: PluginModule["apply"] = (ctx) => {
         navigation={ctx.navigation}
         agents={ctx.agents}
         communities={ctx.communityReader}
+        linkRenderers={ctx.conversation.links}
       />
     ),
   });

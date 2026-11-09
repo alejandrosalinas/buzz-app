@@ -1,6 +1,12 @@
 // @vitest-environment jsdom
 import "@testing-library/jest-dom/vitest";
-import { cleanup, render, screen, waitFor } from "@testing-library/react";
+import {
+  cleanup,
+  render,
+  screen,
+  waitFor,
+  within,
+} from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, expect, it, vi } from "vitest";
 import { StrictMode, useState } from "react";
@@ -95,6 +101,69 @@ it.each([
     expect(trigger.querySelector("svg")?.innerHTML).toBe(artwork);
   },
 );
+
+it("lists fast models in their own section and marks them with a bolt", async () => {
+  const user = userEvent.setup();
+  render(
+    <ModelPicker
+      groupByFamily
+      includeDefault={false}
+      models={[
+        { id: "kimi-cerebras", label: "Kimi K3.1 Pro", fast: true },
+        { id: "kimi-hosted", label: "Kimi K3" },
+        { id: "glm-flash", label: "GLM 5.3 Flash", fast: true },
+        { id: "sonnet", label: "Claude Sonnet" },
+      ]}
+      value="kimi-cerebras"
+      defaultLabel="Choose model"
+      onChange={vi.fn()}
+    />,
+  );
+  const trigger = screen.getByRole("button", {
+    name: "Model: Kimi K3.1 Pro · Fast",
+  });
+  expect(within(trigger).getByTitle("Fast")).toBeInTheDocument();
+  await user.click(trigger);
+  const fast = await screen.findByRole("group", { name: "Fast" });
+  expect(
+    within(fast)
+      .getAllByRole("menuitemradio")
+      .map((item) => item.textContent),
+  ).toEqual(["Kimi K3.1 Pro", "GLM 5.3 Flash"]);
+  const submenu = screen.getByRole("menuitem", { name: "Kimi" });
+  submenu.focus();
+  await user.keyboard("{ArrowRight}");
+  const kimi = await screen.findByRole("menu", { name: "Kimi models" });
+  expect(
+    within(kimi).getByRole("menuitemradio", { name: "Kimi K3.1 Pro Fast" }),
+  ).toBeInTheDocument();
+  expect(
+    within(kimi).getByRole("menuitemradio", { name: "Kimi K3" }),
+  ).not.toHaveTextContent("Fast");
+});
+
+it.each([
+  ["no model is fast", false],
+  ["every model is fast", true],
+])("leaves out the Fast section when %s", async (_, fast) => {
+  const user = userEvent.setup();
+  render(
+    <ModelPicker
+      groupByFamily
+      includeDefault={false}
+      models={[
+        { id: "kimi-cerebras", label: "Kimi K3.1 Pro", fast },
+        { id: "glm-flash", label: "GLM 5.3 Flash", fast },
+      ]}
+      value="kimi-cerebras"
+      defaultLabel="Choose model"
+      onChange={vi.fn()}
+    />,
+  );
+  await user.click(screen.getByRole("button", { name: /^Model:/ }));
+  await screen.findByRole("menuitem", { name: "Kimi" });
+  expect(screen.queryByRole("group", { name: "Fast" })).toBeNull();
+});
 
 const models: ModelChoice[] = [
   { id: "sonnet", label: "Sonnet" },

@@ -5,6 +5,7 @@ import type { AgentPlace } from "../../features/agents/service";
 import type { RelaySession } from "../../features/relay/session";
 import {
   chooseDefaultAgent,
+  clearDefaultAgent,
   restoreDefaultAgent,
   useSavedAgent,
 } from "../../features/solo/default-agent";
@@ -31,7 +32,10 @@ export const remoteAgent = (place: AgentPlace | undefined) =>
 
 /** Making an agent Bestie, wherever it is offered: `make` asks before
  * replacing an explicitly saved Bestie, and before choosing a remote agent
- * (`placeOf` says where each runs), in the dialog `view` renders. */
+ * (`placeOf` says where each runs), in the dialog `view` renders. `remove`
+ * asks before saving no Bestie, from any device, as it edits only the
+ * account; it is absent without an account to save none to, as this device
+ * would then pick another agent at once. */
 export function useBestieChoice(
   session: RelaySession,
   scope: string,
@@ -48,6 +52,8 @@ export function useBestieChoice(
   }>();
   /** The remote agent asked about, with no Bestie to replace. */
   const [remote, setRemote] = useState<BestieAgent>();
+  /** The Bestie asked about removing, by its name. */
+  const [removing, setRemoving] = useState<{ name: string; pubkey: string }>();
   // Only the latest choice reports its failure.
   const latest = useRef(0);
   // Closing the side panel unmounts the dialog without its close handler, so
@@ -148,10 +154,30 @@ export function useBestieChoice(
           onConfirm={() => save(remote.pubkey)}
         />
       )}
+      {removing && (
+        <RemoveBestie
+          name={removing.name}
+          // Its Former Bestie tab shows only where its instructions can be
+          // edited.
+          remote={placeOf?.(removing.pubkey) === "elsewhere"}
+          remove={() =>
+            // A choice changed elsewhere while this dialog was open wins.
+            saved === removing.pubkey
+              ? clearDefaultAgent(session, scope)
+              : Promise.resolve()
+          }
+          onClose={() => setRemoving(undefined)}
+        />
+      )}
       {error && !replacement && !remote && <p role="alert">{error}</p>}
     </>
   );
-  return { saved, choices, make, view };
+  const remove = session.mainAgent
+    ? (pubkey: string, name: string) => {
+        if (pubkey === saved) setRemoving({ name, pubkey });
+      }
+    : undefined;
+  return { saved, choices, make, remove, view };
 }
 
 export const bestieName = (agent: BestieAgent) =>
@@ -174,21 +200,26 @@ function BestieReplacement({
   onChoose(): void;
   onClose(): void;
 }) {
-  const keep = useRef<HTMLButtonElement>(null);
+  const proceed = useRef<HTMLButtonElement>(null);
   return (
     <AlertDialog
       title={`Make ${bestieName(replacing)} your bestie?`}
       description={`Your existing chats with ${bestieName(current)} will still be available in your DMs.${remote ? ` ${REMOTE_BESTIE_WARNING}` : ""}`}
-      initialFocus={keep}
+      initialFocus={proceed}
       pending={pending}
       onClose={onClose}
       {...(error && { children: <p role="alert">{error}</p> })}
       actions={
         <>
-          <Button ref={keep} disabled={pending} onClick={onClose}>
+          <Button disabled={pending} onClick={onClose}>
             Keep {bestieName(current)}
           </Button>
-          <Button variant="prominent" loading={pending} onClick={onChoose}>
+          <Button
+            ref={proceed}
+            variant="prominent"
+            loading={pending}
+            onClick={onChoose}
+          >
             Switch to {bestieName(replacing)}
           </Button>
         </>
@@ -228,6 +259,60 @@ export function RemoteBestieConfirm({
           </Button>
           <Button variant="prominent" loading={pending} onClick={onConfirm}>
             Use as bestie
+          </Button>
+        </>
+      }
+    />
+  );
+}
+
+/** Asks before the agent stops being Bestie, then saves no Bestie. Its tab
+ * goes with it; the agent then shows Former Bestie while a setting is on. */
+function RemoveBestie({
+  name,
+  remote,
+  remove,
+  onClose,
+}: {
+  name: string;
+  /** It runs on another device, where its Former Bestie tab is. */
+  remote: boolean;
+  remove(): Promise<void>;
+  onClose(): void;
+}) {
+  const [pending, setPending] = useState(false);
+  const [error, setError] = useState("");
+  const keep = useRef<HTMLButtonElement>(null);
+  return (
+    <AlertDialog
+      title={`Remove ${name} as your Bestie?`}
+      description={`${name} stays in Agents, with your chats in your DMs. Its check-ins stop. Its memory rules and private channels stay; turn them off in its Former Bestie tab${remote ? " on the device it runs on" : ""}.`}
+      initialFocus={keep}
+      pending={pending}
+      onClose={onClose}
+      {...(error && { children: <p role="alert">{error}</p> })}
+      actions={
+        <>
+          <Button ref={keep} disabled={pending} onClick={onClose}>
+            Cancel
+          </Button>
+          <Button
+            variant="prominent"
+            loading={pending}
+            onClick={() => {
+              setPending(true);
+              setError("");
+              remove()
+                .then(onClose)
+                .catch((cause: unknown) =>
+                  setError(
+                    cause instanceof Error ? cause.message : String(cause),
+                  ),
+                )
+                .finally(() => setPending(false));
+            }}
+          >
+            Remove as Bestie
           </Button>
         </>
       }

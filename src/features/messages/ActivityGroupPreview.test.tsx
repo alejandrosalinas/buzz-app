@@ -8,6 +8,7 @@ import {
   fireEvent,
   render,
   screen,
+  within,
 } from "@testing-library/react";
 import { useState } from "react";
 import { afterEach, expect, it, vi } from "vitest";
@@ -22,6 +23,7 @@ import { ActivityGroupActions } from "./ActivityGroupActions";
 import {
   activityPresentation,
   useActivityPresentation,
+  useStableRowActivity,
 } from "./activity-presentation";
 import { MessageRow } from "./MessageRow";
 
@@ -65,24 +67,432 @@ function fixture() {
     },
   };
 }
-it("keeps working activity through a public reply, then retires only that request", () => {
+it("keeps a signed failure and its history in one disclosure through completion and reload", () => {
   const f = fixture();
+  const { audience: _audience, ...publicStep } = step;
+  const failure: ChannelMessage = {
+    ...publicStep,
+    id: "failure",
+    createdAt: 101,
+    notice: "execution-failure",
+    content: "The model could not process this image.",
+  };
+  const rows = [step, failure];
+  function Preview({ reloaded = false }: { reloaded?: boolean }) {
+    const [expanded, setExpanded] = useState(false);
+    const presentation = useActivityPresentation(
+      rows,
+      reloaded ? undefined : f.activity,
+      new Set(["agent"]),
+      "request",
+    );
+    const group = presentation.groups[0];
+    if (!group) throw new Error("Missing group");
+    return (
+      <ActivityGroupPreview
+        group={group}
+        profiles={new Map()}
+        media={() => undefined}
+        expanded={expanded}
+        onToggle={() => setExpanded((value) => !value)}
+        renderHistory={(row) => <p data-message-id={row.id}>{row.content}</p>}
+      />
+    );
+  }
   try {
+    const work = f.local.begin({
+      scope: "test",
+      agent: "agent",
+      channelId: "channel",
+      messageId: "request",
+      threadRootId: "request",
+    });
+    work.started();
+    const view = render(<Preview />);
+    const toggle = screen.getByRole("button", {
+      name: /Show activity history/,
+    });
+    fireEvent.click(toggle);
+    act(() => work.finish({ ok: false, error: "Provider failed" }));
+    expect(toggle).toHaveAttribute("aria-expanded", "true");
+    expect(toggle).toHaveFocus();
+    expect(screen.getAllByText(failure.content)).toHaveLength(1);
+    expect(screen.getByText(step.content)).toBeVisible();
+    expect(screen.getByText("Couldn’t finish")).toBeVisible();
+    expect(screen.queryByText("Provider failed")).toBeNull();
+    fireEvent.click(toggle);
+    view.rerender(<Preview reloaded />);
+    expect(screen.getByText("Couldn’t finish")).toBeVisible();
+    expect(screen.queryByText(failure.content)).toBeNull();
+    fireEvent.click(toggle);
+    expect(screen.getByText(failure.content)).toHaveAttribute(
+      "data-message-id",
+      "failure",
+    );
+  } finally {
+    f.dispose();
+  }
+});
+
+it.each(["timeline", "thread"] as const)(
+  "attributes an expanded failure to its author in multi-participant %s history",
+  (layout) => {
     const { audience: _audience, ...publicStep } = step;
+    const helper = {
+      ...step,
+      id: "helper-step",
+      authorId: "helper",
+      content: "Helper reading files",
+      createdAt: 101,
+    };
+    const failure: ChannelMessage = {
+      ...publicStep,
+      id: "failure",
+      notice: "execution-failure",
+      content: "Provider unavailable",
+      createdAt: 102,
+    };
+    const profiles = new Map([
+      ["agent", { name: "Agent", isAgent: true as const }],
+      ["helper", { name: "Helper", isAgent: true as const }],
+    ]);
+    function Preview({ multiple }: { multiple: boolean }) {
+      const rows = multiple ? [step, helper, failure] : [step, failure];
+      const presentation = activityPresentation(
+        rows,
+        undefined,
+        new Set(profiles.keys()),
+      );
+      const stable = useStableRowActivity();
+      const group = presentation.groups[0];
+      if (!group) throw new Error("Missing group");
+      return (
+        <ActivityGroupPreview
+          group={group}
+          profiles={profiles}
+          media={() => undefined}
+          layout={layout}
+          expanded
+          onToggle={() => {}}
+          renderHistory={(row) => (
+            <MessageRow
+              row={row}
+              recordedActivity={stable.activity(
+                row.id,
+                presentation.byRow.get(row.id),
+                "history",
+              )}
+              profile={profiles.get(row.authorId)}
+              layout={layout}
+              stackPrevious
+              stackNext
+              media={() => undefined}
+              onOpenLink={() => false}
+              day={false}
+              retry={undefined}
+            />
+          )}
+        />
+      );
+    }
+    const view = render(<Preview multiple />);
+    const author = () => {
+      const row = screen
+        .getByText(failure.content)
+        .closest("[data-message-id]");
+      if (!row) throw new Error("Missing failure row");
+      return within(row as HTMLElement).getByText("Agent", {
+        selector: "strong",
+      });
+    };
+    expect(author().closest(".sr-only")).toBeNull();
+    expect(author().closest("[data-stack-previous]")).toBeNull();
+    expect(author().closest("[data-stack-next]")).toBeNull();
+    view.rerender(<Preview multiple={false} />);
+    expect(author().closest(".sr-only")).not.toBeNull();
+    view.rerender(<Preview multiple />);
+    expect(author().closest(".sr-only")).toBeNull();
+  },
+);
+
+it("keeps a signed failure authoritative when telemetry is uncertain and leaves passive history neutral", () => {
+  const f = fixture();
+  const request = "e".repeat(64);
+  const update = { ...step, threadRootId: request, replyParentId: request };
+  const { audience: _audience, ...publicStep } = update;
+  const failure: ChannelMessage = {
+    ...publicStep,
+    id: "failure",
+    createdAt: 101,
+    notice: "execution-failure",
+    content: "The selected model could not complete this request.",
+  };
+  const snapshot = {
+    ...f.activity.snapshot(),
+    turns: [
+      {
+        agent: "agent",
+        turnId: "turn",
+        channelId: "channel",
+        timestamp: 0,
+        state: "unknown" as const,
+        triggeringEventIds: [request],
+        threadRootId: request,
+      },
+    ],
+  };
+  try {
+    const quiet = activityPresentation(
+      [update],
+      snapshot,
+      new Set(["agent"]),
+      request,
+    ).groups[0];
+    expect(quiet?.outcomes).toEqual([]);
+    const group = activityPresentation(
+      [update, failure],
+      snapshot,
+      new Set(["agent"]),
+      request,
+    ).groups[0];
+    if (!group) throw new Error("Missing signed failure group");
+    expect(group.outcomes).toEqual([
+      { agent: "agent", state: "error", reason: failure.content },
+    ]);
+    render(
+      <ActivityGroupPreview
+        group={group}
+        profiles={new Map()}
+        media={() => undefined}
+        expanded
+        onToggle={() => {}}
+        renderHistory={(row) => <p>{row.content}</p>}
+      />,
+    );
+    expect(screen.getByText("Couldn’t finish")).toBeVisible();
+    expect(screen.queryByText("Status unavailable")).toBeNull();
+    expect(screen.getByText(failure.content)).toBeVisible();
+  } finally {
+    f.dispose();
+  }
+});
+
+it("shows failed and stopped participants independently without attributing sibling work", () => {
+  const f = fixture();
+  const rows = [step, { ...step, id: "helper-step", authorId: "helper" }];
+  try {
+    f.local
+      .begin({
+        scope: "test",
+        agent: "agent",
+        channelId: "channel",
+        messageId: "request",
+        threadRootId: "request",
+      })
+      .finish({ ok: false, error: "Unavailable" });
+    f.local
+      .begin({
+        scope: "test",
+        agent: "helper",
+        channelId: "channel",
+        messageId: "request",
+        threadRootId: "request",
+      })
+      .finish({ ok: true, stopped: true });
+    f.local
+      .begin({
+        scope: "test",
+        agent: "agent",
+        channelId: "channel",
+        messageId: "sibling",
+        threadRootId: "request",
+      })
+      .started();
+    const group = activityPresentation(
+      rows,
+      f.activity.snapshot(),
+      new Set(["agent", "helper"]),
+      "request",
+    ).groups[0];
+    if (!group) throw new Error("Missing group");
+    render(
+      <ActivityGroupPreview
+        group={group}
+        profiles={new Map()}
+        media={() => undefined}
+        expanded={false}
+        onToggle={() => {}}
+      />,
+    );
+    expect(screen.getByText("Couldn’t finish")).toBeVisible();
+    expect(screen.getByText("Stopped")).toBeVisible();
+    expect(screen.queryByText("Checking the layout")).toBeNull();
+    expect(group.working).toBe(false);
+    expect(group.ids).toEqual([step.id, "helper-step"]);
+  } finally {
+    f.dispose();
+  }
+});
+
+it.each(["signed failure", "failed update", "working update"])(
+  "keeps the working participant named beside a failure when the latest row is a %s",
+  (latest) => {
+    const f = fixture();
+    const helperStep = {
+      ...step,
+      id: "helper-step",
+      authorId: "helper",
+      createdAt: 101,
+      content: "Helper reading files",
+    };
+    const { audience: _audience, ...publicStep } = step;
+    const last: ChannelMessage =
+      latest === "signed failure"
+        ? {
+            ...publicStep,
+            id: "failure",
+            createdAt: 102,
+            notice: "execution-failure",
+            content: "Provider unavailable",
+          }
+        : {
+            ...(latest === "working update" ? helperStep : step),
+            id: "latest-step",
+            createdAt: 102,
+            content:
+              latest === "working update"
+                ? "Helper checking results"
+                : "Agent checking results",
+          };
+    const rows = [step, helperStep, last];
+    const preview =
+      latest === "working update" ? last.content : helperStep.content;
     function Preview() {
       const presentation = useActivityPresentation(
-        [
-          { ...step, id: "first" },
-          step,
-          {
-            ...publicStep,
-            id: "reply",
-            content: "Result",
-            createdAt: 101,
-          },
-        ],
+        rows,
         f.activity,
-        new Set(["agent"]),
+        new Set(["agent", "helper"]),
+        "request",
+      );
+      const group = presentation.groups[0];
+      if (!group) throw new Error("Missing group");
+      return (
+        <ActivityGroupPreview
+          group={group}
+          profiles={new Map()}
+          media={() => undefined}
+          expanded={false}
+          onToggle={() => {}}
+        />
+      );
+    }
+    try {
+      f.local
+        .begin({
+          scope: "test",
+          agent: "agent",
+          channelId: "channel",
+          messageId: "request",
+          threadRootId: "request",
+        })
+        .finish({ ok: false, error: "Provider unavailable" });
+      const helper = f.local.begin({
+        scope: "test",
+        agent: "helper",
+        channelId: "channel",
+        messageId: "request",
+        threadRootId: "request",
+      });
+      helper.started();
+      const view = render(<Preview />);
+      expect(screen.getByText("Couldn’t finish")).toBeVisible();
+      expect(screen.getByText(`helper: ${preview}`)).toHaveAttribute(
+        "data-active",
+        "true",
+      );
+      expect(
+        screen.getByRole("button", {
+          name: `Show activity history: agent: Couldn’t finish; helper: still working — ${preview}`,
+        }),
+      ).toBeVisible();
+      expect(screen.queryByText("Provider unavailable")).toBeNull();
+      act(() => helper.finish({ ok: true }));
+      expect(screen.getByText("Couldn’t finish")).toBeVisible();
+      expect(view.container.querySelector("[data-active]")).toBeNull();
+      expect(
+        screen.getByRole("button", {
+          name: "Show activity history: agent: Couldn’t finish",
+        }),
+      ).toBeVisible();
+    } finally {
+      f.dispose();
+    }
+  },
+);
+
+it.each([
+  "ordinary reply",
+  "unlinked",
+  "other author",
+  "other request",
+  "other thread",
+  "another day",
+  "edited",
+  "attachment",
+])("keeps %s outside the signed failure disclosure", (variant) => {
+  const { audience: _audience, ...publicStep } = step;
+  const failure: ChannelMessage = {
+    ...publicStep,
+    id: "failure",
+    createdAt: 101,
+    ...(variant === "ordinary reply"
+      ? {}
+      : { notice: "execution-failure" as const }),
+    ...(variant === "unlinked" ? { replyParentId: undefined } : {}),
+    ...(variant === "other author" ? { authorId: "outside" } : {}),
+    ...(variant === "other request" ? { replyParentId: "sibling" } : {}),
+    ...(variant === "other thread" ? { threadRootId: "sibling" } : {}),
+    ...(variant === "another day" ? { createdAt: 86501 } : {}),
+    ...(variant === "edited" ? { edited: true } : {}),
+    ...(variant === "attachment"
+      ? {
+          attachments: [
+            {
+              url: "https://relay.test/media/result.png",
+              kind: "image" as const,
+            },
+          ],
+        }
+      : {}),
+  };
+  const group = activityPresentation(
+    [step, failure],
+    undefined,
+    new Set(["agent", "outside"]),
+    "request",
+  ).groups[0];
+  expect(group?.ids).toEqual([step.id]);
+  expect(group?.outcomes).toEqual([]);
+});
+it("keeps a dispatch readable after its sender finishes, while the helper works and after reload", () => {
+  const f = fixture();
+  try {
+    const dispatch = {
+      ...step,
+      content: "@helper check the layout",
+      mentions: ["helper"],
+    };
+    const { audience: _audience, ...publicStep } = step;
+    const rows = [
+      dispatch,
+      { ...publicStep, id: "reply", content: "Status update", createdAt: 101 },
+    ];
+    function Preview({ reloaded = false }: { reloaded?: boolean }) {
+      const [expanded, setExpanded] = useState(false);
+      const presentation = useActivityPresentation(
+        rows,
+        reloaded ? undefined : f.activity,
+        new Set(["agent", "helper"]),
         "request",
       );
       const group = presentation.groups[0];
@@ -92,8 +502,9 @@ it("keeps working activity through a public reply, then retires only that reques
           group={group}
           profiles={new Map()}
           media={() => undefined}
-          expanded={false}
-          onToggle={() => {}}
+          expanded={expanded}
+          onToggle={() => setExpanded((value) => !value)}
+          renderHistory={(row) => <p>{row.content}</p>}
         />
       );
     }
@@ -105,24 +516,35 @@ it("keeps working activity through a public reply, then retires only that reques
       threadRootId: "request",
     });
     work.started();
-    render(<Preview />);
-    expect(
-      screen.getByRole("button", { name: /Show activity history/ }),
-    ).toBeVisible();
-    act(() => work.finish({ ok: true }));
-    expect(screen.queryByRole("button")).toBeNull();
+    const view = render(<Preview />);
+    const toggle = screen.getByRole("button", {
+      name: /Show activity history/,
+    });
+    expect(toggle).toBeVisible();
     act(() => {
       f.local
         .begin({
           scope: "test",
-          agent: "agent",
+          agent: "helper",
           channelId: "channel",
-          messageId: "next-request",
+          messageId: dispatch.id,
           threadRootId: "request",
         })
         .started();
+      work.finish({ ok: true });
     });
-    expect(screen.queryByRole("button")).toBeNull();
+    expect(toggle).toBeVisible();
+    fireEvent.click(toggle, { detail: 0 });
+    expect(toggle).toHaveAttribute("aria-expanded", "true");
+    expect(screen.getByText(dispatch.content, { selector: "p" })).toBeVisible();
+    fireEvent.click(toggle, { detail: 0 });
+    view.rerender(<Preview reloaded />);
+    const restored = screen.getByRole("button", {
+      name: /Show activity history/,
+    });
+    expect(restored).toHaveAttribute("aria-expanded", "false");
+    fireEvent.click(restored, { detail: 0 });
+    expect(screen.getByText(dispatch.content, { selector: "p" })).toBeVisible();
   } finally {
     f.dispose();
   }

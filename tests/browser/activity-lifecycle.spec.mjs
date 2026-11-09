@@ -165,15 +165,13 @@ for (const inThread of [false, true]) {
     await expect(
       history.getByText("Completed lifecycle work", { exact: true }),
     ).toBeVisible();
-    await expect(collapse).toHaveCount(0);
-    await expect
-      .poll(() =>
-        history.evaluate(
-          (el) =>
-            el.contains(document.activeElement) &&
-            document.activeElement !== document.body,
-        ),
-      )
-      .toBe(true);
+    // A public reply retires the live treatment, not the expanded history.
+    await expect(collapse).toBeVisible();
+    await expect(collapse).toBeFocused();
+    await collapse.click();
+    await expect(disclosure).toBeVisible();
+    await expect(disclosure).toBeFocused();
+    await disclosure.click();
+    await expect(collapse).toBeVisible();
   });
 }

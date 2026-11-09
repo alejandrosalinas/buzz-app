@@ -12,16 +12,18 @@ test.use({
 });
 
 // Real shell/plugin routing and visible retained reader, beyond direct remount tests.
-test("Inbox restores its conversation after visiting Messages and another page", async ({
+test("Activity restores its conversation after visiting Messages and another page", async ({
   page,
   app,
 }) => {
   await open(page, app);
-  const inboxButton = page.getByRole("button", { name: /^Inbox\b/ });
-  await inboxButton.click();
-  const inbox = page.getByRole("region", { name: "Inbox", exact: true });
+  const inboxTab = page
+    .getByRole("navigation", { name: "Apps dock", exact: true })
+    .getByRole("tab", { name: "Activity", exact: true });
+  await inboxTab.click();
+  const inbox = page.getByRole("region", { name: "Activity", exact: true });
   const row = inbox
-    .getByRole("list", { name: "Inbox conversations" })
+    .getByRole("list", { name: "Activity", exact: true })
     .getByRole("listitem")
     .filter({ hasText: "Unread reply 1" });
   await expect(inbox.getByText("Checking recent activity…")).toHaveCount(0);
@@ -36,7 +38,7 @@ test("Inbox restores its conversation after visiting Messages and another page",
   for (const destination of ["Messages", "Reminders"]) {
     await page.getByRole("tab", { name: destination, exact: true }).click();
     await expect(inbox).toHaveCount(0);
-    await inboxButton.click();
+    await inboxTab.click();
     await expect(tab).toHaveAttribute("aria-selected", "true");
     await expect(reader).toBeVisible();
     await expect(row).toHaveAttribute("data-selected");
@@ -47,9 +49,9 @@ test("Inbox restores its conversation after visiting Messages and another page",
   await expect(tab).toHaveCount(0);
   await page.getByRole("tab", { name: "Reminders", exact: true }).click();
   await expect(inbox).toHaveCount(0);
-  await inboxButton.click();
+  await inboxTab.click();
   await expect(
-    inbox.getByRole("list", { name: "Inbox conversations" }),
+    inbox.getByRole("list", { name: "Activity", exact: true }),
   ).toBeVisible();
   await expect(tab).toHaveCount(0);
 });

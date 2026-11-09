@@ -8,21 +8,44 @@ const composer = (page, name) =>
 
 export async function settle(page, scroller = history(page)) {
   // Wait for geometry to stop moving, rather than assuming a fixed animation delay.
+  // Each read follows two rendering updates: a DOM write lands before the
+  // frame whose ResizeObserver measures it, and Linux WebKit can go longer
+  // than the stable window without rendering, so unpaced reads can mistake an
+  // unmeasured estimate for settled geometry. Playwright's clock fakes
+  // requestAnimationFrame, so a paused clock would stop rAF pacing; a new
+  // ResizeObserver's first notification comes from the real rendering update.
   let previous;
   let stable = 0;
   await expect
     .poll(
       async () => {
-        const value = await scroller.evaluate((element) =>
-          JSON.stringify([
+        const value = await scroller.evaluate(async (element) => {
+          const rendered = () =>
+            new Promise((resolve) => {
+              const observer = new ResizeObserver(() => {
+                observer.disconnect();
+                // Leave the delivery loop before observing again; a same-depth
+                // observation added inside it is skipped and reported as a loop error.
+                const channel = new MessageChannel();
+                channel.port1.onmessage = () => {
+                  channel.port1.close();
+                  resolve();
+                };
+                channel.port2.postMessage(null);
+              });
+              observer.observe(document.documentElement);
+            });
+          await rendered();
+          await rendered();
+          return JSON.stringify([
             element.scrollTop,
             element.scrollHeight,
             element.clientHeight,
             ...Array.from(element.querySelectorAll("[data-message-id]")).map(
               (row) => [row.dataset.messageId, row.getBoundingClientRect().y],
             ),
-          ]),
-        );
+          ]);
+        });
         stable = value === previous ? stable + 1 : 0;
         previous = value;
         return stable;
@@ -153,11 +176,23 @@ export async function edge(page, direction, scroller = history(page)) {
       direction,
     );
   await scroller.hover();
-  // Send one real gesture for the actual distance, not an arbitrary 100,000px
+  // Send real gestures for the actual distance, not an arbitrary 100,000px
   // overshoot. At the boundary, retain input so production can initiate paging.
-  const remaining = await distance();
-  if (remaining >= 4) await wheel(page, direction * remaining, scroller);
-  else await page.mouse.wheel(0, direction * Math.max(1, remaining));
+  let remaining = await distance();
+  if (remaining < 4)
+    await page.mouse.wheel(0, direction * Math.max(1, remaining));
+  // A gesture can end short of the edge, as one did 199px from the top in
+  // Linux WebKit (see upper). Each further gesture must make real progress,
+  // so an immobile timeline still fails.
+  for (let gesture = 0; remaining >= 4 && gesture < 4; gesture++) {
+    await wheel(page, direction * remaining, scroller);
+    const before = remaining;
+    remaining = await distance();
+    if (remaining >= 4)
+      expect(remaining, "edge gesture moves toward the edge").toBeLessThan(
+        before,
+      );
+  }
   await expect
     .poll(distance, { message: "wheel reaches timeline edge" })
     .toBeLessThan(4);
@@ -235,11 +270,27 @@ export async function frames(page, count = 2) {
 // Hover a row's element with one raw pointer move. Locator.hover retries by
 // scrolling the timeline, and each scroll restarts Virtua's pointer-event
 // hold; a hover rest (Base UI's PreviewCard) starts only on a move over the
-// element, so arrive once the list hit-tests again. A late re-measure can
-// still scroll between the measurement and the move.
+// element, so arrive once its centre hit-tests again. Geometry quiescence has
+// no terminal signal: a later re-measure can still scroll between this check
+// and the move, or after the move. The preview assertion must still catch it.
 export async function hoverRow(page, locator, scroller = history(page)) {
   await expect(scroller.locator("ol")).toHaveCSS("pointer-events", "auto");
   await expect(locator).toBeInViewport();
+  await expect
+    .poll(
+      () =>
+        locator.evaluate((element) => {
+          const box = element.getBoundingClientRect();
+          return element.contains(
+            document.elementFromPoint(
+              box.x + box.width / 2,
+              box.y + box.height / 2,
+            ),
+          );
+        }),
+      { message: "timeline hover target hit-tests at its centre" },
+    )
+    .toBe(true);
   const box = await locator.boundingBox();
   await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
 }

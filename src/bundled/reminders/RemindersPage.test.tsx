@@ -133,7 +133,7 @@ it("lists finished reminders newest first in a collapsed Done group", () => {
   ).toBeVisible();
   expect(overdue.querySelector("img")).toHaveAttribute(
     "src",
-    authorPicture.replace(/\.png$/, ".thumb.jpg"),
+    authorPicture.replace(/\.png$/, ".thumb.webp"),
   );
   // The row's open action still conveys what the reminder is and when.
   expect(

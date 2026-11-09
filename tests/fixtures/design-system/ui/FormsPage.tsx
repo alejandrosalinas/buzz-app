@@ -331,19 +331,9 @@ ${workspaceComboboxCode}`}
         </p>
         <p className="text-body text-secondary">
           Auto-growing textareas, multi-select chips, and search inside a popup
-          are deferred. Block UI’s form references are currently marked
-          Unverified; Buzz retains its own foundations and Base UI behavior.
+          are deferred. Buzz retains its own foundations and Base UI behavior.
         </p>
       </Section>
-      <p className="text-body-sm text-secondary">
-        <a
-          href="https://argos-ci.squareupstaging.com/storybook/blockui-web-main-block/?path=/docs/components-input-group--docs"
-          target="_blank"
-          rel="noreferrer"
-        >
-          Block UI reference ↗
-        </a>
-      </p>
       <Dialog
         open={dialog}
         onOpenChange={setDialog}

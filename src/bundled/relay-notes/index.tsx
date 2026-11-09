@@ -10,7 +10,7 @@ export const apply: PluginModule["apply"] = (ctx) => {
     title: "Shared notes",
     layout: "workspace",
     primary: true,
-    placement: "topbar",
+    placement: "dock",
     route: { version: 1, validate: (params) => !!notesRoute(params) },
     component: (props) => (
       <NotesPage

@@ -1,9 +1,11 @@
 import { describe, expect, it, vi } from "vitest";
-import { npubEncode } from "nostr-tools/nip19";
+import { noteEncode, npubEncode, nsecEncode } from "nostr-tools/nip19";
+import { hexToBytes } from "nostr-tools/utils";
 import {
   canonicalPublicKey,
   formatPublicKey,
   publicKeyLabels,
+  typedPublicKey,
 } from "./public-key";
 
 vi.mock("nostr-tools/nip19", async (actual) => {
@@ -84,5 +86,33 @@ describe("public-key display", () => {
       "npub…rcaj",
     ]);
     expect(publicKeyLabels([]).size).toBe(0);
+  });
+});
+
+describe("typed public keys", () => {
+  const npub = npubEncode(first);
+  it.each([
+    ["lowercase hex", first],
+    ["uppercase hex", first.toUpperCase()],
+    ["an npub", npub],
+    ["a nostr: npub", `nostr:${npub}`],
+    ["an uppercase npub", npub.toUpperCase()],
+    ["an uppercase nostr: npub", `NOSTR:${npub.toUpperCase()}`],
+    ["text padded with spaces", `  ${npub} `],
+  ])("reads %s as the hex key", (_case, text) => {
+    expect(typedPublicKey(text)).toBe(first);
+  });
+
+  it.each([
+    ["a partly typed npub", npub.slice(0, 12)],
+    ["a mixed-case npub", `NPUB1${npub.slice(5)}`],
+    ["the nsec with the same key bytes", nsecEncode(hexToBytes(first))],
+    ["a note", noteEncode(first)],
+    ["an npub of 20 bytes", "npub1qurswpc8qurswpc8qurswpc8qurswpc86nz8sw"],
+    ["63 hex characters", first.slice(1)],
+    ["65 hex characters", `${first}a`],
+    ["a name", "Sam Rivera"],
+  ])("does not read %s as a key", (_case, text) => {
+    expect(typedPublicKey(text)).toBeUndefined();
   });
 });

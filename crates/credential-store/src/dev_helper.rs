@@ -8,110 +8,23 @@ use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
 use zeroize::Zeroizing;
 
-pub(super) fn read(helper: &OsStr) -> Result<Zeroizing<Vec<u8>>> {
-    if !Path::new(helper).is_absolute() {
-        return Err(Error::Unavailable);
-    }
-    let authorize = std::env::var_os("BUZZ_DEV_CREDENTIAL_HELPER_AUTHORIZE").as_deref()
-        == Some(OsStr::new("1"));
-    let timeout = Duration::from_secs(if authorize { 120 } else { 5 });
-    let deadline = Instant::now() + timeout;
-    let (channel, helper_channel) = UnixStream::pair().map_err(|_| Error::Unavailable)?;
-    let mut command = Command::new(helper);
-    if authorize {
-        command.arg("--authorize");
-    }
-    let mut child = command
-        .stdin(Stdio::null())
-        .stdout(Stdio::from(OwnedFd::from(helper_channel)))
-        .stderr(Stdio::null())
-        .spawn()
-        .map_err(|_| Error::Unavailable)?;
-    // Command retains a socket copy. Close it so an exited helper produces EOF.
-    drop(command);
-    let status = loop {
-        match child.try_wait() {
-            Ok(Some(status)) => break status,
-            Ok(None) if Instant::now() < deadline => {
-                std::thread::sleep(Duration::from_millis(10));
-            }
-            _ => {
-                let _ = child.kill();
-                let _ = child.wait();
-                return Err(Error::Unavailable);
-            }
-        }
-    };
-    match status.code() {
-        Some(0) => {}
-        Some(10) => return Err(Error::Absent),
-        Some(11) => return Err(Error::Denied),
-        Some(12) => return Err(Error::Corrupt),
-        _ => return Err(Error::Unavailable),
-    }
-    // The helper has exited. A retained socket in another process is a failure.
-    channel
-        .set_nonblocking(true)
-        .map_err(|_| Error::Unavailable)?;
-    let mut value = Zeroizing::new(Vec::with_capacity(64));
-    channel
-        .take(64)
-        .read_to_end(&mut value)
-        .map_err(|_| Error::Unavailable)?;
-    if value.len() != 63 {
-        return Err(Error::Corrupt);
-    }
-    Ok(value)
-}
-
-pub(super) fn agent(
+/// One `--item` request: `read`, `add`, `replace` or `delete` of an exact
+/// service/account. The helper decides which items it serves.
+pub(super) fn item(
     helper: &OsStr,
     operation: &str,
     service: &str,
     account: &str,
     value: &[u8],
 ) -> Result<Zeroizing<Vec<u8>>> {
-    if !matches!(
-        service,
-        "xyz.block.buzz.desktop.agents" | "dev.local.buzz.foundation.agents"
-    ) || !(account == "agent-bundle-v1" || account.starts_with("agent:"))
-    {
-        return Err(Error::Unavailable);
-    }
     store(
         helper,
-        "--agent-store",
+        "--item",
         operation,
         service,
         account,
         value,
         2 * 1024 * 1024,
-    )
-}
-
-pub(super) fn session(
-    helper: &OsStr,
-    operation: &str,
-    service: &str,
-    account: &str,
-    value: &[u8],
-) -> Result<Zeroizing<Vec<u8>>> {
-    if service != "xyz.block.buzz.desktop.federated-session.debug"
-        || account.len() != 64
-        || !account
-            .bytes()
-            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
-    {
-        return Err(Error::Unavailable);
-    }
-    store(
-        helper,
-        "--session-store",
-        operation,
-        service,
-        account,
-        value,
-        1024 * 1024,
     )
 }
 
@@ -129,9 +42,9 @@ fn store(
     use std::net::Shutdown;
 
     if !Path::new(helper).is_absolute()
-        || !matches!(operation, "read" | "replace" | "delete")
+        || !matches!(operation, "read" | "add" | "replace" | "delete")
         || value.len() > limit
-        || (operation != "replace" && !value.is_empty())
+        || (!matches!(operation, "add" | "replace") && !value.is_empty())
     {
         return Err(Error::Unavailable);
     }
@@ -170,7 +83,8 @@ fn store(
         match channel.shutdown(Shutdown::Write) {
             // macOS can close the peer before its buffered reply is read.
             Err(error)
-                if operation != "replace" && error.kind() == std::io::ErrorKind::NotConnected => {}
+                if !matches!(operation, "add" | "replace")
+                    && error.kind() == std::io::ErrorKind::NotConnected => {}
             result => result.map_err(|_| Error::Unavailable)?,
         }
         let mut output = Zeroizing::new(Vec::new());

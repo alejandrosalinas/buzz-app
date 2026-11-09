@@ -10,7 +10,10 @@ test("channel settings owns its responsive side panel and returns keyboard focus
   await openPage(page, "Messages");
   const conversation = page.getByRole("article", { name: "Conversation" });
   await expect(
-    conversation.getByRole("tab", { name: "Alpha", exact: true }),
+    conversation.getByRole("button", {
+      name: "Manage members of Alpha",
+      exact: true,
+    }),
   ).toBeVisible();
   const trigger = page.getByRole("button", {
     name: "Channel actions",
@@ -38,9 +41,7 @@ test("channel settings owns its responsive side panel and returns keyboard focus
     expect(
       await workspace
         .locator("header.panel-header")
-        .evaluate(
-          (header) => getComputedStyle(header, "::after").backgroundColor,
-        ),
+        .evaluate((header) => getComputedStyle(header).borderBottomColor),
     ).toBe("rgb(45, 67, 89)");
   } finally {
     await tokens.evaluate((node) => node.remove());
@@ -48,13 +49,6 @@ test("channel settings owns its responsive side panel and returns keyboard focus
   await expect(trigger).toHaveAttribute("aria-expanded", "false");
   await page.mouse.move(0, 0);
   await expect(trigger).toHaveCSS("background-color", "rgba(0, 0, 0, 0)");
-  const channelTab = conversation.getByRole("tab", {
-    name: "Alpha",
-    exact: true,
-  });
-  await channelTab.hover();
-  await expect(channelTab).toHaveCSS("background-color", "rgba(0, 0, 0, 0)");
-  await expect(channelTab).toHaveCSS("cursor", "default");
   const settingsTab = workspace.getByRole("tab", {
     name: "Channel settings",
     exact: true,
@@ -218,7 +212,7 @@ test.describe("description links", () => {
     await expect(
       page
         .getByRole("article", { name: "Conversation" })
-        .getByRole("tab", { name: "Beta", exact: true }),
+        .getByRole("button", { name: "Manage members of Beta", exact: true }),
     ).toBeVisible();
     await expect(editor).toHaveCount(0);
   });

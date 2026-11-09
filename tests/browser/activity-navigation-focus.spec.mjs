@@ -2,6 +2,7 @@ import { openChannelDetails } from "./channel-details.mjs";
 import { test, expect } from "./fixture.mjs";
 import { open } from "./timeline.mjs";
 import { generateSecretKey } from "nostr-tools";
+import { channelUnread } from "./unread-state.mjs";
 
 test.use({
   productionBroker: true,
@@ -29,7 +30,13 @@ test("mark-read retains focus through a gated storage failure, working transitio
   await open(page, app);
   const row = page.locator('button[data-channel-id="alpha"]');
   const popup = page.getByRole("dialog", { name: "Activity in Alpha" });
-  await expect(row.getByRole("img", { name: /unread threads?/ })).toBeVisible();
+  // The open channel's row is quiet; its activity popup still lists threads.
+  await expect
+    .poll(async () => (await channelUnread(page, "alpha")).threads)
+    .toBeGreaterThan(0);
+  await expect(row.getByRole("img", { name: /unread threads?/ })).toHaveCount(
+    0,
+  );
   await row.focus();
   const originalRow = await row.elementHandle();
   await row.press("Enter");

@@ -36,6 +36,11 @@
     border-radius: var(--radius-pill);
   }
 
+  :where(html[data-message-density="compact"])
+    .inline-chip:is([data-kind="person"], [data-kind="agent"]) {
+    padding-inline-start: var(--space-half);
+  }
+
   button.inline-chip {
     cursor: pointer;
   }

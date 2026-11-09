@@ -19,6 +19,7 @@ import {
 } from "../../features/channel-navigation/routes";
 
 import { fixture, owners, id, viewer, scope } from "./sidebar-testing";
+import { federatedFixture } from "../../features/federated-identity/testing";
 import type { ChannelDetails } from "../../features/relay/channel-details-protocol";
 import { createSoloRegionFixture } from "../../features/channel-navigation/solo-navigation-testing";
 import { PrimarySidebar } from "./PrimarySidebar";
@@ -269,9 +270,10 @@ it("filters the combined sidebar without navigating or resetting Solo sections",
   await user.click(solo);
   expect(screen.getByRole("button", { name: "Inbox" })).toBeVisible();
   expect(screen.queryByRole("heading", { name: "Solo" })).toBeNull();
+  // Without its heading, Solo creates from New beside the tabs.
   expect(
-    screen.getByRole("button", { name: "New chat or workspace" }),
-  ).toBeVisible();
+    screen.queryByRole("button", { name: "New chat or workspace" }),
+  ).toBeNull();
   expect(screen.getByRole("button", { name: "Chats" })).toHaveAttribute(
     "aria-expanded",
     "false",
@@ -489,10 +491,7 @@ it("keeps unavailable creation actions disabled", async () => {
   );
 });
 
-it.each([
-  ["New", "New workspace"],
-  ["New chat or workspace", "New workspace"],
-])(
+it.each([["New", "New workspace"]])(
   "does not navigate to a replaced session after project creation from %s completes",
   async (triggerName, itemName) => {
     const f = fixture(true, true);
@@ -773,9 +772,7 @@ it.each(["empty", "chats", "projects", "both"])(
       expect(f.open).toHaveBeenLastCalledWith(soloDraftTarget(scope));
     }
     await user.click(screen.getByRole("tab", { name: "Solo" }));
-    const trigger = within(nav).getByRole("button", {
-      name: "New chat or workspace",
-    });
+    const trigger = screen.getByRole("button", { name: "New" });
     await user.click(trigger);
     await user.click(await screen.findByRole("menuitem", { name: "New chat" }));
     expect(f.open).toHaveBeenLastCalledWith(soloDraftTarget(scope));
@@ -792,9 +789,7 @@ it.each(["empty", "chats", "projects", "both"])(
 it("keeps new Solo chats available when project creation is unavailable", async () => {
   const user = userEvent.setup();
   const f = fixture(true);
-  await user.click(
-    screen.getByRole("button", { name: "New chat or workspace" }),
-  );
+  await user.click(screen.getByRole("button", { name: "New" }));
   expect(
     await screen.findByRole("menuitem", { name: "New workspace" }),
   ).toHaveAttribute("aria-disabled", "true");
@@ -895,7 +890,7 @@ it("an explicit Solo reveal during a restriction keeps the saved Team filter", a
   }
 });
 
-it("uses one contributed heading and the prior All Team Nexus order without losing chat creation", async () => {
+it("uses one contributed heading and the prior All Team Nexus order, with no heading creation", async () => {
   const h = createSoloRegionFixture(viewer);
   await h.register({ title: "Nexus", component: () => null });
   const target = conversationTarget(h.scope, "owned");
@@ -916,36 +911,20 @@ it("uses one contributed heading and the prior All Team Nexus order without losi
     expect(screen.getAllByText("Nexus")).toHaveLength(2);
     await userEvent.setup().click(screen.getByRole("tab", { name: "Nexus" }));
     expect(screen.getAllByText("Nexus")).toHaveLength(1);
-    expect(screen.getByRole("button", { name: "Create" })).toBeVisible();
     await userEvent.setup().click(screen.getByRole("tab", { name: "All" }));
     expect(screen.getAllByText("Nexus")).toHaveLength(2);
-    await userEvent
-      .setup()
-      .click(screen.getByRole("button", { name: "Create" }));
+    // Headings carry no creation of their own; the New menu owns it.
     expect(
-      await screen.findByRole("menuitem", { name: "New chat" }),
-    ).toBeVisible();
-    expect(
-      screen.getByRole("menuitem", { name: "New workspace" }),
-    ).toBeVisible();
+      screen.queryByRole("button", { name: "Create" }),
+    ).not.toBeInTheDocument();
   } finally {
     view.unmount();
     await h.dispose();
   }
 });
 
-it("merged Create keeps workspace creation and return focus when a plugin menu fails", async () => {
+it("omits a contributed create action whose menu fails", async () => {
   const h = createSoloRegionFixture(viewer);
-  const create = vi.fn(async (_section: { id: string; name: string }) => {});
-  Object.assign(h.session, {
-    soloPreferences: {
-      ...h.session.soloPreferences,
-      sectionCreationWritable: true,
-      createSection: create,
-    },
-  });
-  const open = vi.fn(async () => ({ status: "opened" as const }));
-  const navigator = { ...h.navigator, open };
   await h.register({
     title: "Nexus",
     component: () => null,
@@ -965,41 +944,18 @@ it("merged Create keeps workspace creation and return focus when a plugin menu f
     <ToastProvider>
       <PrimarySidebar
         relay={h.relay}
-        navigator={navigator}
+        navigator={h.navigator}
         target={conversationTarget(h.scope, "owned")}
       >
         {null}
       </PrimarySidebar>
     </ToastProvider>,
   );
-  const user = userEvent.setup();
   try {
-    const trigger = screen.getByRole("button", { name: "Create" });
-    await user.click(trigger);
-    await user.click(
-      await screen.findByRole("menuitem", { name: "New workspace" }),
-    );
-    await screen.findByRole("dialog", { name: "New workspace" });
-    await user.keyboard("{Escape}");
-    await waitFor(() => expect(trigger).toHaveFocus());
-    await user.click(trigger);
-    await user.click(
-      await screen.findByRole("menuitem", { name: "New workspace" }),
-    );
-    const dialog = await screen.findByRole("dialog", { name: "New workspace" });
-    await user.type(
-      within(dialog).getByRole("textbox", { name: "Name" }),
-      "Planning",
-    );
-    await user.click(within(dialog).getByRole("button", { name: "Create" }));
-    await waitFor(() => expect(create).toHaveBeenCalledOnce());
-    const project = create.mock.calls[0]?.[0] as unknown as { id: string };
-    await waitFor(() =>
-      expect(open).toHaveBeenCalledWith(
-        soloDraftTarget(h.scope, { project: project.id }),
-      ),
-    );
-    await waitFor(() => expect(trigger).toHaveFocus());
+    expect(screen.getAllByText("Nexus")).toHaveLength(2);
+    expect(
+      screen.queryByRole("button", { name: "Create" }),
+    ).not.toBeInTheDocument();
   } finally {
     view.unmount();
     await h.dispose();
@@ -1048,6 +1004,48 @@ it("collapsing the contributed Solo section in All hides its ordinary chats", as
   }
 });
 
+// A refused community gets one notice in the toast stack on every page, with
+// what fixes it. The sidebar's sign-in prompt and Try again would repeat it.
+it("moves a refusal's recovery from the sidebar to its one notice", async () => {
+  const h = federatedFixture();
+  const f = fixture(
+    true,
+    false,
+    undefined,
+    undefined,
+    0,
+    undefined,
+    undefined,
+    {
+      federatedIdentity: h.service,
+    },
+  );
+  const sidebar = () => screen.getByRole("complementary", { name: "Sidebar" });
+  // A connection failure with native's sign-in error asks for sign-in here.
+  f.connection({ status: "error", error: "Federated sign-in is required" });
+  expect(
+    within(sidebar()).getByRole("button", {
+      name: "Sign in with builderlab.example",
+    }),
+  ).toBeVisible();
+  f.connection({ denied: true, refusal: "sign-in" });
+  const notice = await screen.findByRole("dialog", {
+    name: "Sign in to open this community",
+  });
+  expect(
+    within(notice).getByRole("button", {
+      name: "Sign in with builderlab.example",
+    }),
+  ).toBeVisible();
+  expect(
+    within(notice).queryByRole("button", { name: "Try again" }),
+  ).toBeNull();
+  expect(
+    within(sidebar()).queryByRole("button", { name: /Sign in|Try again/ }),
+  ).toBeNull();
+  expect(within(sidebar()).queryByText(/sign-in/)).toBeNull();
+});
+
 it("shows Try again beside a settled failure, and Connecting while the connection retries", async () => {
   const f = fixture(true);
   const retry = vi.spyOn(f.relay, "retry");
@@ -1060,19 +1058,24 @@ it("shows Try again beside a settled failure, and Connecting while the connectio
     .setup()
     .click(within(sidebar()).getByRole("button", { name: "Try again" }));
   expect(retry).toHaveBeenCalledOnce();
-  // A refusal is about access, not the connection.
+  // A refusal is about access, not the connection. Its notice reports it on
+  // every page; the sidebar neither repeats it nor offers Try again.
   f.connection({
     status: "error",
     error: "ReadError: Relay read failed (403)",
     denied: true,
   });
+  const notice = await screen.findByRole("dialog", {
+    name: "You don’t have access to this community",
+  });
   expect(
-    within(sidebar()).getByText("You don’t have access to this community."),
+    within(notice).getByRole("button", { name: "Check again" }),
   ).toBeVisible();
   expect(within(sidebar()).queryByText("Couldn’t load channels.")).toBeNull();
+  expect(within(sidebar()).queryByText(/have access/)).toBeNull();
   expect(
-    within(sidebar()).getByRole("button", { name: "Try again" }),
-  ).toBeVisible();
+    within(sidebar()).queryByRole("button", { name: "Try again" }),
+  ).toBeNull();
   for (const working of [
     { status: "connecting" },
     { status: "error", error, retrying: true },

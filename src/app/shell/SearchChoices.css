@@ -85,8 +85,21 @@
   }
 
   .search-palette-group-empty,
-  .search-palette-status {
+  .search-palette-status,
+  .search-palette-footer {
     padding-inline: var(--space-control-inset);
+  }
+
+  /* A footer stays below the results, outside their scrollport, and takes
+     its room from them so both fit the dialog. */
+  .search-palette[data-search-footer] {
+    --search-palette-results-max: min(
+      55vh,
+      calc(100dvh - var(--dialog-top) - 13rem)
+    );
+  }
+  .search-palette-footer {
+    padding-block: var(--space-2) var(--space-3);
   }
 
   .search-palette-group-empty {
@@ -153,6 +166,15 @@
     height: var(--space-2);
     background: linear-gradient(to bottom, var(--surface-panel), transparent);
     pointer-events: none;
+  }
+  .search-palette[data-search-footer] .search-palette-height::before {
+    content: "";
+    position: absolute;
+    inset: auto 0 0;
+    height: var(--space-2);
+    background: linear-gradient(to top, var(--surface-panel), transparent);
+    pointer-events: none;
+    z-index: 1;
   }
   .search-palette-height[data-measured] {
     transition: height 180ms ease-in-out;

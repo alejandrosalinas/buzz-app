@@ -25,7 +25,29 @@ afterEach(() => {
 });
 
 const viewer = "ab".repeat(32);
-const PORTAL = "https://app.builderlab.xyz";
+/** bb-public's community hosts, as its compiled sign-in server lists them. */
+const PUBLIC_HOSTS = ["*.communities.buzz.xyz", "communities.buzz.xyz"];
+/** A build whose first compiled sign-in server is bb-public. */
+const publicServers = async () =>
+  [
+    {
+      status: "signed-out",
+      authority: {
+        id: "bb-public",
+        identityOrigin: "https://app.builderlab.xyz",
+        apiBasePath: "/api/goose/",
+        signIn: "on-demand",
+        organization: null,
+        communityHosts: PUBLIC_HOSTS,
+      },
+      revision: "",
+      email: null,
+      failure: null,
+      expiresAt: null,
+      expiring: false,
+      cleanup: false,
+    },
+  ] as const;
 const HOSTED = "https://communities.buzz.xyz";
 const INDEPENDENT = "https://relay.example.com";
 
@@ -52,19 +74,24 @@ it.each([
   "a key with no saved choice in %s decides %s",
   (_label, decision, ids) => {
     expect(
-      decideBackup(consent(), { automatic: null }, memberships(ids), PORTAL),
+      decideBackup(
+        consent(),
+        { automatic: null },
+        memberships(ids),
+        PUBLIC_HOSTS,
+      ),
     ).toBe(decision);
   },
 );
 
-it("a build that is not the hosting portal asks even for a hosted community", () => {
-  for (const build of ["https://builderlab.example", ""])
+it("a build whose Builderlab doesn't host a community asks even for a hosted one", () => {
+  for (const hosts of [["buzz.acme.builderlab.xyz"], [], undefined])
     expect(
       decideBackup(
         consent(),
         { automatic: null },
         memberships([HOSTED]),
-        build,
+        hosts,
       ),
     ).toBe("ask");
 });
@@ -88,7 +115,7 @@ it.each([
 ] as const)("%s decides nothing", (_label, status, automatic) => {
   for (const ids of [[HOSTED], [INDEPENDENT]])
     expect(
-      decideBackup(status, { automatic }, memberships(ids), PORTAL),
+      decideBackup(status, { automatic }, memberships(ids), PUBLIC_HOSTS),
     ).toBeUndefined();
 });
 
@@ -102,7 +129,6 @@ function setup(
   automatic: boolean | null = null,
   loading = false,
 ) {
-  vi.stubEnv("VITE_BUZZ_BUILDERLAB_URL", PORTAL);
   const watchers: { onmessage: (status: BackupStatus) => void }[] = [];
   const backup = createBackupStatus(
     async <T,>(command: string, args?: Record<string, unknown>) => {
@@ -157,6 +183,7 @@ function setup(
         { backup, getBackupChoice, setBackupChoice } as unknown as Identity
       }
       communities={communities}
+      servers={publicServers}
     />,
   );
   return {

@@ -2,7 +2,7 @@
 pub(crate) mod agent;
 mod huddle;
 use crate::federated_identity::{
-    assertion::{Authorization, HEADER},
+    assertion::{Authorization, HEADER, SIGNED_OUT},
     FederatedIdentity,
 };
 use crate::identity::{EventTemplate, IdentityHost};
@@ -313,9 +313,12 @@ pub(crate) async fn relay_sign(
     {
         return Err("Relay event is too large".into());
     }
-    if coordinate_delete
-        .is_some_and(|coordinate| coordinate.split(':').nth(1) != signed["pubkey"].as_str())
-    {
+    // Canonical workflow deletes may target an agent owned by the signer.
+    // The relay authorizes ownership; other coordinate deletes remain author-only.
+    if coordinate_delete.is_some_and(|coordinate| {
+        !coordinate.starts_with("30620:")
+            && coordinate.split(':').nth(1) != signed["pubkey"].as_str()
+    }) {
         return Err("Only the author can delete this event".into());
     }
     Ok(signed)
@@ -973,32 +976,113 @@ async fn send(
     authenticated: bool,
     response_limit: usize,
 ) -> Result<RelayResponse> {
-    let mut phase = crate::network_diagnostics::Phase::new(
-        "http.authorization",
-        url.as_str(),
-        None,
-        crate::network_diagnostics::Level::Debug,
-    );
-    let assertion = if authenticated {
-        evidence(host, fi, &url).await?
-    } else {
-        None
-    };
-    phase.ok = true;
-    drop(phase);
-    send_authorized(
-        host,
-        AuthorizationContext {
-            fi,
-            assertion: assertion.as_ref(),
+    let community = url.clone();
+    let result = async {
+        let mut phase = crate::network_diagnostics::Phase::new(
+            "http.authorization",
+            url.as_str(),
+            None,
+            crate::network_diagnostics::Level::Debug,
+        );
+        let assertion = if authenticated {
+            evidence(host, fi, &url).await?
+        } else {
+            None
+        };
+        phase.ok = true;
+        drop(phase);
+        send_authorized(
+            host,
+            AuthorizationContext {
+                fi,
+                assertion: assertion.as_ref(),
+            },
+            url,
+            method,
+            body,
+            authenticated,
+            response_limit,
+        )
+        .await
+    }
+    .await;
+    // Only a request sent as the signed-in user speaks for their session: a
+    // native plugin's read or publish goes without federated evidence, so an
+    // FI-gated community refusing it says nothing about the user's sign-in.
+    if authenticated && fi.is_some() {
+        observe_refusal(&community, &result);
+    }
+    result
+}
+
+/// What the whole community refused, as `http-admission.ts` reads it: the
+/// relay's exact NIP-FI denial bodies (buzz-auth `nip_fi/denial.rs`), a
+/// community without NIP-FI refusing a key that isn't a member or is banned
+/// (buzz-relay `api/mod.rs` `admit_member`, and its media routes'
+/// `membership_denial`), and the sign-in this device no longer has. Anything
+/// else stays with its caller.
+fn community_refusal(result: &Result<RelayResponse>) -> Option<&'static str> {
+    match result {
+        Ok(response) => match (response.status, response.body.as_str()) {
+            (401, "authentication required\n") | (403, "evidence rejected\n") => Some("sign-in"),
+            (403, "authorization denied\n") => Some("access"),
+            (403, body) => serde_json::from_str::<serde_json::Value>(body)
+                .ok()
+                .filter(|body| {
+                    matches!(
+                        body["error"].as_str(),
+                        Some(
+                            "relay_membership_required"
+                                | "relay membership required"
+                                | "blocked: you are banned from this community"
+                        )
+                    )
+                })
+                .map(|_| "access"),
+            _ => None,
         },
-        url,
-        method,
-        body,
-        authenticated,
-        response_limit,
-    )
-    .await
+        Err(error) if error == SIGNED_OUT => Some("sign-in"),
+        Err(_) => None,
+    }
+}
+
+#[derive(Clone, Serialize)]
+struct Refusal {
+    community: String,
+    refusal: &'static str,
+}
+
+fn refusals() -> &'static tokio::sync::broadcast::Sender<Refusal> {
+    static REFUSALS: OnceLock<tokio::sync::broadcast::Sender<Refusal>> = OnceLock::new();
+    REFUSALS.get_or_init(|| tokio::sync::broadcast::channel(16).0)
+}
+
+/// Every signed relay request passes here, so a community's refusal reaches
+/// the window whichever command met it first.
+fn observe_refusal(url: &Url, result: &Result<RelayResponse>) {
+    if let Some(refusal) = community_refusal(result) {
+        let _ = refusals().send(Refusal {
+            community: url.origin().ascii_serialization(),
+            refusal,
+        });
+    }
+}
+
+/// Tells the window `relay-refusal` for each community refusal.
+pub(crate) fn watch_refusals<R: tauri::Runtime>(app: tauri::AppHandle<R>) {
+    use tauri::Emitter as _;
+    let mut refused = refusals().subscribe();
+    tauri::async_runtime::spawn(async move {
+        loop {
+            match refused.recv().await {
+                Ok(refusal) => {
+                    let _ = app.emit_to("main", "relay-refusal", refusal);
+                }
+                Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {}
+                Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
+            }
+        }
+    });
 }
 
 async fn send_authorized(
@@ -1516,20 +1600,28 @@ async fn upload_file(
     (size, hash): (usize, String),
     progress: Option<UploadProgress>,
 ) -> Result<RelayResponse> {
-    let assertion = evidence(host, fi, &url).await?;
-    upload_file_authorized(
-        host,
-        AuthorizationContext {
-            fi,
-            assertion: assertion.as_ref(),
-        },
-        url,
-        kind,
-        path,
-        (size, hash),
-        progress,
-    )
-    .await
+    let community = url.clone();
+    let result = async {
+        let assertion = evidence(host, fi, &url).await?;
+        upload_file_authorized(
+            host,
+            AuthorizationContext {
+                fi,
+                assertion: assertion.as_ref(),
+            },
+            url,
+            kind,
+            path,
+            (size, hash),
+            progress,
+        )
+        .await
+    }
+    .await;
+    if fi.is_some() {
+        observe_refusal(&community, &result);
+    }
+    result
 }
 
 async fn upload_file_authorized(
@@ -1664,10 +1756,7 @@ pub(crate) fn media_protocol<R: tauri::Runtime>(
         .clone();
     tauri::async_runtime::spawn(async move {
         let response = match media_request(&request) {
-            Ok((url, Some((start, end)))) => {
-                media_blocks::read(&host, Some(&fi), &url, start, end, WHOLE_VIDEO_MAX).await
-            }
-            Ok((url, None)) => fetch_media(&host, Some(&fi), url, None).await,
+            Ok((url, range)) => serve_media(&host, Some(&fi), url, range).await,
             Err(status) => Err(status),
         };
         let mut response = response.unwrap_or_else(|status| {
@@ -2149,6 +2238,40 @@ fn media_request(
     Ok((url, range))
 }
 
+async fn serve_media(
+    host: &IdentityHost,
+    fi: Option<&FederatedIdentity>,
+    url: Url,
+    range: Option<(u64, u64)>,
+) -> std::result::Result<tauri::http::Response<Vec<u8>>, u16> {
+    let fallback = jpeg_thumb(&url);
+    match (serve_blob(host, fi, url, range).await, fallback) {
+        (Err(404), Some(url)) => serve_blob(host, fi, url, range).await,
+        (response, _) => response,
+    }
+}
+
+async fn serve_blob(
+    host: &IdentityHost,
+    fi: Option<&FederatedIdentity>,
+    url: Url,
+    range: Option<(u64, u64)>,
+) -> std::result::Result<tauri::http::Response<Vec<u8>>, u16> {
+    match range {
+        Some((start, end)) => media_blocks::read(host, fi, &url, start, end, WHOLE_VIDEO_MAX).await,
+        None => fetch_media(host, fi, url, None).await,
+    }
+}
+
+/// Relays before WebP thumbnails, and images uploaded before them, have only
+/// the `.thumb.jpg` that every relay writes.
+fn jpeg_thumb(url: &Url) -> Option<Url> {
+    let stem = url.path().strip_suffix(".thumb.webp")?;
+    let mut url = url.clone();
+    url.set_path(&format!("{stem}.thumb.jpg"));
+    Some(url)
+}
+
 /// Only relay-hosted blobs on an HTTPS origin; never an arbitrary URL.
 fn media_url(target: &str) -> Option<Url> {
     let url = Url::parse(target).ok()?;
@@ -2350,3 +2473,63 @@ fn media_type(value: Option<&str>) -> (String, bool) {
 }
 #[cfg(test)]
 mod tests;
+
+/// A native plugin's relay read (NIP-11, or one filter), on the same bounded,
+/// authenticated HTTP client as other native relay reads.
+pub(crate) async fn plugin_read(
+    host: &IdentityHost,
+    community: &str,
+    filter: Option<serde_json::Value>,
+) -> Result<serde_json::Value> {
+    let (path, method) = if filter.is_some() {
+        ("/query", "POST")
+    } else {
+        ("/", "GET")
+    };
+    let url = request_url(community, path, method)?;
+    let body = filter.map(|filter| serde_json::json!([filter]).to_string());
+    let response = send(
+        host,
+        None,
+        url,
+        method,
+        body,
+        method == "POST",
+        MAX_RESPONSE,
+    )
+    .await?;
+    if !(200..300).contains(&response.status) {
+        return Err("Relay read failed".into());
+    }
+    serde_json::from_str(&response.body).map_err(|_| "Invalid relay response".into())
+}
+
+/// Publishes an event the signed-in identity already signed, for a native
+/// plugin's host adapter; it never signs or publishes arbitrary events.
+pub(crate) async fn plugin_publish(
+    host: &IdentityHost,
+    community: &str,
+    event: serde_json::Value,
+) -> Result<()> {
+    verify_owned_event(host, &event).await?;
+    let url = request_url(community, "/events", "POST")?;
+    let response = send(
+        host,
+        None,
+        url,
+        "POST",
+        Some(event.to_string()),
+        true,
+        MAX_RESPONSE,
+    )
+    .await?;
+    let receipt: serde_json::Value =
+        serde_json::from_str(&response.body).map_err(|_| "Invalid publication receipt")?;
+    if !(200..300).contains(&response.status)
+        || receipt["accepted"] != true
+        || receipt["event_id"] != event["id"]
+    {
+        return Err("Relay did not accept the publication".into());
+    }
+    Ok(())
+}

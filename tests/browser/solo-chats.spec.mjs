@@ -55,7 +55,7 @@ test("chat row menus open Share with the chat's people and restore focus", async
     name: "Actions for Alpha",
     exact: true,
   });
-  // Lifecycle items mount after each opening's permission read.
+  // Lifecycle items come from the live roster when the menu opens.
   const lifecycleReady = menu.getByRole("menuitem", {
     name: "Delete chat",
     exact: true,
@@ -386,6 +386,26 @@ test("Share opens View only and posts a link without promoting or moving the Sol
     exact: true,
   });
   await expect(share).toBeEnabled();
+  // Channel results can render before the people search and the access check
+  // settle. Their results then change the height above Share, which can move
+  // Share after focus has revealed it.
+  await expect(
+    dialog.getByRole("status").filter({ hasText: "Searching…" }),
+  ).toHaveCount(0);
+  await expect(
+    dialog.getByText("Existing members keep their access.", { exact: true }),
+  ).toBeVisible();
+  // Count the page's scrollTo and scrollBy calls; see the wait before focus.
+  await page.evaluate(() => {
+    window.__scrollCalls = 0;
+    for (const name of ["scrollTo", "scrollBy"]) {
+      const native = Element.prototype[name];
+      Element.prototype[name] = function (...args) {
+        window.__scrollCalls += 1;
+        return native.apply(this, args);
+      };
+    }
+  });
   await page.setViewportSize({ width: 390, height: 850 });
   await page.evaluate(() =>
     document.documentElement.style.setProperty("--buzz-text-scale", "2"),
@@ -393,12 +413,53 @@ test("Share opens View only and posts a link without promoting or moving the Sol
   await expect.poll(() => page.evaluate(() => window.innerWidth)).toBe(390);
   await expect(page.locator("html")).toHaveCSS("font-size", "32px");
   // Let the resized, enlarged-text layout finish before testing focus reveal.
-  await page.evaluate(
-    () =>
-      new Promise((resolve) =>
-        requestAnimationFrame(() => requestAnimationFrame(resolve)),
-      ),
+  // At this size the shell header wraps Search onto its own row. That shortens
+  // the chat behind the dialog, and Virtua scrolls the chat back to its newest
+  // message with scrollTo, again on each size update for 150 ms. WebKit
+  // reveals a newly focused element on a 0 ms timer, and a scrollTo or
+  // scrollBy on any element before that timer fires cancels the reveal, even
+  // one that does not move, so Share would stay hidden. On loaded Linux WebKit
+  // this chain can end hundreds of milliseconds after the text change. Wait
+  // for the header to wrap and the chat to rest at its newest message, with no
+  // scrollTo or scrollBy for longer than Virtua's 150 ms. page.clock fakes
+  // requestAnimationFrame, so each reading first waits for two real rendering
+  // updates: a new ResizeObserver reports only in one, after the app's own
+  // observers have received the layout before it.
+  await expect(page.locator(".shell-header")).toHaveAttribute(
+    "data-search-wrapped",
+    "true",
   );
+  const timeline = page.locator(
+    "section[aria-label='Channel message history']",
+  );
+  let previous;
+  let stable = 0;
+  await expect
+    .poll(
+      async () => {
+        const value = await timeline.evaluate(async (element) => {
+          for (let update = 0; update < 2; update++)
+            await new Promise((resolve) => {
+              const observer = new ResizeObserver(() => {
+                observer.disconnect();
+                resolve();
+              });
+              observer.observe(element);
+            });
+          return element.scrollHeight -
+            element.clientHeight -
+            element.scrollTop <=
+            1
+            ? `${window.__scrollCalls},${element.scrollTop},${element.clientHeight}`
+            : "moving";
+        });
+        stable = value !== "moving" && value === previous ? stable + 1 : 0;
+        previous = value;
+        return stable;
+      },
+      { intervals: [200], message: "chat rests at its newest message" },
+    )
+    .toBeGreaterThanOrEqual(2);
   await share.focus();
   await expect(share).toBeInViewport({ ratio: 1 });
   await expect
@@ -470,7 +531,7 @@ test("Share opens View only and posts a link without promoting or moving the Sol
   await page.setViewportSize({ width: 1280, height: 850 });
   await expect(row).toBeVisible();
   await expect(
-    page.getByRole("heading", { name: "Alpha", exact: true }),
+    page.getByRole("button", { name: "Share access to Alpha", exact: true }),
   ).toBeVisible();
   await expect(history).toBeVisible();
   expect(grants).toHaveLength(0);

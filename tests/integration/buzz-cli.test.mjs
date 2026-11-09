@@ -1,7 +1,10 @@
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
+import { execFileSync } from "node:child_process";
+import { mkdtempSync, readFileSync, realpathSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import test from "node:test";
-import { buzzPin } from "../../scripts/build-buzz-cli.mjs";
+import { buzzPin, cliTarget } from "../../scripts/build-buzz-cli.mjs";
 
 const read = (path) =>
   readFileSync(new URL(`../../${path}`, import.meta.url), "utf8");
@@ -26,6 +29,40 @@ test("a manifest without a pinned revision is rejected", () => {
     'buzz-audio-client = { git = "https://github.com/block/buzz.git", rev = "main" }',
   ])
     assert.throws(() => buzzPin(manifest), /no buzz-audio-client git revision/);
+});
+
+test("linked worktrees share the main checkout's buzz CLI build", (t) => {
+  const scratch = realpathSync(mkdtempSync(join(tmpdir(), "buzz-cli-")));
+  t.after(() => rmSync(scratch, { recursive: true, force: true }));
+  // Without GIT_* from a calling hook, so git discovers the scratch repositories.
+  const env = { PATH: process.env.PATH };
+  const main = join(scratch, "main");
+  const linked = join(scratch, "linked");
+  const git = (...args) =>
+    execFileSync("git", args, { cwd: scratch, env, stdio: "ignore" });
+  git("init", "-q", main);
+  git(
+    "-C",
+    main,
+    "-c",
+    "user.name=Example",
+    "-c",
+    "user.email=dev@example.org",
+    "commit",
+    "-q",
+    "--allow-empty",
+    "-m",
+    "init",
+  );
+  git("-C", main, "worktree", "add", "-q", linked);
+
+  assert.equal(cliTarget(linked, env), join(main, "target"));
+  assert.equal(cliTarget(main, env), join(main, "target"));
+  assert.equal(cliTarget(scratch, env), join(scratch, "target"));
+  assert.equal(
+    cliTarget(linked, { ...env, CARGO_TARGET_DIR: join(scratch, "custom") }),
+    join(scratch, "custom"),
+  );
 });
 
 test("desktop builds stage buzz after the other helpers", () => {

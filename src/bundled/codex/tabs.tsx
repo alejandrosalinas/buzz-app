@@ -4,11 +4,7 @@ import activityStyles from "../../features/agents/ActivityLayout.module.css";
 import { formatItemTimestamp } from "../../shared/datetime";
 import { useClockFormat } from "../../shared/clock-preference";
 import { InlineHeader } from "../../shared/design-system/ui/Header";
-import { IconButton } from "../../shared/design-system/ui/IconButton";
-import {
-  ArrowsClockwiseIcon,
-  CaretRightIcon,
-} from "../../shared/design-system/icons";
+import { CaretRightIcon } from "../../shared/design-system/icons";
 import { SettingsGroup } from "../../shared/design-system/ui/SettingsGroup";
 import { ProviderDialogActions } from "../../features/agents/ProviderDialogActions";
 import { AgentSaveButton } from "../../features/agents/AgentSaveButton";
@@ -21,7 +17,7 @@ import {
   useState,
   useSyncExternalStore,
 } from "react";
-import { ActivityTranscript } from "../../features/agents/ActivityTranscript";
+import { TranscriptPanel } from "../../features/agents/TranscriptPanel";
 import { AgentInstructions } from "../../features/agents/AgentInstructions";
 import { CreateModelChoices } from "../../features/agents/CreateModelChoices";
 import { ModelPicker } from "../../features/agents/ModelPicker";
@@ -56,14 +52,10 @@ import {
 import { AppServer, listModels, needsSignIn, type Spawn } from "./rpc";
 import type { CodexRuntime, SavedConversation } from "./runtime";
 import type { CodexSetup } from "./setup";
-import { readTranscript, TURN_LIMIT, type CodexTranscript } from "./transcript";
+import { readTranscript, TURN_LIMIT } from "./transcript";
 
 const label = ({ channelId, name, root }: SavedConversation) =>
   `${name || channelId.slice(0, 8)} · ${root ? `thread ${root.slice(0, 8)}` : "channel"}`;
-type Read =
-  | { status: "ready"; transcript: CodexTranscript }
-  | { status: "missing" }
-  | { status: "error"; error: string };
 
 type Catalog = {
   models: Model[];
@@ -563,6 +555,7 @@ export function createTabs(
     openSettings,
     config,
     onChange,
+    onReadyChange,
     ...props
   }: AgentCreateProps<Config>) {
     const current = readConfig(config);
@@ -590,6 +583,12 @@ export function createTabs(
         : status?.state === "signed-out" || error === SIGN_IN_ERROR
           ? "login"
           : undefined;
+    const ready =
+      !step &&
+      !checking &&
+      !error &&
+      !!catalogModel(current.model || providerDefaults.model, data);
+    useEffect(() => onReadyChange?.(ready), [onReadyChange, ready]);
     const field = useRef<HTMLDivElement>(null);
     const hadStep = useRef(false);
     const handoff = useRef(false);
@@ -645,6 +644,16 @@ export function createTabs(
             onChange(readConfig({ ...current, ...modelChange(model, data) }))
           }
         />
+        {onReadyChange &&
+          !checking &&
+          !error &&
+          data &&
+          current.model &&
+          !catalogModel(current.model, data) && (
+            <p role="status" className="m-0 text-body-sm text-subtle">
+              This model isn’t available. Choose another model to continue.
+            </p>
+          )}
       </div>
     );
   }
@@ -955,106 +964,55 @@ export function createTabs(
     );
   }
 
-  /** One conversation's Codex thread, read on open and on Refresh. A refresh
-   * keeps the last result in place until the new one arrives. */
+  /** One conversation's Codex thread, kept current while Codex works. */
   function TranscriptView({
     agent,
     conversation,
-    openConversation,
+    working,
   }: {
     agent: AgentViewProps<Config>["agent"];
     conversation: SavedConversation;
-    openConversation: AgentViewProps<Config>["openConversation"];
+    working: boolean;
   }) {
-    const [read, setRead] = useState<Read>();
-    const [loading, setLoading] = useState(true);
-    const [attempt, setAttempt] = useState(0);
-    // biome-ignore lint/correctness/useExhaustiveDependencies: attempt is the explicit Refresh.
-    useEffect(() => {
-      const abort = new AbortController();
-      setLoading(true);
-      const reading = binding(agent.key).then((bound) => {
-        if (bound)
-          throw new Error(
-            "Transcripts are unavailable for remote Codex agents.",
-          );
-        return readTranscript(
-          spawn,
-          { agent: { key: agent.key, name: agent.name }, ...conversation },
-          abort.signal,
-          (pubkey) => runtime.name(agent.key, pubkey),
-        );
-      });
-      void reading
-        .then(
-          (transcript): Read =>
-            transcript
-              ? {
-                  status: "ready",
-                  transcript: {
-                    ...transcript,
-                    turns: runtime.prompts(agent.key).shown(transcript.turns),
-                  },
-                }
-              : { status: "missing" },
-          (reason): Read => ({ status: "error", error: message(reason) }),
-        )
-        .then((next) => {
-          if (abort.signal.aborted) return;
-          setRead(next);
-          setLoading(false);
-        });
-      return () => abort.abort();
-    }, [conversation, attempt]);
     return (
-      <div className={activityStyles.transcript}>
-        <InlineHeader
-          title="Transcript"
-          actions={
-            <IconButton
-              hint="familiar"
-              aria-label="Refresh transcript"
-              title="Refresh transcript"
-              loading={loading}
-              onClick={() => setAttempt((value) => value + 1)}
-              icon={<ArrowsClockwiseIcon size="1rem" aria-hidden="true" />}
-            />
-          }
-        />
-        {read && loading && (
-          <span role="status" className="sr-only">
-            Refreshing transcript…
-          </span>
-        )}
-        {!read ? (
-          <p role="status" className="m-0">
-            Reading the Codex session…
-          </p>
-        ) : read.status === "missing" ? (
+      <TranscriptPanel
+        agent={agent}
+        read={async (signal) => {
+          if (await binding(agent.key))
+            throw new Error(
+              "Transcripts are unavailable for remote Codex agents.",
+            );
+          const transcript = await readTranscript(
+            spawn,
+            { agent: { key: agent.key, name: agent.name }, ...conversation },
+            signal,
+            (pubkey) => runtime.name(agent.key, pubkey),
+          );
+          return (
+            transcript && {
+              ...transcript,
+              turns: runtime.prompts(agent.key).shown(transcript.turns),
+            }
+          );
+        }}
+        readKey={conversation.key}
+        working={working}
+        reading="Reading the Codex session…"
+        failed="Could not read the Codex session"
+        missing={
           <p className="m-0 text-body-sm text-subtle">
             Codex has no history for this conversation on this computer. Its
             session may have been deleted.
           </p>
-        ) : read.status === "error" ? (
-          <p role="alert" className="m-0">
-            Could not read the Codex session: {read.error}
-          </p>
-        ) : (
-          <ActivityTranscript
-            transcript={read.transcript}
-            agentName={agent.name}
-            openConversation={openConversation}
-            state={() => (read.transcript.working ? "working" : undefined)}
-            before={
-              read.transcript.more && (
-                <p className="m-0 text-body-sm text-subtle">
-                  Showing the latest {TURN_LIMIT} turns.
-                </p>
-              )
-            }
-          />
-        )}
-      </div>
+        }
+        notes={(transcript) =>
+          transcript.more && (
+            <p className="m-0 text-body-sm text-subtle">
+              Showing the latest {TURN_LIMIT} turns.
+            </p>
+          )
+        }
+      />
     );
   }
 
@@ -1102,14 +1060,12 @@ export function createTabs(
     conversation,
     initialTranscript,
     close,
-    openConversation,
     listed,
   }: {
     agent: AgentViewProps<Config>["agent"];
     conversation?: AgentViewProps<Config>["conversation"];
     initialTranscript?: AgentViewProps<Config>["initialTranscript"];
     close?: AgentViewProps<Config>["close"];
-    openConversation?: AgentViewProps<Config>["openConversation"];
     listed?: SavedConversation[];
   }) {
     useClockFormat();
@@ -1242,7 +1198,7 @@ export function createTabs(
               key={open.key}
               agent={agent}
               conversation={open}
-              openConversation={openConversation}
+              working={views.get(open.key)?.status === "Working"}
             />
           </PanelSubview>
         )}

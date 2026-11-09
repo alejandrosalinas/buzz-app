@@ -16,13 +16,13 @@ The **Desktop previews** workflow builds all supported desktop platforms from
 `main` and publishes one GitHub prerelease, tagged
 `v<app-version>-preview.<run-number>.<attempt>` at the built commit:
 
-- **Apple Silicon macOS:** signed/notarized DMG and a signed updater archive with
-  its `.sig`.
+- **Apple Silicon and Intel macOS:** a signed/notarized DMG and a signed updater
+  archive with its `.sig` for each architecture.
 - **Windows x64:** unsigned NSIS `.exe` installer and its updater `.sig`.
 - **Linux x64:** Ubuntu 24.04 `.deb` and AppImage, each with its updater `.sig`.
-- **Provenance:** `SOURCE_COMMIT` and one `SHA256SUMS` covering all nine asset files.
+- **Provenance:** `SOURCE_COMMIT` and one `SHA256SUMS` covering all twelve asset files.
 
-Publication waits for all three platform jobs, their existing payload checks and
+Publication waits for every platform job, their existing payload checks and
 the Windows/Linux updater signatures. A failed platform blocks publication and
 automatic feed promotion; it does not publish a partial release. Downloads are
 checked against each job's checksums before assembly. If a job fails, use
@@ -36,12 +36,13 @@ Runs are scheduled at **00:17, 06:17, 12:17, and 18:17 UTC**. To start one manua
 gh workflow run release.yml --repo block/buzz-app --ref main
 ```
 
-The macOS build uses `macos-latest` and the repository's pinned toolchain. The
-workflow publishes an Apple-signed/notarized DMG and a separately Tauri-signed
-updater `.app.tar.gz` and `.sig` for Apple Silicon. The updater archive is
-rebuilt from the verified app in the signed DMG; built-in Tauri artifact
-creation remains disabled because this DMG-only build does not emit an updater
-archive.
+The macOS builds run on Apple Silicon `macos-latest` with the repository's
+pinned toolchain; the Intel build cross-compiles `x86_64-apple-darwin` after
+adding that target's standard library to the pinned Rust release. Each
+publishes an Apple-signed/notarized DMG and a separately Tauri-signed updater
+`.app.tar.gz` and `.sig`. The updater archive is rebuilt from the verified app
+in the signed DMG; built-in Tauri artifact creation remains disabled because
+this DMG-only build does not emit an updater archive.
 
 Windows and Linux installers are built with the same updater configuration.
 Their jobs never receive the Tauri signing key: each checks that its installed or
@@ -74,10 +75,11 @@ Neither endpoint is `releases/latest`: versioned builds are prereleases.
 **Auto-promotion begins as soon as this workflow lands on `main`.** Install an
 updater-enabled build manually first (older installed builds lack the updater),
 and verify its embedded public key and preview endpoint match the release
-configuration. Those values are checked in each candidate's macOS binary at
-promotion and in the Windows/Linux binaries by their build jobs, but nothing
-validates a live old→new install before publishing. For manual recovery or a controlled repromotion, dispatch
-an existing version from `main`:
+configuration. The macOS build job checks those values in both the Apple
+Silicon and Intel binaries, promotion rechecks only the Apple Silicon binary,
+and the Windows/Linux build jobs check their binaries, but nothing validates a
+live old→new install before publishing. For manual recovery or a controlled
+repromotion, dispatch an existing version from `main`:
 
 ```sh
 gh workflow run release.yml --repo block/buzz-app --ref main \
@@ -109,7 +111,7 @@ enable the client flag alone: existing unbound signatures would fail. A signatur
 mismatch fails before the rolling manifest is replaced.
 
 The job builds the Tauri manifest with each artifact's signature from that
-release and an immutable versioned asset URL: `darwin-aarch64`, `windows-x86_64`,
+release and an immutable versioned asset URL: `darwin-aarch64`, `darwin-x86_64`, `windows-x86_64`,
 `linux-x86_64-deb` and `linux-x86_64-appimage`. Linux has no generic entry, so
 a deb install never receives an AppImage. The job refuses full-SemVer rollback and
 changed same-version metadata, and replaces the rolling manifest last. The
@@ -187,20 +189,20 @@ Setup, by a repository admin:
 
 ### Builderlab URL
 
-The **Desktop previews** workflow sets `BUZZ_BUILDERLAB_URL` for all platform
-builds, including candidate-only runs. It defaults to `https://app.builderlab.xyz`.
-To override it, set the repository's non-secret Actions variable
-`BUZZ_BUILDERLAB_URL`; an unset or empty variable uses the production default.
-When `BUZZ_BUILD_FEDERATED_IDENTITY_CONFIG` is set, the workflow supplies an
-empty `BUZZ_BUILDERLAB_URL` instead, because FI builds reject the legacy origin.
+The **Desktop previews** workflow leaves `BUZZ_BUILDERLAB_URL` unset, so every
+platform build, including candidate-only runs, signs in to the built-in
+Builderlab server (`https://app.builderlab.xyz`) with the native session. When
+the repository's non-secret Actions variable
+`BUZZ_BUILD_FEDERATED_IDENTITY_CONFIG` is nonempty, the workflow adds its
+servers to the built-in one; see
+[federated identity build input](configuration.md#federated-identity-build-input).
 
 ### Signing
 
-Deploy [the signing infrastructure](https://github.com/squareup/tf-mobuild-workers/pull/1398)
-and set these repository Actions secrets:
+Set these repository Actions secrets:
 
-- `OSX_CODESIGN_ROLE`: ARN of `block-buzz-app-codesign-role`.
-- `CODESIGN_S3_BUCKET`: `block-buzz-app-artifacts-bucket-<environment>`.
+- `OSX_CODESIGN_ROLE`: ARN of the IAM role the signing action assumes.
+- `CODESIGN_S3_BUCKET`: the signing action's artifact bucket.
 - `TAURI_SIGNING_PRIVATE_KEY`: persistent Tauri updater private key (not the
   Apple Developer ID signing identity). Restrict access to release CI and back
   it up outside Actions; losing it prevents old updater-enabled builds from
@@ -249,8 +251,11 @@ gh attestation verify <archive> --repo aaif-goose/goose \
 ```
 
 Then update version, source revision, versioned asset URLs and SHA-256 values
-together, and review upstream license/notice changes. This release is mutable;
-committed hashes bind the downloaded bytes. Never resolve `latest` at build time.
+together, and review upstream license/notice changes. Move the Buzz Security
+plugin's protected Goose pin to the same revision before that Buzz release
+ships. This release is mutable; committed hashes bind the downloaded bytes.
+Never resolve
+`latest` at build time.
 The obsolete `target/goose-acp-src` and `target/goose-acp-build` caches are unused
 and can be removed locally when no old source build is running.
 Version 1.57.0 also advances Goose 26 commits from the previous source pin;
@@ -281,7 +286,8 @@ build` runs it through `beforeBuildCommand`; `just desktop` runs it with `--dev`
 (a debug build, and a failure only warns). It selects `TAURI_ENV_TARGET_TRIPLE`
 or the host, installs under `target/buzz-cli/<rev>/<target>/<profile>`, which
 lets Cargo skip an install that is already current, and replaces the staged file
-atomically. A first release build takes about two minutes.
+atomically. Linked worktrees use the main checkout's `target/`, so they share
+one build of each revision. A first release build takes about two minutes.
 
 The macOS release signing service signs the executable with the Developer ID
 certificate and the hardened runtime, as it does `goose-acp` and

@@ -383,6 +383,37 @@ describe.skipIf(!BIN)("goose-acp", () => {
     }
   });
 
+  it("ends the turn after a final send, keeping the send's result", {
+    timeout: 180_000,
+  }, async () => {
+    const { goose, cwd, tools, sends } = await live();
+    const cancels: unknown[] = [];
+    const notify = goose.notify.bind(goose);
+    goose.notify = (method, params) => {
+      if (method === "session/cancel") cancels.push(params);
+      return notify(method, params);
+    };
+    try {
+      const session = await goose.open({
+        cwd,
+        tools,
+        systemPrompt:
+          "You are a Buzz agent. You reply in Buzz only by calling the send tool, once, with final true.",
+      });
+      await session.send("Reply in Buzz with the word hello.");
+      await session.idle();
+      expect(cancels).toEqual([{ sessionId: session.id }]);
+      // goose saved the send's result, not an interrupted call.
+      await session.send(
+        "Reply in Buzz with the exact text your last send tool call returned, or the word interrupted if it did not complete.",
+      );
+      await session.idle();
+      expect(sends().at(-1)?.arguments?.text).toContain("Sent.");
+    } finally {
+      await goose.kill();
+    }
+  });
+
   it("compacts a session, saying so in its text", {
     timeout: 180_000,
   }, async () => {

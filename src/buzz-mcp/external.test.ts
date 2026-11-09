@@ -2,16 +2,27 @@ import { expect, it, vi } from "vitest";
 import type { BuzzClient, BuzzEvent, Filter, Template } from "./client";
 import type { ExternalScope } from "../features/agents/external-connection";
 import { respondExternal } from "./external";
+import { respond } from "./rpc";
+import type { AddedTool } from "./session-tools";
 
-function fixture(events: BuzzEvent[] = []) {
+const note: AddedTool = {
+  name: "notes_plugin_get",
+  description: "A tool a plugin adds, which Buzz classifies nowhere.",
+  inputSchema: {
+    type: "object",
+    properties: { slug: { type: "string" }, depth: { type: "integer" } },
+  },
+  call: vi.fn(async (_client, _context, args) => `note ${String(args.slug)}`),
+};
+
+function fixture(events: BuzzEvent[] = [], settings = false) {
   const query = vi.fn(async (_filters: readonly Filter[]) => events);
   const publish = vi.fn(async (event: Template) => ({
     ...event,
     id: "d".repeat(64),
   }));
-  const defaultWorker = vi.fn(async () => "c".repeat(64));
   const read = vi.fn(async () => {
-    throw new Error("file access");
+    throw new Error("This agent cannot read /tmp/private");
   });
   const client = {
     pubkey: "a".repeat(64),
@@ -20,28 +31,50 @@ function fixture(events: BuzzEvent[] = []) {
     query,
     publish,
     read,
+    ...(settings
+      ? { settings: { list: () => [], get: () => undefined, set: vi.fn() } }
+      : {}),
   } as unknown as BuzzClient;
-  const call = (
-    name: string,
-    args: unknown,
-    scopes: readonly ExternalScope[] = ["read", "post"],
+  let added: readonly AddedTool[] = [note];
+  const message = (
+    method: string,
+    params: object,
+    scopes: readonly ExternalScope[] = ["agent"],
   ) =>
     respondExternal(
       client,
-      {
-        jsonrpc: "2.0",
-        id: 1,
-        method: "tools/call",
-        params: { name, arguments: args },
-      },
+      { jsonrpc: "2.0", id: 1, method, params },
       () => {},
       scopes,
-      defaultWorker,
+      () => added,
     );
-  return { client, query, publish, read, call, defaultWorker };
+  const call = (
+    name: string,
+    args: unknown,
+    scopes: readonly ExternalScope[] = ["agent"],
+  ) => message("tools/call", { name, arguments: args }, scopes);
+  const list = async (scopes: readonly ExternalScope[] = ["agent"]) =>
+    (await message("tools/list", {}, scopes)) as {
+      result: {
+        tools: { name: string; _meta: object }[];
+        _meta: object;
+      };
+    };
+  return {
+    client,
+    query,
+    publish,
+    read,
+    call,
+    list,
+    message,
+    setAdded: (next: readonly AddedTool[]) => {
+      added = next;
+    },
+  };
 }
 
-it("lists the restricted schemas and negotiates only the external protocol", async () => {
+it("negotiates only the external protocol and leaves notifications unanswered", async () => {
   const { client } = fixture();
   const connected = vi.fn();
   const request = {
@@ -50,131 +83,99 @@ it("lists the restricted schemas and negotiates only the external protocol", asy
     method: "initialize",
     params: { protocolVersion: "2024-11-05" },
   };
-  expect(await respondExternal(client, request, connected)).toHaveProperty(
-    "error.code",
-    -32602,
-  );
+  const answer = (input: unknown) =>
+    respondExternal(client, input, connected, ["agent"], () => []);
+  expect(await answer(request)).toHaveProperty("error.code", -32602);
   expect(connected).not.toHaveBeenCalled();
   request.params.protocolVersion = "2025-06-18";
-  expect(await respondExternal(client, request, connected)).toHaveProperty(
-    "result.protocolVersion",
-    "2025-06-18",
+  const initialized = await answer(request);
+  expect(initialized).toHaveProperty("result.protocolVersion", "2025-06-18");
+  expect(initialized).toHaveProperty(
+    "result.instructions",
+    expect.stringContaining("explicit channel or message IDs"),
   );
   expect(connected).toHaveBeenCalledOnce();
-  const list = await respondExternal(
-    client,
-    { id: 2, method: "tools/list" },
-    connected,
-  );
-  const tools = (
-    list as {
-      result: {
-        tools: {
-          name: string;
-          inputSchema: { properties: object; required?: string[] };
-        }[];
-      };
-    }
-  ).result.tools;
-  expect(tools.map((tool) => tool.name).sort()).toEqual([
-    "channel_create",
-    "channel_get",
-    "channel_list",
-    "read",
-    "reply_in_subthread",
-    "send",
-  ]);
-  const send = tools.find((tool) => tool.name === "send");
-  expect(send?.inputSchema.properties).not.toHaveProperty("files");
-  expect(send?.inputSchema.properties).not.toHaveProperty("path");
-  expect(send?.inputSchema.required).toEqual(["channel", "text", "audience"]);
-  const create = tools.find((tool) => tool.name === "channel_create");
-  expect(create?.inputSchema.properties).toEqual({ name: { type: "string" } });
-  expect(create?.inputSchema.required).toEqual(["name"]);
-  expect(create).toHaveProperty("annotations.readOnlyHint", false);
-  expect(create).toHaveProperty("_meta.buzz/requiredScopes", ["create"]);
   expect(
-    await respondExternal(
-      client,
-      { id: 3, method: "tools/list", params: { cursor: "next" } },
-      connected,
-    ),
+    await answer({ id: 3, method: "tools/list", params: { cursor: "next" } }),
   ).toHaveProperty("error.code", -32602);
-  expect(
-    await respondExternal(
-      client,
-      { method: "notifications/initialized" },
-      connected,
-    ),
-  ).toBeUndefined();
+  expect(await answer({ method: "notifications/initialized" })).toBeUndefined();
 });
 
-it.each([
-  ["run", { command: "pwd" }],
-  ["media_get", { url: "https://example.test/image" }],
-  ["git_auth", {}],
-  ["mem_list", {}],
-  ["agent_create", {}],
-  [
-    "send",
-    {
-      channel: "chan",
-      text: "text",
-      audience: "everyone",
-      path: "/tmp/private",
-    },
-  ],
-  [
-    "send",
-    {
-      channel: "chan",
-      text: "text",
-      audience: "everyone",
-      files: ["/tmp/private"],
-    },
-  ],
-  ["send", { text: "text", audience: "everyone" }],
-  ["send", { channel: "chan", text: "text", audience: "user" }],
-  [
-    "send",
-    { channel: "chan", text: "text", audience: "everyone", mentions: [false] },
-  ],
-  ["read", { q: "text" }],
-  ["read", { channel: " ", q: "needle" }],
-  ["read", { channel: " " }],
-  ["read", { thread: " " }],
-  ["read", { message_url: " " }],
-  ["read", { message_url: "https://example.test/message" }],
-  ["read", { message_url: `buzz://channel/chan` }],
-  [
-    "read",
-    {
-      message_url: `buzz://message?channel=chan&id=${"a".repeat(64)}`,
-      channel: "other",
-    },
-  ],
-  ["read", { channel: "chan", limit: 1.5 }],
-  ["channel_get", {}],
-  ["channel_list", { all: "true" }],
-  ["channel_list", { types: ["unknown"] }],
-  ["channel_list", { types: [] }],
-  ["reply_in_subthread", { text: "text", audience: "everyone" }],
-])(
-  "rejects unsafe or invalid %s arguments before accessing the client",
-  async (name, args) => {
-    const { call, query, publish, read } = fixture();
-    expect(await call(name as string, args)).toHaveProperty(
-      "result.isError",
-      true,
+it.each([false, true])(
+  "lists exactly the native session tools and schemas (settings %s)",
+  async (settings) => {
+    const { client, list } = fixture([], settings);
+    const native = (await respond(client, {}, { id: 1, method: "tools/list" }, [
+      note,
+    ])) as { result: { tools: { name: string }[] } };
+    const external = await list();
+    expect(external.result.tools).toEqual(
+      native.result.tools.map((tool) => ({
+        ...tool,
+        _meta: { "buzz/requiredScopes": ["agent"] },
+      })),
     );
-    expect(query).not.toHaveBeenCalled();
-    expect(publish).not.toHaveBeenCalled();
-    expect(read).not.toHaveBeenCalled();
+    const names = external.result.tools.map((tool) => tool.name);
+    expect(names).toEqual(
+      expect.arrayContaining(["repo", "agent_create", "notes_plugin_get"]),
+    );
+    expect(names.includes("settings_set")).toBe(settings);
+    expect(external.result._meta).toEqual({
+      "buzz/grantedScopes": ["agent"],
+      "buzz/supportedScopes": ["agent"],
+    });
   },
 );
 
-it("posts text through the shared handler with the selected identity", async () => {
-  const { call, publish, read } = fixture();
+it("follows plugin tools as they are added and removed", async () => {
+  const { call, list, setAdded } = fixture();
+  expect(
+    await call("notes_plugin_get", { slug: "x", depth: 2 }),
+  ).toHaveProperty("result.content.0.text", "note x");
+  expect(note.call).toHaveBeenCalledWith(
+    expect.not.objectContaining({ settings: expect.anything() }),
+    {},
+    { slug: "x", depth: 2 },
+  );
+  setAdded([]);
+  expect(
+    (await list()).result.tools.some(
+      (tool) => tool.name === "notes_plugin_get",
+    ),
+  ).toBe(false);
+  expect(await call("notes_plugin_get", { slug: "x" })).toHaveProperty(
+    "result.isError",
+    true,
+  );
+});
+
+it("passes full arguments to the native handler", async () => {
+  const { call, publish } = fixture();
+  const member = "c".repeat(64);
+  await call("channel_create", {
+    name: "Triage",
+    visibility: "private",
+    solo: true,
+    members: [member],
+  });
+  expect(publish).toHaveBeenCalledWith(
+    expect.objectContaining({
+      kind: 9007,
+      tags: expect.arrayContaining([
+        ["visibility", "private"],
+        ["t", "buzz.solo"],
+        ["p", member],
+      ]),
+    }),
+  );
+});
+
+it("posts as the selected agent with explicit targets only", async () => {
+  const { call, publish } = fixture();
+  expect(
+    await call("send", { text: "No target", audience: "everyone" }),
+  ).toHaveProperty("result.isError", true);
+  expect(publish).not.toHaveBeenCalled();
   expect(
     await call("send", {
       channel: "chan",
@@ -186,318 +187,53 @@ it("posts text through the shared handler with the selected identity", async () 
     expect.objectContaining({
       kind: 9,
       content: "Test message",
-      tags: expect.arrayContaining([
-        ["h", "chan"],
-        ["audience", "agents"],
-      ]),
+      tags: expect.arrayContaining([["h", "chan"]]),
     }),
   );
-  expect(read).not.toHaveBeenCalled();
 });
 
-it("reads a message link through the shared handler without an implicit target", async () => {
-  const id = "a".repeat(64);
-  const { call } = fixture([
-    {
-      id,
-      pubkey: "b".repeat(64),
-      created_at: 1,
-      kind: 9,
-      content: "Linked message",
-      tags: [["h", "chan"]],
-      sig: "",
-    },
-  ]);
-  const reply = await call("read", {
-    message_url: `buzz://message?channel=chan&id=${id}`,
-  });
-  expect(reply).toHaveProperty(
-    "result.content.0.text",
-    expect.stringContaining(`thread ${id} in chan`),
-  );
-  expect(reply).toHaveProperty(
-    "result.content.0.text",
-    expect.stringContaining("Linked message"),
-  );
-});
-
-it("enforces read-only scope even when a caller asks for a post tool", async () => {
-  const { client, publish } = fixture();
-  const call = await respondExternal(
-    client,
-    {
-      id: 1,
-      method: "tools/call",
-      params: {
-        name: "send",
-        arguments: { channel: "chan", text: "blocked", audience: "everyone" },
-      },
-    },
-    () => {},
-    ["read"],
-  );
-  expect(call).toHaveProperty("result.isError", true);
-  expect(publish).not.toHaveBeenCalled();
-  const list = await respondExternal(
-    client,
-    { id: 2, method: "tools/list" },
-    () => {},
-    ["read"],
-  );
-  expect(list).toHaveProperty(
-    "result.tools",
-    expect.arrayContaining([expect.objectContaining({ name: "read" })]),
-  );
-  expect(list).toHaveProperty("result._meta", {
-    "buzz/grantedScopes": ["read"],
-    "buzz/supportedScopes": ["read", "post", "create"],
-  });
-  expect(list).toHaveProperty(
-    "result.tools",
-    expect.arrayContaining([
-      expect.objectContaining({
-        name: "send",
-        _meta: { "buzz/requiredScopes": ["post"] },
-      }),
-    ]),
-  );
-  expect(call).toHaveProperty("result._meta.buzz/error", {
-    code: "authorization_required",
-    required_scopes: ["post"],
-  });
-  expect(publish).not.toHaveBeenCalled();
-  const granted = ["read", "post"] as const;
-  const explicit = await respondExternal(
-    client,
-    {
-      id: 3,
-      method: "tools/call",
-      params: {
-        name: "send",
-        arguments: {
-          channel: "chan",
-          text: "After approval",
-          audience: "everyone",
-        },
-      },
-    },
-    () => {},
-    granted,
-  );
-  expect(explicit).toHaveProperty(
-    "result.content.0.text",
-    `sent ${"d".repeat(64)}`,
-  );
-  expect(publish).toHaveBeenCalledOnce();
-});
-
-it("does not expand existing read/post grants to create", async () => {
-  const { call, defaultWorker, query, publish } = fixture();
-  const reply = await call("channel_create", { name: "Triage" });
-  expect(reply).toHaveProperty("result.isError", true);
-  expect(reply).toHaveProperty("result._meta.buzz/error", {
-    code: "authorization_required",
-    required_scopes: ["create"],
-  });
-  expect(defaultWorker).not.toHaveBeenCalled();
-  expect(query).not.toHaveBeenCalled();
+it("returns the native refusal when the agent cannot do something", async () => {
+  const { call, read, publish } = fixture();
+  expect(
+    await call("send", {
+      channel: "chan",
+      text: "x",
+      audience: "everyone",
+      files: ["/tmp/private"],
+    }),
+  ).toHaveProperty("result.isError", true);
+  expect(read).toHaveBeenCalled();
   expect(publish).not.toHaveBeenCalled();
 });
 
-it.each([
-  ["channel_list", {}, "read"],
-  ["channel_get", { channel: "chan" }, "read"],
-  ["read", { channel: "chan" }, "read"],
-  ["send", { channel: "chan", text: "blocked", audience: "everyone" }, "post"],
-  [
-    "reply_in_subthread",
-    { parent: "a".repeat(64), text: "blocked", audience: "everyone" },
-    "post",
-  ],
+it.each<{ scopes: readonly ExternalScope[] }>([
+  { scopes: ["read"] },
+  { scopes: ["read", "post"] },
+  { scopes: ["read", "post", "create"] },
+  { scopes: ["create"] },
+  { scopes: [] },
 ])(
-  "does not grant %s through create-only consent",
-  async (name, args, scope) => {
-    const { call, defaultWorker, query, publish, read } = fixture();
-    const reply = await call(name as string, args, ["create"]);
-    expect(reply).toHaveProperty("result.isError", true);
-    expect(reply).toHaveProperty("result._meta.buzz/error", {
-      code: "authorization_required",
-      required_scopes: [scope],
+  "never widens an older $scopes approval: lists without granting and refuses calls",
+  async ({ scopes }) => {
+    const { call, list, query, publish } = fixture();
+    const listed = await list(scopes);
+    expect(listed.result._meta).toEqual({
+      "buzz/grantedScopes": [],
+      "buzz/supportedScopes": ["agent"],
     });
-    expect(defaultWorker).not.toHaveBeenCalled();
+    for (const [name, args] of [
+      ["read", { channel: "chan" }],
+      ["send", { channel: "chan", text: "x", audience: "everyone" }],
+      ["notes_plugin_get", { slug: "x" }],
+    ] as const) {
+      const reply = await call(name, args, scopes);
+      expect(reply).toHaveProperty("result.isError", true);
+      expect(reply).toHaveProperty("result._meta.buzz/error", {
+        code: "authorization_required",
+        required_scopes: ["agent"],
+      });
+    }
     expect(query).not.toHaveBeenCalled();
     expect(publish).not.toHaveBeenCalled();
-    expect(read).not.toHaveBeenCalled();
   },
 );
-
-it.each([
-  {},
-  { name: " " },
-  { name: 123 },
-  ...[
-    "owner",
-    "agent",
-    "worker",
-    "members",
-    "visibility",
-    "solo",
-    "template",
-    "type",
-    "about",
-    "ttl",
-    "join_role",
-  ].map((field) => ({ name: "Triage", [field]: "override" })),
-])("rejects external Solo overrides or invalid names (%j)", async (args) => {
-  const { call, defaultWorker, query, publish } = fixture();
-  expect(await call("channel_create", args, ["create"])).toHaveProperty(
-    "result.isError",
-    true,
-  );
-  expect(defaultWorker).not.toHaveBeenCalled();
-  expect(query).not.toHaveBeenCalled();
-  expect(publish).not.toHaveBeenCalled();
-});
-
-it.each([{ owner: undefined }, { owner: "invalid" }, { pubkey: "invalid" }])(
-  "rejects invalid authenticated Solo identities (%j)",
-  async (identity) => {
-    const { client, call, defaultWorker, publish } = fixture();
-    Object.assign(client, identity);
-    expect(
-      await call("channel_create", { name: "Triage" }, ["create"]),
-    ).toHaveProperty(
-      "result.content.0.text",
-      expect.stringContaining("Authorize the app again"),
-    );
-    expect(defaultWorker).not.toHaveBeenCalled();
-    expect(publish).not.toHaveBeenCalled();
-  },
-);
-
-it("rejects invalid or unreadable default-worker configuration before publication", async () => {
-  const { call, defaultWorker, publish } = fixture();
-  defaultWorker.mockResolvedValueOnce("invalid");
-  expect(
-    await call("channel_create", { name: "Triage" }, ["create"]),
-  ).toHaveProperty(
-    "result.content.0.text",
-    "Choose and save a Bestie in Buzz, then try again.",
-  );
-  defaultWorker.mockRejectedValueOnce(
-    new Error("Your saved Bestie could not be read."),
-  );
-  expect(
-    await call("channel_create", { name: "Triage" }, ["create"]),
-  ).toHaveProperty("result.isError", true);
-  expect(publish).not.toHaveBeenCalled();
-});
-
-function soloFixture() {
-  const f = fixture();
-  f.query.mockImplementation(async (filters) => {
-    const created = f.publish.mock.lastCall?.[0];
-    if (!created) return [];
-    const id = created.tags.find(([key]) => key === "h")?.[1] as string;
-    const kind = (filters[0]?.kinds as number[] | undefined)?.[0] ?? 0;
-    const tags =
-      kind === 39000
-        ? [
-            ["d", id],
-            ["name", "Triage"],
-            ["private"],
-            ["t", "stream"],
-            ["t", "buzz.solo"],
-            ["t", "buzz.session.named"],
-          ]
-        : kind === 39002
-          ? [
-              ["d", id],
-              ["p", f.client.pubkey, "", "owner"],
-              ...created.tags.filter(([key]) => key === "p"),
-            ]
-          : undefined;
-    return tags
-      ? [
-          {
-            id: "e".repeat(64),
-            pubkey: f.client.pubkey,
-            created_at: 1,
-            kind,
-            content: "",
-            tags,
-            sig: "",
-          },
-        ]
-      : [];
-  });
-  return f;
-}
-
-it.each(["a".repeat(64), "b".repeat(64), "c".repeat(64)])(
-  "creates only a private Solo and deduplicates the worker %s",
-  async (worker) => {
-    const { call, client, defaultWorker, publish } = soloFixture();
-    defaultWorker.mockResolvedValue(worker);
-    const reply = await call("channel_create", { name: "Triage" }, ["create"]);
-    expect(reply).not.toHaveProperty("result.isError", true);
-    expect(reply).toHaveProperty(
-      "result.content.0.text",
-      expect.not.stringContaining("did not keep the Solo label"),
-    );
-    expect(reply).toHaveProperty(
-      "result.content.0.text",
-      expect.stringMatching(/^created /),
-    );
-    expect(publish).toHaveBeenCalledOnce();
-    const created = publish.mock.calls[0]?.[0];
-    const members = [...new Set([client.owner, worker])].filter(
-      (key) => key !== client.pubkey,
-    );
-    expect(created).toEqual({
-      kind: 9007,
-      content: "",
-      tags: [
-        ["h", expect.any(String)],
-        ["name", "Triage"],
-        ["visibility", "private"],
-        ["channel_type", "stream"],
-        ["t", "buzz.solo"],
-        ["t", "buzz.session.named"],
-        ...members.map((key) => ["p", key]),
-      ],
-    });
-    for (const member of members)
-      expect(reply).toHaveProperty(
-        "result.content.0.text",
-        expect.stringContaining(`added ${member}`),
-      );
-  },
-);
-
-it("preserves relay refusal and unconfirmed creation results", async () => {
-  const { call, publish } = soloFixture();
-  publish.mockRejectedValueOnce(new Error("Relay refused a required member."));
-  const refused = await call("channel_create", { name: "Triage" }, ["create"]);
-  expect(refused).toHaveProperty("result.isError", true);
-  expect(refused).toHaveProperty(
-    "result.content.0.text",
-    "Relay refused a required member.",
-  );
-  const pending = fixture();
-  vi.useFakeTimers();
-  try {
-    const reply = pending.call("channel_create", { name: "Triage" }, [
-      "create",
-    ]);
-    await vi.runAllTimersAsync();
-    expect(await reply).toHaveProperty(
-      "result.content.0.text",
-      expect.stringMatching(
-        /^The community accepted channel .+; its members are not confirmed\.$/,
-      ),
-    );
-  } finally {
-    vi.useRealTimers();
-  }
-});

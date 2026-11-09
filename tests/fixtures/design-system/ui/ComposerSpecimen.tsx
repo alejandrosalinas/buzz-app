@@ -279,7 +279,7 @@ function Tools({ disabled = false }: { disabled?: boolean }) {
           className="composer-specimen-frame"
           code={`<Composer
   label="Message with error"
-  value="Share the BlockUI comparison."
+  value="Share the design comparison."
   onValueChange={() => undefined}
   tools={<Tools />}
   status={recovered ? "Message preparation recovered." : undefined}
@@ -316,7 +316,7 @@ function Tools({ disabled = false }: { disabled?: boolean }) {
         >
           <Composer
             label="Message with error"
-            value="Share the BlockUI comparison."
+            value="Share the design comparison."
             onValueChange={() => undefined}
             tools={<Tools />}
             status={recovered ? "Message preparation recovered." : undefined}

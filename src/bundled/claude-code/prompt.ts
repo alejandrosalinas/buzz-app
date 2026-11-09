@@ -7,7 +7,10 @@ import {
 } from "../../buzz-mcp/prompt";
 import type { EventData } from "../../features/relay/events";
 import { messageAuthor } from "../../features/relay/fold";
-import { BASE_PROMPT } from "../../features/agent-harness/base-prompt";
+import {
+  BASE_PROMPT,
+  mentionSection,
+} from "../../features/agent-harness/base-prompt";
 import { coreMemorySection } from "../../features/agent-harness/core-memory";
 import {
   type ConversationWake,
@@ -21,6 +24,8 @@ import {
 } from "../../features/agent-harness/turn-records";
 import channelModel from "./session_model_channel.md?raw";
 import threadModel from "./session_model_thread.md?raw";
+import channelHandoff from "./session_handoff_channel.md?raw";
+import threadHandoff from "./session_handoff_thread.md?raw";
 
 export type Scope = "thread" | "channel";
 /** Messages of thread context shown with a turn, newest kept. */
@@ -195,13 +200,20 @@ export function turnPrompt(input: TurnInput) {
     ),
   );
   if (input.project) parts.push(input.project);
+  // A wake is not a mention, so only a delivered message says what the agent
+  // owes it. The event stays last.
   parts.push(
-    input.wake
-      ? wakeSection(input.wake)
-      : section(
-          EVENT,
-          eventBody(event, event.content, input.names?.(event.pubkey)),
-        ),
+    ...(input.wake
+      ? [wakeSection(input.wake)]
+      : [
+          mentionSection(
+            input.scope === "thread" ? threadHandoff : channelHandoff,
+          ),
+          section(
+            EVENT,
+            eventBody(event, event.content, input.names?.(event.pubkey)),
+          ),
+        ]),
   );
   return parts.join("\n\n");
 }

@@ -444,7 +444,10 @@ test("Close all retires mixed active and inactive content visits", async ({
   await openThread(0);
   await openThread(1);
   await openGitHub(page, app);
-  const channel = page.getByRole("tab", { name: "Alpha", exact: true });
+  const channel = page.getByRole("button", {
+    name: "Manage members of Alpha",
+    exact: true,
+  });
   await channel.click({ button: "right" });
   await page
     .getByRole("menuitem", { name: "Close all tabs", exact: true })

@@ -5,6 +5,13 @@ import { createAppsClient } from "./apps/client";
 import { applyApps } from "./apps";
 import type { AddedTool } from "../../buzz-mcp/session-tools";
 import { deferred } from "./test-helpers";
+import type { BuilderlabSession } from "./session";
+
+const fresh = (session: BuilderlabSession) =>
+  session.freshCredential(new AbortController().signal).then(
+    () => {},
+    () => {},
+  );
 
 class Events {
   static all: Events[] = [];
@@ -115,7 +122,6 @@ it("shares agent and Apps transport without an app-held credential and refuses s
   ).resolves.toEqual([]);
   const owner = h.session.credential();
   const apps = createAppsClient(
-    {} as never,
     h.session,
     "https://compose-ctrl.builderlab.xyz",
     h.apps,
@@ -188,7 +194,7 @@ it("returns accepted deployment IDs without checking readiness under a replaceme
     host: {},
     agents: { addTool: (tool: AddedTool) => tools.set(tool.name, tool) },
   };
-  applyApps(ctx as never, h.session, true, undefined, h.apps);
+  applyApps(ctx as never, h.session, true, h.apps);
   h.events.emit("one", "A");
   await signedIn(h.session);
   const accepted = deferred<void>();
@@ -419,5 +425,157 @@ it.each(
       await Promise.all([login, replacement]);
     }
     expect(Events.all.at(-1)?.close).toHaveBeenCalled();
+  },
+);
+
+it("refreshes only capabilities through the broker while preserving its owner and app viewers", async () => {
+  let now = Date.now();
+  const clock = vi.spyOn(Date, "now").mockImplementation(() => now);
+  const h = setup();
+  try {
+    h.events.emit("one", "A");
+    await signedIn(h.session);
+    const owner = h.session.credential();
+    const viewer = h.session.viewerSession();
+    await fresh(h.session);
+    expect(h.fetch).not.toHaveBeenCalled();
+    now += 60_000;
+    h.fetch.mockResolvedValueOnce(
+      Response.json({
+        revision: "one",
+        capabilities: {
+          can_use_remote_agents: false,
+          can_use_builderlab_decisions: true,
+          can_delete_buzz_communities: true,
+        },
+      }),
+    );
+    await Promise.all([fresh(h.session), fresh(h.session)]);
+    expect(h.fetch).toHaveBeenCalledOnce();
+    expect(h.session.snapshot().account).toMatchObject({
+      subject: "A",
+      email: "A@example.com",
+      canUseRemoteAgents: false,
+      canUseBuilderlabDecisions: true,
+    });
+    expect(h.session.credential()).toBe(owner);
+    expect(h.session.viewerSession()).toBe(viewer);
+    expect(viewer.signal.aborted).toBe(false);
+    now += 60_000;
+    h.fetch.mockRejectedValueOnce(new TypeError("Offline"));
+    const previous = h.session.snapshot();
+    await fresh(h.session);
+    expect(h.session.snapshot().account).toBe(previous.account);
+    now += 60_000;
+    h.fetch.mockResolvedValueOnce(
+      Response.json({
+        revision: "replacement",
+        capabilities: { can_use_remote_agents: true },
+      }),
+    );
+    await fresh(h.session);
+    expect(h.session.snapshot().account).toBe(previous.account);
+    expect(h.fetch).toHaveBeenLastCalledWith(
+      "/api/builderlab/capabilities?revision=one",
+      { signal: viewer.signal },
+    );
+  } finally {
+    h.session.dispose();
+    clock.mockRestore();
+  }
+});
+
+it("restores the broker's capability cache age instead of starting another minute on reload", async () => {
+  let now = Date.now();
+  const clock = vi.spyOn(Date, "now").mockImplementation(() => now);
+  const h = setup();
+  const checkedAt = now;
+  // A reload restores the broker's last projection halfway through its cache lifetime.
+  now += 30_000;
+  h.events.onmessage?.({
+    data: JSON.stringify({
+      revision: "one",
+      pending: false,
+      capabilitiesCheckedAt: checkedAt,
+      auth: {
+        subject: "A",
+        email: "A@example.org",
+        expiresAt: "2030",
+        capabilities: { can_use_remote_agents: true },
+      },
+    }),
+  });
+  try {
+    await signedIn(h.session);
+    now = checkedAt + 59_999;
+    await fresh(h.session);
+    expect(h.fetch).not.toHaveBeenCalled();
+    now += 1;
+    h.fetch.mockResolvedValueOnce(
+      Response.json({
+        revision: "one",
+        capabilities: { can_use_remote_agents: false },
+      }),
+    );
+    await fresh(h.session);
+    expect(h.fetch).toHaveBeenCalledOnce();
+    expect(h.session.snapshot().account?.canUseRemoteAgents).toBe(false);
+  } finally {
+    h.session.dispose();
+    clock.mockRestore();
+  }
+});
+
+it.each(["sign-out", "replacement", "disposal"] as const)(
+  "cancels a pending capability read on %s without waiting for its response",
+  async (end) => {
+    let now = Date.now();
+    const clock = vi.spyOn(Date, "now").mockImplementation(() => now);
+    const h = setup();
+    const response = deferred<Response>();
+    let refresh: Promise<void> | undefined;
+    try {
+      h.events.emit("one", "A");
+      await signedIn(h.session);
+      const viewer = h.session.viewerSession();
+      now += 60_000;
+      h.fetch.mockImplementationOnce(
+        (_url, init) =>
+          new Promise((resolve, reject) => {
+            init?.signal?.addEventListener(
+              "abort",
+              () => reject(init.signal?.reason),
+              { once: true },
+            );
+            response.promise.then(resolve, reject);
+          }),
+      );
+      refresh = fresh(h.session);
+      await vi.waitFor(() => expect(h.fetch).toHaveBeenCalledOnce());
+      const signal = h.fetch.mock.calls[0]?.[1]?.signal;
+      expect(signal?.aborted).toBe(false);
+      if (end === "sign-out") h.session.signOut();
+      else if (end === "replacement") h.events.emit("two", "B");
+      else h.session.dispose();
+      expect(signal?.aborted).toBe(true);
+      expect(viewer.signal.aborted).toBe(true);
+      await refresh;
+      if (end === "replacement") {
+        await signedIn(h.session);
+        expect(h.session.snapshot().account?.subject).toBe("B");
+      } else if (end === "sign-out") {
+        expect(h.fetch).toHaveBeenLastCalledWith(
+          "/api/builderlab/sign-out",
+          expect.anything(),
+        );
+        h.events.emit("two", null);
+        expect(h.session.snapshot().status).toBe("signed-out");
+      } else expect(h.session.snapshot().status).toBe("signed-out");
+    } finally {
+      response.resolve(Response.json({ revision: "one", capabilities: {} }));
+      await refresh;
+      h.session.dispose();
+      clock.mockRestore();
+    }
   },
 );

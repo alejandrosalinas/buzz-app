@@ -4,6 +4,7 @@ import { listen } from "@tauri-apps/api/event";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import {
   FederatedIdentityService,
+  onCommunitySignedIn,
   onSignedIn,
   type FederatedIdentity,
   type SessionSnapshot,
@@ -20,12 +21,14 @@ const signedOut: SessionSnapshot = {
     apiBasePath: "/api/",
     signIn: "on-demand",
     organization: null,
+    communityHosts: ["relay.example"],
   },
   revision: "out",
   email: null,
   failure: null,
   expiresAt: null,
   expiring: false,
+  cleanup: false,
 };
 const signedIn: SessionSnapshot = {
   ...signedOut,
@@ -109,6 +112,25 @@ it("fails closed when the native session event listener cannot be registered", a
     }),
   );
   expect(invoke).not.toHaveBeenCalledWith("federated_identity_snapshot");
+});
+
+it("asks native for the sign-up screen and a forced login only when the sign-in asks for them", async () => {
+  const { service } = setup();
+  await vi.waitFor(() => expect(service.snapshot()).toBe(signedOut));
+  await service.signIn();
+  await service.signIn({ signup: true });
+  await service.signIn({ forceLogin: true });
+  expect(
+    vi
+      .mocked(invoke)
+      .mock.calls.filter(
+        ([command]) => command === "federated_identity_sign_in",
+      ),
+  ).toEqual([
+    ["federated_identity_sign_in", { signup: false, forceLogin: false }],
+    ["federated_identity_sign_in", { signup: true, forceLogin: false }],
+    ["federated_identity_sign_in", { signup: false, forceLogin: true }],
+  ]);
 });
 
 it("reauthorizes on sign-in and account change, not on startup restore or sign-out", async () => {
@@ -333,4 +355,115 @@ it("retires a registration admitted after plugin unload without forwarding the r
         ([command]) => command === "federated_identity_unregister",
       ),
   ).toHaveLength(2);
+});
+
+const peer = {
+  id: "peer",
+  identityOrigin: "https://peer.example",
+  apiBasePath: "/api/",
+  signIn: "on-demand",
+  organization: null,
+  communityHosts: ["*.communities.example"],
+} as const;
+
+it("signs in to a community's own server and follows only that server", async () => {
+  const handlers = new Map<string, typeof publish>();
+  vi.mocked(listen).mockImplementation(async (name, handler) => {
+    handlers.set(name, handler as typeof publish);
+    return unlisten;
+  });
+  const emit = (name: string, payload: SessionSnapshot) => {
+    const handler = handlers.get(name);
+    if (!handler) throw new Error(`No ${name} listener`);
+    handler({ payload });
+  };
+  const { service } = setup();
+  vi.mocked(invoke).mockResolvedValue({ ...signedOut, authority: peer });
+  const community = service.forCommunity("wss://team.communities.example");
+  expect(service.forCommunity("wss://team.communities.example")).toBe(
+    community,
+  );
+  const changes = vi.fn();
+  community.subscribe(changes);
+  await vi.waitFor(() =>
+    expect(community.snapshot().authority?.id).toBe("peer"),
+  );
+  expect(invoke).toHaveBeenCalledWith("federated_identity_snapshot", {
+    relay: "wss://team.communities.example",
+  });
+  // Another server's snapshot is not this community's.
+  emit("federated-identity", signedIn);
+  expect(community.snapshot().status).toBe("signed-out");
+  emit("federated-identity-community", { ...signedIn, authority: peer });
+  expect(community.snapshot().status).toBe("signed-in");
+  vi.mocked(invoke).mockResolvedValue({ ...signedIn, authority: peer });
+  await community.signIn();
+  expect(invoke).toHaveBeenCalledWith("federated_identity_sign_in", {
+    relay: "wss://team.communities.example",
+  });
+});
+
+it("addresses a server by id, for its own Settings row", async () => {
+  const handlers = new Map<string, typeof publish>();
+  vi.mocked(listen).mockImplementation(async (name, handler) => {
+    handlers.set(name, handler as typeof publish);
+    return unlisten;
+  });
+  const { service } = setup();
+  vi.mocked(invoke).mockResolvedValue({ ...signedIn, authority: peer });
+  const server = service.forServer("peer");
+  expect(service.forServer("peer")).toBe(server);
+  server.subscribe(() => {});
+  await vi.waitFor(() => expect(server.snapshot().status).toBe("signed-in"));
+  expect(invoke).toHaveBeenCalledWith("federated_identity_snapshot", {
+    server: "peer",
+  });
+  vi.mocked(invoke).mockResolvedValue({ ...signedOut, authority: peer });
+  await server.signOut();
+  expect(invoke).toHaveBeenLastCalledWith("federated_identity_sign_out", {
+    server: "peer",
+  });
+  expect(server.snapshot().status).toBe("signed-out");
+});
+
+it("reauthorizes communities when another server signs in", async () => {
+  const reauthorize = vi.fn();
+  onCommunitySignedIn(reauthorize);
+  await vi.waitFor(() => expect(listen).toHaveBeenCalled());
+  publish({ payload: { ...signedIn, authority: peer } });
+  expect(reauthorize).not.toHaveBeenCalled();
+  publish({ payload: { ...signedOut, authority: peer } });
+  publish({ payload: { ...signedIn, authority: peer } });
+  expect(reauthorize).toHaveBeenCalledTimes(1);
+});
+
+it("releases each community session's native listeners when it is disposed", async () => {
+  const { root, service } = setup();
+  await vi.waitFor(() => expect(listen).toHaveBeenCalledOnce());
+  service.forCommunity("wss://team.communities.example").subscribe(() => {});
+  await vi.waitFor(() => expect(listen).toHaveBeenCalledTimes(3));
+  await root.fiber.dispose();
+  // The root's listener and both of the community's.
+  await vi.waitFor(() => expect(unlisten).toHaveBeenCalledTimes(3));
+});
+
+it("answers sign-in with the call's own result when an event arrives before it", async () => {
+  vi.mocked(invoke).mockResolvedValue(signedOut);
+  const { service } = setup();
+  await vi.waitFor(() => expect(service.snapshot().status).toBe("signed-out"));
+  let finish!: (snapshot: SessionSnapshot) => void;
+  vi.mocked(invoke).mockImplementationOnce(
+    () =>
+      new Promise((resolve) => {
+        finish = resolve;
+      }),
+  );
+  const pending = service.signIn();
+  await vi.waitFor(() => expect(finish).toBeTypeOf("function"));
+  // The browser step's event lands before native answers the invoke.
+  publish({ payload: { ...signedOut, status: "signing-in" } });
+  finish(signedIn);
+  await expect(pending).resolves.toEqual(signedIn);
+  // The event moved the epoch on, so the answer is not adopted over it.
+  expect(service.snapshot().status).toBe("signing-in");
 });

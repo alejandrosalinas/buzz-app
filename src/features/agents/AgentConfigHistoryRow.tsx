@@ -25,11 +25,16 @@ export function AgentConfigHistoryRow({
   useSyncExternalStore(agents.subscribe, agents.snapshot);
   const history = agents.configHistory(pubkey);
   return history ? (
-    <HistoryRow key={pubkey} history={history} presentation={presentation} />
+    <ConfigHistoryRow
+      key={pubkey}
+      history={history}
+      presentation={presentation}
+    />
   ) : null;
 }
 
-function HistoryRow({
+/** Previous versions of each side `history` has. */
+export function ConfigHistoryRow({
   history,
   presentation,
 }: {

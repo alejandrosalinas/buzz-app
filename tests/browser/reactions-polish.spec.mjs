@@ -829,3 +829,32 @@ test("short reactor lists do not add a keyboard stop", async ({ page }) => {
   ).toBeFocused();
   await expect(preview).toHaveCount(0);
 });
+
+// Browser-only: real overflow and anchor geometry decide the Tab handoff, and
+// native Enter and Space activation is what the pill must reject.
+test("people who cannot react can read every reactor without toggling", async ({
+  page,
+}) => {
+  await page.goto(
+    "/tests/fixtures/emoji.html?reactions&grouped=150&long-names",
+  );
+  await page.evaluate(() => window.emojiFixture.archive(true));
+  const group = page.getByRole("button", { name: "👍: 150 people" });
+  await expect(group).toHaveAttribute("aria-disabled", "true");
+  await group.focus();
+  const people = page
+    .getByRole("dialog")
+    .getByRole("region", { name: "Everyone who reacted" });
+  await expect(people).toHaveAttribute("tabindex", "0");
+  await group.press("Enter");
+  await group.press(" ");
+  // Playwright will not click an aria-disabled control unless forced.
+  await group.click({ force: true });
+  // Activation enqueues synchronously, so the outbox is a complete barrier.
+  expect(await page.evaluate(() => window.emojiFixture.operations())).toBe(0);
+  await expect(group).toHaveAttribute("aria-pressed", "false");
+  await group.focus();
+  await expect(people).toBeVisible();
+  await page.keyboard.press("Tab");
+  await expect(people).toBeFocused();
+});

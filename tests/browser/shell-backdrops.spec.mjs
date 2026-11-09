@@ -65,6 +65,9 @@ test("registered backdrops paint in order between the shell and its controls, an
     const main = document
       .getElementById("main-content")
       .getBoundingClientRect();
+    const dock = document
+      .querySelector(".shell-side-dock")
+      .getBoundingClientRect();
     return {
       // Below the header row, beside the bottom of the window: a bare gutter.
       gutter: [2, window.innerHeight - 2],
@@ -73,42 +76,57 @@ test("registered backdrops paint in order between the shell and its controls, an
       group: [history.left + history.width / 2, history.top + 3],
       floor: [toggle.left - 3, header.top + header.height / 2],
       pane: [main.left + main.width / 2, main.top + main.height / 2],
+      // The app dock's column, below its last tile: its own floor.
+      dock: [dock.left + dock.width / 2, dock.bottom - 3],
     };
   });
   for (const mode of ["light", "dark"]) {
     await page.emulateMedia({ colorScheme: mode });
     await expect(page.locator("html")).toHaveAttribute("data-color-mode", mode);
-    const [gutter, group, floor, pane] = await paint(page, [
+    const [gutter, group, floor, pane, dock] = await paint(page, [
       points.gutter,
       points.group,
       points.floor,
       points.pane,
+      points.dock,
     ]);
     expect(near(gutter, blue), `${mode} gutter ${gutter}`).toBe(true);
     const app = await appColor(page);
     expect(near(group, app), `${mode} header group ${group}`).toBe(true);
     expect(near(floor, app), `${mode} header floor ${floor}`).toBe(true);
+    expect(near(dock, app), `${mode} dock floor ${dock}`).toBe(true);
     expect(near(pane, blue) || near(pane, red), `${mode} pane ${pane}`).toBe(
       false,
     );
   }
 
-  // The sidebar grip appears on hover; its host halo keeps the gutter's
-  // backdrop off the pixels beside it.
+  // The sidebar grip appears on hover. It sits on the seam of the joined
+  // sidebar and conversation surface, so no backdrop reaches it: the pixels
+  // beside it match the same seam well below it, with no gutter or floor.
   const grip = page.getByRole("separator", { name: "Resize sidebar" });
   await grip.hover();
   await expect
     .poll(() => grip.evaluate((el) => getComputedStyle(el, "::after").opacity))
     .toBe("0.5");
-  // Beside the 3px grip, against the same column well below it, where the
-  // panels' edges and shadows match and only the halo can differ.
-  const box = await grip.boundingBox();
-  const x = box.x + box.width / 2 + 2.5;
-  const [beside, below] = await paint(page, [
-    [x, box.y + box.height / 2],
-    [x, box.y + box.height / 2 + 100],
-  ]);
-  expect(near(beside, below), `grip halo ${beside} vs ${below}`).toBe(false);
+  const seam = await grip.evaluate((el) => {
+    const box = el.getBoundingClientRect();
+    const after = getComputedStyle(el, "::after");
+    return {
+      x: box.left + Number.parseFloat(after.left),
+      half: Number.parseFloat(after.width) / 2,
+      y: box.top + box.height / 2,
+    };
+  });
+  for (const x of [seam.x - seam.half - 2, seam.x + seam.half + 1]) {
+    const [beside, below] = await paint(page, [
+      [x, seam.y],
+      [x, seam.y + 100],
+    ]);
+    expect(near(beside, below), `grip side ${beside} vs ${below}`).toBe(true);
+    expect(near(beside, blue) || near(beside, red), `grip ${beside}`).toBe(
+      false,
+    );
+  }
   await page.mouse.move(0, 0);
 
   for (const preference of [

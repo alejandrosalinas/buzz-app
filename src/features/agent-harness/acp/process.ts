@@ -11,6 +11,7 @@ import type {
   AcpHooks,
   Choice,
   McpServer,
+  PlatformTools,
   ServeMcp,
   Spawn,
   ToolServer,
@@ -111,6 +112,8 @@ export class AcpProcess {
       env?: Readonly<Record<string, string | null>>;
       serve?: ServeMcp;
       signal?: AbortSignal;
+      /** The one agent the harness runs: its tools get its Buzz credential. */
+      agent?: Readonly<{ pubkey: string; relay: string }>;
       /** Given the harness as soon as it has started, before `initialize`, so
        * a caller can keep one whose start fails until it has exited. */
       onProcess?: (acp: AcpProcess) => void;
@@ -125,6 +128,7 @@ export class AcpProcess {
       cwd: launch.cwd,
       ...(launch.args ? { args: launch.args } : {}),
       env: { ...hooks.env, ...launch.env, ...PROTECTED_ENV },
+      agentCredential: !!launch.agent,
       onStdout: (data) => (acp ? acp.read(data) : early.push(data)),
       onStderr: (data) => {
         if (acp) acp.readError(data);
@@ -147,6 +151,11 @@ export class AcpProcess {
         .then(resolve, reject)
         .finally(() => signal?.removeEventListener("abort", cancel));
     });
+    if (launch.agent)
+      await process.actAs?.(launch.agent).catch((error: unknown) => {
+        void process.kill();
+        throw error;
+      });
     acp = new AcpProcess(process, hooks, launch.serve);
     launch.onProcess?.(acp);
     for (const data of earlyErrors) acp.readError(data);
@@ -230,6 +239,11 @@ export class AcpProcess {
       named?: (title: string) => void;
       tools?: ToolServer;
       choice?: () => Choice;
+      /** Built-ins beside the Buzz tools, for harnesses that take them. */
+      platform?: PlatformTools;
+      /** Replaces the harness's own base prompt with `systemPrompt` instead
+       * of appending it, for small models that a long prompt throws off. */
+      replacePrompt?: boolean;
       /** Given the session as soon as the harness has opened it, before it
        * is set up, so a caller can close one whose open then fails. */
       onSession?: (session: AcpSession) => void;
@@ -287,6 +301,7 @@ export class AcpProcess {
             _meta: hooks.newSessionMeta(buzz, {
               ...(title ? { title } : {}),
               provider,
+              ...(launch.platform ? { platform: launch.platform } : {}),
             }),
           }),
         },
@@ -314,7 +329,12 @@ export class AcpProcess {
     }
     try {
       if (systemPrompt && hooks.systemPrompt)
-        await hooks.systemPrompt(this, sessionId, systemPrompt);
+        await hooks.systemPrompt(
+          this,
+          sessionId,
+          systemPrompt,
+          launch.replacePrompt,
+        );
     } catch (error) {
       void this.close(session);
       throw error;
@@ -508,14 +528,17 @@ export class AcpProcess {
     const call = (params ?? {}) as {
       name?: unknown;
       arguments?: { final?: unknown };
+      _meta?: Record<string, unknown>;
     };
     const worked =
       method === "tools/call" &&
       !response.error &&
       !(response.result as { isError?: unknown } | undefined)?.isError;
     if (worked && ANSWERS.has(String(call.name))) session?.answered();
+    // goose names the ACP tool call behind an MCP call in its `_meta`.
+    const toolCall = call._meta?.["agent-tool-call-request-id"];
     if (worked && isFinalMessage(call.name, call.arguments))
-      session?.finished();
+      session?.finished(typeof toolCall === "string" ? toolCall : undefined);
     return response;
   }
 }

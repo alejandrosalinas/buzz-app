@@ -1,0 +1,24 @@
+{
+  "version": "0.76.0-rc4",
+  "models": [
+    "meshllm/Qwen3.5-35B-A3B-UD-Q4_K_XL-layers@69cbd9fc1f928305e8e86e1148a1db6a6f1de8e9"
+  ],
+  "hosted_models": [
+    "meshllm/Qwen3.5-35B-A3B-UD-Q4_K_XL-layers@69cbd9fc1f928305e8e86e1148a1db6a6f1de8e9"
+  ],
+  "serving_models": [
+    "meshllm/Qwen3.5-35B-A3B-UD-Q4_K_XL-layers@69cbd9fc1f928305e8e86e1148a1db6a6f1de8e9"
+  ],
+  "runtime": {
+    "models": [
+      {
+        "name": "meshllm/Qwen3.5-35B-A3B-UD-Q4_K_XL-layers@69cbd9fc1f928305e8e86e1148a1db6a6f1de8e9",
+        "instance_id": "runtime-1",
+        "backend": "skippy",
+        "status": "ready",
+        "port": 52759,
+        "context_length": 8192
+      }
+    ]
+  }
+}

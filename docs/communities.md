@@ -15,20 +15,26 @@ Configure `BUZZ_DEV_VIEWER` with your existing Buzz public key in `.env.local`
 development broker runs on macOS and Linux and refuses an OS-store identity
 that does not match your explicit public pin.
 Click the avatar → **Settings → Profile**. With a community selected in the
-header's community picker, Save updates only your profile in that community;
+dock's community switcher, Save updates only your profile in that community;
 there is no separate profile-destination selector. In Personal space, Save edits
-the local default for new communities without publishing. Open the header's
-community picker, choose **Join a community** and type a **Community URL**. With
-no community saved, the picker is labeled **Communities**; otherwise it shows the
-selected community's icon or the Personal space globe. There
-is no destination dropdown. Accepts `wss://` or `https://` origins, for example
+the local default for new communities without publishing. Open the dock's
+community switcher, choose **Join a community** and type a **Community URL**. The
+switcher's trigger is an icon-only button: the selected community's icon, or a
+globe in Personal space or with no community saved. Its tooltip names the
+selected community, or reads **Personal space**, or **Communities** when none is
+saved. There is no destination dropdown. Accepts `wss://` or `https://` origins, for example
 `wss://relay.example.com` or `wss://other.example.com`, and other
-Buzz-compatible community relays. No community is pre-joined; a packaged build
-that sets [`BUZZ_DEFAULT_COMMUNITY_URL`](configuration.md) only preselects one.
+Buzz-compatible community relays; a bare host such as `relay.example.com` is
+read as `wss://`. The relay's invite link, `https://<host>/invite/<code>`, is
+looked up at its origin and its code fills **Invite code**. An invite code
+pasted without its link is refused inline with a request for the whole link; it
+is never looked up as a host. The no-community landing reads its field the same
+way. No community is pre-joined; a packaged build that sets
+[`BUZZ_DEFAULT_COMMUNITY_URL`](configuration.md) only preselects one.
 
 Surrounding whitespace, host case, a final DNS dot, default port 443 and a single
 root slash normalize to the same HTTPS origin. Non-default ports are preserved.
-Credentials, insecure schemes, non-root paths, query and fragment are rejected,
+Credentials, insecure schemes, other paths, query and fragment are rejected,
 not silently stripped. Continue starts discovery and authenticated profile reads;
 typing does not contact a relay. The canonical origin stays visible before policy
 acceptance or profile publication. Failed setup keeps the typed input and current
@@ -56,12 +62,29 @@ restore of the account's [known communities](#known-communities) joins each
 admitted destination through the same read and call. `Welcome` is also the
 second caller of the invite intent (`invite-intent.ts`) beside OS deep links:
 an address typed on the welcome screen that the restore did not admit opens
-this dialog, prefilled, as the app opens. The relay adds a member newly admitted
+this dialog, prefilled, as the app opens. Builderlab's Settings **Create
+community** is the third: through the `communityJoin` capability it opens this
+dialog on the community just created, marked submitted, so it connects at once
+as first run's **Create a community** does, without Continue. The relay adds a member newly admitted
 by an invite claim to the community's starter channels, so they are already in
 the sidebar and Messages opens the first of them. An open community needs no
 claim: there the relay adds each person, though not agents, to the starter
 channels they have never been in each time they connect, so those channels
 appear a moment later. See [local-first launch](channels.md#local-first-launch).
+
+A brand-new community has no channels. When its owner opens Messages there,
+having joined no channel, the client reads at most 20 stream or forum metadata
+events (`anyChannel`). Solo chats, DMs and system channels don't count, since
+the Bestie tab can open one first. Only when none of the rest come back, so the
+community has no stream or forum at all, open, private or archived, does it
+create one open `general` and make it a starter channel. A full batch of 20
+Solo chats counts as not empty, so it creates nothing and stops checking. It
+does this at most
+once per community on each device (a view-state marker) and once per app run,
+and the relay's unique open channel names refuse a second `general` from
+another device. Admins and members never create it, and it joins no one and
+posts nothing: Messages then opens it as the first channel. The relay is
+expected to take this over (block/buzz#9108).
 
 
 
@@ -90,7 +113,7 @@ re-reads the effective name/picture/description after the accepted receipt; a fa
 conflicting current profile retains the draft for explicit Save retry instead of
 reporting success. This confirmation is not a transaction against other clients.
 
-Use the header's community picker to select a saved community or Personal
+Use the dock's community switcher to select a saved community or Personal
 space. Personal space
 clears selection without forgetting memberships. Its **Join a community** item opens the
 existing join dialog; displaying saved communities reads relay metadata but does not open sessions for them.
@@ -103,7 +126,9 @@ with the role read from the relay-signed roster through the selected
 community's existing session rather than a further session request. The
 Membership settings card applies the same role gate in both development and
 native builds. Owners and admins in both builds read the relay-signed member
-list, mint invite links, add members directly and change or remove members. Each
+list, mint invite links, add members directly and change or remove members.
+Native builds also show the minted invite link as a dark QR code, drawn by the
+host's `qr_code` renderer that pairing uses; a new link never shows the previous code. Each
 change is one NIP-43 command (kind 9030 add, 9031 remove, 9032 role) signed by
 the viewer: the broker signs it in development, and the native host signs only
 that exact shape and posts it to the relay's `/events`. The relay alone decides

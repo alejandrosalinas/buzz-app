@@ -98,8 +98,13 @@ function owner(profiles = new Map<string, Profile>()) {
       snapshot = { ...snapshot, manual: "local-only" };
       for (const listener of listeners) listener();
     },
-    unread(count: number, attentionCount = 0) {
-      snapshot = { ...snapshot, observedCount: count, attentionCount };
+    unread(count: number, attentionCount = 0, row?: UnreadSnapshot["row"]) {
+      snapshot = {
+        ...snapshot,
+        observedCount: count,
+        attentionCount,
+        ...(row ? { row } : {}),
+      };
       for (const listener of listeners) listener();
     },
   };
@@ -122,6 +127,7 @@ function itemProps(
     selected: undefined,
     onSelect: vi.fn(),
     onOpenThread: vi.fn(),
+    onOpenMessage: vi.fn(),
   };
 }
 
@@ -270,6 +276,7 @@ it("keeps live unread updates and uses replacement session callbacks across row 
     selected: undefined,
     onSelect,
     onOpenThread: vi.fn(),
+    onOpenMessage: vi.fn(),
   };
   const view = render(<ChannelSidebarItem {...props} />);
   const row = screen.getByRole("button", { name: "Alpha" });
@@ -348,6 +355,7 @@ it("badges one-to-one DM avatars with live presence and sanitizes their media", 
     selected: undefined,
     onSelect: vi.fn(),
     onOpenThread: vi.fn(),
+    onOpenMessage: vi.fn(),
   };
   const view = render(<ChannelSidebarItem {...props} />);
   const row = screen.getByRole("button", { name: /^Alice$/ });
@@ -443,6 +451,7 @@ it.each(["ContextMenu", "F10"])(
         selected={undefined}
         onSelect={onSelect}
         onOpenThread={vi.fn()}
+        onOpenMessage={vi.fn()}
         menuEnabled
         sectionKey="group:work"
         onOpenMenu={onOpenMenu}
@@ -505,6 +514,35 @@ it("marks the row for ordinary unread and working agents", () => {
   view.rerender(<ChannelSidebarItem {...props} working={false} />);
   expect(select()).not.toHaveAttribute("data-working");
   expect(badges()).not.toHaveAttribute("data-working");
+});
+
+it("shows what the row has not seen, while the channel stays unread", () => {
+  const state = owner();
+  render(
+    <ChannelSidebarItem
+      {...itemProps(state.session, false)}
+      sectionKey="group:work"
+    />,
+  );
+  const row = () => document.querySelector("[data-channel-sidebar-row]");
+  const marker = (name: string) => document.querySelector(`[${name}]`);
+  // Opening the channel saw its mention, thread reply and ordinary message.
+  act(() =>
+    state.unread(3, 2, { observedCount: 0, attentionCount: 0, threadCount: 0 }),
+  );
+  expect(row()).not.toHaveAttribute("data-ordinary");
+  for (const name of [
+    "data-channel-unread",
+    "data-channel-priority",
+    "data-channel-activity",
+  ])
+    expect(marker(name)).toBeNull();
+  // A later thread reply lights the row's thread dot.
+  act(() =>
+    state.unread(4, 3, { observedCount: 1, attentionCount: 1, threadCount: 1 }),
+  );
+  expect(marker("data-channel-activity")).not.toBeNull();
+  expect(row()).not.toHaveAttribute("data-ordinary");
 });
 
 it("marks a temporary channel with its lifetime and yields the slot to working agents", () => {

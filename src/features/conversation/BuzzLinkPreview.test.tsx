@@ -70,8 +70,13 @@ function setup(
   let described = reference;
   const listListeners = new Set<() => void>();
   // As in the store, a demanded lookup is on the way at once, and its batch
-  // tells list subscribers from a microtask. A found channel keeps its name.
+  // tells list subscribers from a microtask. A found channel keeps its name;
+  // a readable one is not looked up.
+  let lookups = 0;
   const refer = vi.fn(() => {
+    if (described?.state === "found" && described.readable !== false)
+      return () => {};
+    lookups++;
     described =
       described?.state === "found"
         ? { ...described, looking: true }
@@ -115,6 +120,7 @@ function setup(
     thread,
     views,
     refer,
+    lookups: () => lookups,
     /** The channel lookup answers, or discovery moves the list on, as the
      * store notifies list subscribers. */
     answer(next: ChannelReference, nextStatus = list.status) {
@@ -296,7 +302,8 @@ it("looks up a channel the viewer left before trusting a refused read, then read
   expect(text(h.tree)).toBe("Loading message…");
   h.views[1]?.publish({ ...base, status: "ready", root });
   expect(h.tree.textContent).toContain("reconciled body");
-  expect(h.refer).toHaveBeenCalledOnce();
+  // The readable answer still holds the link's demand, without a lookup.
+  expect(h.lookups()).toBe(1);
 });
 it("keeps loading while a read is genuinely in flight", () => {
   const loading = setup({
@@ -381,6 +388,6 @@ it("asks for the relay thumbnail of the author's picture, as message rows do", (
     ]),
   );
   expect(tree.querySelector("img")?.getAttribute("src")).toBe(
-    `https://relay.test/media/${sha}.thumb.jpg`,
+    `https://relay.test/media/${sha}.thumb.webp`,
   );
 });

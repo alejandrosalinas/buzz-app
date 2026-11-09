@@ -84,6 +84,7 @@ it("shows a Codex turn's request, steering, tools and reply in the shared transc
       type: "prompt",
       text: "fix the <tests>",
       author: "Sam",
+      authorPubkey: "sam",
       steer: false,
       sections: [
         expect.objectContaining({ tag: "context" }),
@@ -229,22 +230,28 @@ it("keeps a send that failed or has not finished as a tool call", () => {
 function server(
   list: (params: Record<string, unknown>) => Wire,
   threads: { id: string; name: string; updatedAt: number }[] = [],
-  rollout?: string,
+  rollout?: string | (() => string),
+  path = "/sessions/rollout.jsonl",
 ) {
   const sent: Wire[] = [];
   const items = new Map<string, unknown[]>();
   const spawn = vi.fn(async (_id: string, options?: HostProcessOptions) => {
-    if (_id === "read") {
+    if (_id === "read" || _id === "read-from") {
       // Match the desktop host's process-directory contract.
       if (options?.cwd && !options.cwd.startsWith("/"))
         throw new Error("The process directory must be absolute");
-      if (rollout === undefined) options?.onStderr?.("file unavailable");
-      else options?.onStdout?.(btoa(rollout));
+      const file = typeof rollout === "function" ? rollout() : rollout;
+      // `read-from` is `tail -c +N`: from byte N, counting from 1.
+      const from = _id === "read" ? 0 : Number(options?.args?.[1]) - 1;
+      const shrank = file !== undefined && from > file.length;
+      if (file === undefined) options?.onStderr?.("file unavailable");
+      else if (shrank) options?.onStderr?.(`${path} shrank`);
+      else options?.onStdout?.(btoa(file.slice(from)));
       return {
         write: async () => {},
         end: async () => {},
         kill: async () => {},
-        exited: Promise.resolve(rollout === undefined ? 1 : 0),
+        exited: Promise.resolve(file === undefined ? 1 : shrank ? 3 : 0),
       };
     }
     let exit!: (code: number) => void;
@@ -263,7 +270,7 @@ function server(
             : wire.method === "thread/items/list"
               ? itemPage(items, params)
               : wire.method === "thread/read"
-                ? { result: { thread: { path: "/sessions/rollout.jsonl" } } }
+                ? { result: { thread: { path } } }
                 : wire.method === "thread/list"
                   ? {
                       result: {
@@ -383,6 +390,88 @@ it("loads the recorded script through the declared file reader, and reports unav
   expect(fallback?.turns[0]?.items).toContainEqual(
     expect.objectContaining({ title: "pnpm test" }),
   );
+});
+
+it("reads only what a rollout appended since its last read, showing the same recorded tools", async () => {
+  const records = [
+    { type: "event_msg", payload: { type: "task_started", turn_id: "turn-1" } },
+    {
+      type: "response_item",
+      payload: {
+        type: "custom_tool_call",
+        call_id: "script",
+        name: "exec",
+        input: "text(42)",
+      },
+    },
+    {
+      type: "response_item",
+      payload: {
+        type: "custom_tool_call_output",
+        call_id: "script",
+        output: "42",
+      },
+    },
+  ].map((record) => JSON.stringify(record));
+  // The first read ends partway through the output record.
+  const cut = `${records.slice(0, 2).join("\n")}\n${records[2]?.slice(0, 20)}`;
+  let file = cut;
+  const path = "/sessions/appended.jsonl";
+  // While its turn works, the rollout is remembered between reads.
+  const working = () =>
+    paged([turn({ items: [], status: "inProgress", completedAt: null })]);
+  const { spawn } = server(working(), [], () => file, path);
+  const lookupOne = { ...lookup, threadId: "thread-1" };
+  const first = await readTranscript(
+    spawn,
+    lookupOne,
+    new AbortController().signal,
+  );
+  expect(first?.turns[0]?.items).toMatchObject([
+    { title: "exec", input: "text(42)" },
+  ]);
+  file = records.join("\n");
+  const second = await readTranscript(
+    spawn,
+    lookupOne,
+    new AbortController().signal,
+  );
+  // From the partial line on, not the whole file again.
+  const whole = records.slice(0, 2).join("\n").length + 1;
+  expect(spawn).toHaveBeenLastCalledWith(
+    "read-from",
+    expect.objectContaining({ args: [path, String(whole + 1)] }),
+  );
+  const fresh = await readTranscript(
+    server(working(), [], file, "/sessions/fresh.jsonl").spawn,
+    lookupOne,
+    new AbortController().signal,
+  );
+  expect(second?.turns).toEqual(fresh?.turns);
+  // A file that shrank is read whole again, not from the old text.
+  file = records.slice(0, 2).join("\n");
+  const shrunk = await readTranscript(
+    spawn,
+    lookupOne,
+    new AbortController().signal,
+  );
+  expect(
+    spawn.mock.calls.filter(
+      ([id, options]) => id === "read" && options?.args?.[0] === path,
+    ),
+  ).toHaveLength(2);
+  expect(shrunk?.turns).toEqual(
+    (
+      await readTranscript(
+        server(working(), [], file, "/sessions/shrunk.jsonl").spawn,
+        lookupOne,
+        new AbortController().signal,
+      )
+    )?.turns,
+  );
+  expect(second?.turns[0]?.items).toMatchObject([
+    { title: "exec", input: "text(42)", output: "42" },
+  ]);
 });
 
 it("reads the latest turns oldest first, and closes its app-server", async () => {
@@ -604,6 +693,53 @@ it("fails a transcript with an item over app-server's output frame", async () =>
       .filter((w) => w.method === "thread/items/list")
       .map((w) => (w.params as { limit: number }).limit),
   ).toEqual([50, 25, 13, 7, 4, 2, 1]);
+});
+
+it("refuses a remembered rollout that grew past a full read's limit, without rereading it", async () => {
+  const half = `${"x".repeat(30 * 1024 * 1024)}\n`;
+  let file = half;
+  const path = "/sessions/large.jsonl";
+  const { spawn } = server(
+    paged([turn({ items: [], status: "inProgress", completedAt: null })]),
+    [],
+    () => file,
+    path,
+  );
+  const lookupOne = { ...lookup, threadId: "thread-1" };
+  const signal = new AbortController().signal;
+  await readTranscript(spawn, lookupOne, signal);
+  file = half + half;
+  for (const more of ["", "y\n", ""]) {
+    file += more;
+    const grown = await readTranscript(spawn, lookupOne, signal);
+    expect(JSON.stringify(grown?.turns)).toContain("larger than 50 MB");
+    // Only what was appended is read, not the whole file again.
+    expect(spawn).toHaveBeenLastCalledWith("read-from", expect.anything());
+  }
+  // A file that shrank is read whole again.
+  file = '{"type":"event_msg"}\n';
+  const fresh = await readTranscript(spawn, lookupOne, signal);
+  expect(JSON.stringify(fresh?.turns)).not.toContain("larger than 50 MB");
+  expect(spawn).toHaveBeenLastCalledWith(
+    "read",
+    expect.objectContaining({ args: [path] }),
+  );
+});
+
+it("remembers a rollout while a thread found by name is in progress", async () => {
+  const tag = sessionTag(agent.key, lookup);
+  const path = "/sessions/named.jsonl";
+  const { spawn } = server(
+    paged([turn({ items: [], status: "inProgress", completedAt: null })]),
+    [{ id: "tagged", name: `Named · ${tag}`, updatedAt: 1 }],
+    '{"type":"event_msg"}\n',
+    path,
+  );
+  const signal = new AbortController().signal;
+  expect(lookup).not.toHaveProperty("threadId");
+  await readTranscript(spawn, lookup, signal);
+  await readTranscript(spawn, lookup, signal);
+  expect(spawn).toHaveBeenLastCalledWith("read-from", expect.anything());
 });
 
 it("merges the threads other builds started, found by tag or by their earlier name", async () => {

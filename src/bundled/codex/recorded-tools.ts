@@ -6,7 +6,7 @@ import type {
   TranscriptTurn,
 } from "../../features/agents/activity-transcript";
 
-type Json = Record<string, unknown>;
+export type Json = Record<string, unknown>;
 const object = (value: unknown): Json | undefined =>
   value !== null && typeof value === "object" && !Array.isArray(value)
     ? (value as Json)
@@ -34,7 +34,36 @@ const output = (value: unknown) =>
         .join("\n")
     : display(value);
 
-export function restoreRecordedTools(turns: TranscriptTurn[], file: string) {
+/** The rollout lines restoring tools reads, parsed: turn starts, completed
+ * items and tool calls with their outputs. */
+export function recordedLines(text: string): Json[] {
+  const kept: Json[] = [];
+  for (const line of text.split("\n")) {
+    let record: Json | undefined;
+    try {
+      record = object(JSON.parse(line));
+    } catch {
+      // A live file may end halfway through its next record.
+      continue;
+    }
+    const type = str(object(record?.payload)?.type);
+    if (
+      record &&
+      (record.type === "turn_context" ||
+        (record.type === "event_msg" &&
+          (type === "task_started" || type === "item_completed")) ||
+        (record.type === "response_item" &&
+          /^(custom_tool_call|function_call)(_output)?$/.test(type)))
+    )
+      kept.push(record);
+  }
+  return kept;
+}
+
+export function restoreRecordedTools(
+  turns: TranscriptTurn[],
+  file: string | readonly Json[],
+) {
   const drafts = new Map(
     turns.map((turn) => [
       turn.turnId,
@@ -53,14 +82,7 @@ export function restoreRecordedTools(turns: TranscriptTurn[], file: string) {
   >();
   const active = new Map<ToolItem, string>();
   let turnId = "";
-  for (const line of file.split("\n")) {
-    let record: Json | undefined;
-    try {
-      record = object(JSON.parse(line));
-    } catch {
-      // A live file may end halfway through its next record.
-      continue;
-    }
+  for (const record of typeof file === "string" ? recordedLines(file) : file) {
     const payload = object(record?.payload);
     if (!payload) continue;
     if (

@@ -14,6 +14,7 @@ import {
 import { tmpdir } from "node:os";
 import path from "node:path";
 import test from "node:test";
+import { fileURLToPath } from "node:url";
 import { portForPath } from "../../scripts/worktree-port.mjs";
 
 function recipe(name, ...args) {
@@ -41,6 +42,11 @@ function recipe(name, ...args) {
         new URL(`../../scripts/${file}`, import.meta.url),
         path.join(directory, "scripts", file),
       );
+    // Stand in for the Keychain helper setup: never build it or touch the Keychain.
+    writeFileSync(
+      path.join(directory, "scripts/dev-credential-helper.mjs"),
+      `export function prepareCredentialHelper() {\n  if (process.env.BUZZ_TEST_HELPER_FAILS) throw new Error("no helper");\n  return { helper: "/helper", identity: "IDENTITY" };\n}\n`,
+    );
     // Record the bundled goose-acp build instead of compiling it.
     writeFileSync(
       path.join(directory, "scripts/build-goose-acp.mjs"),
@@ -76,6 +82,8 @@ function recipe(name, ...args) {
       path.join(directory, "pnpm"),
       `#!${process.execPath}\nrequire("node:fs").appendFileSync(process.env.BUZZ_TEST_CALLS, JSON.stringify(process.argv.slice(2)) + "\\n");
 if (process.argv[2] === "tauri" && process.argv[3] === "dev") console.log("VIEWER:" + JSON.stringify(process.env.BUZZ_DEV_VIEWER));
+if (process.argv[2] === "tauri" && process.argv[3] === "dev") console.log("RELEASE_KEY:" + JSON.stringify(process.env.BUZZ_DEV_RELEASE_KEY ?? null));
+if (process.argv[2] === "tauri" && process.argv[3] === "dev") console.log("HELPER:" + JSON.stringify([process.env.BUZZ_DEV_CREDENTIAL_HELPER ?? null, process.env.BUZZ_DEV_CREDENTIAL_HELPER_AUTHORIZE ?? null, process.env.BUZZ_DEV_HELPER_SIGNING ?? null, process.env.CARGO_TARGET_AARCH64_APPLE_DARWIN_RUNNER?.endsWith("/scripts/dev-sign-run.sh") ?? null]));
 if (process.argv[2] === "tauri") console.log("ENV:" + JSON.stringify({ fi: process.env.BUZZ_BUILD_FEDERATED_IDENTITY_CONFIG, other: process.env.LOCAL_ONLY_SECRET, updater: process.env.BUZZ_UPDATER_ENDPOINT }));
 \n`,
       { mode: 0o755 },
@@ -117,6 +125,11 @@ if (process.argv[2] === "tauri") console.log("ENV:" + JSON.stringify({ fi: proce
           BUZZ_BUILD_FEDERATED_IDENTITY_CONFIG: undefined,
           LOCAL_ONLY_SECRET: undefined,
           BUZZ_UPDATER_ENDPOINT: undefined,
+          BUZZ_DEV_RELEASE_KEY: undefined,
+          BUZZ_DEV_CREDENTIAL_HELPER: undefined,
+          BUZZ_DEV_CREDENTIAL_HELPER_AUTHORIZE: undefined,
+          BUZZ_DEV_HELPER_SIGNING: undefined,
+          CARGO_TARGET_AARCH64_APPLE_DARWIN_RUNNER: undefined,
           ...settings.env,
         },
         encoding: "utf8",
@@ -567,6 +580,126 @@ for (const [name, settings, expected] of [
     );
   });
 }
+
+// Only `just desktop me` reads the release key: never `.env.local` or the
+// shell, since `.env.local` is copied into agents' worktrees.
+for (const [name, args, settings, expected] of [
+  ["me", ["me"], {}, "1"],
+  ["me with options", ["me", "--port", "1430"], {}, "1"],
+  ["plain", [], {}, null],
+  ["from .env.local", [], { local: "BUZZ_DEV_RELEASE_KEY=1\n" }, null],
+  ["from the shell", [], { env: { BUZZ_DEV_RELEASE_KEY: "1" } }, null],
+]) {
+  test(`desktop reads the release key only for me: ${name}`, () => {
+    const result = recipe("desktop", settings, ...args);
+    assert.equal(result.status, 0, result.stderr);
+    assert.ok(
+      result.stdout.includes(`RELEASE_KEY:${JSON.stringify(expected)}`),
+      result.stdout,
+    );
+  });
+}
+
+// On macOS `me` also routes Keychain items through the helper and signs the
+// build it starts; nothing else turns that on.
+const routed = JSON.stringify(["/helper", "1", "IDENTITY", true]);
+const direct = JSON.stringify([null, null, null, null]);
+for (const [name, args, settings, expected] of [
+  ["me", ["me"], {}, process.platform === "darwin" ? routed : direct],
+  ["plain", [], {}, direct],
+  [
+    "from .env.local",
+    [],
+    {
+      local:
+        "BUZZ_DEV_CREDENTIAL_HELPER=/other\nBUZZ_DEV_CREDENTIAL_HELPER_AUTHORIZE=1\n",
+    },
+    direct,
+  ],
+  [
+    "from the shell",
+    [],
+    {
+      env: {
+        BUZZ_DEV_CREDENTIAL_HELPER: "/other",
+        BUZZ_DEV_HELPER_SIGNING: "X",
+      },
+    },
+    direct,
+  ],
+  [
+    "me when setup fails",
+    ["me"],
+    { env: { BUZZ_TEST_HELPER_FAILS: "1" } },
+    direct,
+  ],
+]) {
+  test(`desktop uses the Keychain helper only for me: ${name}`, () => {
+    const result = recipe("desktop", settings, ...args);
+    assert.equal(result.status, 0, result.stderr);
+    assert.ok(result.stdout.includes(`HELPER:${expected}`), result.stdout);
+    if (name === "me when setup fails" && process.platform === "darwin")
+      assert.match(result.stderr, /Keychain helper unavailable \(no helper\)/);
+  });
+}
+
+// The signed app's agents and plugins inherit its environment, so the runner
+// must not leave itself configured there: their own `cargo run` would fail.
+test("dev-sign-run.sh signs the app and drops its runner settings", {
+  skip: process.platform !== "darwin",
+}, () => {
+  const directory = mkdtempSync(path.join(tmpdir(), "buzz-dev-sign-run-"));
+  try {
+    const binary = path.join(directory, "env");
+    copyFileSync("/usr/bin/env", binary);
+    const runner = fileURLToPath(
+      new URL("../../scripts/dev-sign-run.sh", import.meta.url),
+    );
+    const result = spawnSync(runner, [binary], {
+      env: {
+        PATH: process.env.PATH,
+        // Ad hoc, so the test needs no certificate.
+        BUZZ_DEV_HELPER_SIGNING: "-",
+        BUZZ_DEV_CREDENTIAL_HELPER: "/helper",
+        BUZZ_DEV_CREDENTIAL_HELPER_AUTHORIZE: "1",
+        CARGO_TARGET_AARCH64_APPLE_DARWIN_RUNNER: runner,
+        CARGO_TARGET_X86_64_APPLE_DARWIN_RUNNER: runner,
+      },
+      encoding: "utf8",
+    });
+    assert.equal(result.status, 0, result.stderr);
+    const launched = Object.fromEntries(
+      result.stdout
+        .trim()
+        .split("\n")
+        .map((line) => [
+          line.slice(0, line.indexOf("=")),
+          line.slice(line.indexOf("=") + 1),
+        ]),
+    );
+    assert.equal(launched.BUZZ_DEV_CREDENTIAL_HELPER, "/helper");
+    assert.equal(launched.BUZZ_DEV_CREDENTIAL_HELPER_AUTHORIZE, "1");
+    for (const name of [
+      "BUZZ_DEV_HELPER_SIGNING",
+      "CARGO_TARGET_AARCH64_APPLE_DARWIN_RUNNER",
+      "CARGO_TARGET_X86_64_APPLE_DARWIN_RUNNER",
+    ])
+      assert.ok(!(name in launched), `${name} reached the app`);
+    const signed = spawnSync("/usr/bin/codesign", ["-dv", binary], {
+      encoding: "utf8",
+    });
+    assert.match(signed.stderr, /Identifier=xyz\.block\.buzz\.desktop\.dev/);
+  } finally {
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test("desktop refuses me after other arguments", () => {
+  const result = recipe("desktop", "--port", "1430", "me");
+  assert.notEqual(result.status, 0);
+  assert.match(result.stderr, /just desktop me --port 1430/);
+  assert.ok(!result.stdout.includes("RELEASE_KEY:"), result.stdout);
+});
 
 // `.env.local` is a launch environment source for `BUZZ_` names, so native
 // build inputs such as the FI descriptor can live there.

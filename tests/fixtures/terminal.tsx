@@ -4,6 +4,7 @@ import "../../src/shared/styles/globals.css";
 import { useKeyboardFocusVisibility } from "../../src/shared/design-system/useKeyboardFocusVisibility";
 import { createScreen } from "../../src/bundled/terminal/renderer";
 import type { TerminalInputSource } from "../../src/bundled/terminal/renderer";
+import { createTerminalFontPreference } from "../../src/bundled/terminal/font-preference";
 
 function Fixture() {
   useKeyboardFocusVisibility();
@@ -11,6 +12,7 @@ function Fixture() {
   const [visible, show] = useState(true);
   const [input, setInput] = useState("");
   const [dimensions, resized] = useState("");
+  const [font] = useState(() => createTerminalFontPreference());
   const [generated] = useState<{ data: string; source: TerminalInputSource }[]>(
     [],
   );
@@ -21,6 +23,7 @@ function Fixture() {
         setInput((value) => value + data);
       },
       (cols, rows) => resized(`${cols}x${rows}`),
+      font,
     ),
   );
   useEffect(() => {
@@ -30,11 +33,15 @@ function Fixture() {
     Object.assign(window, {
       terminalRenderer: {
         generated,
+        font,
         output: (data: string) => screen.output(new TextEncoder().encode(data)),
       },
     });
-    return () => screen.dispose();
-  }, [screen, generated]);
+    return () => {
+      screen.dispose();
+      font.dispose();
+    };
+  }, [screen, generated, font]);
   return (
     <>
       <button

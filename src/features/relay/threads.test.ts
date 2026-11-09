@@ -308,6 +308,10 @@ it("drops shared row identity when any compared field changes", () => {
     ],
     ["threadRootId", (row) => ({ ...row, threadRootId: replacementId })],
     ["replyParentId", (row) => ({ ...row, replyParentId: replacementId })],
+    [
+      "mediaTargetUrl",
+      (row) => ({ ...row, mediaTargetUrl: "https://example.com/other.mp4" }),
+    ],
     ["replyCount", (row) => ({ ...row, replyCount: 2 })],
     ["participants", (row) => ({ ...row, participants: [replacementId] })],
   ];

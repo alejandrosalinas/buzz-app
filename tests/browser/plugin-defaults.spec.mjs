@@ -111,8 +111,8 @@ test("Bestie opts in without changing the other bundled defaults and survives re
       .getByRole("button", { name: "Bestie", exact: true }),
   ).toHaveCount(0);
   const destination = page
-    .getByRole("navigation", { name: "Pages" })
-    .getByRole("button", { name: "Bestie", exact: true });
+    .getByRole("navigation", { name: "Apps dock" })
+    .getByRole("tab", { name: "Bestie", exact: true });
   await expect(destination).toBeVisible();
   await destination.click();
   const bestiePage = page.getByRole("region", { name: "Bestie" });

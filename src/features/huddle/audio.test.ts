@@ -27,7 +27,20 @@ function harness() {
   const output = node();
   const routed = { ...node(), stream: stream() };
   const sources: ReturnType<typeof node>[] = [];
+  const bufferSource = () => ({
+    ...node(),
+    buffer: null,
+    onended: null,
+    start: vi.fn(),
+    stop: vi.fn(),
+  });
   const context = {
+    currentTime: 0,
+    createBuffer: vi.fn((_channels: number, length: number, rate: number) => ({
+      duration: length / rate,
+      copyToChannel: vi.fn(),
+    })),
+    createBufferSource: vi.fn(bufferSource),
     sampleRate: 48000,
     destination: {},
     resume: vi.fn(async () => {}),
@@ -193,6 +206,71 @@ it("keeps the original speaker route if selection is rejected", async () => {
     expect(h.output.connect).not.toHaveBeenCalledWith(h.routed);
     expect(pause).toHaveBeenCalledOnce();
     expect(h.routed.stream.track.stop).toHaveBeenCalledOnce();
+  } finally {
+    audio.close();
+  }
+});
+
+it("keeps near-miss playback contiguous while audio remains queued", async () => {
+  const h = harness();
+  const audio = await h.open();
+  try {
+    const frame = Array(480).fill(0.25);
+    audio.play("peer", frame);
+    expect(
+      h.context.createBufferSource.mock.results[0]?.value.start,
+    ).toHaveBeenCalledWith(0.06);
+    h.context.currentTime = 0.065;
+    audio.play("peer", frame);
+    expect(
+      h.context.createBufferSource.mock.results[1]?.value.start.mock
+        .calls[0]?.[0],
+    ).toBeCloseTo(0.07);
+  } finally {
+    audio.close();
+  }
+});
+
+it("restarts a real playback underrun at 20 ms and keeps catch-up frames contiguous", async () => {
+  const h = harness();
+  const audio = await h.open();
+  try {
+    const frame = Array(480).fill(0.25);
+    audio.play("peer", frame);
+    h.context.currentTime = 0.1;
+    audio.play("peer", frame);
+    audio.play("peer", frame);
+    expect(
+      h.context.createBufferSource.mock.results[1]?.value.start.mock
+        .calls[0]?.[0],
+    ).toBeCloseTo(0.12);
+    expect(
+      h.context.createBufferSource.mock.results[2]?.value.start.mock
+        .calls[0]?.[0],
+    ).toBeCloseTo(0.13);
+  } finally {
+    audio.close();
+  }
+});
+
+it("drops frames beyond the 200 ms queue cap and resumes as the queue drains", async () => {
+  const h = harness();
+  const audio = await h.open();
+  try {
+    const frame = Array(4800).fill(0.25);
+    audio.play("peer", frame);
+    audio.play("peer", frame);
+    // The two 100 ms buffers end at 260 ms, beyond the cap.
+    audio.play("peer", frame);
+    expect(h.context.createBufferSource).toHaveBeenCalledTimes(2);
+    expect(h.context.createBuffer).toHaveBeenCalledTimes(2);
+    h.context.currentTime = 0.1;
+    audio.play("peer", frame);
+    expect(h.context.createBufferSource).toHaveBeenCalledTimes(3);
+    expect(
+      h.context.createBufferSource.mock.results[2]?.value.start.mock
+        .calls[0]?.[0],
+    ).toBeCloseTo(0.26);
   } finally {
     audio.close();
   }

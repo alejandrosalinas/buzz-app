@@ -44,9 +44,17 @@ const empty: readonly OutgoingEvent[] = [];
 const snapshot = () => empty;
 const subscribe = () => () => {};
 
+export type DraftMessageEdit = {
+  id: string;
+  content: string;
+  saveDraft(body: string): Promise<void>;
+  cancelDraft(): void;
+};
+
 /** Edit delivery uses the session outbox; the composer owns input and draft restoration. */
 export function useMessageEdit(session: ComposerSession, restore: () => void) {
-  const [target, setTarget] = useState<ChannelMessage>();
+  const [target, setTarget] = useState<ChannelMessage | DraftMessageEdit>();
+  const [draftSaving, setDraftSaving] = useState(false);
   const [operation, setOperation] = useState<string>();
   const submitted = useRef<string | undefined>(undefined);
   const initial = useRef<string | undefined>(undefined);
@@ -57,10 +65,17 @@ export function useMessageEdit(session: ComposerSession, restore: () => void) {
     session.outbox?.snapshot ?? snapshot,
   );
   const delivery = pending.find((item) => item.event.id === operation);
-  const busy = !!operation && delivery?.delivery === "sending";
+  const busy = draftSaving || (!!operation && delivery?.delivery === "sending");
   const retryable =
     delivery?.delivery === "failed" || delivery?.delivery === "unknown";
+  useEffect(
+    () => () => {
+      if (target && "cancelDraft" in target) target.cancelDraft();
+    },
+    [target],
+  );
   const close = () => {
+    if (target && "cancelDraft" in target) target.cancelDraft();
     restore();
     setTarget(undefined);
     setOperation(undefined);
@@ -81,7 +96,7 @@ export function useMessageEdit(session: ComposerSession, restore: () => void) {
   return {
     target,
     busy,
-    locked: !!operation,
+    locked: !!operation || draftSaving,
     retryable,
     error: error ?? delivery?.error,
     close,
@@ -100,8 +115,25 @@ export function useMessageEdit(session: ComposerSession, restore: () => void) {
       initial.current = normalize(body);
       return body;
     },
+    startDraft(draft: DraftMessageEdit) {
+      setTarget(draft);
+      setError(undefined);
+      initial.current = draft.content;
+      return draft.content;
+    },
     save(body: string, current: ChannelMessage | undefined) {
-      if (!target || submitted.current || !body.trim()) return;
+      if (!target || submitted.current || draftSaving) return;
+      if ("saveDraft" in target) {
+        setDraftSaving(true);
+        void target
+          .saveDraft(body)
+          .then(close, (reason) => {
+            setError(reason instanceof Error ? reason.message : String(reason));
+          })
+          .finally(() => setDraftSaving(false));
+        return;
+      }
+      if (!body.trim()) return;
       if (!current || !lastEditableMessage(session, [current])) {
         setError("This message is no longer available to edit.");
         return;

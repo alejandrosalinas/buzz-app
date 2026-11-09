@@ -69,7 +69,7 @@ export function CanvasHistory({
   const [full, setFull] = useState(false);
   const [notice, setNotice] = useState("");
   const [confirm, setConfirm] = useState(false);
-  const cancel = useRef<HTMLButtonElement>(null);
+  const proceed = useRef<HTMLButtonElement>(null);
   const restoreButton = useRef<HTMLButtonElement>(null);
   const generation = useRef(0);
   const refreshButton = useRef<HTMLButtonElement>(null);
@@ -352,7 +352,7 @@ export function CanvasHistory({
         onOpenChange={setConfirm}
         title="Restore this version?"
         description="This publishes the selected version as a new Canvas revision. Existing history is kept."
-        initialFocus={cancel}
+        initialFocus={proceed}
         finalFocus={() =>
           attempted.current ? refreshButton.current : restoreButton.current
         }
@@ -360,14 +360,11 @@ export function CanvasHistory({
         dismissOnOutsideClick
         actions={
           <>
-            <Button
-              ref={cancel}
-              disabled={busy}
-              onClick={() => setConfirm(false)}
-            >
+            <Button disabled={busy} onClick={() => setConfirm(false)}>
               Cancel
             </Button>
             <Button
+              ref={proceed}
               variant="prominent"
               loading={busy}
               disabled={readOnly}

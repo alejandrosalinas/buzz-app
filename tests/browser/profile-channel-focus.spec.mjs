@@ -94,7 +94,7 @@ test("profile channel focus ring paints on one row and both list boundaries", as
 
   await page
     .locator(
-      '.buzz-tabs-item:not(:has([data-tab-value^="thread:"])) > button:not([role="tab"])',
+      '.buzz-tabs-item:not(:has([data-tab-value^="thread:"])) > button[aria-label^="Close "]',
     )
     .click();
   await page

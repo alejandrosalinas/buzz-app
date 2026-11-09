@@ -44,7 +44,6 @@ export function ChannelHeaderMenu({
   openMenuPanel?: ((panel: RegisteredPanel) => void) | undefined;
 }) {
   const [open, setOpen] = useState(false);
-  const [prepared, setPrepared] = useState(false);
   const finalFocus = useRef<(() => HTMLElement | false) | undefined>(undefined);
   const handoff = useChannelNavigation();
   const menuActions = useChannelMenuActions();
@@ -85,7 +84,18 @@ export function ChannelHeaderMenu({
           Finish conversion
         </MenuItem>
       )}
-      <MenuItem onClick={openDetails}>
+      <MenuItem
+        onClick={() => {
+          // WebKit can drop the tab's focus before the menu finishes closing.
+          finalFocus.current = () =>
+            document.querySelector<HTMLElement>(
+              '[data-panel-workspace] [data-tab-value="settings"]',
+            ) ??
+            trigger.current ??
+            false;
+          openDetails();
+        }}
+      >
         <MenuIcon>
           <InfoIcon size={16} />
         </MenuIcon>
@@ -114,10 +124,7 @@ export function ChannelHeaderMenu({
       onOpenChange={(next) => {
         readAction.reset();
         setOpen(next);
-        if (next) {
-          finalFocus.current = undefined;
-          setPrepared(true);
-        }
+        if (next) finalFocus.current = undefined;
       }}
     >
       <MenuTrigger
@@ -133,16 +140,14 @@ export function ChannelHeaderMenu({
           />
         }
       />
-      {prepared &&
-      channel &&
+      {channel &&
       handoff &&
       (!channel.readOnly || channel.viewerRole === "guest") &&
       !channel.cached &&
       !channel.archived ? (
         <ChannelLifecycleMenu
-          channelId={channel.id}
-          lifecycle={session.channelLifecycle}
-          open={open}
+          channel={channel}
+          session={session}
           disabled={!!handoff.lifecycleDialog}
           separator
           noun={lifecycleNoun(channel)}

@@ -1,4 +1,5 @@
 import { expect, it } from "vitest";
+import { npubEncode } from "nostr-tools/nip19";
 import { noSearchUsage, type SearchUsage } from "./usage";
 import { personKey, rankPeople, type PersonCandidate } from "./people-rank";
 
@@ -36,6 +37,28 @@ it("matches display names and usernames with the shared name rule", () => {
   expect(order(people, "ache")).toEqual(["Alice Chen"]);
   expect(order(people, "hel")).toEqual([]);
 });
+
+const sam = "a".repeat(64);
+it.each([
+  ["hex key", sam],
+  ["uppercase hex key", sam.toUpperCase()],
+  ["npub", npubEncode(sam)],
+  ["nostr: npub", `nostr:${npubEncode(sam)}`],
+])(
+  "keeps only the person a typed %s names, as an exact match",
+  (_case, key) => {
+    const people = [
+      person("b".repeat(64), "Alex Stone", { relationship: 0 }),
+      person(sam, "Sam Rivera"),
+    ];
+    // Score -2 is an exact match (rank 0), ahead of every other row.
+    expect(
+      rankPeople(people, key, noSearchUsage, undefined).map(
+        ({ person, score }) => [person.label, score],
+      ),
+    ).toEqual([["Sam Rivera", -2]]);
+  },
+);
 
 it("ranks an exact name first, then relationship bands, as New message does", () => {
   const people = [

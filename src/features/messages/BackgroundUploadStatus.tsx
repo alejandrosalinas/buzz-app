@@ -13,9 +13,16 @@ import styles from "./Messages.module.css";
 export function BackgroundUploadStatus({
   session,
   focusTarget,
+  here,
+  onOpenLink,
 }: {
   session: ComposerSession;
   focusTarget: React.RefObject<HTMLElement | null>;
+  /** The conversation the hosting composer presents, which a notice need not
+   * open. Absent while a covered tab hides it. */
+  here?: string | undefined;
+  /** The hosting composer's link handler opens a notice's conversation. */
+  onOpenLink?: ((target: string) => boolean) | undefined;
 }) {
   const uploads = useBackgroundUploads(session);
   const focusedCancel = useRef(false);
@@ -34,10 +41,13 @@ export function BackgroundUploadStatus({
   }, [uploads.uploading, focusTarget]);
   return (
     <>
-      {uploads.uploading && (
+      {uploads.destination && (
         <div className={styles.backgroundUpload}>
-          <span id={phase} role="status">
-            {uploads.phase}
+          {/* The text takes the spare width, so the bar and Cancel stay put
+              as it changes. */}
+          <span id={phase} role="status" className="min-w-0 flex-1 truncate">
+            {`${uploads.phase} to ${uploads.destination.name}`}
+            {uploads.others > 0 && ` and ${uploads.others} more`}
           </span>
           {/* Desktop's bar: measured bytes, or an indeterminate sweep while
               the host reports none. It never shows a number. */}
@@ -81,27 +91,45 @@ export function BackgroundUploadStatus({
             }}
             size="sm"
             variant="ghost"
+            aria-label={`Cancel upload to ${uploads.destination.name}`}
+            // Pressing Cancel can disable it; focus stays for the handoff above.
+            disabled={!uploads.cancellable}
+            focusableWhenDisabled
             onClick={() => cancelBackgroundUpload(session)}
           >
             Cancel
           </Button>
         </div>
       )}
-      {uploads.notices.map((notice) => (
-        <ToastNotice
-          key={notice.id}
-          title={notice.message}
-          {...(!notice.retry && {
-            onDismiss: () => dismissBackgroundUploadNotice(session, notice.id),
-          })}
-        >
-          {notice.retry && (
-            <Button type="button" onClick={notice.retry}>
-              Retry failed send recovery
-            </Button>
-          )}
-        </ToastNotice>
-      ))}
+      {uploads.notices.map((notice) => {
+        const dismiss = () => dismissBackgroundUploadNotice(session, notice.id);
+        const { link } = notice.destination;
+        return (
+          <ToastNotice
+            key={notice.id}
+            title={notice.title}
+            {...(notice.description && { description: notice.description })}
+            {...(!notice.retry && { onDismiss: dismiss })}
+          >
+            {notice.retry && (
+              <Button type="button" onClick={notice.retry}>
+                Retry failed send recovery
+              </Button>
+            )}
+            {onOpenLink && link && link !== here && (
+              <Button
+                type="button"
+                onClick={() => {
+                  // Opening answers a failure; recovery stays until it succeeds.
+                  if (onOpenLink(link) && !notice.retry) dismiss();
+                }}
+              >
+                {`Open ${notice.destination.name}`}
+              </Button>
+            )}
+          </ToastNotice>
+        );
+      })}
     </>
   );
 }

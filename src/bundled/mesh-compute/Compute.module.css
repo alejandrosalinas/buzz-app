@@ -1,0 +1,387 @@
+/* Consumer content layout from feat/community-compute-plugin @ b4a910e. */
+.content {
+  max-width: 60rem;
+  margin-inline: auto;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  overflow-wrap: anywhere;
+  gap: var(--space-control-inset);
+}
+
+.content > [class~="buzz-content-header"] {
+  padding-inline: 0;
+  margin-block-end: var(--space-1);
+}
+
+/* A small instrument panel; colors follow the surrounding Buzz theme. */
+.activity {
+  margin-block: var(--space-3);
+  border: 1px solid var(--border-standard);
+  border-radius: var(--radius-row);
+  background: var(--surface-inset);
+  padding: var(--space-4);
+  box-shadow: inset 0 1px 0 var(--border-standard);
+}
+
+.activityHeader {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--space-control-inset);
+}
+
+.sessionStatus {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  font-family: var(--font-mono);
+}
+
+.statusLight {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--status-offline);
+}
+
+.statusLight[data-active="true"] {
+  background: var(--status-online);
+  box-shadow: 0 0 8px var(--status-online);
+}
+
+.metrics {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: calc(var(--space-2) + var(--space-half));
+  margin-block: var(--space-panel-inset);
+}
+
+.metric {
+  min-width: 0;
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  padding: var(--space-4);
+  border: 1px solid var(--border-standard);
+  border-radius: calc(var(--radius-row) / 2);
+  background-color: var(--surface-base);
+  background-image: radial-gradient(
+    var(--border-standard) 0.7px,
+    transparent 0.7px
+  );
+  background-size: 8px 8px;
+}
+
+.metricLabel {
+  display: flex;
+  align-items: baseline;
+  gap: calc(var(--space-2) + var(--space-half));
+}
+
+.readout {
+  position: relative;
+  isolation: isolate;
+  width: fit-content;
+  max-width: 100%;
+  background: var(--surface-base);
+  box-shadow: 0 0 0 6px var(--surface-base);
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+  overflow-wrap: anywhere;
+  color: var(--text-standard);
+}
+
+.secondaryMetrics {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(9rem, 1fr));
+  gap: var(--space-control-inset);
+}
+
+.details summary {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding-block: var(--space-3);
+  list-style: none;
+  cursor: pointer;
+}
+.details summary::-webkit-details-marker {
+  display: none;
+}
+.detailsArrow {
+  width: var(--space-4);
+  height: var(--space-4);
+  flex-shrink: 0;
+}
+.details[open] .detailsArrow {
+  transform: rotate(90deg);
+}
+
+.deviceTiles {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: calc(var(--space-2) + var(--space-half));
+  margin-block: var(--space-3);
+}
+.deviceTile {
+  min-width: 0;
+  padding: var(--space-3);
+  border: 1px solid var(--border-standard);
+  border-radius: var(--radius-row);
+  background: var(--surface-inset);
+  box-shadow: inset 0 1px 0 var(--border-standard);
+}
+.deviceTile dt {
+  display: flex;
+  align-items: center;
+  gap: calc(var(--space-2) + var(--space-half));
+  color: var(--text-subtle);
+  font-size: var(--text-caption);
+}
+.deviceTile dd {
+  margin: var(--space-2) 0 0;
+  font-family: var(--font-mono);
+  font-size: var(--text-body);
+  line-height: var(--text-body--line-height);
+  color: var(--text-standard);
+  overflow-wrap: anywhere;
+}
+.modelTile {
+  grid-column: 1 / -1;
+}
+.modelChoice [role="combobox"] {
+  width: 100%;
+  min-height: var(--text-body--line-height);
+  padding: 0;
+  border-radius: var(--radius-control);
+  background: transparent;
+  box-shadow: none;
+  font: inherit;
+  font-family: var(--font-mono);
+  text-align: left;
+}
+.modelChoice [role="combobox"] > span {
+  justify-content: space-between;
+}
+
+.statusRow {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+}
+.statusBadge {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1h);
+  margin-block: 0;
+  padding: calc(var(--space-1) + var(--space-half) / 2)
+    calc(var(--space-2) + var(--space-half) / 2);
+  border: 1px solid var(--border-standard);
+  border-radius: var(--radius-chip);
+  background: var(--surface-inset);
+  color: var(--text-subtle);
+  font-size: var(--text-caption);
+  line-height: var(--text-caption--line-height);
+}
+.statusBadge[data-positive="true"] {
+  color: var(--status-online);
+}
+.memoryValue {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+.deviceOverview {
+  display: grid;
+  grid-template-columns: 164px minmax(0, 1fr);
+  gap: var(--space-3);
+  align-items: stretch;
+}
+.deviceOverview .deviceTiles {
+  grid-template-rows: repeat(2, minmax(0, 1fr));
+  margin: 0;
+}
+.widgetCard {
+  position: relative;
+  width: min(164px, 100%);
+  aspect-ratio: 1;
+  align-self: start;
+  overflow: hidden;
+  border: 1px solid var(--border-standard);
+  border-radius: var(--radius-row);
+  background: var(--surface-inset);
+}
+.embeddedWidget {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  border: 0;
+}
+.widgetPopout {
+  position: absolute;
+  top: 6px;
+  right: 6px;
+}
+.deviceTile dd.tileStatus {
+  margin-top: var(--space-2);
+}
+.deviceTile .statusBadge {
+  padding: 0;
+  border: 0;
+  background: transparent;
+}
+@media (max-width: 760px) {
+  .deviceOverview {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+.headerStatus {
+  margin-left: auto;
+  display: inline-flex;
+  align-items: center;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: calc(var(--space-2) + var(--space-half));
+  font-size: var(--text-caption);
+}
+
+.widgetOverview {
+  width: min(164px, 100%);
+  align-self: start;
+}
+.sharingControl {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.sharingHeader {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-control-inset);
+}
+
+/* Sharing status hexagon from block/buzz MeshComputeSettingsCard. */
+.hex {
+  position: relative;
+  display: inline-flex;
+  flex-shrink: 0;
+  align-items: center;
+  justify-content: center;
+  width: 1.75rem;
+  height: 1.75rem;
+  color: var(--text-secondary);
+}
+
+.hex[data-state="working"] {
+  color: var(--text-primary);
+}
+
+.hex[data-state="sharing"] {
+  color: var(--text-success);
+}
+
+.hexPing {
+  position: absolute;
+  inset: 0;
+  display: inline-flex;
+  opacity: 0.3;
+  animation: hex-ping 1s cubic-bezier(0, 0, 0.2, 1) infinite;
+}
+
+.hexTrack {
+  fill: none;
+  stroke: currentColor;
+  opacity: 0.2;
+}
+
+.hexTrace {
+  fill: none;
+  stroke: currentColor;
+  animation: hex-trace 1.1s linear infinite;
+}
+
+@keyframes hex-ping {
+  75%,
+  100% {
+    transform: scale(1.8);
+    opacity: 0;
+  }
+}
+
+@keyframes hex-trace {
+  to {
+    stroke-dashoffset: -100;
+  }
+}
+
+.fit[data-fit="comfortable"] {
+  color: var(--text-success);
+}
+
+.fit[data-fit="tight"],
+.fit[data-fit="tradeoff"] {
+  color: var(--text-warning);
+}
+
+.fit[data-fit="too_large"] {
+  color: var(--text-danger);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .hexPing,
+  .hexTrace {
+    animation: none;
+    transition: none;
+  }
+}
+
+.devices,
+.presets {
+  display: grid;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  border: 1px solid var(--border-standard);
+  border-radius: var(--radius-panel);
+}
+
+.device,
+.preset {
+  display: flex;
+  align-items: center;
+  gap: var(--space-control-inset);
+  padding: var(--space-row-gap) var(--space-control-inset);
+}
+
+.device + .device,
+.preset + .preset {
+  border-top: 1px solid var(--border-standard);
+}
+
+.deviceBody,
+.presetBody {
+  flex: 1;
+  min-width: 0;
+}
+
+.deviceMemory {
+  flex-shrink: 0;
+  white-space: nowrap;
+}
+
+.presetIcon {
+  display: inline-flex;
+  flex-shrink: 0;
+  align-items: center;
+  justify-content: center;
+  width: 2rem;
+  height: 2rem;
+  color: var(--text-secondary);
+  background: var(--bg-hover);
+  border-radius: var(--radius-control);
+}

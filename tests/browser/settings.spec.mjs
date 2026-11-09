@@ -339,9 +339,13 @@ test.describe("community administration permissions", () => {
   });
 });
 
+// The Builderlab section applies only in FI builds. With no native host its
+// session stays signed out, and hosted communities use the fixture broker.
+const fiBuild = test.extend({ federatedIdentity: true });
+
 // Only this journey requires a confirmed Online badge/radio. Keep unrelated
 // Settings fixtures on their existing synthetic broker.
-const confirmedPresence = test.extend({ productionBroker: true });
+const confirmedPresence = fiBuild.extend({ productionBroker: true });
 confirmedPresence(
   "avatar Settings access dismisses cleanly and exposes Profile and Plugins",
   async ({ page, app, browserName }, testInfo) => {
@@ -418,11 +422,13 @@ confirmedPresence(
       await avatar.click();
       await expect(account).toBeHidden();
       await avatar.click();
-      // The account popup may cover main’s top-left on narrow layouts.
-      // Click the lower content area, genuinely outside the popup.
+      // The dock account popup opens beside the bottom controls.
+      // Click exposed content above it to exercise outside dismissal.
       const main = page.getByRole("main");
       const bounds = await main.boundingBox();
-      await main.click({ position: { x: 24, y: bounds.height - 5 } });
+      await main.click({
+        position: { x: bounds.width / 2, y: bounds.height / 3 },
+      });
       await expect(account).toBeHidden();
       await avatar.focus();
       await page.keyboard.press("Enter");
@@ -453,6 +459,13 @@ confirmedPresence(
       await tab(true);
       await expect(
         page.getByRole("button", { name: /^Community switcher:/ }),
+      ).toBeFocused();
+      await tab(true);
+      await expect(
+        page
+          .getByRole("navigation", { name: "Apps dock" })
+          .getByRole("tab")
+          .and(page.locator('[tabindex="0"]')),
       ).toBeFocused();
       await tab(true);
       await expect(button(page, "Search Buzz")).toBeFocused();
@@ -659,204 +672,206 @@ const savedCommunity = (page, viewer) =>
       );
   }, viewer);
 
-test("hosted deletion reload keeps the UUID until an enabled manual replay", async ({
-  page,
-  app,
-}) => {
-  const owner = "a".repeat(64);
-  const request = {
-    community_id: "11111111-1111-4111-8111-111111111111",
-    host: "North.communities.buzz.xyz",
-    request_id: "22222222-2222-4222-8222-222222222222",
-    acknowledgement_version: 1,
-  };
-  const calls = [];
-  const deletionBodies = [];
-  let canDelete = false;
-  await page.route("**/api/relay/identity", (route) =>
-    route.fulfill({ json: { viewer: owner } }),
-  );
-  await savedCommunity(page, owner);
-  await page.route("**/api/builderlab/**", async (route) => {
-    const action = new URL(route.request().url()).pathname.split("/").at(-1);
-    calls.push(action);
-    if (action === "auth")
-      return route.fulfill({
-        json: {
-          auth: {
-            email: "owner@example.com",
-            expiresAt: "2030",
-            capabilities: { can_delete_buzz_communities: canDelete },
+fiBuild(
+  "hosted deletion reload keeps the UUID until an enabled manual replay",
+  async ({ page, app }) => {
+    const owner = "a".repeat(64);
+    const request = {
+      community_id: "11111111-1111-4111-8111-111111111111",
+      host: "North.communities.buzz.xyz",
+      request_id: "22222222-2222-4222-8222-222222222222",
+      acknowledgement_version: 1,
+    };
+    const calls = [];
+    const deletionBodies = [];
+    let canDelete = false;
+    await page.route("**/api/relay/identity", (route) =>
+      route.fulfill({ json: { viewer: owner } }),
+    );
+    await savedCommunity(page, owner);
+    await page.route("**/api/builderlab/**", async (route) => {
+      const action = new URL(route.request().url()).pathname.split("/").at(-1);
+      calls.push(action);
+      if (action === "auth")
+        return route.fulfill({
+          json: {
+            auth: {
+              email: "owner@example.com",
+              expiresAt: "2030",
+              capabilities: { can_delete_buzz_communities: canDelete },
+            },
           },
-        },
-      });
-    if (action === "identity")
-      return route.fulfill({ json: { identity: { pubkey_hex: owner } } });
-    if (action === "list")
-      return route.fulfill({
-        json: {
-          communities: [],
-          quota_used: 1,
-          quota_limit: 5,
-          can_create: false,
-        },
-      });
-    if (action === "delete") {
-      deletionBodies.push(route.request().postDataJSON());
-      return route.fulfill({
-        status: 202,
-        json: { ...request, status: "submitted" },
-      });
-    }
-    return route.fulfill({ status: 404, json: { error: "unexpected" } });
-  });
-
-  // Boot with the saved deletion rather than reloading over a booting app,
-  // which WebKit can fail with an internal error. Seed only the first
-  // document, so the reload below sees just what the app kept.
-  await page.addInitScript(
-    ({ owner, request }) => {
-      if (sessionStorage.getItem("test.seeded-deletion")) return;
-      sessionStorage.setItem("test.seeded-deletion", "1");
-      localStorage.setItem(
-        "buzz.hosted-community-deletion.v1",
-        JSON.stringify({
-          version: 1,
-          owner_pubkey: owner,
-          backend_origin: window.location.origin,
-          request,
-        }),
-      );
-    },
-    { owner, request },
-  );
-  await page.goto(app.origin);
-  await button(page, "Your profile").click();
-  await page.getByRole("menuitem", { name: "Settings", exact: true }).click();
-  await button(page, "Builderlab").click();
-  await expect(
-    page.getByText("Deletion status is unknown", { exact: true }),
-  ).toBeVisible();
-  await expect(
-    page.getByText(request.request_id, { exact: true }),
-  ).toBeVisible();
-  await expect(page.getByText(/will not check automatically/i)).toBeVisible();
-  expect(calls.filter((action) => action === "delete")).toHaveLength(0);
-  expect(
-    await page.evaluate(() =>
-      localStorage.getItem("buzz.hosted-community-deletion.v1"),
-    ),
-  ).not.toBeNull();
-  await expect(button(page, "Check deletion status")).toBeDisabled();
-  canDelete = true;
-  // Reload restores the open Settings modal over its workspace.
-  await page.reload();
-  await expect(settingsDialog(page)).toBeVisible();
-  await button(page, "Builderlab").click();
-  await expect(button(page, "Check deletion status")).toBeEnabled();
-  await button(page, "Check deletion status").click();
-  await expect(
-    page.getByText("Deletion started", { exact: true }),
-  ).toBeVisible();
-  expect(calls.filter((action) => action === "delete")).toHaveLength(1);
-  expect(deletionBodies).toEqual([request]);
-  await expect(button(page, "Delete")).toHaveCount(0);
-  expect(
-    await page.evaluate(() =>
-      localStorage.getItem("buzz.hosted-community-deletion.v1"),
-    ),
-  ).toBeNull();
-});
-
-test("hosted deletion keeps a foreign owner's full npub inside the dialog and notice", async ({
-  page,
-  app,
-}) => {
-  const owner = "a".repeat(64);
-  const community = {
-    id: "11111111-1111-4111-8111-111111111111",
-    name: "north",
-    normalized_host: "North.communities.buzz.xyz",
-    archived_at: "2026-09-24",
-  };
-  const deletes = [];
-  await page.route("**/api/relay/identity", (route) =>
-    route.fulfill({ json: { viewer: owner } }),
-  );
-  await savedCommunity(page, owner);
-  await page.route("**/api/builderlab/**", async (route) => {
-    const action = new URL(route.request().url()).pathname.split("/").at(-1);
-    if (action === "auth")
-      return route.fulfill({
-        json: {
-          auth: {
-            email: "owner@example.com",
-            expiresAt: "2030",
-            capabilities: { can_delete_buzz_communities: true },
+        });
+      if (action === "identity")
+        return route.fulfill({ json: { identity: { pubkey_hex: owner } } });
+      if (action === "list")
+        return route.fulfill({
+          json: {
+            communities: [],
+            quota_used: 1,
+            quota_limit: 5,
+            can_create: false,
           },
-        },
-      });
-    if (action === "identity")
-      return route.fulfill({ json: { identity: { pubkey_hex: owner } } });
-    if (action === "list")
-      return route.fulfill({
-        json: {
-          communities: [community],
-          quota_used: 1,
-          quota_limit: 5,
-          can_create: true,
-        },
-      });
-    if (action === "delete") deletes.push(route.request().postDataJSON());
-    return route.fulfill({ status: 404, json: { error: "unexpected" } });
-  });
-  const contained = (locator) =>
-    locator.evaluate((node) => node.scrollWidth <= node.clientWidth);
+        });
+      if (action === "delete") {
+        deletionBodies.push(route.request().postDataJSON());
+        return route.fulfill({
+          status: 202,
+          json: { ...request, status: "submitted" },
+        });
+      }
+      return route.fulfill({ status: 404, json: { error: "unexpected" } });
+    });
 
-  await page.goto(app.origin);
-  await button(page, "Your profile").click();
-  await page.getByRole("menuitem", { name: "Settings", exact: true }).click();
-  await button(page, "Builderlab").click();
-  await button(page, "Delete").click();
-  const dialog = page.getByRole("dialog", { name: /Permanently delete north/ });
-  await dialog
-    .getByLabel("Type the exact host")
-    .fill(community.normalized_host);
-  await dialog
-    .getByRole("checkbox", { name: /I understand this cannot be canceled/ })
-    .check();
-  // Another tab claims the slot while this dialog is open.
-  await page.evaluate(
-    (community) =>
-      localStorage.setItem(
-        "buzz.hosted-community-deletion.v1",
-        JSON.stringify({
-          version: 1,
-          owner_pubkey: "b".repeat(64),
-          backend_origin: window.location.origin,
-          request: {
-            community_id: community.id,
-            host: community.normalized_host,
-            request_id: "33333333-3333-4333-8333-333333333333",
-            acknowledgement_version: 1,
-          },
-        }),
+    // Boot with the saved deletion rather than reloading over a booting app,
+    // which WebKit can fail with an internal error. Seed only the first
+    // document, so the reload below sees just what the app kept.
+    await page.addInitScript(
+      ({ owner, request }) => {
+        if (sessionStorage.getItem("test.seeded-deletion")) return;
+        sessionStorage.setItem("test.seeded-deletion", "1");
+        localStorage.setItem(
+          "buzz.hosted-community-deletion.v1",
+          JSON.stringify({
+            version: 1,
+            owner_pubkey: owner,
+            backend_origin: window.location.origin,
+            request,
+          }),
+        );
+      },
+      { owner, request },
+    );
+    await page.goto(app.origin);
+    await button(page, "Your profile").click();
+    await page.getByRole("menuitem", { name: "Settings", exact: true }).click();
+    await button(page, "Builderlab").click();
+    await expect(
+      page.getByText("Deletion status is unknown", { exact: true }),
+    ).toBeVisible();
+    await expect(
+      page.getByText(request.request_id, { exact: true }),
+    ).toBeVisible();
+    await expect(page.getByText(/will not check automatically/i)).toBeVisible();
+    expect(calls.filter((action) => action === "delete")).toHaveLength(0);
+    expect(
+      await page.evaluate(() =>
+        localStorage.getItem("buzz.hosted-community-deletion.v1"),
       ),
-    community,
-  );
-  await dialog.getByRole("button", { name: "Start deletion" }).click();
-  const alert = dialog.getByRole("alert");
-  await expect(alert).toContainText("is already pending on this device");
-  expect(await contained(dialog)).toBe(true);
-  await dialog.getByRole("button", { name: "Cancel" }).click();
-  // The global paragraph rule already wraps this notice; this guards regressions.
-  const notice = page
-    .getByRole("status")
-    .filter({ hasText: "is still pending" });
-  await expect(notice).toBeVisible();
-  expect(await contained(notice)).toBe(true);
-  expect(deletes).toHaveLength(0);
-});
+    ).not.toBeNull();
+    await expect(button(page, "Check deletion status")).toBeDisabled();
+    canDelete = true;
+    // Reload restores the open Settings modal over its workspace.
+    await page.reload();
+    await expect(settingsDialog(page)).toBeVisible();
+    await button(page, "Builderlab").click();
+    await expect(button(page, "Check deletion status")).toBeEnabled();
+    await button(page, "Check deletion status").click();
+    await expect(
+      page.getByText("Deletion started", { exact: true }),
+    ).toBeVisible();
+    expect(calls.filter((action) => action === "delete")).toHaveLength(1);
+    expect(deletionBodies).toEqual([request]);
+    await expect(button(page, "Delete")).toHaveCount(0);
+    expect(
+      await page.evaluate(() =>
+        localStorage.getItem("buzz.hosted-community-deletion.v1"),
+      ),
+    ).toBeNull();
+  },
+);
+
+fiBuild(
+  "hosted deletion keeps a foreign owner's full npub inside the dialog and notice",
+  async ({ page, app }) => {
+    const owner = "a".repeat(64);
+    const community = {
+      id: "11111111-1111-4111-8111-111111111111",
+      name: "north",
+      normalized_host: "North.communities.buzz.xyz",
+      archived_at: "2026-09-24",
+    };
+    const deletes = [];
+    await page.route("**/api/relay/identity", (route) =>
+      route.fulfill({ json: { viewer: owner } }),
+    );
+    await savedCommunity(page, owner);
+    await page.route("**/api/builderlab/**", async (route) => {
+      const action = new URL(route.request().url()).pathname.split("/").at(-1);
+      if (action === "auth")
+        return route.fulfill({
+          json: {
+            auth: {
+              email: "owner@example.com",
+              expiresAt: "2030",
+              capabilities: { can_delete_buzz_communities: true },
+            },
+          },
+        });
+      if (action === "identity")
+        return route.fulfill({ json: { identity: { pubkey_hex: owner } } });
+      if (action === "list")
+        return route.fulfill({
+          json: {
+            communities: [community],
+            quota_used: 1,
+            quota_limit: 5,
+            can_create: true,
+          },
+        });
+      if (action === "delete") deletes.push(route.request().postDataJSON());
+      return route.fulfill({ status: 404, json: { error: "unexpected" } });
+    });
+    const contained = (locator) =>
+      locator.evaluate((node) => node.scrollWidth <= node.clientWidth);
+
+    await page.goto(app.origin);
+    await button(page, "Your profile").click();
+    await page.getByRole("menuitem", { name: "Settings", exact: true }).click();
+    await button(page, "Builderlab").click();
+    await button(page, "Delete").click();
+    const dialog = page.getByRole("dialog", {
+      name: /Permanently delete north/,
+    });
+    await dialog
+      .getByLabel("Type the exact host")
+      .fill(community.normalized_host);
+    await dialog
+      .getByRole("checkbox", { name: /I understand this cannot be canceled/ })
+      .check();
+    // Another tab claims the slot while this dialog is open.
+    await page.evaluate(
+      (community) =>
+        localStorage.setItem(
+          "buzz.hosted-community-deletion.v1",
+          JSON.stringify({
+            version: 1,
+            owner_pubkey: "b".repeat(64),
+            backend_origin: window.location.origin,
+            request: {
+              community_id: community.id,
+              host: community.normalized_host,
+              request_id: "33333333-3333-4333-8333-333333333333",
+              acknowledgement_version: 1,
+            },
+          }),
+        ),
+      community,
+    );
+    await dialog.getByRole("button", { name: "Start deletion" }).click();
+    const alert = dialog.getByRole("alert");
+    await expect(alert).toContainText("is already pending on this device");
+    expect(await contained(dialog)).toBe(true);
+    await dialog.getByRole("button", { name: "Cancel" }).click();
+    // The global paragraph rule already wraps this notice; this guards regressions.
+    const notice = page
+      .getByRole("status")
+      .filter({ hasText: "is still pending" });
+    await expect(notice).toBeVisible();
+    expect(await contained(notice)).toBe(true);
+    expect(deletes).toHaveLength(0);
+  },
+);
 
 test("Settings loads and publishes the selected community profile", async ({
   page,
@@ -941,9 +956,10 @@ test("Settings loads and publishes the selected community profile", async ({
     exact: true,
   });
   await picture.fill("http://example.com/avatar.png");
-  await expect(
-    avatarEditor.getByRole("button", { name: "Done", exact: true }),
-  ).toBeDisabled();
+  // Done reveals the URL error instead of applying it.
+  await avatarEditor.getByRole("button", { name: "Done", exact: true }).click();
+  await expect(picture).toHaveAccessibleDescription(/Use an HTTPS image URL/);
+  await expect(avatarEditor).toBeVisible();
   await picture.fill("");
   await avatarEditor.getByRole("button", { name: "Done", exact: true }).click();
   await expect(avatarEditor).toBeHidden();
@@ -1086,9 +1102,10 @@ test("discarding community setup leaves the published profile unchanged", async 
     exact: true,
   });
   await picture.fill("http://example.com/avatar.png");
-  await expect(
-    avatarEditor.getByRole("button", { name: "Done", exact: true }),
-  ).toBeDisabled();
+  // Done reveals the URL error instead of applying it.
+  await avatarEditor.getByRole("button", { name: "Done", exact: true }).click();
+  await expect(picture).toHaveAccessibleDescription(/Use an HTTPS image URL/);
+  await expect(avatarEditor).toBeVisible();
   await picture.fill("https://example.com/avatar.png");
   await avatarEditor.getByRole("button", { name: "Done", exact: true }).click();
   await expect(button(page, "Publish profile & open")).toBeEnabled();

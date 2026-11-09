@@ -19,7 +19,8 @@ Get the newest build from the [releases page](https://github.com/block/buzz-app/
 
 | Platform | Download | Notes |
 | --- | --- | --- |
-| macOS (Apple Silicon) | `Buzz_…_aarch64.dmg` | Signed and notarized. Intel Macs aren't supported. |
+| macOS (Apple Silicon) | `Buzz_…_aarch64.dmg` | Signed and notarized. |
+| macOS (Intel) | `Buzz_…_x64.dmg` | Signed and notarized. |
 | Windows (x64) | `Buzz_…_x64_unsigned.exe` | Not code-signed, so Windows SmartScreen warns you before it runs. |
 | Linux (x64) | `Buzz_…_amd64.deb` or `Buzz_…_x86_64.AppImage` | Built on Ubuntu 24.04. |
 
@@ -64,7 +65,7 @@ from block/buzz.
 
 ### 4. Add your first agent
 
-Open **Agents** in the top bar and choose **Create your first agent** (or
+Open **Agents** in the app dock and choose **Create your first agent** (or
 **New agent → Create a new agent**). Agents belong to a community, so add yours
 first. Give the agent a name, pick a **Harness**, and optionally choose a model
 and write instructions. Then click **Create agent**.
@@ -85,8 +86,9 @@ edit files there.
 
 ### 5. Talk to it
 
-- **New chat:** click **+** in the top bar, left of **Messages**, and choose
-  **New chat**. Your default agent is tagged for you; type a message and send.
+- **New chat:** click **+** at the top of the Messages sidebar, beside
+  **All / Solo / Team**, and choose **New chat**. Your default agent is tagged
+  for you; type a message and send.
 - **Direct message:** open the agent's profile and click **Message**.
 - **In a channel:** @mention the agent. If it isn't in the channel yet, Buzz
   asks whether to **Invite** it.
@@ -105,8 +107,8 @@ ln -sf /Applications/Buzz.app/Contents/Resources/bin/buzz ~/.local/bin/buzz
 ## Preview limitations
 
 - Builds come straight from `main`; there's no stable release channel yet.
-- macOS builds are for Apple Silicon only. The Windows installer is unsigned,
-  and Windows and Linux get less testing than macOS.
+- The Windows installer is unsigned, and Intel macOS, Windows and Linux get
+  less testing than Apple Silicon macOS.
 - Claude and Codex agents need macOS or Linux. Goose and Pi work everywhere.
 - Buzz doesn't back up your key, so keep your own copy (see step 2).
 - Bringing your identity over from Buzz 0.X doesn't bring your communities

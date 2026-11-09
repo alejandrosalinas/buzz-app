@@ -1,21 +1,24 @@
 import { TypingDots } from "../../shared/design-system/ui/TypingDots";
 import { ShimmerText } from "../../shared/design-system/ui/ShimmerText";
+import type { ReactNode } from "react";
 import styles from "./ActivityStepPreview.module.css";
 
 /** The request's typing footprint opens into its real current step. */
 export function ActivityStepPreview({
   text,
   state,
+  icon,
 }: {
   text?: string | undefined;
   state: "waiting" | "working";
+  icon?: ReactNode;
 }) {
   const label = activityStepLabel(text);
   return (
     <span className={styles.stepPreview}>
-      {!label ? (
-        <TypingDots size="message" state={state} />
-      ) : (
+      {icon}
+      <TypingDots size="message" state={state} />
+      {label && (
         <span className={styles.stepText}>
           <ShimmerText active={state === "working"}>{label}</ShimmerText>
         </span>

@@ -37,6 +37,10 @@ test("avatar editing shares the creation picker in responsive dialogs", async ({
     ).toBeVisible();
     await expect(save).toBeEnabled();
     const emoji = dialog.getByRole("button", { name: "Choose emoji" });
+    await expect(emoji.locator("[data-avatar-shape]")).toHaveAttribute(
+      "data-avatar-shape",
+      "squircle",
+    );
     await emoji.click();
     await expect(
       page.getByRole("dialog", { name: "Choose emoji", exact: true }),

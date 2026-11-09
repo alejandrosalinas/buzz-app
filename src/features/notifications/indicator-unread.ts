@@ -77,9 +77,9 @@ export function bindUnreadIndicator(
             kind: "channel",
             channelId,
           });
-          return (
-            snapshot.manual !== "none" || (snapshot.observedCount ?? 0) > 0
-          );
+          // The dock follows the sidebar rows, which opening a channel quiets.
+          const count = snapshot.row?.observedCount ?? snapshot.observedCount;
+          return snapshot.manual !== "none" || (count ?? 0) > 0;
         }),
       );
     };

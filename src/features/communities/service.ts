@@ -85,6 +85,7 @@ export function createCommunities(
   identityReady?: Promise<string>,
   nativeConnect?: (id: string, signal: AbortSignal) => Promise<ReadTransport>,
   localAgents?: LocalAgentSource,
+  verifyStored?: ReadTransport["verifyStored"],
 ) {
   const connect = live
     ? (id: string, signal: AbortSignal) =>
@@ -185,6 +186,7 @@ export function createCommunities(
         agentChoices,
         viewer ? { viewer, scope: communityDestination(id).url } : undefined,
         localAgents,
+        verifyStored,
       );
       sessions.set(id, session);
       sessionScopes.set(id, scope);

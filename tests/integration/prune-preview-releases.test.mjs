@@ -56,6 +56,7 @@ function fixture(t) {
     platforms: Object.fromEntries(
       Object.entries({
         "darwin-aarch64": "aarch64.app.tar.gz",
+        "darwin-x86_64": "x64.app.tar.gz",
         "windows-x86_64": "x64_unsigned.exe",
         "linux-x86_64-deb": "amd64.deb",
         "linux-x86_64-appimage": "x86_64.AppImage",

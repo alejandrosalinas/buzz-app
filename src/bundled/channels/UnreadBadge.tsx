@@ -11,16 +11,21 @@ import styles from "./Channels.module.css";
 
 type UnreadSnapshot = ReturnType<RelaySession["unread"]["snapshot"]>;
 
+/** What the channel's row shows: opening it quiets the row (`row`) while
+ * its messages and threads stay unread elsewhere. */
+const shown = (snapshot: UnreadSnapshot) => snapshot.row ?? snapshot;
+
 /** Bold tracks ordinary backlog; protected attention has its own dot. */
 export function ordinaryUnread(
   snapshot: UnreadSnapshot,
   dm: boolean,
   muted = false,
 ) {
-  const count = snapshot.observedCount ?? 0;
+  const { observedCount, attentionCount } = shown(snapshot);
+  const count = observedCount ?? 0;
   return (
     snapshot.manual !== "none" ||
-    (!muted && (dm ? count > 0 : count > (snapshot.attentionCount ?? 0)))
+    (!muted && (dm ? count > 0 : count > (attentionCount ?? 0)))
   );
 }
 
@@ -67,17 +72,17 @@ export function useUnreadState(
     getActivity,
   );
   const muted = useConfirmedMute(session, channelId);
-  const count = snapshot.observedCount;
+  const { observedCount: count, attentionCount } = shown(snapshot);
   const manual = snapshot.manual !== "none";
   const unread =
-    manual ||
-    ((count ?? 0) > 0 && (dm || !muted || (snapshot.attentionCount ?? 0) > 0));
+    manual || ((count ?? 0) > 0 && (dm || !muted || (attentionCount ?? 0) > 0));
   const ordinary = ordinaryUnread(snapshot, dm, muted);
-  const threadCount = activity.items?.length ?? 0;
+  const threadCount = snapshot.row?.threadCount ?? activity.items?.length ?? 0;
   return {
     snapshot,
     activity,
     count,
+    attentionCount,
     manual,
     unread,
     ordinary,
@@ -108,6 +113,7 @@ export function UnreadBadge({
     activity,
     count,
     manual,
+    attentionCount,
     unread: quietUnread,
     ordinary,
     threadCount,
@@ -119,7 +125,7 @@ export function UnreadBadge({
       : quietUnread;
   const hideUnreadDots = muted && labelUnread === "ordinary" && !preserveUnread;
   if (!unread && !threadCount && label === undefined) return null;
-  const priority = dm || (snapshot.attentionCount ?? 0) > 0;
+  const priority = dm || (attentionCount ?? 0) > 0;
   const showUnreadDot =
     !hideUnreadDots &&
     priority &&
@@ -128,7 +134,12 @@ export function UnreadBadge({
   const unreadLabel = manual
     ? `Marked unread${snapshot.manual === "local-only" ? " on this device only" : ""}`
     : `${count} observed unread messages${snapshot.freshness === "stale" ? "; may be out of date" : ""}. Not an exact total.`;
-  const threadLabel = `${threadCount} unread ${threadCount === 1 ? "thread" : "threads"}${activity.freshness === "stale" ? "; may be out of date" : ""}`;
+  const mentionCount = activity.mentions?.length ?? 0;
+  const stale = activity.freshness === "stale" ? "; may be out of date" : "";
+  const mentionLabel = `${mentionCount} unread ${mentionCount === 1 ? "mention" : "mentions"}`;
+  // Mentions share the thread dot. Without a thread they have only the
+  // aria-hidden priority dot, or none when muted, so name them on their own.
+  const activityLabel = `${mentionCount ? `${mentionLabel}, ` : ""}${threadCount} unread ${threadCount === 1 ? "thread" : "threads"}${stale}`;
   return (
     <>
       {label !== undefined && (
@@ -158,17 +169,20 @@ export function UnreadBadge({
           aria-hidden="true"
         />
       )}
+      {mentionCount > 0 && threadCount === 0 && (
+        <span className="sr-only">{`${mentionLabel}${stale}`}</span>
+      )}
       {threadCount > 0 &&
         (hideUnreadDots ? (
-          <span className="sr-only">{threadLabel}</span>
+          <span className="sr-only">{activityLabel}</span>
         ) : (
           <span
             className={styles.threadActivityDot}
             data-channel-activity=""
             data-channel-muted={muted || undefined}
             role="img"
-            aria-label={threadLabel}
-            title={threadLabel}
+            aria-label={activityLabel}
+            title={activityLabel}
           />
         ))}
     </>

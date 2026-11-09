@@ -146,7 +146,7 @@ it("forwards the requested size so previews share the message-row thumbnail URL"
     `/api/relay/${encodeURIComponent(community)}/media?url=${encodeURIComponent(target)}`;
   const picture = `${community}/media/${sha}.png`;
   expect(avatarPreview(picture, community, "small")).toBe(
-    proxied(`${community}/media/${sha}.thumb.jpg`),
+    proxied(`${community}/media/${sha}.thumb.webp`),
   );
   // The editor keeps the original for its large frame.
   expect(avatarPreview(picture, community)).toBe(proxied(picture));

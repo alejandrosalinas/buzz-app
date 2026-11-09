@@ -50,7 +50,7 @@ it("registers only the reader page and leaves built-in agent tools unchanged", a
         title: "Shared notes",
         layout: "workspace",
         primary: true,
-        placement: "topbar",
+        placement: "dock",
       },
     ]);
     expect(addedKey(service.tools())).toBe(before);

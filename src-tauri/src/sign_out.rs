@@ -741,20 +741,26 @@ fn fenced() -> Failure {
     }
 }
 
-/// Commit intent, close signing, then run `shutdown`. Deleting is left to the next launch.
-async fn prepare<S>(
+/// Revoke paired tools, commit intent, close signing, then run `shutdown`.
+/// Deleting is left to the next launch.
+async fn prepare<V, S>(
     paths: &Paths,
     choices: Choices,
+    revoke: impl FnOnce() -> V,
     close: impl FnOnce(),
     shutdown: impl FnOnce() -> S,
 ) -> Result<(), Failure>
 where
+    V: Future<Output = Result<(), Failure>>,
     S: Future<Output = Result<(), String>>,
 {
     if let Err(error) = paths.unlinked(choices) {
         eprintln!("buzz: sign out refused: {error}");
         return Err(refuse(LINKED));
     }
+    // Last before the commit, so a refusal above keeps paired tools, and none
+    // outlives the marker, even past a crash.
+    revoke().await?;
     write_marker(&paths.marker, choices).map_err(|error| {
         eprintln!("buzz: could not write sign-out marker: {error}");
         refuse(NOT_PREPARED)
@@ -770,20 +776,22 @@ where
 /// Admit, commit and shut down. A refusal before the marker withdraws; any
 /// fenced failure, before or after it, closes signing and goes to `exit`, never
 /// to the dialog.
-async fn attempt<S, E>(
+async fn attempt<V, S, E>(
     instance: &Instance,
     paths: &Paths,
     choices: Choices,
+    revoke: impl FnOnce() -> V,
     close: impl Fn(),
     shutdown: impl FnOnce() -> S,
     exit: impl FnOnce() -> E,
 ) -> Result<(), Failure>
 where
+    V: Future<Output = Result<(), Failure>>,
     S: Future<Output = Result<(), String>>,
     E: Future<Output = Result<(), Failure>>,
 {
     let result = match instance.begin(choices) {
-        Ok(()) => prepare(paths, choices, &close, shutdown)
+        Ok(()) => prepare(paths, choices, revoke, &close, shutdown)
             .await
             .map_err(|failure| {
                 if failure.fenced {
@@ -860,6 +868,19 @@ pub(crate) fn sign_out_wipe_refusal() -> Option<&'static str> {
     current_refusal(true, false)
 }
 
+/// Paired tools act as this human, whose key a plain sign-out keeps, so it
+/// needs their revoke-all at least owed: once the marker is saved, the next
+/// launch finishes it. Sign out and erase needs it done.
+pub(crate) fn pairings_allow(
+    cleared: &Result<(), crate::credential_service::Unrevoked>,
+    wipe: bool,
+) -> bool {
+    match cleared {
+        Ok(()) => true,
+        Err(unrevoked) => !wipe && unrevoked.recorded,
+    }
+}
+
 /// Records the choices and restarts; the next launch deletes.
 #[tauri::command]
 pub(crate) async fn sign_out<R: tauri::Runtime>(
@@ -882,6 +903,14 @@ pub(crate) async fn sign_out<R: tauri::Runtime>(
     };
     // Agents run as plugin host processes, which stop when Buzz exits.
     let shutdown = || async { Ok(()) };
+    let revoke = || async {
+        match app.try_state::<crate::credential_service::CredentialService>() {
+            Some(credentials) if !pairings_allow(&credentials.clear_pairings().await, wipe) => Err(
+                refuse("Couldn't revoke paired command-line tools; nothing was signed out"),
+            ),
+            _ => Ok(()),
+        }
+    };
     let identity = app.state::<crate::identity::IdentityHost>().inner().clone();
     let pairing = app.state::<crate::pairing::Pairing>().inner().clone();
     let backup = app
@@ -896,7 +925,7 @@ pub(crate) async fn sign_out<R: tauri::Runtime>(
         identity.close();
         pairing.close();
     };
-    attempt(&instance, &paths, choices, close, shutdown, || {
+    attempt(&instance, &paths, choices, revoke, close, shutdown, || {
         exit_fenced(app.clone())
     })
     .await?;

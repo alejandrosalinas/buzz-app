@@ -1,7 +1,7 @@
-// Claude on this computer: Buzz's own copy, whether it is signed in, and
-// keeping that copy on the latest release. Each step runs as a declared
+// Claude on this computer: Buzz's own copy, whether it can run (`auth.tsx`),
+// and keeping that copy on the latest release. Each step runs as a declared
 // process; the copy lives apart from any `claude` the user installed, and
-// shares their `~/.claude` sign-in and settings.
+// shares their `~/.claude` settings.
 import type { AgentProviderSnapshot } from "../../features/agents/service";
 import type { ReviewPrompt } from "../../features/agent-protection/models";
 import type {
@@ -9,6 +9,7 @@ import type {
   HostRequest,
   HostResponse,
 } from "../../features/host/service";
+import { ClaudeAuth } from "./auth";
 import { ClaudeProcess, ENV, type ClaudeModel, type Spawn } from "./claude";
 import script from "./claude.sh?raw";
 import {
@@ -46,7 +47,6 @@ const STEPS: Readonly<Record<string, string>> = {
   install: "install",
   use: "use",
   review: "review",
-  "review-token": "review-token",
 };
 /** Starts `claude` and its other steps as steps of `claude.sh`, which the
  * manifest grants as `bash -c`; other processes start as declared. */
@@ -144,23 +144,10 @@ const abortable = <T>(work: Promise<T>, signal: AbortSignal) =>
 const message = (error: unknown) =>
   error instanceof Error ? error.message : String(error);
 
-const NO_REVIEW_SIGN_IN =
-  "Claude security reviews need their own sign-in. Run claude setup-token in Terminal, then paste the token under Sign in for reviews in Settings → Agent setup → Harness defaults → Claude → Edit configuration. It needs a Claude Pro, Max, Team or Enterprise subscription.";
-const REJECTED_REVIEW_SIGN_IN =
-  "Claude rejected the security-review sign-in. It may have expired (it lasts a year) or been revoked, or the account has no Claude subscription. Run claude setup-token again and paste the new token under Sign in for reviews in Settings → Agent setup → Harness defaults → Claude → Edit configuration.";
-
-/** Security reviews' own Claude folder and the sign-in saved in it, or why
- * there is none to review with. */
-async function reviewSignIn(spawn: Spawn) {
-  const { code, stdout, stderr } = await collect(spawn, "review", []);
-  if (code !== 0)
-    throw new Error(stderr.trim() || "Claude's review sign-in is unreadable");
-  const [home, token] = stdout.split("\n");
-  if (!home?.startsWith("/") || !token) throw new Error(NO_REVIEW_SIGN_IN);
-  return { home, token };
-}
-
-export async function checkClaude(spawn: Spawn): Promise<ClaudeStatus> {
+export async function checkClaude(
+  spawn: Spawn,
+  auth: ClaudeAuth,
+): Promise<ClaudeStatus> {
   let version: string;
   try {
     const result = await collect(spawn, "claude", ["--version"]);
@@ -178,19 +165,9 @@ export async function checkClaude(spawn: Spawn): Promise<ClaudeStatus> {
   if (compareVersions(version, MIN_VERSION) < 0)
     return { state: "outdated", version };
   try {
-    const { stdout } = await collect(spawn, "claude", [
-      "auth",
-      "status",
-      "--json",
-    ]);
-    const status = JSON.parse(stdout) as {
-      loggedIn?: boolean;
-      email?: string;
-      orgName?: string;
-    };
-    if (!status.loggedIn) return { state: "signed-out", version };
-    const account = [status.email, status.orgName].filter(Boolean).join(" · ");
-    return { state: "ready", version, ...(account ? { account } : {}) };
+    const signedIn = await auth.check();
+    if (!signedIn) return { state: "signed-out", version };
+    return { state: "ready", version, ...signedIn };
   } catch {
     return { state: "signed-out", version };
   }
@@ -242,7 +219,7 @@ export type SetupState = Readonly<{
   modelsChecking: boolean;
   modelsError: string;
   checking: boolean;
-  running: "install" | "login" | undefined;
+  running: "install" | "sign-in" | undefined;
   /** The running or last step's output. */
   output: string;
   /** Why the latest release is not the one in use, after it failed its test. */
@@ -277,10 +254,15 @@ export class ClaudeSetup {
    * while Buzz has found no copy to run. */
   private holding: Promise<void> | undefined;
 
+  /** Starts `claude` with the credentials when there are any. */
+  private readonly spawn: Spawn | undefined;
   constructor(
-    private readonly spawn: Spawn | undefined,
+    spawn: Spawn | undefined,
     private readonly request?: Request,
-  ) {}
+    readonly auth = new ClaudeAuth(spawn),
+  ) {
+    this.spawn = spawn && auth.authorize(spawn);
+  }
 
   snapshot = () => this.state;
   providerSnapshot = () => this.health;
@@ -308,7 +290,7 @@ export class ClaudeSetup {
                   : status.state === "outdated"
                     ? "Update Claude Code"
                     : status.state === "signed-out"
-                      ? "Log in to Claude Code"
+                      ? this.auth.attentionLabel
                       : "Claude Code needs attention",
             },
     );
@@ -331,7 +313,7 @@ export class ClaudeSetup {
     if (this.state.checking || this.state.running) return;
     const previous = this.state.status;
     this.set({ checking: true });
-    const status = await checkClaude(this.spawn);
+    const status = await checkClaude(this.spawn, this.auth);
     const invalidate =
       refreshModels || JSON.stringify(previous) !== JSON.stringify(status);
     if (invalidate) {
@@ -404,7 +386,7 @@ export class ClaudeSetup {
     // Held from the first check: until it answers, there may be no copy.
     return this.hold(
       (async () => {
-        const status = await checkClaude(spawn);
+        const status = await checkClaude(spawn, this.auth);
         this.set({ status });
         if (!needed && status.state === "missing") return;
         await this.run("install", false);
@@ -457,17 +439,18 @@ export class ClaudeSetup {
     return held;
   }
 
-  /** Installs or updates Buzz's copy, or runs sign-in; then checks again.
-   * Asked for by the person, it also retries a release that failed its test,
-   * and shows only this step's output. */
-  run(step: "install" | "login", asked = true) {
+  /** Installs or updates Buzz's copy, or runs the interactive sign-in when
+   * there is one; then checks again. Asked for by the person, it also
+   * retries a release that failed its test, and shows only this step's
+   * output. */
+  run(step: "install" | "sign-in", asked = true) {
     if (!this.spawn || this.state.running) return Promise.resolve();
     const work = this.perform(this.spawn, step, asked);
     return step === "install" ? this.hold(work) : work;
   }
   private async perform(
     spawn: Spawn,
-    step: "install" | "login",
+    step: "install" | "sign-in",
     asked: boolean,
   ) {
     this.cancelled = false;
@@ -475,7 +458,10 @@ export class ClaudeSetup {
     this.set({ running: step, ...(asked ? { output: "" } : {}) });
     try {
       if (step === "install") await this.install(spawn);
-      else await this.step(spawn, "claude", ["auth", "login"], "Sign-in");
+      else
+        await this.auth.signIn?.((id, args, label) =>
+          this.step(spawn, id, args, label),
+        );
     } catch (error) {
       this.log(`\n${message(error)}`);
     } finally {
@@ -516,7 +502,7 @@ export class ClaudeSetup {
   /** Downloads the latest release, checks it against its published checksum,
    * tests it, and only then makes it the one new sessions start. */
   private async install(spawn: Spawn) {
-    const status = await checkClaude(spawn);
+    const status = await checkClaude(spawn, this.auth);
     const current = "version" in status ? status.version : undefined;
     const latest = (await this.fetch("latest")).trim();
     if (!/^\d+\.\d+\.\d+$/.test(latest))
@@ -567,9 +553,9 @@ export class ClaudeSetup {
       );
     if (!this.spawn) throw new Error("Claude review needs the desktop app");
     const timeout = AbortSignal.any([signal, AbortSignal.timeout(60_000)]);
-    // Signed in apart from `~/.claude`, which contained agents can write; and
-    // without that sign-in, closed before any download or model.
-    const review = await abortable(reviewSignIn(this.spawn), timeout);
+    // Its own folder in place of `~/.claude`, which contained agents can
+    // write; and without credentials, closed before any download or model.
+    const review = await abortable(this.auth.review(), timeout);
     // A verdict comes only from the release the host verified.
     await this.protectedInstalled(timeout);
     const worker = await ClaudeProcess.start(this.spawn, {
@@ -589,11 +575,9 @@ export class ClaudeSetup {
       timeout.throwIfAborted();
       if (!result.ok)
         throw new Error(
-          /authentication_error|OAuth token .*(expired|revoked)/i.test(
-            result.error ?? "",
-          )
-            ? REJECTED_REVIEW_SIGN_IN
-            : (result.error ?? "The security model did not complete"),
+          result.error
+            ? this.auth.explain(result.error)
+            : "The security model did not complete",
         );
       return {
         text: prompt.outputSchema ? worker.structuredResult : worker.result,
@@ -654,35 +638,6 @@ export class ClaudeSetup {
   /** Sends a line to the running step, such as a sign-in code. */
   answer(text: string) {
     return this.process?.write(`${text}\n`);
-  }
-  /** Saves the token `claude setup-token` printed as security reviews' own
-   * sign-in. Like a sign-in code it goes on stdin, never in an argument, and
-   * the step prints only fixed lines, which this returns or throws. */
-  async saveReviewSignIn(token: string, signal: AbortSignal) {
-    if (!this.spawn) throw new Error("Claude reviews need the desktop app");
-    let output = "";
-    const process = await this.spawn("review-token", {
-      onStdout: (text) => {
-        output += text;
-      },
-      onStderr: (text) => {
-        output += text;
-      },
-    });
-    const stop = () => void process.kill();
-    signal.addEventListener("abort", stop, { once: true });
-    if (signal.aborted) stop();
-    try {
-      await process.end(`${token}\n`);
-      const code = await process.exited;
-      if (code !== 0)
-        throw new Error(
-          output.trim() || `Saving ended (${code ?? "stopped"}).`,
-        );
-      return output.trim();
-    } finally {
-      signal.removeEventListener("abort", stop);
-    }
   }
   cancel() {
     this.cancelled = true;

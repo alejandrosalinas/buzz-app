@@ -350,6 +350,9 @@ it("attributes transfer limit_reached to the recipient, not this owner's quota",
     Response.json({ error: { code: "limit_reached" } }, { status: 409 });
   renderCard();
   fireEvent.click(await screen.findByRole("button", { name: "Transfer" }));
+  await waitFor(() =>
+    expect(screen.getByLabelText("Recipient npub")).toHaveFocus(),
+  );
   fireEvent.change(screen.getByPlaceholderText("npub1…"), {
     target: { value: npubEncode(other) },
   });
@@ -620,6 +623,54 @@ it("shows an availability failure and retries the same name", async () => {
   ).toBeEnabled();
 });
 
+it("opens the join for a created community instead of handing off its address", async () => {
+  routes["/api/builderlab/availability"] = () => ({ available: true });
+  routes["/api/builderlab/create"] = () => ({
+    community: { id: "c1", normalized_host: "north.communities.buzz.xyz" },
+  });
+  const writeText = vi.fn(async () => {});
+  vi.stubGlobal("navigator", { clipboard: { writeText } });
+  const join = vi.fn(() => true);
+  render(
+    <StrictMode>
+      <HostedCommunities api={brokerApi} active={() => true} join={join} />
+    </StrictMode>,
+  );
+  await typeName("north");
+  await screen.findByText("That address is available.", {}, { timeout: 2000 });
+  fireEvent.click(screen.getByRole("button", { name: "Create community" }));
+  await waitFor(() =>
+    expect(join).toHaveBeenCalledWith("wss://north.communities.buzz.xyz"),
+  );
+  expect(join).toHaveBeenCalledOnce();
+  await waitFor(() =>
+    expect(
+      screen.getByRole("button", { name: "Create community" }),
+    ).not.toHaveAttribute("aria-busy", "true"),
+  );
+  expect(writeText).not.toHaveBeenCalled();
+  expect(screen.queryByText(/Address copied/)).not.toBeInTheDocument();
+});
+
+it("hands off the address when the app cannot open the join", async () => {
+  routes["/api/builderlab/availability"] = () => ({ available: true });
+  routes["/api/builderlab/create"] = () => ({
+    community: { id: "c1", normalized_host: "north.communities.buzz.xyz" },
+  });
+  const writeText = vi.fn(async () => {});
+  vi.stubGlobal("navigator", { clipboard: { writeText } });
+  const join = vi.fn(() => false);
+  render(<HostedCommunities api={brokerApi} active={() => true} join={join} />);
+  await typeName("north");
+  await screen.findByText("That address is available.", {}, { timeout: 2000 });
+  fireEvent.click(screen.getByRole("button", { name: "Create community" }));
+  await waitFor(() =>
+    expect(writeText).toHaveBeenCalledWith("wss://north.communities.buzz.xyz"),
+  );
+  expect(join).toHaveBeenCalledOnce();
+  expect(await screen.findByText(/Address copied/)).toBeInTheDocument();
+});
+
 it("keeps the address visible when the clipboard rejects", async () => {
   routes["/api/builderlab/availability"] = () => ({ available: true });
   routes["/api/builderlab/create"] = () => ({
@@ -728,6 +779,36 @@ it("does not write to the clipboard when create finishes after the card retires"
   expect(writeText).not.toHaveBeenCalled();
 });
 
+for (const ending of ["retires", "unmounts"] as const)
+  it(`does not open the join when create finishes after the card ${ending}`, async () => {
+    const create = hold();
+    let live = true;
+    routes["/api/builderlab/availability"] = () => ({ available: true });
+    routes["/api/builderlab/create"] = create.answer as Handler;
+    const join = vi.fn(() => true);
+    const { unmount } = render(
+      <HostedCommunities api={brokerApi} active={() => live} join={join} />,
+    );
+    await typeName("north");
+    await screen.findByText(
+      "That address is available.",
+      {},
+      { timeout: 2000 },
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Create community" }));
+    await waitFor(() =>
+      expect(calls.map(([url]) => url)).toContain("/api/builderlab/create"),
+    );
+    if (ending === "retires") live = false;
+    else unmount();
+    await act(async () =>
+      create.release({
+        community: { id: "c1", normalized_host: "north.communities.buzz.xyz" },
+      }),
+    );
+    expect(join).not.toHaveBeenCalled();
+  });
+
 it("keeps a created community's address when the following refresh fails", async () => {
   routes["/api/builderlab/availability"] = () => ({ available: true });
   routes["/api/builderlab/create"] = () => ({
@@ -818,6 +899,15 @@ it.each([
     });
     renderCard();
     fireEvent.click(await screen.findByRole("button", { name: action }));
+    // Archive stops every connection, so Enter cancels; unarchive confirms.
+    const dialog = await screen.findByRole("alertdialog");
+    await waitFor(() =>
+      expect(
+        within(dialog).getByRole("button", {
+          name: kind === "archive" ? "Cancel" : action,
+        }),
+      ).toHaveFocus(),
+    );
     routes["/api/builderlab/list"] = () => ({
       error: { code: "relay_unavailable" },
     });
@@ -1101,6 +1191,19 @@ async function confirmDeletion(host = archived.normalized_host) {
 
 const deletionPosts = () =>
   calls.filter(([url]) => url === "/api/builderlab/delete");
+
+it("starts permanent deletion in the host field with submission gated", async () => {
+  routes["/api/builderlab/list"] = () => ({ communities: [archived] });
+  renderCard();
+  const dialog = await openDeletion();
+  await waitFor(() =>
+    expect(within(dialog).getByLabelText("Type the exact host")).toHaveFocus(),
+  );
+  expect(
+    within(dialog).getByRole("button", { name: "Start deletion" }),
+  ).toBeDisabled();
+  expect(deletionPosts()).toEqual([]);
+});
 
 async function startUncertainDeletion() {
   routes["/api/builderlab/list"] = () => ({ communities: [archived] });

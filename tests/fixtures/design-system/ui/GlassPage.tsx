@@ -102,6 +102,20 @@ export function GlassPage() {
         </div>
       </Section>
 
+      <Section
+        title="Clear glass action (proposed)"
+        description="Barely-there glass for a secondary action beside a prominent one on a bright brand surface."
+      >
+        <div className="glass-scene flex flex-wrap gap-3 rounded-xl p-6">
+          <Button variant="prominent" size="lg">
+            Create account
+          </Button>
+          <Button variant="glass-clear" size="lg">
+            Sign in
+          </Button>
+        </div>
+      </Section>
+
       {GLASS ? (
         <Section
           title="The ramp"

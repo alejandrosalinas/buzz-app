@@ -300,6 +300,108 @@ test("emoji picker load failure fits above the footer and retries on reopen", as
   await expect(alert).toHaveCount(0);
 });
 
+// Refocus on each poll so the scroll applies once the panel settles.
+const focusedSliderClearsFooter = (done) =>
+  done.evaluate((button) => {
+    const slider = button
+      .closest("fieldset")
+      .querySelector('input[type="range"]');
+    slider.blur();
+    slider.focus();
+    const footer = button.parentElement.parentElement;
+    return (
+      slider.getBoundingClientRect().bottom <=
+      footer.getBoundingClientRect().top
+    );
+  });
+
+test("a short avatar popup keeps Done in view on the Emoji tab", async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 1280, height: 420 });
+  await page.route("**/api/relay/**", (route) => route.abort());
+  await page.goto("/tests/fixtures/profile-settings.html");
+  await page
+    .getByRole("button", { name: "Edit human profile", exact: true })
+    .click();
+  await page.getByRole("button", { name: "Edit avatar", exact: true }).click();
+  await page.getByRole("tab", { name: "Emoji", exact: true }).click();
+  await expect(
+    page.getByRole("searchbox", { name: "Search emoji" }),
+  ).toBeVisible();
+  const done = page.getByRole("button", { name: "Done", exact: true });
+  // The popup scrolls beneath its sticky footer instead of hiding Done
+  // below the emoji grid, and the picker's own layers stay under it.
+  await expect
+    .poll(() =>
+      done.evaluate((button) => {
+        const popup = button.closest(".popover-surface");
+        const bounds = button.getBoundingClientRect();
+        const hit = document.elementFromPoint(
+          bounds.left + bounds.width / 2,
+          bounds.top + bounds.height / 2,
+        );
+        return (
+          popup.scrollHeight > popup.clientHeight &&
+          bounds.bottom <= popup.getBoundingClientRect().bottom &&
+          button.contains(hit)
+        );
+      }),
+    )
+    .toBe(true);
+  // The action row, not the grid beneath it, owns the gap between actions.
+  const remove = page.getByRole("button", {
+    name: "Remove avatar",
+    exact: true,
+  });
+  expect(
+    await done.evaluate(
+      (button, removeBox) => {
+        const doneBox = button.getBoundingClientRect();
+        const hit = document.elementFromPoint(
+          (removeBox.x + removeBox.width + doneBox.left) / 2,
+          doneBox.top + doneBox.height / 2,
+        );
+        return button.parentElement.contains(hit);
+      },
+      await remove.boundingBox(),
+    ),
+  ).toBe(true);
+  // Focus scrolling keeps a control clear of the footer that covers the end.
+  await expect.poll(() => focusedSliderClearsFooter(done)).toBe(true);
+});
+
+test("a wrapped avatar footer at enlarged text still clears focused controls", async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 480, height: 600 });
+  await page.route("**/api/relay/**", (route) => route.abort());
+  await page.goto("/tests/fixtures/profile-settings.html");
+  await page.evaluate(() => {
+    document.documentElement.style.fontSize = "200%";
+  });
+  await page
+    .getByRole("button", { name: "Edit human profile", exact: true })
+    .click();
+  await page.getByRole("button", { name: "Edit avatar", exact: true }).click();
+  await page.getByRole("tab", { name: "Emoji", exact: true }).click();
+  await expect(
+    page.getByRole("searchbox", { name: "Search emoji" }),
+  ).toBeVisible();
+  const done = page.getByRole("button", { name: "Done", exact: true });
+  const remove = page.getByRole("button", {
+    name: "Remove avatar",
+    exact: true,
+  });
+  // The actions wrap onto two rows, so the footer is taller than one control.
+  await expect
+    .poll(
+      async () => (await done.boundingBox()).y > (await remove.boundingBox()).y,
+    )
+    .toBe(true);
+  await expect.poll(() => focusedSliderClearsFooter(done)).toBe(true);
+});
+
 test("custom color and footer resize together without reversing direction", async ({
   page,
 }) => {
@@ -512,4 +614,85 @@ test("avatar picker previews pointer selections and respects reduced motion", as
   await expect(
     page.getByRole("tab", { name: "Emoji", exact: true }),
   ).toHaveCount(0);
+});
+
+const onboardingAvatar = async (page) => {
+  await page.route("**/api/relay/**", (route) => route.abort());
+  await page.goto("/tests/fixtures/onboarding-profile.html");
+  const add = page.getByRole("button", { name: "Add avatar", exact: true });
+  await add.click();
+  const dialog = page.getByRole("dialog", { name: "Edit avatar", exact: true });
+  await expect(dialog).toBeVisible();
+  return { add, dialog };
+};
+
+// Browser boundary: Base UI outside-press and focus-out dismissal, and return
+// focus to a trigger that is remounted when the draft preview clears.
+test("an unsaved onboarding avatar draft survives an outside press, and closing returns focus", async ({
+  page,
+}) => {
+  const { add, dialog } = await onboardingAvatar(page);
+  const heading = page.getByRole("heading", { name: "Set up your profile" });
+  // An untouched draft still dismisses on an outside press.
+  await heading.click();
+  await expect(dialog).toHaveCount(0);
+  await add.click();
+  const url = page.getByRole("textbox", { name: "Picture URL (optional)" });
+  await url.fill("https://images.example/avatar.png");
+  // The heading is focusable, but the draft keeps focus as well as the popup.
+  await heading.click();
+  await page.mouse.click(4, 4);
+  // A label focuses its control on click, after the press itself.
+  await page
+    .getByText("Display name", { exact: true })
+    .click({ position: { x: 3, y: 5 } });
+  await expect(dialog).toBeVisible();
+  await expect(url).toBeFocused();
+  await expect(url).toHaveValue("https://images.example/avatar.png");
+  await page.keyboard.press("Escape");
+  await expect(dialog).toHaveCount(0);
+  await expect(add).toBeFocused();
+
+  // A picked emoji is a draft too, even before any URL exists.
+  await add.click();
+  await page.getByRole("tab", { name: "Emoji", exact: true }).click();
+  await expect(
+    page.getByRole("searchbox", { name: "Search emoji" }),
+  ).toBeVisible();
+  await heading.click();
+  await expect(dialog).toBeVisible();
+  await page.getByRole("tab", { name: "Emoji", exact: true }).press("Escape");
+  await expect(dialog).toHaveCount(0);
+  await expect(add).toBeFocused();
+
+  // Tabbing out still closes, and focus lands on a control, not a hidden guard.
+  await add.click();
+  await url.fill("https://images.example/avatar.png");
+  await page.getByRole("button", { name: "Done", exact: true }).focus();
+  await page.keyboard.press("Tab");
+  await expect(dialog).toHaveCount(0);
+  await expect(add).toBeFocused();
+});
+
+// The full validation matrix lives in AvatarEditor.test.tsx; this checks the
+// wiring in a real browser, where Tab moves focus out of the field.
+test("the picture URL error waits for the field to lose focus", async ({
+  page,
+}) => {
+  await onboardingAvatar(page);
+  const url = page.getByRole("textbox", { name: "Picture URL (optional)" });
+  const message = /Use an HTTPS image URL/;
+  await url.pressSequentially("h");
+  await expect(url).not.toHaveAccessibleDescription(message);
+  await url.press("Tab");
+  await expect(url).toHaveAccessibleDescription(message);
+});
+
+test("the onboarding display name keeps nickname autofill without spellcheck", async ({
+  page,
+}) => {
+  await page.goto("/tests/fixtures/onboarding-profile.html");
+  const name = page.getByLabel("Display name", { exact: true });
+  await expect(name).toHaveAttribute("spellcheck", "false");
+  await expect(name).toHaveAttribute("autocomplete", "nickname");
 });

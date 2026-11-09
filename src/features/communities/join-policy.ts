@@ -5,6 +5,21 @@ export type JoinPolicy = {
   age_attestation_required: boolean;
 };
 
+/**
+ * The consent a join must ask for before `policy`'s community may be joined:
+ * none once it is `given` already (`accountConsents`).
+ */
+export function consentAsked(
+  policy: JoinPolicy | null | undefined,
+  given: boolean,
+) {
+  if (given) return { age: false, agreement: false };
+  return {
+    age: policy?.age_attestation_required === true,
+    agreement: Boolean(policy?.terms_markdown || policy?.privacy_markdown),
+  };
+}
+
 const optionalText = (value: unknown): value is string | null | undefined =>
   value == null || typeof value === "string";
 

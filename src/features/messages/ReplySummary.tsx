@@ -1,5 +1,6 @@
 import type { ReactNode } from "react";
 import { AvatarStack } from "../../shared/design-system/ui/AvatarStack";
+import { PencilSimpleIcon } from "../../shared/design-system/icons/index";
 import type { Profile } from "../relay/contracts";
 import styles from "./Messages.module.css";
 import { avatarMedia } from "../../shared/avatar-source";
@@ -17,11 +18,17 @@ export function ReplySummary({
   workingParticipants = [],
   activity,
   hideEmptyLabel = false,
+  draft = false,
+  replied = count > 0,
 }: {
   workingParticipants?: readonly string[];
   activity?: ReactNode;
   /** Activity-only triggers already have an accessible thread action label. */
   hideEmptyLabel?: boolean;
+  /** An unsent reply waits in this thread; it names an empty thread itself. */
+  draft?: boolean;
+  /** The thread has replies, even when an activity line hides their count. */
+  replied?: boolean;
   count: number;
   participants: readonly string[];
   profiles?: ReadonlyMap<string, Profile> | undefined;
@@ -48,7 +55,7 @@ export function ReplySummary({
           })}
       />
       {activity}
-      {(count > 0 || !hideEmptyLabel) && (
+      {(count > 0 || !(hideEmptyLabel || draft)) && (
         <span>
           {count > 0
             ? `${count} ${count === 1 ? "reply" : "replies"}`
@@ -64,6 +71,13 @@ export function ReplySummary({
           title={unreadLabel}
         />
       ) : null}
+      {draft && (
+        <span className={styles.threadDraft} data-thread-draft="">
+          {replied && <span aria-hidden="true">·</span>}
+          <PencilSimpleIcon size={14} aria-hidden="true" />
+          {replied ? "Draft" : "Draft reply"}
+        </span>
+      )}
     </>
   );
 }

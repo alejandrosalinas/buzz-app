@@ -28,6 +28,8 @@ export type FakeTurn = {
 export type FakeGoose = {
   id: string;
   options: HostProcessOptions;
+  /** The agent its credential was bound to, if any. */
+  actedAs?: Readonly<{ pubkey: string; relay: string }>;
   /** Every message written to its stdin. */
   received: Message[];
   /** Each `session/new`'s params. */
@@ -258,7 +260,10 @@ export function fakeSpawn(
       const sessionId = String(params.sessionId ?? "");
       switch (method) {
         case "_buzz/security/capabilities":
-          return reply(id, { version: 2 });
+          return reply(id, {
+            version: 2,
+            enabled: fake.env.BUZZ_SECURITY_URL != null,
+          });
         case "initialize":
           return reply(id, {
             protocolVersion: 1,
@@ -475,6 +480,11 @@ export function fakeSpawn(
         fake.killed = true;
         fake.exit(null);
       },
+      ...(process.agentCredential && {
+        actAs: async (agent: Readonly<{ pubkey: string; relay: string }>) => {
+          fake.actedAs = agent;
+        },
+      }),
       exited,
     };
   };

@@ -6,6 +6,17 @@ import type { Profile } from "./contracts";
 // Events are immutable; the directory refolds every retained profile per change.
 const projected = new WeakMap<EventData, Profile>();
 
+/** Display projection only; signed content stays intact. */
+function profileName(value: unknown): string | undefined {
+  if (typeof value !== "string") return;
+  const name = value.trim();
+  // Reordering and layout controls cannot be handled by collision comparison.
+  // Preserve script joiners and variation selectors in the displayed name.
+  if (!name || /[\p{Cc}\p{Zl}\p{Zp}\p{Bidi_Control}\ufff9-\ufffb]/u.test(name))
+    return;
+  return name;
+}
+
 /** Kind 0 metadata. Only the author's own latest event counts. */
 export function foldProfiles(
   events: readonly EventData[],
@@ -43,19 +54,15 @@ export function foldProfiles(
         is_agent?: unknown;
         isAgent?: unknown;
       };
-      const name = [body.display_name, body.name].find(
-        (value): value is string =>
-          typeof value === "string" && value.trim().length > 0,
-      );
-      const handle =
-        typeof body.name === "string" ? body.name.trim() : undefined;
+      const handle = profileName(body.name);
+      const name = profileName(body.display_name) ?? handle;
       const picture = avatarSource(body.picture);
       profiles.set(
         pubkey,
         Object.freeze({
           name: name ?? pubkey.slice(0, 10),
           ...(!name ? { nameIsFallback: true as const } : {}),
-          ...(handle && handle !== name?.trim() ? { username: handle } : {}),
+          ...(handle && handle !== name ? { username: handle } : {}),
           ...agent,
           ...(picture ? { picture } : {}),
           ...(typeof body.about === "string" && body.about.trim()

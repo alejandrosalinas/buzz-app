@@ -1,6 +1,8 @@
+import { ACTIVITY_PAGE } from "./activity-context";
+import { ActivityNavigationIcon } from "./ActivityNavigation";
 import {
+  cloneElement,
   useEffect,
-  useId,
   useRef,
   useState,
   type ComponentProps,
@@ -18,20 +20,15 @@ import {
 } from "../../features/conversation/ContributionBoundary";
 import { NavigationItem } from "../../shared/design-system/ui/NavigationItem";
 import { Tabs } from "../../shared/design-system/ui/Tabs";
-import { IconButton } from "../../shared/design-system/ui/IconButton";
+import { Tooltip } from "../../shared/design-system/ui/Tooltip";
 import { PageIcon } from "./PageIcon";
 import { Avatar } from "../../shared/design-system/ui/Avatar";
+import { BestieUnreadBadge, usePagePresentation } from "./BestieNavigation";
 import {
   PopoverPopup,
   PopoverRoot,
   PopoverTrigger,
 } from "../../shared/design-system/ui/Popover";
-import {
-  BestieUnreadBadge,
-  BestieUnreadLabel,
-  usePagePresentation,
-} from "./BestieNavigation";
-import { BESTIE_PAGE } from "./bestie-context";
 
 export function PageNavigation({
   pages,
@@ -43,49 +40,90 @@ export function PageNavigation({
 }: {
   pages: readonly RegisteredPage[];
   selected: string;
+  /** The open destination when `selected` is the app that lists it. */
   currentPage?: string;
   onSelect(key: string, options?: Pick<NavigationOpenOptions, "focus">): void;
-  placement?: "sidebar" | "topbar" | "toolbar";
-  /** Show page hover previews; only the sidebar's own navigation opts in. */
+  /** The app dock is a vertical icon tablist; the sidebar lists rows. */
+  placement?: "sidebar" | "dock";
+  /** Show inactive page previews in this navigation surface on hover-capable devices. */
   previews?: boolean;
 }) {
   const presentation = usePagePresentation();
   const hover = useHoverPointer();
-  const badgeId = useId();
-  // A selected page is already showing what its preview would summarize.
   const previewed = (page: RegisteredPage) =>
     previews && hover && page.key !== selected;
-  if (placement === "topbar") {
+  if (placement === "dock") {
     return (
       <Tabs
-        label="Topbar pages"
-        variant="chrome"
+        label="Apps"
+        variant="dock"
+        orientation="vertical"
         value={pages.some((page) => page.key === selected) ? selected : null}
         onValueChange={(key) => onSelect(key, { focus: "preserve" })}
+        // The selected app returns from a page opened in its navigation.
         onReselect={(key) => {
           if (key !== currentPage) onSelect(key, { focus: "preserve" });
         }}
         items={pages.map((page) => {
           const Badge = page.badge;
-          const { icon, image } = presentation(page);
+          const Preview = page.preview;
+          const { icon, image, avatar, label } = presentation(page);
           return {
             value: page.key,
-            label: presentation(page).label,
-            icon: (
-              <PageIcon icon={icon} image={image} size={16} strokeWidth={2.5} />
+            label,
+            icon: avatar ? (
+              <Avatar
+                src={avatar.src}
+                alt=""
+                fallback={label}
+                shape={avatar.shape}
+                size="small"
+              />
+            ) : page.key === ACTIVITY_PAGE ? (
+              <ActivityNavigationIcon>
+                <PageIcon
+                  icon={icon}
+                  image={image}
+                  size={20}
+                  strokeWidth={2.5}
+                />
+              </ActivityNavigationIcon>
+            ) : (
+              <PageIcon icon={icon} image={image} size={20} strokeWidth={2.5} />
             ),
             panelId: `shell-page-${page.key}`,
-            trailing: Badge ? (
-              <ContributionBoundary key={contributionKey(page)} fallback={null}>
-                <Badge />
-              </ContributionBoundary>
-            ) : undefined,
+            renderTab: Preview
+              ? (tab: ReactElement<ComponentProps<"button">>) => (
+                  <PagePreview
+                    page={page}
+                    preview={Preview}
+                    label={label}
+                    enabled={previewed(page)}
+                    dockHint
+                  >
+                    {tab}
+                  </PagePreview>
+                )
+              : undefined,
+            trailing: (
+              <>
+                {Badge && (
+                  <ContributionBoundary
+                    key={contributionKey(page)}
+                    fallback={null}
+                  >
+                    <Badge />
+                  </ContributionBoundary>
+                )}
+                <BestieUnreadBadge pageKey={page.key} />
+              </>
+            ),
           };
         })}
       />
     );
   }
-  return pages.map((page, index) => {
+  return pages.map((page) => {
     const { label, icon, image, avatar } = presentation(page);
     const Badge = page.badge;
     const badge = Badge && (
@@ -115,64 +153,25 @@ export function PageNavigation({
         strokeWidth={2.5}
       />
     );
-    // The toolbar badge sits beside its icon-only button, not inside it, so
-    // the button names the page and the badge describes it.
-    const describedBy = badge ? `${badgeId}-${index}` : undefined;
-    if (placement === "toolbar")
-      return (
-        <span className="shell-toolbar-page" key={page.key}>
-          <IconButton
-            aria-label={label}
-            aria-describedby={describedBy}
-            title={label}
-            variant="chrome"
-            aria-current={selected === page.key ? "page" : undefined}
-            onClick={select}
-            icon={pageIcon}
-          />
-          {badge && (
-            <span id={describedBy} className="shell-toolbar-badge">
-              {badge}
-            </span>
-          )}
-        </span>
-      );
     const item = (
       <NavigationItem
         key={page.key}
         onClick={select}
         selected={selected === page.key}
-        aria-current={
-          selected === page.key && currentPage !== selected ? true : undefined
-        }
-        label={
-          page.key === BESTIE_PAGE ? <BestieUnreadLabel label={label} /> : label
-        }
+        label={label}
         title={page.preview && previewed(page) ? undefined : label}
         variant="row"
-        trailing={
-          page.key === BESTIE_PAGE ? (
-            <>
-              {badge}
-              <BestieUnreadBadge pageKey={page.key} />
-            </>
-          ) : (
-            badge
-          )
-        }
-        icon={
-          placement === "sidebar" ? (
-            <span className="shell-page-icon">{pageIcon}</span>
-          ) : undefined
-        }
+        trailing={badge}
+        icon={<span className="shell-page-icon">{pageIcon}</span>}
       />
     );
-    return page.preview && previewed(page) ? (
+    return page.preview ? (
       <PagePreview
         key={page.key}
         page={page}
         preview={page.preview}
         label={label}
+        enabled={previewed(page)}
       >
         {item}
       </PagePreview>
@@ -204,14 +203,22 @@ function PagePreview({
   page,
   preview: Preview,
   label,
+  enabled,
+  dockHint = false,
   children,
 }: {
   page: RegisteredPage;
   preview: ComponentType<PagePreviewProps>;
   label: string;
-  children: ReactElement;
+  enabled: boolean;
+  /** Dock tabs show their label as an instant hint beside the dock. */
+  dockHint?: boolean;
+  children: ReactElement<ComponentProps<"button">>;
 }) {
   const [open, setOpen] = useState(false);
+  useEffect(() => {
+    if (!enabled) setOpen(false);
+  }, [enabled]);
   const actions =
     useRef<
       NonNullable<ComponentProps<typeof PopoverRoot>["actionsRef"]>["current"]
@@ -225,23 +232,45 @@ function PagePreview({
     if (actions.current) actions.current.close();
     else setOpen(false);
   };
+  // Keep both trigger wrappers mounted while selection switches between a
+  // rich preview and the dock's instant label, preserving the focused tab.
+  const trigger = (
+    <PopoverTrigger
+      openOnHover={enabled ? "preview" : false}
+      data-popup-preview={enabled ? "" : undefined}
+      render={cloneElement(children, {
+        title: enabled || dockHint ? undefined : label,
+        "aria-haspopup": enabled ? "dialog" : undefined,
+        "aria-expanded": enabled ? open : undefined,
+      })}
+    />
+  );
   return (
     <PopoverRoot
       modal={false}
-      open={open}
+      open={enabled && open}
       actionsRef={actions}
       onOpenChange={(next, details) => {
         // Hover only: pressing the row selects the page instead.
         if (next) handoff.current = false;
-        setOpen(next && details.reason !== "trigger-press");
+        setOpen(enabled && next && details.reason !== "trigger-press");
       }}
     >
       {/* Marked transient, so a conversation's default focus is not held back. */}
-      <PopoverTrigger
-        openOnHover="preview"
-        data-popup-preview=""
-        render={children}
-      />
+      {dockHint ? (
+        <Tooltip
+          content={label}
+          hint="dock"
+          side="right"
+          // Keyboard focus opens only the label; the preview replaces it once
+          // a resting pointer opens it.
+          {...(enabled && open ? { open: false } : {})}
+        >
+          {trigger}
+        </Tooltip>
+      ) : (
+        trigger
+      )}
       <PopoverPopup
         size="wide"
         padding="list"

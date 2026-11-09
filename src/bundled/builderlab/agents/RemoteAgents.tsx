@@ -28,11 +28,12 @@ export function RemoteAgents({
   const [revision, setRevision] = useState(0);
   if (login.status === "signed-in" && !login.account?.canUseRemoteAgents)
     return (
-      <EmptyState
-        icon={<RobotIcon />}
-        title="Coming soon"
-        description="Builderlab remote agents are not available for your account yet."
-      />
+      <section className="mt-section-gap" aria-label="Remote agents">
+        <InlineHeader
+          title="Remote agents"
+          subtitle="Unavailable for this account"
+        />
+      </section>
     );
   return login.status === "signed-in" ? (
     <AgentList

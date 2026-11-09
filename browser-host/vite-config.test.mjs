@@ -206,6 +206,28 @@ it("loads the broker's Vite config without native-compatibility warnings", () =>
               );
               assert.equal(result.config.define['import.meta.env.VITE_BUZZ_BUILDERLAB_URL'], JSON.stringify(expected));
             }
+            // The Apps control plane follows the native build's sources too:
+            // a mode file alone sets nothing, .env.local and process do.
+            delete process.env.BUZZ_BUILDERLAB_URL;
+            const plane = 'import.meta.env.VITE_BUZZ_BUILDERLAB_APPS_CONTROL_PLANE';
+            writeFileSync('.env.local', '');
+            writeFileSync('.env.production', 'BUZZ_BUILDERLAB_APPS_CONTROL_PLANE=https://ctrl.example');
+            const modeOnly = await loadConfigFromFile({ command: 'build', mode: 'production' }, configFile);
+            assert.equal(modeOnly.config.define[plane], JSON.stringify(''));
+            writeFileSync('.env.local', 'BUZZ_BUILDERLAB_APPS_CONTROL_PLANE=https://local.example');
+            const local = await loadConfigFromFile({ command: 'build', mode: 'production' }, configFile);
+            assert.equal(local.config.define[plane], JSON.stringify('https://local.example'));
+            process.env.BUZZ_BUILDERLAB_APPS_CONTROL_PLANE = 'https://process.example';
+            const fromProcess = await loadConfigFromFile({ command: 'build', mode: 'production' }, configFile);
+            assert.equal(fromProcess.config.define[plane], JSON.stringify('https://process.example'));
+            process.env.BUZZ_BUILDERLAB_APPS_CONTROL_PLANE = 'https://process.example/';
+            await assert.rejects(
+              loadConfigFromFile({ command: 'build', mode: 'production' }, configFile),
+              /HTTPS origin/,
+            );
+            delete process.env.BUZZ_BUILDERLAB_APPS_CONTROL_PLANE;
+            writeFileSync('.env.local', '');
+            writeFileSync('.env.production', '');
             // The first-run account seed reaches only a dev server, and a
             // malformed value fails at configuration time without being echoed.
             for (const command of ['serve', 'build']) {

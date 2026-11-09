@@ -7,14 +7,17 @@
   margin-inline-end: 0;
 }
 
-/* The shell's shared panel gutter follows the sidebar. Center the existing hit
-   target in that gutter without changing its width or the sidebar's geometry. */
+/* Keep the resize grip on the joined sidebar/conversation boundary. */
 .handle[aria-orientation="vertical"] {
   --resize-grip-opacity: 0.5;
-  translate: calc(-1 * var(--space-panel-gap) / 2) 0;
+  /* Keep the target inside the conversation’s leading inset, clear of both
+     sidebar actions and the header identity artwork. */
+  width: var(--space-2);
+  margin-inline: calc(-1 * var(--space-1));
+  translate: 50% 0;
 }
 .handle[aria-orientation="vertical"]::after {
-  left: 50%;
+  left: 0;
 }
 /* AppShell uses the same physical breakpoint for navigation and resizing. */
 @media (max-width: 650px) {

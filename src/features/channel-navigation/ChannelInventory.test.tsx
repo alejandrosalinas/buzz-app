@@ -803,13 +803,77 @@ it("closes a removed DM's menu and focuses its neighbor before the exit ends", a
   const bob = screen.getByRole("button", { name: "Bob" });
   fireEvent.keyDown(alice, { key: "ContextMenu" });
   await screen.findByRole("menu", { name: "Actions for Alice" });
-  fireEvent.click(screen.getByRole("menuitem", { name: "Remove from Team" }));
+  fireEvent.click(screen.getByRole("menuitem", { name: "Close conversation" }));
   // Assert synchronously while the retained row's exit is still mounted.
   expect(alice.closest("[inert]")).not.toBeNull();
   expect(screen.queryByRole("menu", { name: "Actions for Alice" })).toBeNull();
   await act(async () => {});
   expect(alice).toBeInTheDocument();
   expect(bob).toHaveFocus();
+});
+
+it("opens an Activity mention at its message, with no thread root", async () => {
+  const message = "e".repeat(64);
+  const h = fixture();
+  const mention = {
+    channelId: "beta",
+    messageId: message,
+    authorId: "b".repeat(64),
+    preview: "Can you sign off?",
+    createdAt: 1,
+  };
+  // Stable per channel, as external-store snapshots must be.
+  const snapshots = new Map(
+    ["alpha", "beta", "gamma"].map((id) => [
+      id,
+      {
+        channelId: id,
+        items: [],
+        mentions: id === "beta" ? [mention] : [],
+        coverage: "observed" as const,
+        freshness: "observed" as const,
+      },
+    ]),
+  );
+  const unread = h.session.unread;
+  h.session.unread = {
+    ...unread,
+    activity: (id) => snapshots.get(id) ?? unread.activity(id),
+    subscribeActivity: () => () => {},
+  };
+  // The sidebar reads back the attempt it started to hand off focus return.
+  let opened: unknown;
+  vi.mocked(h.navigator.open).mockImplementation(async (next) => {
+    opened = next;
+    return { status: "opened" };
+  });
+  Object.assign(h.navigator, {
+    snapshot: () => ({
+      attempt: {
+        id: "visit",
+        entry: { id: "entry", target: opened },
+        signal: new AbortController().signal,
+      },
+    }),
+  });
+  render(h.view("alpha"));
+  const beta = await screen.findByRole("button", { name: /^beta/ });
+  beta.focus();
+  await userEvent.keyboard("{Enter}");
+  const popup = await screen.findByRole("dialog", { name: "Activity in beta" });
+  await userEvent.click(
+    within(popup).getByRole("button", { name: /^Open unread mention from/ }),
+  );
+  expect(h.navigator.open).toHaveBeenLastCalledWith(
+    expect.objectContaining({
+      kind: "conversation",
+      channelId: "beta",
+      messageId: message,
+    }),
+  );
+  expect(vi.mocked(h.navigator.open).mock.lastCall?.[0]).not.toHaveProperty(
+    "threadRootId",
+  );
 });
 
 it("copies a channel link that opens the same channel", async () => {

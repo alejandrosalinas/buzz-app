@@ -5,6 +5,7 @@ stubAvatarBrowserApis();
 import {
   act,
   cleanup,
+  fireEvent,
   render,
   screen,
   waitFor,
@@ -24,13 +25,12 @@ import { AgentSaveButton } from "../../features/agents/AgentSaveButton";
 import { Input } from "../../shared/design-system/ui/Input";
 import { Button } from "../../shared/design-system/ui/Button";
 import { AgentDetails } from "./AgentDetails";
-import { createOAuthSession } from "../builderlab/oauth/session";
 import {
   AccountRecoverySheet,
   createProfileActions,
-  createSignInFooter,
 } from "../builderlab/adapter-type/SignInFooter";
-import { deferred } from "../builderlab/test-helpers";
+import { SignInAction } from "../builderlab/adapter-type/SignInAction";
+import { deferred, createTestSession } from "../builderlab/test-helpers";
 
 vi.mock("../builderlab/oauth/browser", async (original) => ({
   ...(await original<typeof import("../builderlab/oauth/browser")>()),
@@ -112,6 +112,7 @@ it("keeps one provider footer across tabs and measures its changing height for t
     subscribe: () => () => {},
     snapshot: () => ({ agents: [agent] }),
     configHistory: () => undefined,
+    agentSync: () => undefined,
     addedTabs: () => [],
     memberships: () => [],
   } as unknown as Agents;
@@ -128,12 +129,7 @@ it("keeps one provider footer across tabs and measures its changing height for t
     />,
   );
   const card = screen.getByRole("region", { name: "Account access" });
-  expect(
-    within(screen.getByRole("region", { name: "Profile editing" })).getByRole(
-      "button",
-      { name: "Message" },
-    ),
-  ).toBeVisible();
+  expect(screen.getByRole("button", { name: "Message" })).toBeVisible();
   expect(
     within(screen.getByRole("region", { name: "Profile editing" })).getByRole(
       "button",
@@ -204,6 +200,8 @@ it.each([
   "closes the $target editor for account access (recovery: $recovery)",
   async ({ target, recovery }) => {
     vi.stubEnv("VITE_BUZZ_BUILDERLAB_URL", "https://builderlab.example");
+    // Switching accounts from the sheet is the development broker's recovery.
+    if (recovery) vi.stubEnv("VITE_BUZZ_LIVE", "1");
     let canUseRemoteAgents = true;
     const callbacks = new Set<() => void>();
     vi.stubGlobal(
@@ -219,8 +217,8 @@ it.each([
         unobserve() {}
       },
     );
-    const session = createOAuthSession(async () => ({
-      value: "credential",
+    const session = createTestSession(async () => ({
+      revision: "credential",
       account: {
         subject: "account",
         email: "a@example.com",
@@ -247,14 +245,17 @@ it.each([
     function RecoverySettings() {
       const login = useSyncExternalStore(session.subscribe, session.snapshot);
       return (
-        <AccountRecoverySheet
-          session={session}
-          mismatch={false}
-          active={
-            login.status === "signed-in" &&
-            login.account?.canUseRemoteAgents === false
-          }
-        />
+        <>
+          <SignInAction session={session} />
+          <AccountRecoverySheet
+            session={session}
+            mismatch={false}
+            active={
+              login.status === "signed-in" &&
+              login.account?.canUseRemoteAgents === false
+            }
+          />
+        </>
       );
     }
     const type = {
@@ -264,7 +265,6 @@ it.each([
       id: "hosted",
       title: "Hosted",
       defaults: () => ({ config: {} }),
-      PanelFooter: createSignInFooter(session),
       ProfileActions: createProfileActions(session),
       tabs: [
         {
@@ -280,6 +280,7 @@ it.each([
       subscribe: () => () => {},
       snapshot: () => ({ agents: [agent] }),
       configHistory: () => undefined,
+      agentSync: () => undefined,
       addedTabs: () => [],
       memberships: () => [],
     } as unknown as Agents;
@@ -297,6 +298,8 @@ it.each([
     );
     try {
       const user = userEvent.setup();
+      if (!recovery)
+        await user.click(screen.getByRole("tab", { name: "Memory" }));
       await user.click(
         screen.getByRole("button", { name: "Agent profile actions" }),
       );
@@ -328,7 +331,7 @@ it.each([
       });
       if (recovery) {
         const sheet = await screen.findByRole("region", {
-          name: "Builderlab access unavailable",
+          name: "Try another Builderlab account",
         });
         const identity = screen.getByRole("complementary", {
           name: "Ada identity",
@@ -340,6 +343,12 @@ it.each([
           screen.queryByRole("button", { name: "Sign in to Builderlab" }),
         ).toBeNull();
       }
+      expect(screen.getByRole("button", { name: "Message" })).toBeVisible();
+      expect(screen.queryByText("Offline")).toBeNull();
+      if (!recovery)
+        expect(
+          screen.queryByRole("button", { name: "Sign in to Builderlab" }),
+        ).toBeNull();
       const attempts = signIn.mock.calls.length;
       act(() => screen.getByRole("tab", { selected: true }).focus());
       await user.keyboard("{Enter}");
@@ -354,7 +363,10 @@ it.each([
         const reconnect = await screen.findByRole("button", {
           name: "Sign in to Builderlab",
         });
-        await waitFor(() => expect(reconnect).toHaveFocus());
+        expect(reconnect).toBeEnabled();
+        await waitFor(() =>
+          expect(screen.getByRole("tab", { selected: true })).toHaveFocus(),
+        );
         expect(session.snapshot().status).toBe("signed-out");
         expect(signIn).toHaveBeenCalledTimes(attempts);
         const selected = screen.getByRole("tab", { selected: true });
@@ -377,6 +389,29 @@ it.each([
       expect(
         screen.queryByRole("dialog", { name: "Change avatar" }),
       ).toBeNull();
+      if (recovery) {
+        canUseRemoteAgents = false;
+        await act(() => session.signIn());
+        const sheet = await screen.findByRole("region", {
+          name: "Try another Builderlab account",
+        });
+        const footer = sheet.parentElement?.parentElement;
+        if (!footer) throw new Error("Missing pane notice host");
+        // An entrance still at opacity 0 can correctly finish exit immediately.
+        await waitFor(() =>
+          expect(sheet.parentElement).toHaveStyle({ opacity: "1" }),
+        );
+        const memory = screen.getByRole("tab", { name: "Memory" });
+        act(() => memory.focus());
+        fireEvent.click(memory);
+        // The host must survive clearing the notice so Motion can finish exit.
+        expect(footer).toBeInTheDocument();
+        expect(sheet).toBeInTheDocument();
+        expect(sheet.closest("[inert]")).toHaveAttribute("aria-hidden", "true");
+        await waitFor(() => expect(sheet).not.toBeInTheDocument());
+        expect(footer).toBeEmptyDOMElement();
+        expect(screen.getByRole("tab", { name: "Memory" })).toHaveFocus();
+      }
     } finally {
       view.unmount();
       session.dispose();
@@ -457,6 +492,7 @@ it("shows every affected community with unsaved shared settings and submits the 
     },
     snapshot: () => ({ agents: [agent] }),
     configHistory: () => undefined,
+    agentSync: () => undefined,
     addedTabs: () => [],
     registerTab: () => {},
     controlAttention: () => {},

@@ -20,6 +20,7 @@ export type HuddleBridge = {
     destination: HuddleDestination,
     room: string | undefined,
     receive: (update: HuddleUpdate) => void,
+    agent?: string,
   ): Promise<void>;
   close(id: string): Promise<void>;
   touch(id: string): Promise<void>;
@@ -27,7 +28,7 @@ export type HuddleBridge = {
 };
 export const nativeHuddles: HuddleBridge = {
   available: isTauri(),
-  open(id, destination, room, receive) {
+  open(id, destination, room, receive, agent) {
     const updates = new Channel<HuddleUpdate>();
     updates.onmessage = receive;
     return invoke("huddle_open", {
@@ -37,6 +38,7 @@ export const nativeHuddles: HuddleBridge = {
         viewer: destination.viewer,
         parent: destination.channelId,
         room: room ?? null,
+        agent: agent ?? null,
       },
       updates,
     });

@@ -139,6 +139,11 @@ p:empty {
   position: absolute;
   inset-block-start: 1.09375rem;
   inset-inline-start: 3rem;
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  font-weight: 500;
+  line-height: 1.5;
 }
 
 .brand svg {
@@ -151,52 +156,9 @@ p:empty {
   fill: currentColor;
 }
 
-/* Federated handoffs share the account card, with Buzz's mode-aware shell.
-   Their native owner still has to verify the account after this page appears. */
-:root[data-provider="Buzz"] {
-  color-scheme: light dark;
-  --bg-app: #f1f1f2;
-  --texture-dots-color: color-mix(in srgb, var(--bg-app) 94%, black);
-  background-image: radial-gradient(
-    var(--texture-dots-color) 1px,
-    transparent 1px
-  );
-  background-size: 24px 24px;
-}
-
-[data-provider="Buzz"] .page {
-  padding: min(1.5rem, 4vw);
-  align-items: center;
-}
-
+/* Keep the federated card readable with enlarged text in a narrow window. */
 [data-provider="Buzz"] main {
   padding: min(var(--space-panel-inset), 4vw);
-  border-radius: min(var(--radius-container), 4vw);
-}
-
-[data-provider="Buzz"] .brand {
-  position: static;
-  display: flex;
-  align-items: center;
-  gap: 0.75rem;
-  margin-block-end: 1.5rem;
-  font-weight: 500;
-  line-height: 1.5;
-}
-
-[data-provider="Buzz"] .brand svg {
-  block-size: 1.3125rem;
-  flex-shrink: 0;
-}
-
-@media (prefers-color-scheme: dark) {
-  :root[data-provider="Buzz"] {
-    --bg-app: #101010;
-    --surface-panel: #1a1a1a;
-    --text-standard: #fff;
-    --text-subtle: #a4a4a4;
-    --texture-dots-color: color-mix(in srgb, var(--bg-app) 92%, white);
-  }
 }
 
 h1 {
@@ -266,8 +228,7 @@ body[data-complete="false"] #close-spinner {
 }
 
 @media (forced-colors: active) {
-  :root,
-  :root[data-provider="Buzz"] {
+  :root {
     background: Canvas;
     color: CanvasText;
   }

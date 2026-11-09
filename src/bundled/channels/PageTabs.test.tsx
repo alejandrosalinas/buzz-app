@@ -351,6 +351,7 @@ it("names a thread's conversation inside it, linking where the menu's Open in ch
     channelId: "alpha",
     messageId: "reply",
     threadRootId: "root",
+    context: "channel",
   });
   page.open({ channelId: "dm", threadId: "root" });
   expect(screen.getByRole("button", { name: "DM · Alice" })).toBeVisible();
@@ -388,6 +389,7 @@ it("opens a tab's conversation in its channel from the tab's menu", async () => 
     channelId: "alpha",
     messageId: "reply",
     threadRootId: "root",
+    context: "channel",
   });
   page.open({ channelId: "beta" });
   await user.pointer({

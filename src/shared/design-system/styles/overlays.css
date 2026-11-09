@@ -46,16 +46,22 @@
     background: none;
     box-shadow: none;
   }
+  /* Top-anchored popups share the steps' top edge: centering them in the
+     crossfade's taller grid snaps the remaining step when the other unmounts.
+     A centered compact popup keeps centered steps, which stay put. */
   .buzz-dialog-step {
     grid-area: 1 / 1;
     display: flex;
     flex-direction: column;
     min-height: 0;
-    align-self: center;
+    align-self: start;
     min-width: 0;
     max-height: inherit;
     overflow: auto;
     overscroll-behavior: none;
+  }
+  .buzz-dialog[data-size="compact"] > .buzz-dialog-step {
+    align-self: center;
   }
   .buzz-dialog-step[inert] {
     pointer-events: none;
@@ -238,6 +244,9 @@
     /* Keep the 2px ring and its 2px offset inside the scrolling footer. */
     padding: var(--space-1);
     margin: calc(-1 * var(--space-1));
+  }
+  .buzz-dialog-action-row {
+    display: contents;
   }
   /* This gutter stays outside the scrollport when long content is clipped. */
   :where(.buzz-dialog-body) + .buzz-dialog-actions {
@@ -467,6 +476,7 @@
   .buzz-tooltip[data-ending-style] {
     transition-duration: var(--duration-fast);
   }
+  .buzz-tooltip[data-hint="dock"],
   .buzz-tooltip[data-instant],
   html[data-keyboard-navigation] .buzz-tooltip {
     transition: none;
@@ -540,7 +550,7 @@
     .buzz-dialog {
       --dialog-padding: var(--space-4);
     }
-    .buzz-dialog-actions > .buzz-button {
+    :is(.buzz-dialog-actions, .buzz-dialog-action-row) > .buzz-button {
       flex: 1 0 auto;
     }
   }
@@ -575,6 +585,15 @@
 .buzz-toast-viewport[data-sonner-toaster][data-x-position="right"] {
   left: auto;
   right: max(var(--space-4), env(safe-area-inset-right));
+}
+/* Above any docked composer (useToastClearance), never over its controls. */
+.buzz-toast-viewport[data-sonner-toaster][data-y-position="bottom"] {
+  bottom: max(var(--offset-bottom), var(--buzz-toast-clearance, 0px));
+}
+@media (max-width: 600px) {
+  .buzz-toast-viewport[data-sonner-toaster][data-y-position="bottom"] {
+    bottom: max(var(--mobile-offset-bottom), var(--buzz-toast-clearance, 0px));
+  }
 }
 .buzz-toast-viewport[data-sonner-toaster] [data-sonner-toast] {
   position: relative;
@@ -739,12 +758,38 @@ html[data-keyboard-navigation]
       padding-bottom: var(--space-6);
     }
 
+    > .buzz-dialog-header:has(
+        + .buzz-dialog-content[data-header-gap="compact"]
+      ) {
+      padding-bottom: 0;
+    }
+
     > .buzz-dialog-actions {
-      /* Preserve access to oversized actions at narrow widths/enlarged text. */
-      overflow-x: auto;
+      /* Only the gradient gutter passes input through to the form beneath it. */
+      display: block;
+      pointer-events: none;
+      padding-inline: 0;
       bottom: calc(-1 * var(--dialog-padding));
       margin-bottom: calc(-1 * var(--dialog-padding));
-      padding-bottom: var(--dialog-padding);
+      padding-bottom: 0;
+
+      @media (prefers-reduced-transparency: reduce), (forced-colors: active) {
+        /* ScrollEdgeMaterial is fully opaque, including its former fade gutter. */
+        pointer-events: auto;
+      }
+
+      > .buzz-dialog-action-row {
+        display: flex;
+        align-items: center;
+        flex-wrap: wrap;
+        justify-content: safe end;
+        gap: var(--space-3);
+        pointer-events: auto;
+        /* Keep ring space, the opaque bottom band and overflow input in this row. */
+        overflow-x: auto;
+        margin-top: calc(-1 * var(--space-1));
+        padding: var(--space-1) var(--dialog-padding) var(--dialog-padding);
+      }
     }
   }
 }

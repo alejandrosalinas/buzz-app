@@ -148,6 +148,39 @@ it.each([
   },
 );
 
+it("keeps the development broker's Builderlab sign-in for a pinned viewer without FI", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "buzz-fi-default-"));
+  const cwd = process.cwd();
+  process.chdir(dir);
+  try {
+    vi.stubEnv("BUZZ_BUILD_FEDERATED_IDENTITY_CONFIG", undefined);
+    vi.stubEnv("BUZZ_BUILDERLAB_URL", undefined);
+    vi.stubEnv("BUZZ_DEV_OPEN_RELAY", "");
+    const define = async (viewer: string, command: "serve" | "build") => {
+      vi.stubEnv("BUZZ_DEV_VIEWER", viewer);
+      const { define } = await config({ command, mode: "development" });
+      return [
+        define?.["import.meta.env.VITE_BUZZ_LIVE"],
+        define?.["import.meta.env.VITE_BUZZ_FEDERATED_IDENTITY"],
+      ];
+    };
+    // Pinned dev server: broker live, native NIP-FI off, as on main.
+    expect(await define(viewer, "serve")).toEqual(['"1"', '"0"']);
+    // Unpinned dev server and any build: the built-in NIP-FI server.
+    expect(await define("", "serve")).toEqual(['"0"', '"1"']);
+    expect(await define(viewer, "build")).toEqual(['"0"', '"1"']);
+    // An added server wins over the broker.
+    vi.stubEnv(
+      "BUZZ_BUILD_FEDERATED_IDENTITY_CONFIG",
+      '{"identityOrigin":"https://acme.builderlab.xyz","apiBasePath":"/api/goose/"}',
+    );
+    expect(await define(viewer, "serve")).toEqual(['"1"', '"1"']);
+  } finally {
+    process.chdir(cwd);
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 it("loads ignored local deployment config and lets process env override it", async () => {
   const dir = mkdtempSync(join(tmpdir(), "buzz-routing-"));
   const cwd = process.cwd();

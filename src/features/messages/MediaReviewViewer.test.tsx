@@ -17,6 +17,7 @@ import { afterEach, expect, it, vi } from "vitest";
 import { createRelaySession } from "../relay/session";
 import { keypair, message, profile, signed } from "../relay/testing";
 import { MediaReviewViewer } from "./MediaReviewViewer";
+import { profileTarget } from "../profiles/target";
 
 const owners: ReturnType<typeof createRelaySession>[] = [];
 afterEach(() => {
@@ -151,10 +152,16 @@ it("renders comment mentions as names even though comment links stay inert", asy
   const root = message(viewer, "one", "Image", 1, [
     ["imeta", `url ${attachment.url}`, "m image/png"],
   ]);
-  const reply = message(viewer, "one", "I think @Tyler is looking at that", 2, [
-    ["e", root.id, "", "reply"],
-    ["p", tyler.pubkey],
-  ]);
+  const replies = [
+    message(viewer, "one", "I think @Tyler is looking at that", 2, [
+      ["e", root.id, "", "reply"],
+      ["p", tyler.pubkey],
+    ]),
+    // Edits carry mentions as explicit identity links instead of `p` tags.
+    message(viewer, "one", `Ask [@Tyler](${profileTarget(tyler.pubkey)})`, 3, [
+      ["e", root.id, "", "reply"],
+    ]),
+  ];
   const profiles = [
     profile(viewer, { name: "Human" }),
     profile(tyler, { name: "Tyler" }),
@@ -170,14 +177,15 @@ it("renders comment mentions as names even though comment links stay inert", asy
             filter.authors?.includes(event.pubkey),
           );
         if (filter.ids)
-          return [root, reply].filter((event) =>
+          return [root, ...replies].filter((event) =>
             filter.ids?.includes(event.id),
           );
         if (filter.depth_limit)
-          return filter.thread_cursor === undefined ||
-            reply.created_at > filter.thread_cursor
-            ? [reply]
-            : [];
+          return replies.filter(
+            (event) =>
+              filter.thread_cursor === undefined ||
+              event.created_at > filter.thread_cursor,
+          );
         return [];
       });
     },
@@ -196,11 +204,109 @@ it("renders comment mentions as names even though comment links stay inert", asy
       close={() => {}}
     />,
   );
-  const mention = await screen.findByText("Tyler", {
-    selector: "[data-mention-kind]",
+  await screen.findByText(/^Ask/);
+  const mentions = [...document.querySelectorAll("[data-mention-kind]")];
+  expect(mentions.map((mention) => mention.textContent)).toEqual([
+    "Tyler",
+    "Tyler",
+  ]);
+  for (const mention of mentions) {
+    expect(mention).toHaveAttribute("data-mention-kind", "person");
+    expect(mention.tagName).toBe("SPAN");
+  }
+  expect(
+    screen.getByLabelText("Media comments", { selector: "section" }),
+  ).not.toHaveTextContent("nostr:");
+});
+
+it("opens comments at the reply the reader was viewing behind the review", async () => {
+  const viewer = keypair();
+  const attachment = {
+    url: "https://fixture.test/image.png",
+    kind: "image" as const,
+  };
+  const root = message(viewer, "one", "Image", 1, [
+    ["imeta", `url ${attachment.url}`, "m image/png"],
+  ]);
+  const replies = [2, 3, 4].map((at) =>
+    message(viewer, "one", `Reply ${at}`, at, [["e", root.id, "", "reply"]]),
+  );
+  const reading = replies[1]?.id;
+  // The thread behind the review is scrolled past the root to the second reply.
+  const thread = document.createElement("div");
+  thread.dataset.messageScroller = "";
+  thread.innerHTML = `<div data-message-id="${root.id}"></div><div data-message-id="${reading}"></div>`;
+  document.body.append(thread);
+  const opener = document.createElement("button");
+  thread.append(opener);
+  const box = (top: number, bottom = top + 50) =>
+    ({
+      top,
+      bottom,
+      left: 0,
+      right: 0,
+      width: 0,
+      height: bottom - top,
+    }) as DOMRect;
+  vi.spyOn(Element.prototype, "getBoundingClientRect").mockImplementation(
+    function (this: Element) {
+      if (this === thread) return box(100);
+      const id = (this as HTMLElement).dataset?.messageId;
+      if (id) return box(id === root.id ? 0 : 90, id === root.id ? 90 : 150);
+      if ((this as HTMLElement).dataset?.reviewComment === reading)
+        return box(240);
+      return box(0, 0);
+    },
+  );
+  const scrollTop = vi.spyOn(Element.prototype, "scrollTop", "set");
+  const owner = createRelaySession({
+    viewer: viewer.pubkey,
+    relayAuthor: keypair().pubkey,
+    media: (url) => url,
+    async query(filters) {
+      return filters.flatMap((filter) => {
+        if (filter.ids)
+          return [root, ...replies].filter((event) =>
+            filter.ids?.includes(event.id),
+          );
+        if (filter.depth_limit)
+          return replies.filter(
+            (event) =>
+              filter.thread_cursor === undefined ||
+              event.created_at > filter.thread_cursor,
+          );
+        return [];
+      });
+    },
   });
-  expect(mention).toHaveAttribute("data-mention-kind", "person");
-  expect(mention.tagName).toBe("SPAN");
+  owners.push(owner);
+  try {
+    render(
+      <MediaReviewViewer
+        attachment={attachment}
+        session={owner.session}
+        scope="anchor-test"
+        channelId="one"
+        channelName="One"
+        messageId={root.id}
+        initialTime={0}
+        restoreFocus={{ current: opener }}
+        onOpenLink={() => false}
+        close={() => {}}
+      />,
+    );
+    await screen.findByText("Reply 4");
+    const comments = screen.getByLabelText("Media comments", {
+      selector: "section",
+    });
+    const writes = scrollTop.mock.calls.filter(
+      (_, index) => scrollTop.mock.contexts[index] === comments,
+    );
+    expect(writes).toEqual([[240]]);
+  } finally {
+    vi.restoreAllMocks();
+    thread.remove();
+  }
 });
 
 it("wires image review links to the viewer host opener", async () => {

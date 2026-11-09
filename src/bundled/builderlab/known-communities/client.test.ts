@@ -1,6 +1,6 @@
+import { createTestSession } from "../test-helpers";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import type { Host, HostResponse } from "../../../features/host/service";
-import { createOAuthSession } from "../oauth/session";
 import { createKnownCommunitiesClient } from "./client";
 
 beforeEach(() => {
@@ -18,9 +18,9 @@ const response = (body: unknown, status = 200): HostResponse => ({
   body: typeof body === "string" ? body : JSON.stringify(body),
 });
 async function fixture(reply: HostResponse | (() => Promise<HostResponse>)) {
-  const session = createOAuthSession(
+  const session = createTestSession(
     async () => ({
-      value: "secret",
+      revision: "secret",
       account: {
         subject: "user",
         email: "a@example.com",
@@ -64,7 +64,6 @@ it("lists every destination the account holds under the session credential, in t
     headers: {
       Accept: "application/json",
       "Content-Type": "application/json",
-      "X-BB-Session-Credential": "secret",
     },
     body: "{}",
   });
@@ -219,12 +218,13 @@ it.each([404, 405, 409, 415])(
   },
 );
 
-it("treats a 401 as the end of the session and cancels rather than failing", async () => {
+it("refuses only the request on a 401: the native session decides when it ends", async () => {
   const h = await fixture(response("Unauthorized", 401));
-  await expect(h.client.list(h.signal)).rejects.toMatchObject({
-    name: "AbortError",
+  await expect(h.client.list(h.signal)).resolves.toEqual({
+    kind: "rejected",
+    status: 401,
   });
-  expect(h.session.snapshot().status).toBe("signed-out");
+  expect(h.session.snapshot().status).toBe("signed-in");
 });
 
 it("names an unreachable service while the session stands, and cancels once it changed", async () => {

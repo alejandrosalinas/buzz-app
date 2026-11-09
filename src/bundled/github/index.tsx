@@ -218,7 +218,7 @@ export const apply: PluginModule["apply"] = (ctx) => {
       title: "GitHub",
       group: "Plugins",
       icon: GithubLogoIcon,
-      component: ({ active }) => <GitHubSettings active={active} />,
+      component: ({ active }) => <GitHubSettings active={active} gh={gh} />,
     });
   });
 };

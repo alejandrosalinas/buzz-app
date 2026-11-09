@@ -413,6 +413,71 @@ it("navigates every mixed attachment even after a video fails", async () => {
   await screen.findByText("4 / 5");
 });
 
+it("keeps timed reactions on the exact video while moving through a gallery", async () => {
+  const firstUrl = "https://fixture.test/video.mp4";
+  const secondUrl = "https://fixture.test/second.mp4";
+  const { root, sign, user } = await setupReview({
+    kind: "video",
+    extraRootTags: [["imeta", `url ${secondUrl}`, "m video/mp4"]],
+    replies: (viewer, root) => [
+      message(viewer, "one", "⏱ 0:11 — first cut", 2, [
+        ["e", root.id, "", "reply"],
+        ["buzz:media", firstUrl],
+      ]),
+      message(viewer, "one", "⏱ 0:21 — 😍", 3, [
+        ["e", root.id, "", "reply"],
+        ["buzz:media", secondUrl],
+      ]),
+    ],
+  });
+  const dialog = await screen.findByRole("dialog", { name: "Video review" });
+  const firstVideo = dialog.querySelector("video");
+  assert.exists(firstVideo);
+  Object.defineProperty(firstVideo, "duration", {
+    configurable: true,
+    value: 60,
+  });
+  fireEvent.durationChange(firstVideo);
+  expect(
+    within(dialog).getByRole("button", { name: /^Seek to 0:11,/ }),
+  ).toBeVisible();
+  expect(
+    within(dialog).queryByRole("button", { name: /^Seek to 0:21,/ }),
+  ).toBeNull();
+  expect(within(dialog).getByRole("button", { name: "0:11" })).toBeVisible();
+  expect(within(dialog).queryByRole("button", { name: "0:21" })).toBeNull();
+
+  await user.click(screen.getByRole("button", { name: "Next media" }));
+  const secondVideo = dialog.querySelector("video");
+  assert.exists(secondVideo);
+  Object.defineProperty(secondVideo, "duration", {
+    configurable: true,
+    value: 60,
+  });
+  fireEvent.durationChange(secondVideo);
+
+  expect(
+    within(dialog).queryByRole("button", { name: /^Seek to 0:11,/ }),
+  ).toBeNull();
+  expect(
+    within(dialog).getByRole("button", { name: /^Seek to 0:21,/ }),
+  ).toBeVisible();
+  expect(within(dialog).queryByRole("button", { name: "0:11" })).toBeNull();
+  expect(within(dialog).getByRole("button", { name: "0:21" })).toBeVisible();
+  secondVideo.currentTime = 21;
+  await user.click(
+    screen.getByRole("button", { name: "React 😍 at current frame" }),
+  );
+  const event = await signedTemplate(sign);
+  expect(event.content).toBe("⏱ 0:21 — 😍");
+  expect(event.tags).toEqual(
+    expect.arrayContaining([
+      ["e", root.id, "", "reply"],
+      ["buzz:media", secondUrl],
+    ]),
+  );
+});
+
 async function signedTemplate(sign: ReturnType<typeof vi.fn>) {
   await waitFor(() => expect(sign).toHaveBeenCalled());
   return sign.mock.calls.at(-1)?.[0] as EventTemplate;
@@ -445,6 +510,7 @@ it("publishes checked video review comments as time-prefixed kind 9 replies to t
     expect.arrayContaining([
       ["h", "one"],
       ["e", root.id, "", "reply"],
+      ["buzz:media", "https://fixture.test/video.mp4"],
     ]),
   );
 });
@@ -597,6 +663,40 @@ it("keeps thread timestamps noninteractive when a reply video conflicts with a r
   expect(openReview).not.toHaveBeenCalled();
 });
 
+it("keeps root-parented legacy timecodes visible across a reply-video gallery", async () => {
+  const { user } = await setupReview({
+    kind: "video",
+    attachmentInReply: true,
+    extraRootTags: [
+      ["imeta", "url https://fixture.test/other.mp4", "m video/mp4"],
+    ],
+    replies: (viewer, root) => [
+      message(viewer, "one", "⏱ 0:42 — legacy comment", 3, [
+        ["e", root.id, "", "reply"],
+      ]),
+    ],
+  });
+  const dialog = await screen.findByRole("dialog", { name: "Video review" });
+  const firstVideo = dialog.querySelector("video");
+  assert.exists(firstVideo);
+  Object.defineProperty(firstVideo, "duration", {
+    configurable: true,
+    value: 60,
+  });
+  fireEvent.durationChange(firstVideo);
+  expect(within(dialog).getByRole("button", { name: "0:42" })).toBeVisible();
+
+  await user.click(screen.getByRole("button", { name: "Next media" }));
+  const secondVideo = dialog.querySelector("video");
+  assert.exists(secondVideo);
+  Object.defineProperty(secondVideo, "duration", {
+    configurable: true,
+    value: 60,
+  });
+  fireEvent.durationChange(secondVideo);
+  expect(within(dialog).getByRole("button", { name: "0:42" })).toBeVisible();
+});
+
 it.each([false, true])(
   "seeks the selected full-viewer video with multiple videos (thread entry: %s)",
   async (fromThread) => {
@@ -690,12 +790,17 @@ it.each([
     await user.click(screen.getByRole("button", { name: "00:42.5" }));
     expect(dialog.querySelector("video")?.currentTime).toBe(42.5);
     await typeAndSend(user, "Same conversation");
-    expect((await signedTemplate(sign)).tags).toContainEqual([
-      "e",
-      root.id,
-      "",
-      "reply",
-    ]);
+    const event = await signedTemplate(sign);
+    if (entry.attachmentInReply) {
+      expect(event.tags).toEqual(
+        expect.arrayContaining([
+          ["e", root.id, "", "root"],
+          ["e", attachmentOwner.id, "", "reply"],
+        ]),
+      );
+    } else {
+      expect(event.tags).toContainEqual(["e", root.id, "", "reply"]);
+    }
   },
 );
 

@@ -503,7 +503,7 @@ test.describe("populated device cache", () => {
         const tx = db.transaction(["heads", "startup"], "readwrite");
         const request = tx.objectStore("startup").getAll();
         request.onsuccess = () => {
-          const row = request.result[0];
+          const row = request.result.find((r) => r.data.discovery);
           row.data.discovery.events = input.discovery;
           tx.objectStore("startup").put(row);
           for (const head of input.heads)
@@ -584,10 +584,10 @@ test.describe("saved DM labels", () => {
     await expect(dm).toBeVisible();
     await expect
       .poll(async () =>
-        (await cached(page)).startup.some((r) =>
-          r.data.discovery?.profiles?.some(
-            (p) => p.pubkey === app.participants[0],
-          ),
+        (await cached(page)).startup.some(
+          (r) =>
+            Array.isArray(r.data) &&
+            r.data.some((p) => p.pubkey === app.participants[0]),
         ),
       )
       .toBe(true);
@@ -696,6 +696,8 @@ test.describe("pending startup navigation", () => {
             const rows = store.getAll();
             rows.onsuccess = () => {
               for (const row of rows.result) {
+                // The profile mirror row holds no roster.
+                if (!row.data.discovery) continue;
                 row.data.discovery.events = row.data.discovery.events.filter(
                   (event) =>
                     !event.tags.some(

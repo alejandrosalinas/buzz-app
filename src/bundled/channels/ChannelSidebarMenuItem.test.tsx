@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import "@testing-library/jest-dom/vitest";
-import { act, cleanup, render, screen } from "@testing-library/react";
+import { act, cleanup, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, expect, it, vi } from "vitest";
 import { createRelaySession } from "../../features/relay/session";
@@ -93,10 +93,25 @@ it("keeps menu choices in sync with ordinary, attention, thread and working side
   expect(item.querySelector("[data-channel-priority]")).toBeNull();
   act(() => {
     unread = { ...unread, attentionCount: 1 };
+    activity = {
+      ...activity,
+      mentions: [
+        {
+          channelId: "alpha",
+          messageId: "mention",
+          authorId: "peer",
+          createdAt: 2,
+          preview: "Ask",
+        },
+      ],
+    };
     publish();
   });
   expect(label).not.toHaveAttribute("data-ordinary");
+  // A mention alone keeps the priority dot, and names itself to assistive tech.
   expect(item.querySelector("[data-channel-priority]")).toBeInTheDocument();
+  expect(item.querySelector("[data-channel-activity]")).toBeNull();
+  expect(item).toHaveAccessibleName(/1 unread mention$/);
   act(() => {
     activity = {
       ...activity,
@@ -114,9 +129,11 @@ it("keeps menu choices in sync with ordinary, attention, thread and working side
     };
     publish();
   });
+  // One dot names both, so the mention is not announced twice.
   expect(
-    screen.getByRole("img", { name: "1 unread thread" }),
-  ).toBeInTheDocument();
+    screen.getByRole("img", { name: "1 unread mention, 1 unread thread" }),
+  ).toHaveAttribute("title", "1 unread mention, 1 unread thread");
+  expect(within(item).queryByText(/unread mention/)).toBeNull();
   expect(item.querySelector("[data-channel-priority]")).toBeNull();
   act(() => {
     agents = {
@@ -139,7 +156,7 @@ it("keeps menu choices in sync with ordinary, attention, thread and working side
   ).toBeInTheDocument();
   act(() => {
     unread = { ...unread, observedCount: 0, attentionCount: 0 };
-    activity = { ...activity, items: [] };
+    activity = { ...activity, items: [], mentions: [] };
     publish();
   });
   expect(label).not.toHaveAttribute("data-ordinary");
@@ -163,3 +180,75 @@ it("keeps menu choices in sync with ordinary, attention, thread and working side
   expect(unreadListeners.size).toBe(0);
   expect(agentListeners.size).toBe(0);
 });
+
+it.each([
+  ["an unmuted", false],
+  ["a muted", true],
+])(
+  "announces the mentions of %s row with no unread thread",
+  async (_, muted) => {
+    const owner = createRelaySession(null);
+    owners.push(owner);
+    const unread = {
+      ...owner.session.unread.snapshot({ kind: "channel", channelId: "alpha" }),
+      observedCount: 2,
+      attentionCount: 2,
+    };
+    const mention = {
+      channelId: "alpha",
+      messageId: "newer",
+      authorId: "peer",
+      createdAt: 2,
+      preview: "Ask",
+    };
+    const activity = {
+      ...owner.session.unread.activity("alpha"),
+      items: [],
+      mentions: [mention, { ...mention, messageId: "older", createdAt: 1 }],
+      freshness: "stale" as const,
+    };
+    const session = {
+      ...owner.session,
+      unread: {
+        ...owner.session.unread,
+        snapshot: () => unread,
+        activity: () => activity,
+      },
+      sidebarPreferences: {
+        ...owner.session.sidebarPreferences,
+        snapshot: () => ({
+          status: "ready" as const,
+          data: {
+            sections: [],
+            assignments: {},
+            starred: [],
+            muted: muted ? ["alpha"] : [],
+          },
+        }),
+      },
+    };
+    render(
+      <MenuRoot open>
+        <MenuTrigger>Choose channel</MenuTrigger>
+        <MenuPopup aria-label="Channels">
+          <ChannelSidebarMenuItem
+            channel={{ id: "alpha", name: "Alpha" }}
+            session={session}
+            selected={false}
+            onSelect={() => {}}
+          />
+        </MenuPopup>
+      </MenuRoot>,
+    );
+    const item = await screen.findByRole("menuitem", { name: /^Alpha/ });
+    // The priority dot is aria-hidden, and a muted row hides it.
+    expect(!!item.querySelector("[data-channel-priority]")).toBe(!muted);
+    expect(item.querySelector("[data-channel-activity]")).toBeNull();
+    expect(
+      within(item).getByText("2 unread mentions; may be out of date"),
+    ).toHaveClass("sr-only");
+    expect(item).toHaveAccessibleName(
+      /unread messages\. Not an exact total\.\s*2 unread mentions; may be out of date$/,
+    );
+  },
+);

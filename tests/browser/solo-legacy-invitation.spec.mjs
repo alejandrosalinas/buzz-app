@@ -242,7 +242,7 @@ test("Outbox Retry reconciles a recorded then removed Solo invitation without re
     page.getByRole("button", { name: "Chat actions", exact: true }),
   ).toBeVisible();
   await page
-    .getByRole("button", { name: "Share access", exact: true })
+    .getByRole("button", { name: /^Share access to /, exact: true })
     .last()
     .click();
   const access = page.getByRole("dialog", {

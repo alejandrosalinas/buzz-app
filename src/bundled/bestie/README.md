@@ -21,7 +21,11 @@ selectable agent. Known-archived agents and agents confirmed absent from a compl
 inventory do not keep a pinned conversation.
 
 The page uses the ordinary conversation owners for history, drafts, sending,
-threads and unread state. Thread visits bind to their originating DM. Restoring
+threads and unread state. Its conversation workspace reuses Messages’ tab state
+and tab host, with a retained main timeline/composer and a resizable side pane.
+Threads follow the device’s thread placement preference and support the same
+move, rename, close and pane-collapse controls. Profile and plugin links open
+in the tab workspace. Thread visits bind to their originating DM. Restoring
 one after the Bestie or canonical DM changes retires incompatible thread visits
 and shows the current Bestie's chat; it never reads an old thread in the new DM.
 While that exact DM is promoted, Messages omits its
@@ -44,7 +48,9 @@ on another device, can be your Bestie too. Change, **Make my bestie** and **Make
 my Bestie again** offer it, and say before saving that some bestie features
 aren't available with remote agents, as **Choosing a Bestie** does: one
 question, the replacement's, when it replaces your Bestie. A Bestie on another
-device shows no tab, as its instructions and timers aren't on this device. A
+device shows no tab, as its instructions and timers aren't on this device; its
+card's **Remove as bestie** still removes it, as that saves only to your
+account. A
 hosted Bestie shows the tab, and its provider can hold its instructions: where
 it does (Builderlab does), **Remembers you** reads and saves them through the
 provider, as a local agent's synced instructions are, and the row says why
@@ -60,10 +66,11 @@ this device saw it as Bestie, and it shows **Former Bestie** while its memory
 section is on or it is in one of your private channels. If its latest read
 fails, even after an earlier one found memory off, the tab stays until a read
 succeeds, so its Retry can read again; a read that
-started before the newest one recorded never replaces it. **Remove as Bestie** asks,
-then saves no Bestie to your account: the agent stays, its check-ins stop, and
-its memory section and private channels stay, which its Former Bestie tab can
-turn off.
+started before the newest one recorded never replaces it. **Remove as Bestie**,
+in the tab or as **Remove as bestie** in the agent card's menu, asks, then saves
+no Bestie to your account: the agent stays, its check-ins stop, and its memory
+section and private channels stay, which its Former Bestie tab can turn off.
+Both need an account to save none to.
 
 **Remembers you** adds memory rules to the agent's instructions, in a section
 marked `<!-- buzz:bestie/memory v1 -->` … `<!-- /buzz:bestie/memory -->`, and
@@ -102,17 +109,15 @@ off too. On adds the `buzz:bestie/checkin.hourly` Hourly upkeep section to the
 instructions and an hourly Attention timer, `watch/bestie-hourly-check-in`,
 that wakes Bestie in your DM with it. Each check-in reads what is new in
 that DM and in the private channels Bestie was added to, and reports only in
-the DM. On also turns on the agent's Attention,
-which the Watching tab shows. Off removes the section and the timer and leaves
-Attention on, since the agent's other watches may need it. The timer runs while
-Buzz is open and the Watching plugin is on: this plugin doesn't call
+the DM. The Watching tab shows the timer. Off removes the section and the
+timer. The timer runs while Buzz is open and the Watching plugin is on: this
+plugin doesn't call
 `controlAttention()`, so turning Watching off still turns Attention off for
 every agent. While the timer can't run, the row says it is paused, and a
 timer paused on its own in the Attention tab says to turn the switch off and on
 again to restart it. If the instructions fail to save after the timer did, On
-removes the timer again, and turns Attention back off if it turned it on; a
-timer still left without its section gets a **Remove** row. After a
-sleep it runs once, not once for each missed hour. Each
+removes the timer again; a timer still left without its section gets a
+**Remove** row. After a sleep it runs once, not once for each missed hour. Each
 check-in is a feature in `features.ts`, so another kind is one more entry.
 
 **Changing your Bestie.** Only your Bestie checks in: whenever the saved Bestie

@@ -22,6 +22,7 @@ import {
   waitFor,
 } from "@testing-library/react";
 import { finalizeEvent, generateSecretKey } from "nostr-tools";
+import { npubEncode } from "nostr-tools/nip19";
 import * as communityConfig from "../../features/agents/community-config";
 import { SyncedTeams, teamArtifact } from "../../features/agents/team-config";
 import type { RelayEvent } from "../../features/relay/events";
@@ -30,7 +31,7 @@ import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { MentionCompletion } from "./MentionCompletion";
 import { MentionPicker } from "./MentionPicker";
 import { mentionQuery } from "./mention-query";
-import { useMentionChoices } from "./use-mention-choices";
+import { MENTION_ROWS, useMentionChoices } from "./use-mention-choices";
 import { useTeamMentions } from "./use-team-mentions";
 import { createAgentLibrary } from "../../features/agents/library";
 import { createAgentChoices } from "../../features/agents/choices";
@@ -535,6 +536,21 @@ it.each([false, true])(
     }
   },
 );
+
+it("more members than the shown rows rank only the first rows", async () => {
+  const h = fixture({ count: MENTION_ROWS + 1, team: 0 });
+  const view = renderHook(() =>
+    useMentionChoices(h.session, "parent", false, "", "open", true),
+  );
+  try {
+    await waitFor(() =>
+      expect(view.result.current.choices).toHaveLength(MENTION_ROWS),
+    );
+  } finally {
+    view.unmount();
+    h.library.dispose();
+  }
+});
 
 it("reserves room for teams ready when the first 50-choice budget installs", async () => {
   const h = fixture({ count: 50 });
@@ -1110,6 +1126,26 @@ it("a current team blocks a same-name person during delayed Space resolution", a
       new AbortController().signal,
     );
     expect(result).toBeNull();
+  } finally {
+    h.library.dispose();
+  }
+});
+
+it("a team named like a pasted npub does not block its owner during delayed Space resolution", async () => {
+  const h = fixture();
+  try {
+    const key = npubEncode(h.agent.pubkey);
+    const result = await resolveSpaceMention(
+      h.session,
+      {
+        channelId: "parent",
+        selected: [],
+        teamNames: () => [key, `${key} Crew`],
+      },
+      key,
+      new AbortController().signal,
+    );
+    expect(result).toMatchObject({ pubkey: h.agent.pubkey });
   } finally {
     h.library.dispose();
   }

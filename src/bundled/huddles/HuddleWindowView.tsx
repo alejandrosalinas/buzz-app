@@ -155,9 +155,9 @@ function HuddleWindowContent({ view, act, error }: WindowProps) {
           muted={view.muted}
         />
         <footer className={styles.windowFooter}>
-          {error && (
+          {(error || view.error) && (
             <p role="alert" className="text-caption text-secondary">
-              {error}
+              {error || view.error}
             </p>
           )}
           <div className={styles.windowControlBar}>

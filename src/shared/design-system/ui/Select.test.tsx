@@ -131,3 +131,72 @@ it("keeps the setting label available while disabling a preference control", () 
   expect(row).not.toHaveAttribute("data-disabled");
   expect(row?.querySelector(".buzz-preference-row-label")).toBeVisible();
 });
+
+it("keeps a controlled replacement when its previous option is removed, and still supports typeahead", async () => {
+  const user = userEvent.setup();
+  function Choices() {
+    const [value, setValue] = useState("");
+    return (
+      <>
+        <button type="button" onClick={() => setValue("custom")}>
+          Use custom
+        </button>
+        <button type="button" onClick={() => setValue("new")}>
+          Use saved
+        </button>
+        <Select
+          label="Model"
+          value={value}
+          onValueChange={setValue}
+          groups={[
+            {
+              label: "",
+              options: [
+                { value: "", label: "Default" },
+                { value: "new", label: "New model" },
+                ...(value === "custom"
+                  ? [{ value: "custom", label: "Custom model" }]
+                  : []),
+              ],
+            },
+          ]}
+        />
+        <output aria-label="Selected model">{value || "default"}</output>
+      </>
+    );
+  }
+  render(<Choices />);
+  const trigger = screen.getByRole("combobox", { name: "Model" });
+  await user.click(trigger);
+  await waitFor(() =>
+    expect(screen.getByRole("option", { name: "Default" })).toHaveFocus(),
+  );
+  await user.keyboard("{Escape}");
+  await waitFor(() =>
+    expect(trigger).toHaveAttribute("aria-expanded", "false"),
+  );
+  await waitFor(() => expect(trigger).toHaveFocus());
+  await user.click(screen.getByRole("button", { name: "Use custom" }));
+  expect(trigger).toHaveTextContent("Custom model");
+  await user.click(trigger);
+  await waitFor(() =>
+    expect(screen.getByRole("option", { name: "Custom model" })).toHaveFocus(),
+  );
+  await user.keyboard("{Escape}");
+  await waitFor(() =>
+    expect(trigger).toHaveAttribute("aria-expanded", "false"),
+  );
+  await waitFor(() => expect(trigger).toHaveFocus());
+  await user.click(screen.getByRole("button", { name: "Use saved" }));
+  expect(trigger).toHaveTextContent("New model");
+  expect(screen.getByLabelText("Selected model")).toHaveTextContent("new");
+  expect(screen.getByRole("button", { name: "Use saved" })).toHaveFocus();
+  await user.tab();
+  await waitFor(() => expect(trigger).toHaveFocus());
+  expect(trigger).toHaveAttribute("aria-expanded", "false");
+  await user.keyboard("d");
+  await waitFor(() => expect(trigger).toHaveTextContent("Default"));
+  await user.click(trigger);
+  await user.click(await screen.findByRole("option", { name: "New model" }));
+  expect(trigger).toHaveTextContent("New model");
+});

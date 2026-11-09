@@ -1,9 +1,15 @@
 .preview {
-  margin: 0 0 var(--space-6);
+  margin: var(--space-6) 0 0;
   border: 1px solid var(--border-standard);
   border-radius: var(--radius-container);
   overflow: hidden;
   background: var(--surface-panel);
+}
+.preview[data-embedded] {
+  margin: 0 calc(-1 * var(--settings-group-inset));
+  border: 0;
+  border-block-start: 1px solid var(--border-standard);
+  border-radius: 0;
 }
 .scene {
   display: grid;
@@ -66,6 +72,13 @@
 .heading span {
   width: 25%;
 }
+.messageColumn {
+  width: calc(100% / 1.5);
+  margin-inline: auto;
+}
+.messageColumn[data-message-width="wide"] {
+  width: 100%;
+}
 .messages {
   display: flex;
   flex-direction: column;
@@ -99,6 +112,25 @@
   width: 55%;
   background: var(--surface-message-own);
   color: var(--text-message-own);
+}
+.messageColumn[data-message-density="compact"] .messages {
+  gap: var(--space-1);
+  padding-block: var(--space-3);
+}
+.messageColumn[data-message-density="compact"] .received {
+  align-items: flex-start;
+}
+.messageColumn[data-message-density="compact"] .bubble,
+.messageColumn[data-message-density="compact"] .bubble[data-own] {
+  width: 65%;
+  padding: 0;
+  border-radius: 0;
+  background: transparent;
+  color: var(--text-standard);
+}
+.messageColumn[data-message-density="compact"] .bubble[data-own] {
+  align-self: flex-start;
+  margin-inline-start: calc(var(--space-4) + var(--space-2));
 }
 .composer {
   display: flex;

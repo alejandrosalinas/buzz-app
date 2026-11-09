@@ -210,9 +210,13 @@ cards use the existing relay protocol; no server changes are part of this slice.
   `buzz-audio-client` crate from `block/buzz` supplies the shared audio handshake,
   v2 wire format, Opus sender, and per-peer jitter buffer; it does not pull in the
   v0 desktop app or speech models. Receivers drain 10 ms frames and reset on peer
-  removal/reassignment. Signing stays in the existing IdentityHost. Commands are
-  available only to the main
-  application webview.
+  removal/reassignment. Frames from multiple devices belonging to the same
+  pubkey are mixed once per tick and clipped after summing. Socket writes go
+  through their own queue (five messages, newest dropped when full), so a stalled
+  send never blocks receive or playout. Microphone PCM uses a serial sender: at
+  most four waiting 20 ms frames plus one in flight, oldest waiting frame dropped
+  on overflow; mute discards waiting frames. Signing stays in the existing
+  IdentityHost. Commands are available only to the main application webview.
 
 This is a client-only implementation. It uses the existing private ephemeral
 channel creation event (9007, TTL 3600), parent announcement (48100), authenticated
@@ -224,8 +228,70 @@ may already have joined, so existing relay socket/TTL cleanup owns it.
 
 The macOS bundle includes the microphone purpose string and audio-input entitlement.
 Browser-only, Linux and Windows hosts do not expose the launcher in this slice.
-Agent voices, transcription generation, screen sharing and automatic reconnect
-are outside this first version.
+Screen sharing and automatic reconnect are outside this version.
+
+## Agent voice seats
+
+An agent type can supply `voice(seat)` from `features/agents/service.ts`. The
+seat supplies the agent record, room conversation, abort signal, output callback
+and `ended(error?)`; resolved config, revisions, synced settings and team come from
+the same launch resolver as text, and stay fixed for that seat. The harness returns
+`input(samples)` and idempotent `close()`.
+Output is 48 kHz mono, exactly 960 finite samples per frame; input is the owner's
+48 kHz mono playout, up to 5760 samples per frame (native delivers 10 ms frames).
+The harness owns turn-taking and interruptions; the huddles plugin owns eligibility and the
+native connection. The record carries no tool authority: each harness obtains
+its own authorized agent handle and applies the same protections as an owner
+mention when adopting voice work.
+
+Seats follow the owner's connected human call on this desktop. Each running
+local agent with a voice hook must belong to the room itself, according to its
+current relay roster, and have the signed-in viewer as owner. Pending, cached,
+read-only and archived room projections cannot seat agents. Parent membership
+alone does not qualify. Multiple agents can sit independently; owner calls on
+other devices do not create seats here. Room resolution runs only when a local,
+owner-matched voice candidate exists. Until it succeeds, no seat opens; a failed
+read stays silent and can retry on the next roster or agent update.
+
+Agent voices use the microphones' serial PCM sender, with the same limits;
+leaving discards all waiting sends. Frames already submitted to native cannot be
+recalled. This bounds retained media duration, not wall-clock delivery latency.
+
+Native filters each seat's audio to the owner's current peer indices. The v2
+media protocol has no occupancy epoch: a delayed packet from a previous occupant
+can be attributed to the owner after an index is reassigned. Decoder resets do
+not fence such packets; a strict owner-only guarantee requires a media epoch or
+an equivalent relay ordering guarantee. The filter also cannot identify people
+speaking near the owner's microphone. Eligibility loss or plugin shutdown
+aborts both audio directions and closes the harness and socket, including late
+open completions. A five-second heartbeat renews the native lease. A failed seat
+shows an error in both the compact player and companion window; leave and rejoin
+to retry. The public plugin-author barrel export remains deferred; bundled harnesses use the service
+type directly. Platform support depends on the harness and native audio host.
+
+Transcripts are posted once through `seat.transcript("owner" | "agent", text)`,
+with only the room `h` tag. They never mention anyone or re-enter the transcribing
+agent. Other agents’ explicit room watches see them as ordinary messages authored
+by the transcribing agent. The host aborts the signal, then awaits `close()` before
+releasing the seat reservation.
+
+Teardown keeps the seat reserved until all closing work settles; native bridge
+closure runs alongside harness closure, not after the surviving typed turn.
+
+```text
+seat.stop(): Abort the seat and stop its heartbeat once.
+  |
+  +-> abort: Stop audio callbacks and transcript publication immediately.
+  |
+  +-> harness close() (Codex: runtime.voice -> openVoice): Close media, await
+  |     the surviving typed turn, then unsubscribe; new text waits on closing.
+  |     |
+  |     +-> openVoice.close(): Stop WebRTC and Web Audio, then stop realtime.
+  |
+  +-> bridge.close(): Await native opening, then close its audio connection.
+  |
+  +-> reservation release: Await startup and both close paths before reseating.
+```
 
 ## Checks and tryout
 

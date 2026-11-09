@@ -892,15 +892,13 @@ test("header openings keep focus while a main-pane thread is retained", async ({
     .get("primary/alpha")
     .find((row) => row.content.startsWith("Thread root"));
   const main = page.locator("[data-main-workspace]");
-  const topbar = page.getByRole("navigation", { name: "Topbar pages" });
+  const topbar = page.getByRole("navigation", { name: "Apps dock" });
   const messages = topbar.getByRole("tab", {
     name: "Messages",
     exact: true,
   });
   const projects = topbar.getByRole("tab", { name: "Workflows", exact: true });
-  const inbox = page
-    .getByRole("navigation", { name: "Pages" })
-    .getByRole("button", { name: "Inbox", exact: true });
+  const inbox = topbar.getByRole("tab", { name: "Activity", exact: true });
   for (const leave of [inbox, projects]) {
     await page
       .locator(`[data-channel-timeline="alpha"] [data-message-id="${root.id}"]`)

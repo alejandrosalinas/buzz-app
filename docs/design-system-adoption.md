@@ -1,7 +1,7 @@
 # Shared design system adoption
 
 Buzz uses shared semantic colors, Inter and JetBrains Mono, and Base UI interaction
-primitives. The visual direction follows Block UI’s controls and states. Public
+primitives. Buzz owns the visual direction of its controls and states. Public
 fonts, packages, and generic examples keep the system independent of private assets.
 
 Use this map to find the shared owner before changing a product surface.
@@ -14,12 +14,12 @@ Use this map to find the shared owner before changing a product surface.
 | Actions | Button and IconButton | Retry, refresh, delete, recovery, composer send, and picker triggers. Standard sizes are 32/40/52px; IconButton defaults to small and labelled Button defaults to medium. Text-button heights are minimums. Labels stay on one line; surrounding layouts reflow whole controls or scroll. |
 | Forms and choices | Field, Input, Textarea, RadioGroup, Checkbox | Profile, community setup, appearance, plugin import, and workflow editing. |
 | Search | SearchField | Channels, pages, members, and GIFs retain their query, refs, and keyboard handlers. |
-| Navigation | SidebarNavigation composing NavigationItem and NavigationSection | The primary sidebar and Settings consume the same component, preserving main’s compact sidebar appearance. Features retain unread, collapsing, dragging and scrollbar geometry. Other shell destinations, Home, and community choices retain their existing treatment. Route destinations use button semantics; the wide shell topbar is the documented chrome-tab exception. |
-| Tabs | Tabs | The wide shell Messages topbar links retained page panels and preserves tab focus on selection. Emoji/GIF connects tabs to panels with Base UI keyboard activation. Workflow mode keeps its feature-owned editor view. |
+| Navigation | SidebarNavigation composing NavigationItem and NavigationSection | The primary sidebar and Settings consume the same component, preserving main’s compact sidebar appearance. Features retain unread, collapsing, dragging and scrollbar geometry. Other shell destinations and community choices retain their existing treatment. Route destinations use button semantics; the shell side dock is the documented shell-tab exception. |
+| Tabs | Tabs | The shell side dock links retained page panels and preserves tab focus on selection. Emoji/GIF connects tabs to panels with Base UI keyboard activation. Workflow mode keeps its feature-owned editor view. |
 | Modals | Dialog and AlertDialog | Use the [modal composition](../src/shared/design-system/DESIGN.md#modal-composition): shared title/description lockup, normalized sizes, secondary Close, and fixed footer gutter outside scrolling content. Page search, community setup, and workflow confirmations retain their dismissal and focus contracts. |
 | Panels and headers | Panel and PanelHeader | Settings, channels, and companion cards share appearance. Features own grids, scrolling, docks, and subscriptions. |
 | Read loading | LoadingRegion | Profile Settings uses a same-scope verified snapshot while refreshing; cold reads reserve the actual form geometry. Delayed status does not delay results, errors, or write feedback. |
-| Feedback | Toast (Sonner) | Sidebar preferences and Settings recovery use the shared bottom-right Sonner stack with source-owned recovery. Completed-action feedback can outlive its row. Channel live-update recovery stays inline above the composer; form errors, blocked pages, and lasting paused-state context stay inline. |
+| Feedback | Toast (Sonner) | Sidebar preferences and Settings recovery use the shared bottom-right Sonner stack with source-owned recovery. Completed-action feedback can outlive its row. Relay connection recovery is one quiet bottom-right notice on every page, and the stack rises above docked composers (`useToastClearance`), while channel live-update failures that recovery does not retry stay inline above the composer; form errors, blocked pages, and lasting paused-state context stay inline. |
 | Hints | Tooltip | Control hints and agent activity support keyboard access and dismissal. Controls keep their own accessible names. |
 | Solo chats and activity | NavigationItem, Button, IconButton, Panel, PanelHeader | Solo chat history, agent choice, and activity actions retain unread, admission, draft, and focus behavior. Base UI owns their menus. |
 | Media stages | `surface-inverse` and `text-inverse` | Preserve the stage’s existing values and measure text pairings. Renderers own image and video pixels. |
@@ -94,7 +94,7 @@ below are labelled separately. No product fixes are included in this documentati
 | Surface | Example and the specific pattern it demonstrates |
 | --- | --- |
 | Conversation workspace | [ChannelsPage](../src/bundled/channels/ChannelsPage.tsx): pane identity and icon actions, timeline scroll ownership, persistent composer |
-| Collection with detail | [InboxPage](../src/bundled/inbox/InboxPage.tsx): filters in the body and list/detail ownership; the Drafts header action is a gap below |
+| Collection with detail | [InboxPage](../src/bundled/inbox/InboxPage.tsx): filters in the body and list/detail ownership |
 | Solo chats | [ChannelsPage](../src/bundled/channels/ChannelsPage.tsx) Solo treatment ([SoloHeading](../src/bundled/channels/SoloHeading.tsx)): flat timeline/composer in the shared conversation page and panel workspace |
 | Immediate settings | [NotificationSettings](../src/app/NotificationSettings.tsx), [AppearanceSettings](../src/app/AppearanceSettings.tsx): shared preference rows, grouped controls, and contextual permission feedback |
 | Explicit-save settings | [ProfileSettings](../src/app/ProfileSettings.tsx): scoped description, labelled fields, preserved draft/save behavior. [IdentitySettings](../src/app/IdentitySettings.tsx) owns separate identity details |
@@ -110,7 +110,6 @@ interaction or authorize a redesign of the feature's behavior.
 | Before | After | Why |
 | --- | --- | --- |
 | [Repository views](../src/bundled/repos/RepoPage.tsx) begin with feature-authored large headings; loading replaces the heading too. Observed in the browser. | Adopt the shared pane composition, with filters, scoped notices, and labelled task actions in the body. Keep identity stable across loading and results. | A destination should remain recognizable while its content changes. |
-| [Inbox](../src/bundled/inbox/InboxPage.tsx) uses a text Drafts action. Browser observed. | Shared label/navigation treatment and small icon-only header actions; retain accessible names and existing action behavior. | Using the frame alone does not establish correct composition. |
 | [Builderlab Login](../src/bundled/builderlab/login/Login.tsx) uses its own heading/gaps; [PairingSettings](../src/bundled/pairing/PairingSettings.tsx) uses a different hand-built heading. Builderlab observed; Pairing source-reviewed. | Use the Settings content Header and appropriate form/preference/management grouping. Preserve integration-specific instructions and steps. | Settings registration does not render consistent content hierarchy for the plugin. |
 | [PanelSubview](../src/features/panels/PanelSubview.tsx) focuses its Back control on entry. Adding an IconButton title opens a Tooltip that consumes the first Escape before Back; reproduced in the existing focus/return component test during an isolated trial. | Preserve accessible names and the existing one-Escape Back contract until the shared Tooltip policy supports both. Current controls omit the new hint. | A mandatory hint recipe can conflict with an established keyboard contract; token guards do not detect this. |
 

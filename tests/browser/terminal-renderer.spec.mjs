@@ -4,6 +4,278 @@ import react from "@vitejs/plugin-react";
 import { fileURLToPath } from "node:url";
 import { watchPageErrors } from "./page-errors.mjs";
 
+// Browser-only: real same-origin storage events must carry the registered
+// Settings card's changes to another mounted xterm, without replacing it.
+test("terminal settings apply, persist and reset across windows", async ({
+  page,
+  context,
+}) => {
+  const server = await createServer({
+    configFile: false,
+    envDir: false,
+    server: { host: "127.0.0.1", port: 0 },
+  });
+  await context.addInitScript(() => {
+    document.fonts.add(
+      new FontFace(
+        "Buzz Terminal Settings Test",
+        'url("/node_modules/@fontsource/jetbrains-mono/files/jetbrains-mono-latin-400-normal.woff2")',
+      ),
+    );
+  });
+  const second = await context.newPage();
+  const errors = [watchPageErrors(page), watchPageErrors(second)];
+  try {
+    await server.listen();
+    const url = `http://127.0.0.1:${server.httpServer.address().port}/tests/fixtures/terminal-panel.html`;
+    for (const target of [page, second]) {
+      await target.goto(url);
+      await target
+        .getByRole("button", { name: "Toggle channel terminal", exact: true })
+        .click();
+      await expect(target.locator(".xterm-rows")).toContainText(
+        "FIXTURE_SHELL_READY",
+      );
+      await target.evaluate(() => {
+        window.retainedTerminal = document.querySelector(".xterm");
+      });
+    }
+    await page
+      .getByRole("button", { name: "Terminal font settings", exact: true })
+      .click();
+    const input = page.getByRole("textbox", { name: "Font family" });
+    const size = page.getByRole("spinbutton", { name: "Font size (px)" });
+    await input.fill("ASDF Buzz Missing Font");
+    await input.blur();
+    await expect(page.getByRole("alert")).toContainText("Couldn’t load");
+    await expect(
+      page.getByRole("button", { name: "Apply", exact: true }),
+    ).toBeDisabled();
+    await expect(page.locator(".xterm-rows")).toHaveCSS(
+      "font-family",
+      /^"?JetBrains Mono"?,/,
+    );
+    await input.fill("Buzz Terminal Settings Test");
+    await size.fill("18");
+    await expect(
+      page.getByRole("button", { name: "Apply", exact: true }),
+    ).toBeEnabled();
+    await input.press("Enter");
+    await expect(second.locator(".xterm-rows")).toHaveCSS("font-size", "18px");
+    await expect(second.locator(".xterm-rows")).toHaveCSS(
+      "font-family",
+      /^"?Buzz Terminal Settings Test"?,/,
+    );
+    await expect(second.locator(".xterm-rows")).toContainText(
+      "FIXTURE_SHELL_READY",
+    );
+    expect(
+      await second.evaluate(
+        () => window.retainedTerminal === document.querySelector(".xterm"),
+      ),
+    ).toBe(true);
+    await second.reload();
+    await second
+      .getByRole("button", { name: "Toggle channel terminal", exact: true })
+      .click();
+    await expect(second.locator(".xterm-rows")).toHaveCSS(
+      "font-family",
+      /^"?Buzz Terminal Settings Test"?,/,
+    );
+    await expect(second.locator(".xterm-rows")).toHaveCSS("font-size", "18px");
+    await page.setViewportSize({ width: 390, height: 950 });
+    await page
+      .getByRole("button", { name: "Enlarge text", exact: true })
+      .click();
+    const section = page.getByRole("region", { name: "Terminal", exact: true });
+    expect(
+      await section.evaluate(
+        (element) => element.scrollWidth <= element.clientWidth,
+      ),
+    ).toBe(true);
+    await page
+      .getByRole("button", { name: "Use default", exact: true })
+      .click();
+    await expect(input).toHaveValue("");
+    await expect(size).toHaveValue("12");
+    await expect(second.locator(".xterm-rows")).toHaveCSS(
+      "font-family",
+      /^"?JetBrains Mono"?,/,
+    );
+    await expect(second.locator(".xterm-rows")).toHaveCSS("font-size", "12px");
+    expect(errors.flatMap((error) => error.unexplained())).toEqual([]);
+  } finally {
+    await server.close();
+  }
+});
+
+// Browser-only: CSS font resolution, xterm cell measurement and FitAddon must
+// cooperate on a live font swap. A DOM emulator cannot establish that boundary.
+test("terminal font changes refit the retained emulator and restore the default", async ({
+  page,
+}) => {
+  const server = await createServer({
+    configFile: false,
+    envDir: false,
+    server: { host: "127.0.0.1", port: 0 },
+  });
+  const errors = watchPageErrors(page);
+  let fontGate = Promise.withResolvers();
+  let fontRequest = Promise.withResolvers();
+  const startupFont = Promise.withResolvers();
+  const startupRequest = Promise.withResolvers();
+  try {
+    await server.listen();
+    await page.route(
+      "**/jetbrains-mono-latin-400-normal.woff2",
+      async (route) => {
+        startupRequest.resolve();
+        await startupFont.promise;
+        await route.continue();
+      },
+    );
+    await page.goto(
+      `http://127.0.0.1:${server.httpServer.address().port}/tests/fixtures/terminal.html`,
+      { waitUntil: "domcontentloaded" },
+    );
+    const rows = page.locator(".xterm-rows");
+    await startupRequest.promise;
+    // Theme must be present even while the initial font metrics are pending.
+    const background = await page
+      .locator(".xterm")
+      .locator("..")
+      .evaluate((element) => getComputedStyle(element).backgroundColor);
+    await expect(page.locator(".xterm-scrollable-element")).toHaveCSS(
+      "background-color",
+      background,
+    );
+    startupFont.resolve();
+    // Terminal ANSI styles must work even if an installed family has one face.
+    // The surrounding app disables font synthesis for its own bundled fonts.
+    await expect(rows).toHaveCSS("font-synthesis-weight", "auto");
+    await expect(rows).toHaveCSS("font-synthesis-style", "auto");
+    await expect(page.locator(".xterm-helper-textarea")).toBeFocused();
+    await page.route("**/terminal-delayed.woff2*", async (route) => {
+      fontRequest.resolve();
+      await fontGate.promise;
+      await route.fulfill({
+        response: await route.fetch({
+          url: new URL(
+            "/node_modules/@fontsource/jetbrains-mono/files/jetbrains-mono-latin-400-normal.woff2",
+            page.url(),
+          ).href,
+        }),
+      });
+    });
+    await page.evaluate(async () => {
+      // Use a deliberately wider face from the pinned font asset, independent
+      // of whichever system fonts happen to be installed on a CI machine.
+      const face = new FontFace(
+        "Buzz Terminal Test",
+        'url("/terminal-delayed.woff2")',
+        { sizeAdjust: "150%" },
+      );
+      document.fonts.add(face);
+      await document.fonts.load('12px "JetBrains Mono"');
+      await document.fonts.ready;
+    });
+    await page.evaluate(async () => {
+      await window.terminalRenderer.output("FONT_SWAP_RETAINS_OUTPUT");
+      window.retainedTerminal = document.querySelector(".xterm");
+    });
+    await expect(rows).toContainText("FONT_SWAP_RETAINS_OUTPUT");
+    const dimensions = page.getByLabel("Dimensions", { exact: true });
+    await expect(dimensions).not.toBeEmpty();
+    const original = await dimensions.textContent();
+    await page.evaluate(() =>
+      window.terminalRenderer.font.set("Buzz Terminal Test"),
+    );
+    await fontRequest.promise;
+    await expect(dimensions).toHaveText(original);
+    fontGate.resolve();
+    await page.evaluate(() => document.fonts.load('12px "Buzz Terminal Test"'));
+    await expect(rows).toHaveCSS("font-family", /^"?Buzz Terminal Test"?,/);
+    await expect(dimensions).not.toHaveText(original);
+    await page.evaluate(() => window.terminalRenderer.font.reset());
+    await expect(rows).toHaveCSS("font-family", /^"?JetBrains Mono"?,/);
+    await expect(dimensions).toHaveText(original);
+    // A slower, older choice must not overwrite a newer reset.
+    fontGate = Promise.withResolvers();
+    fontRequest = Promise.withResolvers();
+    await page.evaluate(() => {
+      document.fonts.add(
+        new FontFace(
+          "Buzz Terminal Stale",
+          'url("/terminal-delayed.woff2?stale")',
+          { sizeAdjust: "200%" },
+        ),
+      );
+      window.terminalRenderer.font.set("Buzz Terminal Stale");
+    });
+    await fontRequest.promise;
+    await page.evaluate(() => window.terminalRenderer.font.reset());
+    await expect(rows).toHaveCSS("font-family", /^"?JetBrains Mono"?,/);
+    fontGate.resolve();
+    await page.evaluate(async () => {
+      await document.fonts.load('12px "Buzz Terminal Stale"');
+      await new Promise((resolve) => requestAnimationFrame(resolve));
+    });
+    await expect(rows).toHaveCSS("font-family", /^"?JetBrains Mono"?,/);
+    await expect(dimensions).toHaveText(original);
+    // Same face, different size: real cell dimensions and PTY resize must follow.
+    await page.evaluate(() => window.terminalRenderer.font.set(null, 18));
+    await expect(rows).toHaveCSS("font-size", "18px");
+    await expect(page.locator(".xterm").locator("..")).toHaveCSS(
+      "line-height",
+      "18px",
+    );
+    // Engines serialize zero tracking as either "normal" or "0px".
+    expect(
+      await page
+        .locator(".xterm")
+        .locator("..")
+        .evaluate(
+          (element) =>
+            Number.parseFloat(getComputedStyle(element).letterSpacing) || 0,
+        ),
+    ).toBe(0);
+    await expect(dimensions).not.toHaveText(original);
+    await page.locator(".xterm-helper-textarea").focus();
+    await page.keyboard.type("still typing");
+    await expect(page.getByLabel("Input", { exact: true })).toHaveText(
+      '"still typing"',
+    );
+    await page.evaluate(() => window.terminalRenderer.font.reset());
+    await expect(dimensions).toHaveText(original);
+    expect(
+      await page.evaluate(
+        () => window.retainedTerminal === document.querySelector(".xterm"),
+      ),
+    ).toBe(true);
+    // Detached screens take the latest choice when reattached.
+    await page
+      .getByRole("button", { name: "Toggle mount", exact: true })
+      .click();
+    await page.evaluate(() =>
+      window.terminalRenderer.font.set("Buzz Terminal Test"),
+    );
+    await page
+      .getByRole("button", { name: "Toggle mount", exact: true })
+      .click();
+    await expect(rows).toHaveCSS("font-family", /^"?Buzz Terminal Test"?,/);
+    await expect(rows).toContainText("FONT_SWAP_RETAINS_OUTPUT");
+    await page.evaluate(() =>
+      window.terminalRenderer.font.set("Nonexistent Buzz Font"),
+    );
+    await expect(dimensions).toHaveText(original);
+    expect(errors.unexplained()).toEqual([]);
+  } finally {
+    startupFont.resolve();
+    fontGate.resolve();
+    await server.close();
+  }
+});
+
 // Real keyboard, paste and parser events must cross the renderer's provenance
 // seam. A DOM emulator or mocked Terminal cannot establish that contract.
 for (const platform of ["MacIntel", "Linux x86_64"]) {
@@ -41,6 +313,19 @@ for (const platform of ["MacIntel", "Linux x86_64"]) {
       ]) {
         await page.keyboard.press(key);
         expected.push({ data, source: "user" });
+        await expect.poll(generated).toEqual(expected);
+      }
+      if (apple) {
+        // Off, xterm leaves Option to the keyboard layout and sends no Meta.
+        // Turning the setting on makes the open terminal send Meta-B; that
+        // single Meta-B also proves the first press sent nothing.
+        await page.keyboard.press("Alt+KeyB");
+        await page.evaluate((key) => {
+          localStorage.setItem(key, "on");
+          window.dispatchEvent(new StorageEvent("storage", { key }));
+        }, "buzz-terminal-option-meta.v1");
+        await page.keyboard.press("Alt+KeyB");
+        expected.push({ data: "\x1bb", source: "user" });
         await expect.poll(generated).toEqual(expected);
       }
       await page.evaluate(() =>
@@ -100,6 +385,9 @@ test("real xterm parses a large hidden output completely and in order", async ({
       `http://127.0.0.1:${server.httpServer.address().port}/tests/fixtures/terminal.html`,
     );
     await expect(page.locator(".xterm-helper-textarea")).toBeFocused();
+    await expect(
+      page.getByLabel("Dimensions", { exact: true }),
+    ).not.toBeEmpty();
     await page
       .getByRole("button", { name: "Toggle mount", exact: true })
       .click();
@@ -411,18 +699,9 @@ test("real xterm retains output across detach, handles input and resize, and doe
     await expect(page.locator(".xterm-rows")).toContainText(
       "BUZZ_RENDERER_READY",
     );
-    const fontSize = await page
-      .locator(".xterm-rows")
-      .evaluate((el) => getComputedStyle(el).fontSize);
     await button("Enlarge text").click();
-    await expect
-      .poll(() =>
-        page
-          .locator(".xterm-rows")
-          .evaluate((el) => getComputedStyle(el).fontSize),
-      )
-      .not.toBe(fontSize);
-    expect(await assertSystemAppearance()).toBe(18);
+    await expect(page.locator("html")).toHaveCSS("font-size", "24px");
+    expect(await assertSystemAppearance()).toBe(12);
     const dimensions = await page.getByLabel("Dimensions").textContent();
     await page.setViewportSize({ width: 800, height: 600 });
     await expect(page.getByLabel("Dimensions")).not.toHaveText(dimensions);

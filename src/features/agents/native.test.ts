@@ -3,6 +3,9 @@ import { expect, it, vi } from "vitest";
 import { hasEventProof } from "../relay/events";
 import { keypair, signed } from "../relay/testing";
 import { nativeAgents, unconfirmedAgentEvent } from "./native";
+import { importedEmojiPicture } from "./import-picture";
+
+vi.mock("./import-picture", () => ({ importedEmojiPicture: vi.fn() }));
 
 vi.mock("@tauri-apps/api/core", () => ({
   isTauri: () => true,
@@ -18,6 +21,75 @@ const query = (response: unknown) => {
   vi.mocked(invoke).mockResolvedValueOnce(response);
   return native.query(member, [{ kinds: [9] }]);
 };
+
+it("prepares the selected source's emoji before importing and passes back native upload notes", async () => {
+  const converted = {
+    source: "legacy-svg",
+    png: "data:image/png;base64,iVBORw0KGgo=",
+  };
+  vi.mocked(invoke)
+    .mockResolvedValueOnce({
+      agents: [
+        { source: "development", pubkey: agent.pubkey, picture: "other" },
+        { source: "installed", pubkey: agent.pubkey, picture: "legacy-svg" },
+      ],
+    })
+    .mockResolvedValueOnce({
+      agent: { pubkey: agent.pubkey },
+      carry: {},
+      notes: [],
+    });
+  vi.mocked(importedEmojiPicture).mockResolvedValueOnce(converted);
+  expect(
+    await native.port("installed", agent.pubkey, member.relay, "owner", "type"),
+  ).toMatchObject({ agent: { pubkey: agent.pubkey }, notes: [] });
+  expect(importedEmojiPicture).toHaveBeenLastCalledWith("legacy-svg");
+  expect(invoke).toHaveBeenLastCalledWith("app_agent_port", {
+    source: "installed",
+    pubkey: agent.pubkey,
+    destination: member.relay,
+    owner: "owner",
+    agentType: "type",
+    convertedPicture: converted,
+  });
+});
+
+it.each(["read", "render"])(
+  "still imports with native's warning after a %s failure",
+  async (failure) => {
+    if (failure === "read")
+      vi.mocked(invoke).mockRejectedValueOnce(new Error("Unreadable"));
+    else {
+      vi.mocked(invoke).mockResolvedValueOnce({
+        agents: [
+          { source: "installed", pubkey: agent.pubkey, picture: "legacy-svg" },
+        ],
+      });
+      vi.mocked(importedEmojiPicture).mockRejectedValueOnce(
+        new Error("No canvas"),
+      );
+    }
+    const result = {
+      agent: { pubkey: agent.pubkey },
+      carry: {},
+      notes: ["Picture was skipped"],
+    };
+    vi.mocked(invoke).mockResolvedValueOnce(result);
+    expect(
+      await native.port(
+        "installed",
+        agent.pubkey,
+        member.relay,
+        "owner",
+        "type",
+      ),
+    ).toEqual(result);
+    expect(invoke).toHaveBeenLastCalledWith(
+      "app_agent_port",
+      expect.objectContaining({ convertedPicture: undefined }),
+    );
+  },
+);
 
 it("reads the signed id from an uncertain native publish outcome", () => {
   const id = "a".repeat(64);

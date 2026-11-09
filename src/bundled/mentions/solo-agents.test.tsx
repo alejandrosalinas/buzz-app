@@ -314,6 +314,118 @@ it("marks agents, not people, in both mention menus", async () => {
   expect(screen.getByRole("button", { name: /^Member$/ })).toBeVisible();
   test.library.dispose();
 });
+it.each(["completion", "picker"] as const)(
+  "updates remote %s cues from the shared inventory without changing recipients",
+  async (surface) => {
+    const test = setup();
+    const lifetime = new AbortController();
+    const owner = "f".repeat(64);
+    const relayUrl = "https://relay.example";
+    const remote = {
+      pubkey: "c".repeat(64),
+      name: "Cloud agent",
+      owner,
+      relayUrl,
+      runtime: "block.builderlab/builderlab",
+    };
+    const local = { ...remote, pubkey: "d".repeat(64), name: "Device agent" };
+    const channel = test.session.channels.list().channels[0];
+    if (!channel) throw new Error("Missing fixture channel");
+    Object.assign(channel, {
+      members: [test.member, remote.pubkey],
+    });
+    const native = localAgentsFixture([local]);
+    native.set({ hosted: [remote] });
+    const agentChoices = createAgentChoices({
+      scope: `${relayUrl}:${owner}`,
+      library: test.library.queries,
+      native,
+      signal: lifetime.signal,
+    });
+    const publish = vi.fn();
+    const select = vi.fn(() => true);
+    const session = { ...test.session, agentChoices };
+    const view = render(
+      surface === "completion" ? (
+        <MentionCompletion
+          session={session}
+          scope="test"
+          channelId="parent"
+          inviteAgents
+          observation={{ revision: 1, text: "@", start: 1, end: 1 }}
+          query={{ start: 0, end: 1, query: "" }}
+          publish={publish}
+        />
+      ) : (
+        <MentionPicker
+          session={session}
+          scope="test"
+          channelId="parent"
+          inviteAgents
+          disabled={false}
+          select={select}
+        />
+      ),
+    );
+    const item = (key: string) =>
+      (publish.mock.lastCall?.[0] as CompletionResult | undefined)?.items.find(
+        (row) => row.id === key,
+      );
+    try {
+      if (surface === "picker")
+        await userEvent
+          .setup()
+          .click(screen.getByRole("button", { name: "Mention a member" }));
+      if (surface === "completion") {
+        await waitFor(() => expect(item(remote.pubkey)?.detail).toBe("Remote"));
+        expect(item(remote.pubkey)?.edit).toEqual({
+          mention: { pubkey: remote.pubkey, name: remote.name },
+        });
+        expect(item(local.pubkey)?.detail).toBe("Adds to channel");
+        await waitFor(() =>
+          expect(item(test.key)?.detail).toBe("Adds to channel"),
+        );
+      } else {
+        expect(
+          await screen.findByRole("button", {
+            name: rowName(remote.name, "Remote"),
+          }),
+        ).toBeVisible();
+        expect(
+          screen.getByRole("button", {
+            name: rowName(local.name, "Adds to channel when you send"),
+          }),
+        ).toBeVisible();
+        expect(
+          await screen.findByRole("button", {
+            name: rowName("Outside agent", "Adds to channel when you send"),
+          }),
+        ).toBeVisible();
+      }
+      act(() =>
+        native.set({ hosted: [{ ...remote, runtime: "other/provider" }] }),
+      );
+      if (surface === "completion")
+        await waitFor(() => expect(item(remote.pubkey)?.detail).toBe("Remote"));
+      else {
+        await userEvent.setup().click(
+          await screen.findByRole("button", {
+            name: rowName(remote.name, "Remote"),
+          }),
+        );
+        expect(select).toHaveBeenCalledWith({
+          pubkey: remote.pubkey,
+          name: remote.name,
+        });
+      }
+    } finally {
+      view.unmount();
+      lifetime.abort();
+      test.library.dispose();
+    }
+  },
+);
+
 function renderAudiencePicker(
   test: ReturnType<typeof setup>,
   recipients: readonly { pubkey: string; name: string }[],
@@ -692,7 +804,8 @@ it("offers a known member for Tab while agents load, then appends late agents", 
     expect(completionLabels(publish)).toEqual(["Member"]);
     expect(result().items[0]?.canSelect?.("Tab")).toBe(true);
     expect(result().spaceId).toBeUndefined();
-    expect(result().items[0]?.canSelect?.(" ")).toBe(false);
+    for (const key of [" ", ",", "’"])
+      expect(result().items[0]?.canSelect?.(key), key).toBe(false);
     view.rerender(<MentionCompletion {...props} />);
     await act(async () => release());
     await waitFor(() =>
@@ -2745,7 +2858,7 @@ it("scopes a retry to its query: later queries derive from a cached prefix page 
   expect(last()?.items.map((item) => item.label)).toEqual(["Mira Everly"]);
 });
 
-it("an empty partial-key search does not refute an exact-key lookup, and keys still match no choice", async () => {
+it("an empty partial-key search does not refute an exact-key lookup, which lists only the key's owner", async () => {
   const key = "9".repeat(64);
   const people = vi.fn(async (query: string) => ({
     people: query === key ? [{ pubkey: key, name: "Keyholder" }] : [],
@@ -2760,8 +2873,10 @@ it("an empty partial-key search does not refute an exact-key lookup, and keys st
   await waitFor(() =>
     expect(people).toHaveBeenLastCalledWith(key, 1, expect.any(AbortSignal)),
   );
-  // Choices still match names only, never public keys.
-  await waitFor(() => expect(last()?.items).toEqual([]));
+  // A complete key matches its owner; the partial key above matched no one.
+  await waitFor(() =>
+    expect(last()?.items.map((item) => item.label)).toEqual(["Keyholder"]),
+  );
 });
 
 it("a failed multi-word directory search keeps its error and retry", async () => {
@@ -2889,7 +3004,7 @@ it("uses base matches and visible lexical ties for Fizz in both chooser surfaces
   test.library.dispose();
 });
 
-it("does not complete public keys in either menu", async () => {
+it("completes a full public key only to its owner in either menu, never a partial key", async () => {
   const test = setup();
   const key =
     "150b20bdf6130418df9239dd1bd082c71612c8d653b47c277200365b9be215dc";
@@ -2928,7 +3043,7 @@ it("does not complete public keys in either menu", async () => {
   view.rerender(
     <MentionCompletion {...props} query={{ start: 0, end: 65, query: key }} />,
   );
-  expect(ids()).toEqual([]);
+  expect(ids()).toEqual([key]);
   view.rerender(
     <MentionCompletion {...props} query={{ start: 0, end: 4, query: "eee" }} />,
   );
@@ -2950,7 +3065,10 @@ it("does not complete public keys in either menu", async () => {
   expect(screen.getByRole("button", { name: rowName("Honey") })).toBeVisible();
   await user.clear(screen.getByRole("searchbox"));
   await user.type(screen.getByRole("searchbox"), key);
-  expect(screen.queryByRole("button", { name: /^Bad Janet/ })).toBeNull();
+  expect(
+    screen.getByRole("button", { name: rowName("Bad Janet") }),
+  ).toBeVisible();
+  expect(screen.queryByRole("button", { name: rowName("Honey") })).toBeNull();
   test.library.dispose();
 });
 
@@ -3363,6 +3481,11 @@ it("saved teams resolve exact keys, block automatic Space and revoke a changed c
       ]),
     );
     expect(h.result()?.spaceId).toBeUndefined();
+    // The team's longer name blocks every key that ends the typed name.
+    const member = h.result()?.items.find((item) => item.id === h.member);
+    expect(member?.canSelect?.("Enter")).toBe(true);
+    for (const key of [" ", ",", "'", "’", ")"])
+      expect(member?.canSelect?.(key), key).toBe(false);
     const selected = h.choice();
     if (!selected) throw new Error("Team missing");
     expect(selected.canSelect?.("Enter")).toBe(true);
@@ -3493,7 +3616,7 @@ type DirectoryPage = {
 function spaceFixture(
   memberName: string,
   others: Record<string, string | null> = {},
-  options: { query?: string; dm?: boolean } = {},
+  options: { query?: string; dm?: boolean; teams?: readonly string[] } = {},
 ) {
   const h = setup();
   h.profiles.set(h.member, { name: memberName });
@@ -3527,9 +3650,39 @@ function spaceFixture(
   const publish = vi.fn();
   const result = () =>
     publish.mock.lastCall?.[0] as CompletionResult | undefined;
+  // Legacy catalog teams with these names, each of the member alone.
+  const catalog = {
+    status: "ready" as const,
+    entries: (options.teams ?? []).map((name, index) => ({
+      eventId: `team-${index}`,
+      createdAt: 1,
+      record: {
+        version: 1 as const,
+        community: "fixture",
+        deleted: false,
+        value: {
+          type: "team" as const,
+          id: `team-${index}`,
+          name,
+          agents: [h.member],
+        },
+      },
+    })),
+  };
+  const channelKit: NonNullable<RelaySession["channelKit"]> = {
+    available: true,
+    snapshot: () => catalog,
+    subscribe: () => () => {},
+    ensure() {},
+    async refresh() {},
+    async save() {
+      return "head";
+    },
+  };
   const session = {
     ...h.session,
     names,
+    ...(options.teams ? { channelKit } : {}),
     channels: { ...h.session.channels, list: () => list },
     directMessages: { ...h.session.directMessages, people },
   } as unknown as RelaySession;
@@ -3638,6 +3791,66 @@ it("Space keeps a member's name when an identically named outside namesake is qu
     expect(h.result()?.spaceId).toBe(h.member);
     expect(h.canSpace(h.member)).toBe(true);
     expect(h.canSpace(outsideJose)).toBe(false);
+  } finally {
+    h.dispose();
+  }
+});
+it("Space selects a member by a pasted npub beside a namesake, without waiting for the directory", async () => {
+  const query = npubEncode("a".repeat(64));
+  const h = spaceFixture("Jose", { [otherMember]: "Jose" }, { query });
+  try {
+    await waitFor(() =>
+      expect(h.people).toHaveBeenCalledWith(query, 1, expect.anything()),
+    );
+    // A key has no namesakes: only its owner is listed, and Space selects it.
+    await waitFor(() =>
+      expect(h.result()?.items.map((item) => item.id)).toEqual([h.member]),
+    );
+    expect(h.result()?.spaceId).toBe(h.member);
+    expect(h.canSpace(h.member)).toBe(true);
+  } finally {
+    h.dispose();
+  }
+});
+it.each([
+  { case: "that name", suffix: "" },
+  { case: "a longer name", suffix: " Crew" },
+])(
+  "Space selects a member by a pasted npub beside a saved team with $case",
+  async ({ suffix }) => {
+    const query = npubEncode("a".repeat(64));
+    const h = spaceFixture("Jose", {}, { query, teams: [query + suffix] });
+    try {
+      await waitFor(() =>
+        expect(h.people).toHaveBeenCalledWith(query, 1, expect.anything()),
+      );
+      // A key is not a name: the team neither matches it nor declines Space.
+      await waitFor(() => expect(h.result()?.spaceId).toBe(h.member));
+      expect(h.result()?.items.map((item) => item.id)).toEqual([h.member]);
+      expect(h.canSpace(h.member)).toBe(true);
+    } finally {
+      h.dispose();
+    }
+  },
+);
+it("Space selects someone outside the channel by a pasted npub once the directory finds them", async () => {
+  const query = npubEncode(outsideJose);
+  const h = spaceFixture("Jose", {}, { query });
+  try {
+    await waitFor(() =>
+      expect(h.people).toHaveBeenCalledWith(query, 1, expect.anything()),
+    );
+    expect(h.result()?.items.some((item) => item.id === outsideJose)).toBe(
+      false,
+    );
+    expect(h.result()?.spaceId).toBeUndefined();
+    await h.finish({
+      people: [{ pubkey: outsideJose, name: "Jose" }],
+      hasMore: false,
+    });
+    await waitFor(() => expect(h.result()?.spaceId).toBe(outsideJose));
+    expect(h.result()?.items.map((item) => item.id)).toEqual([outsideJose]);
+    expect(h.canSpace(outsideJose)).toBe(true);
   } finally {
     h.dispose();
   }

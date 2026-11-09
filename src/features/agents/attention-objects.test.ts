@@ -147,6 +147,24 @@ describe("checked writes", () => {
     expect(interestIds(gone)).toEqual(["other"]);
   });
 
+  it("keep an Interest whose only remaining watch this app skipped", async () => {
+    const bare = await write(record(), "watch/asks", null);
+    const value: AgentRecord = {
+      ...bare,
+      skipped: {
+        "watch/over": {
+          slug: "watch/over",
+          value: timer(),
+          modifiedAt: 1,
+          problem: "Over the limit",
+        },
+      },
+    };
+    await expect(write(value, "interest/triage", null)).rejects.toThrow(
+      /^invalid-operation: .*over.*your owner can remove/,
+    );
+  });
+
   it("report the format's own problems as invalid", async () => {
     await expect(
       write(record(), "watch/asks", watch({ since: 0 })),

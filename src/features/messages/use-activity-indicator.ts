@@ -42,9 +42,27 @@ export function useActivityIndicator(
   const matches = (root: string | null | undefined) =>
     root === (row.threadRootId ?? null) ||
     (!row.threadRootId && !!requestId && root === requestId);
-  const liveDetails = [...(detail ?? [])].filter(
-    ([agent, value]) => represented.has(agent) && value.roots.some(matches),
-  );
+  const requestIds = new Set([row.id, row.replyParentId, requestId]);
+  const liveDetails = [...(detail ?? [])].filter(([agent, value]) => {
+    if (!represented.has(agent) || !value.roots.some(matches)) return false;
+    // Known local requests take precedence over conversation-only typing.
+    // Yesterday's last activity row must not represent today's different turn.
+    const local = (activity?.local ?? []).filter(
+      (work) =>
+        work.agent === agent &&
+        work.channelId === row.channelId &&
+        (!row.threadRootId || work.threadRootId === row.threadRootId),
+    );
+    return (
+      !requestId ||
+      !local.length ||
+      local.some(
+        (work) =>
+          requestIds.has(work.messageId) &&
+          (work.state === "waiting" || work.state === "working"),
+      )
+    );
+  });
   const liveAgents = liveDetails
     .filter(([, value]) => value.roots.every(matches))
     .map(([agent]) => agent);

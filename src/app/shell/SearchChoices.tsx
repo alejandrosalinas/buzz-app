@@ -134,6 +134,7 @@ export function SearchChoices({
   scope,
   scopeAction,
   children,
+  footer,
   inlineSettings,
   open = true,
   pending = false,
@@ -144,6 +145,9 @@ export function SearchChoices({
 }: SearchInputProps & {
   groups: readonly SearchGroup[];
   children?: ReactNode;
+  /** Kept below the results, outside their scrollport, so it stays in view
+   * however long the list: a limit on what is searched and its recovery. */
+  footer?: ReactNode;
   /** A row that should lead may still arrive, so Enter before any row
    * waits until it has. */
   pending?: boolean;
@@ -402,6 +406,7 @@ export function SearchChoices({
       data-search-palette=""
       data-modal-tab-switch={views ? "" : undefined}
       data-search-views={views ? "" : undefined}
+      data-search-footer={footer ? "" : undefined}
       {...highlight.listProps}
     >
       {(scope || scopeAction) && (
@@ -808,6 +813,7 @@ export function SearchChoices({
           {children && <div className="search-palette-status">{children}</div>}
         </div>
       </div>
+      {footer && <div className="search-palette-footer">{footer}</div>}
     </div>
   );
 }

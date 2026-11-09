@@ -1,5 +1,4 @@
 mod identity;
-mod qr;
 mod relay;
 
 use buzz_pairing::{AbortReason, PairingSession, PayloadType, SessionState};
@@ -309,7 +308,8 @@ async fn run(
         let mut socket = relay::connect(&relay_url, Duration::from_secs(10)).await?;
         let (pending, auth) = relay::subscribe(&mut socket, &session, &relay_url).await?;
         let uri = Zeroizing::new(buzz_pairing::qr::encode_qr(&qr));
-        let svg = qr::render(&uri)?;
+        let svg = crate::qr::render(&uri, crate::qr::Variant::Light)
+            .map_err(|()| "Couldn’t create the pairing code.")?;
         Ok::<_, Failure>((
             Exchange {
                 session,

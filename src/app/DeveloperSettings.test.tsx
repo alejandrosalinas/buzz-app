@@ -32,8 +32,14 @@ it("loads the saved level, changes it live, and displays remote changes", async 
   await user.tab();
   expect(control).toHaveFocus();
   await user.keyboard("{ArrowDown}");
-  await screen.findByRole("option", { name: "Trace" });
-  await user.keyboard("{End}{Enter}");
+  await waitFor(() =>
+    expect(screen.getByRole("option", { name: "Debug" })).toHaveFocus(),
+  );
+  await user.keyboard("{End}");
+  await waitFor(() =>
+    expect(screen.getByRole("option", { name: "Trace" })).toHaveFocus(),
+  );
+  await user.keyboard("{Enter}");
   await waitFor(() => expect(control).toHaveTextContent("Trace"));
   expect(logLevel()).toBe("trace");
   act(() => setLogLevel("warn"));
@@ -55,8 +61,14 @@ it("shows save failure without pretending the level was persisted", async () => 
   await user.tab();
   expect(control).toHaveFocus();
   await user.keyboard("{ArrowDown}");
-  await screen.findByRole("option", { name: "Silent" });
-  await user.keyboard("{Home}{Enter}");
+  await waitFor(() =>
+    expect(screen.getByRole("option", { name: "Debug" })).toHaveFocus(),
+  );
+  await user.keyboard("{Home}");
+  await waitFor(() =>
+    expect(screen.getByRole("option", { name: "Silent" })).toHaveFocus(),
+  );
+  await user.keyboard("{Enter}");
   expect(await screen.findByRole("alert")).toHaveTextContent(
     "Log level wasn’t saved",
   );

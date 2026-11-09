@@ -404,15 +404,13 @@ test("keyboard switches feed enabled-save confirmation and disabled readback", a
   await page.keyboard.press("Enter");
   const dialog = page.getByRole("alertdialog");
   await expect(dialog).toContainText("It will run for every new message");
-  await expect(button("Keep editing")).toBeFocused();
+  await expect(button("Save enabled workflow")).toBeFocused();
   expect(await saves()).toBe(0);
   await page.keyboard.press("Escape");
   await expect(dialog).toHaveCount(0);
   await expect(button("Create workflow")).toBeFocused();
   expect(await saves()).toBe(0);
   await page.keyboard.press("Space");
-  await expect(button("Keep editing")).toBeFocused();
-  await page.keyboard.press(tab);
   await expect(button("Save enabled workflow")).toBeFocused();
   await page.keyboard.press("Enter");
   await expect.poll(saves).toBe(1);
@@ -1001,10 +999,24 @@ test("restricted cards and read-only editors keep keyboard controls without disc
   await editorControls(page).open("Message helper");
   const dialog = page.getByRole("dialog", { name: "Message helper" });
   await expect(dialog.getByText("Read-only", { exact: true })).toHaveCount(0);
-  // Run history is a tab, so a read-only editor has no actions menu.
-  await expect(
-    dialog.getByRole("button", { name: "Workflow actions" }),
-  ).toHaveCount(0);
+  // Read-only editors explain why Delete is unavailable in their actions menu.
+  const readOnlyActions = dialog.getByRole("button", {
+    name: "Workflow actions",
+    exact: true,
+  });
+  await readOnlyActions.focus();
+  await page.keyboard.press("Enter");
+  const deleteAction = page.getByRole("menuitem", {
+    name: "Delete workflow",
+    exact: true,
+  });
+  await expect(deleteAction).toBeDisabled();
+  await expect(deleteAction).toHaveAccessibleDescription(
+    "Only the author or their verified agent owner can delete this workflow.",
+  );
+  await page.keyboard.press("Escape");
+  await expect(page.getByRole("menu")).toHaveCount(0);
+  await expect(readOnlyActions).toBeFocused();
   await expect(dialog.getByRole("tab", { name: "Runs" })).toBeVisible();
   const name = dialog.getByRole("textbox", { name: "Workflow name" });
   await expect(name).toBeDisabled();

@@ -304,14 +304,21 @@ it("animates Connecting only while a connection is actually under way", async ()
     view.rerender(page({ status: "connecting" }));
     act(() => vi.advanceTimersByTime(1_000));
     expect(screen.getByRole("status").textContent).toContain("Connecting…");
-    // A refusal, e.g. after cached content opened, is about access.
+    // A refusal, e.g. after cached content opened, is about access. The
+    // shell's notice offers what fixes it; the page only says why it's empty.
     view.rerender(page({ status: "error", denied: true }));
-    const denied = screen.getByRole("alert");
-    expect(denied.textContent).toContain("You don’t have access to this");
-    expect(denied.textContent).not.toContain("Check your connection");
-    retry.mockClear();
-    act(() => screen.getByRole("button", { name: "Try again" }).click());
-    expect(retry).toHaveBeenCalledOnce();
+    expect(
+      screen.getByRole("heading", {
+        name: "You don’t have access to this community",
+      }),
+    ).toBeTruthy();
+    expect(screen.queryByText(/Check your connection/)).toBeNull();
+    expect(screen.queryByRole("alert")).toBeNull();
+    expect(screen.queryByRole("button")).toBeNull();
+    view.rerender(page({ status: "error", denied: true, refusal: "sign-in" }));
+    expect(
+      screen.getByRole("heading", { name: "Sign in to open this community" }),
+    ).toBeTruthy();
   } finally {
     vi.useRealTimers();
   }

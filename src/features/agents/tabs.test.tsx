@@ -2,6 +2,7 @@
 import "@testing-library/jest-dom/vitest";
 import { cleanup, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import { useState } from "react";
 import { afterEach, expect, it, vi } from "vitest";
 import type { Agent, Agents } from "./service";
 import { agentSections } from "./tabs";
@@ -65,6 +66,7 @@ it("leaves the device Attention switch out of Settings", () => {
   const section = sections.find((tab) => tab.value === "agent:settings");
   render(<div>{section?.render()}</div>);
   expect(screen.getByText("Provider")).toBeInTheDocument();
+  expect(screen.queryByRole("note")).not.toBeInTheDocument();
   expect(screen.queryByRole("switch")).not.toBeInTheDocument();
 });
 
@@ -140,10 +142,16 @@ it("adds plugin tabs to each agent shown unless their `when` says otherwise, alo
     pluginId: "buzz.example",
     revision: "1",
     title: id,
-    component: ({ agent }: { agent: Agent }) => (
-      <p>
+    component: ({
+      agent,
+      open,
+    }: {
+      agent: Agent;
+      open?: ((target: string) => boolean) | undefined;
+    }) => (
+      <button type="button" onClick={() => open?.(`nostr:${id}`)}>
         {id} {agent.name}
-      </p>
+      </button>
     ),
     ...(when && { when }),
   });
@@ -182,12 +190,21 @@ it("adds plugin tabs to each agent shown unless their `when` says otherwise, alo
     "agent:memory",
   ]);
   expect(values("elsewhere")).toEqual([]);
+  // A plugin's tab opens links, such as profiles, where it is shown.
+  const opened: string[] = [];
   render(
-    agentSections({ agents, agent, type: undefined, memories: undefined })
+    agentSections({
+      agents,
+      agent,
+      type: undefined,
+      memories: undefined,
+      openLink: (target) => opened.push(target) > 0,
+    })
       .find((tab) => tab.value === "agent:added:buzz.example/every")
       ?.render(),
   );
-  expect(screen.getByText("every Ada")).toBeInTheDocument();
+  screen.getByText("every Ada").click();
+  expect(opened).toEqual(["nostr:every"]);
 });
 
 it("adds a plugin tab only to the agents its `when` accepts", () => {
@@ -227,4 +244,149 @@ it("adds a plugin tab only to the agents its `when` accepts", () => {
   expect(values("Bea")).toEqual(["agent:added:example/every", "agent:memory"]);
   expect(error).toHaveBeenCalled();
   error.mockRestore();
+});
+
+it("reopens ordinary editors and their save revisions when config availability changes", async () => {
+  let current: Agent<{ model: string }> = {
+    ...agent,
+    config: { model: "" },
+    configBase: { settings: null },
+    configProblem: "Unavailable",
+  };
+  const save = vi.fn(async () => {});
+  const agents = {
+    save,
+    snapshot: () => ({ agents: [current] }),
+    configHistory: () => undefined,
+    addedTabs: () => [],
+  } as unknown as Agents;
+  // Goose and Pi initialize their draft on mount; Codex also relies on the
+  // host to retain the revision that belongs to the opened editor.
+  function Settings({
+    agent: shown,
+    save: submit,
+  }: import("./service").AgentViewProps<{ model: string }>) {
+    const [draft, setDraft] = useState(shown.config);
+    return (
+      <>
+        <input
+          aria-label="Model"
+          value={draft.model}
+          onChange={(event) => setDraft({ model: event.target.value })}
+        />
+        <button
+          type="button"
+          disabled={draft.model === shown.config.model}
+          onClick={() => void submit(draft)}
+        >
+          Save
+        </button>
+      </>
+    );
+  }
+  const type = {
+    tabs: [
+      {
+        id: "settings",
+        title: "Settings",
+        role: "settings",
+        component: Settings,
+      },
+    ],
+  } as unknown as import("./service").RegisteredAgentType;
+  const shown = () =>
+    agentSections({ agents, agent: current, type, memories: undefined })
+      .find((section) => section.value === "agent:settings")
+      ?.render();
+  const view = render(shown());
+  current = {
+    ...agent,
+    config: { model: "opus" },
+    configBase: { settings: "recovered" },
+  };
+  view.rerender(shown());
+  expect(screen.getByLabelText("Model")).toHaveValue("opus");
+  expect(screen.getByRole("button", { name: "Save" })).toBeDisabled();
+  await userEvent.clear(screen.getByLabelText("Model"));
+  await userEvent.type(screen.getByLabelText("Model"), "sonnet");
+  await userEvent.click(screen.getByRole("button", { name: "Save" }));
+  expect(save).toHaveBeenLastCalledWith(agent.key, {
+    config: { model: "sonnet" },
+    base: { settings: "recovered" },
+  });
+  current = {
+    ...current,
+    config: { model: "" },
+    configBase: { settings: null },
+    configProblem: "Unavailable",
+  };
+  view.rerender(shown());
+  expect(screen.getByLabelText("Model")).toHaveValue("");
+  current = {
+    ...agent,
+    config: { model: "latest" },
+    configBase: { settings: "recovered-again" },
+  };
+  view.rerender(shown());
+  expect(screen.getByLabelText("Model")).toHaveValue("latest");
+  expect(screen.getByRole("button", { name: "Save" })).toBeDisabled();
+  await userEvent.type(screen.getByLabelText("Model"), "-edit");
+  await userEvent.click(screen.getByRole("button", { name: "Save" }));
+  expect(save).toHaveBeenLastCalledWith(agent.key, {
+    config: { model: "latest-edit" },
+    base: { settings: "recovered-again" },
+  });
+});
+
+it("retains opening revisions for ordinary tabs and forwards explicitly reconciled revisions", async () => {
+  let current = { ...agent, configBase: { settings: "opened" } };
+  const save = vi.fn(async () => {});
+  const agents = {
+    save,
+    snapshot: () => ({ agents: [current] }),
+    configHistory: () => undefined,
+    addedTabs: () => [],
+  } as unknown as Agents;
+  const component = ({
+    agent: shown,
+    save: submit,
+  }: import("./service").AgentViewProps) => (
+    <>
+      <button type="button" onClick={() => void submit({ model: "mine" })}>
+        Ordinary save
+      </button>
+      <button
+        type="button"
+        onClick={() =>
+          void submit({ model: "merged" }, { base: shown.configBase ?? {} })
+        }
+      >
+        Reconciled save
+      </button>
+    </>
+  );
+  const type = {
+    tabs: [{ id: "settings", title: "Settings", role: "settings", component }],
+  } as unknown as import("./service").RegisteredAgentType;
+  const shown = () =>
+    agentSections({ agents, agent: current, type, memories: undefined })
+      .find((section) => section.value === "agent:settings")
+      ?.render();
+  const view = render(shown());
+  current = { ...current, configBase: { settings: "latest" } };
+  view.rerender(shown());
+  await userEvent.click(screen.getByRole("button", { name: "Ordinary save" }));
+  expect(save).toHaveBeenLastCalledWith(agent.key, {
+    config: { model: "mine" },
+    base: { settings: "opened" },
+  });
+  current = { ...current, configBase: { settings: "reconciled" } };
+  view.rerender(shown());
+  await userEvent.click(
+    screen.getByRole("button", { name: "Reconciled save" }),
+  );
+  expect(save).toHaveBeenLastCalledWith(agent.key, {
+    config: { model: "merged" },
+    base: { settings: "reconciled" },
+  });
 });

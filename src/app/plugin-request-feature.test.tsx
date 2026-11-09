@@ -31,7 +31,7 @@ afterEach(async () => {
   vi.restoreAllMocks();
 });
 
-// The manifest of https://github.com/squareup/buzz-plugin-browser, installed
+// The manifest of https://github.com/example-org/buzz-plugin-browser, installed
 // but off, so an agent asks to enable it.
 const browser = {
   id: "example.browser",
@@ -124,7 +124,7 @@ it("draws the request in its message and applies the change the owner confirms t
   const dialog = await screen.findByRole("dialog", { name: "Enable Browser?" });
   // A plugin's own install request cannot open a second review over this one.
   const source = {
-    repository: "https://github.com/squareup/buzz-plugin-browser",
+    repository: "https://github.com/example-org/buzz-plugin-browser",
     reference: "main",
   };
   await expect(

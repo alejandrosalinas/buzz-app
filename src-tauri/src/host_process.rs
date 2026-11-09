@@ -11,9 +11,10 @@ use artifact::verify_artifact;
 use claude_hooks::ClaudeHooks;
 use protection::ProcessProtection;
 
+use crate::credential_service::{CredentialService, Issued, ProtectedLaunch};
 use crate::host_command::{effective_path, load_login_shell_path, resolve_program};
 use crate::{with_manager, PluginManager};
-use buzzodz_plugins::HostProcess;
+use buzzodz_plugins::{HostProcess, ProcessArtifact};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::ffi::OsStr;
@@ -28,6 +29,14 @@ use tauri::Manager as _;
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWriteExt};
 use tokio::process::{ChildStdin, Command};
 use tokio::sync::oneshot;
+
+/// The agent a protection provider launches a process for.
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct ProtectedAgent {
+    pubkey: String,
+    relay: String,
+}
 
 #[derive(Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
@@ -73,6 +82,31 @@ struct Entry {
     group: Option<u32>,
     stdin: Option<Arc<tokio::sync::Mutex<ChildStdin>>>,
     stop: Option<oneshot::Sender<()>>,
+    /// Its Buzz credential, revoked once it exits and this entry goes.
+    credential: Option<Arc<Issued>>,
+    /// Tokens for its agents' tools, never its own environment; revoked with it.
+    tools: Arc<ToolCredentials>,
+    /// The agent a protection provider launched it for, if one did.
+    launch: Option<ProtectedLaunch>,
+}
+
+/// One token per agent a shared host runs, each handed only to that agent's
+/// tool processes.
+#[derive(Default)]
+struct ToolCredentials(Mutex<Option<Vec<ToolCredential>>>);
+struct ToolCredential {
+    pubkey: String,
+    relay: String,
+    issued: Issued,
+    env: zeroize::Zeroizing<String>,
+}
+impl ToolCredentials {
+    fn revoke(&self) {
+        let mut held = self.0.lock().unwrap_or_else(|poison| poison.into_inner());
+        for tool in held.take().unwrap_or_default() {
+            tool.issued.revoke();
+        }
+    }
 }
 
 #[derive(Clone, Default)]
@@ -118,9 +152,12 @@ impl HostProcesses {
         plugin: String,
         program: &str,
         command: Command,
+        credential: Option<Issued>,
         on_event: Channel<ProcessEvent>,
     ) -> Result<u64, String> {
-        self.start_guarded(page, plugin, program, command, on_event, None, false)
+        self.start_guarded(
+            page, plugin, program, command, credential, on_event, None, false, None,
+        )
     }
     #[allow(clippy::too_many_arguments)]
     fn start_guarded(
@@ -129,11 +166,15 @@ impl HostProcesses {
         plugin: String,
         program: &str,
         mut command: Command,
+        credential: Option<Issued>,
         on_event: Channel<ProcessEvent>,
         read_lease: Option<crate::host_files::FileReadLease>,
         claude_hooks: bool,
+        launch: Option<ProtectedLaunch>,
     ) -> Result<u64, String> {
         let state = self.clone();
+        let credential = credential.map(Arc::new);
+        let tools = Arc::new(ToolCredentials(Mutex::new(Some(Vec::new()))));
         let mut registry = self.registry();
         if registry.page != page {
             return Err("The page reloaded".into());
@@ -174,6 +215,9 @@ impl HostProcesses {
                     .take()
                     .map(|stdin| Arc::new(tokio::sync::Mutex::new(stdin))),
                 stop: Some(stop),
+                credential: credential.clone(),
+                tools: tools.clone(),
+                launch,
             },
         );
         drop(registry);
@@ -226,6 +270,12 @@ impl HostProcesses {
                     }
                 }
             };
+            // Its token dies with it, even while a descendant that left its
+            // group still holds the pipes or the environment.
+            if let Some(credential) = &credential {
+                credential.revoke();
+            }
+            tools.revoke();
             if let Some(hooks) = &hooks {
                 hooks.close();
             }
@@ -339,6 +389,8 @@ enum Stream {
 /// Starts the declared process `process_id` with `args` after its declared
 /// arguments. `env` adds variables (`null` removes one) to the app's own
 /// environment, less any Buzz identity: an agent's key never leaves the app.
+/// `secrets` names native-held secrets set after `env`, each only for the
+/// processes it belongs to; a secret that is not saved is left unset.
 #[tauri::command]
 #[allow(clippy::too_many_arguments)]
 pub(crate) async fn plugin_host_process_spawn<R: tauri::Runtime>(
@@ -354,6 +406,9 @@ pub(crate) async fn plugin_host_process_spawn<R: tauri::Runtime>(
     on_event: Channel<ProcessEvent>,
     mcp: Option<ProcessMcpConnection>,
     protection: Option<ProcessProtection>,
+    agent_credential: Option<bool>,
+    protected_agent: Option<ProtectedAgent>,
+    secrets: Option<Vec<String>>,
 ) -> Result<u64, String> {
     // Any plugin process with either ID conservatively blocks managed deletion
     // app-wide, regardless of program/path. Attachment adapters use these IDs.
@@ -455,24 +510,13 @@ pub(crate) async fn plugin_host_process_spawn<R: tauri::Runtime>(
     } else {
         process_command(&program, helper.as_deref(), None, &declared.args, &args)
     };
-    // Never pass on an identity the app itself was started with.
-    for (name, _) in std::env::vars_os() {
-        let text = name.to_string_lossy();
-        if text.starts_with("BUZZ_") || text.starts_with("NOSTR_") {
-            command.env_remove(&name);
-        }
-    }
-    command.env("PATH", &path);
     let environment = env.unwrap_or_default();
-    for (name, value) in &environment {
-        if name.is_empty() || name.contains(['=', '\0']) {
-            return Err("Invalid environment variable".into());
-        }
-        match value {
-            Some(value) => command.env(name, value),
-            None => command.env_remove(name),
-        };
-    }
+    set_environment(
+        &mut command,
+        &path,
+        &environment,
+        &app.package_info().version.to_string(),
+    )?;
     if protected {
         for name in std::env::vars_os()
             .map(|(name, _)| name)
@@ -489,12 +533,44 @@ pub(crate) async fn plugin_host_process_spawn<R: tauri::Runtime>(
             }
         }
     }
+    for secret in secrets.unwrap_or_default() {
+        if secret != crate::claude_key::SECRET
+            || !crate::claude_key::may_have(&plugin, &declared.id)
+        {
+            return Err("That secret is not available to this process".into());
+        }
+        if let Some(key) = app.state::<crate::claude_key::ClaudeKey>().key().await? {
+            command.env(crate::claude_key::ENV, &*key);
+        }
+    }
     if let Some(mcp) = mcp {
         command.env(
             "BUZZ_AGENT_CONNECTION",
             serde_json::to_string(&mcp).map_err(|error| error.to_string())?,
         );
     }
+    // Only a protected process may be launched for an agent, and only by the
+    // provider that agent's saved protection names.
+    let launch = match protected_agent {
+        Some(_) if !protected => {
+            return Err("Only a protected process is launched for an agent".into())
+        }
+        Some(agent) => Some(
+            app.state::<CredentialService>()
+                .protected_launch(&plugin, agent.pubkey, agent.relay)
+                .await?,
+        ),
+        None => None,
+    };
+    // Acts for nobody until `plugin_host_process_bind_agent` names its agent.
+    let credential = match agent_credential {
+        Some(true) => app.state::<CredentialService>().issue().await?,
+        _ => None,
+    };
+    let credential = credential.map(|(issued, env)| {
+        command.env(crate::credential_service::ENV, &*env);
+        issued
+    });
     if let Some(cwd) = cwd {
         let directory = expand_home(&cwd)?;
         std::fs::create_dir_all(&directory)
@@ -509,10 +585,43 @@ pub(crate) async fn plugin_host_process_spawn<R: tauri::Runtime>(
         plugin,
         &declared.program,
         command,
+        credential,
         on_event,
         read_lease,
         claude_hooks,
+        launch,
     )
+}
+
+/// Sets a process's environment: the app's own, less any Buzz identity it was
+/// started with, plus the plugin's `environment` (`None` removes a variable).
+/// `BUZZ_VERSION` is always this app's version, so a command can tell it runs
+/// under Buzz.
+fn set_environment(
+    command: &mut Command,
+    path: &OsStr,
+    environment: &HashMap<String, Option<String>>,
+    version: &str,
+) -> Result<(), String> {
+    // Never pass on an identity the app itself was started with.
+    for (name, _) in std::env::vars_os() {
+        let text = name.to_string_lossy();
+        if text.starts_with("BUZZ_") || text.starts_with("NOSTR_") {
+            command.env_remove(&name);
+        }
+    }
+    command.env("PATH", path);
+    for (name, value) in environment {
+        if name.is_empty() || name.contains(['=', '\0']) {
+            return Err("Invalid environment variable".into());
+        }
+        match value {
+            Some(value) => command.env(name, value),
+            None => command.env_remove(name),
+        };
+    }
+    command.env("BUZZ_VERSION", version);
+    Ok(())
 }
 
 /// The verified target stays inside the MCP prefix and the same containment.
@@ -554,6 +663,129 @@ pub(crate) async fn plugin_host_process_write(
     close: bool,
 ) -> Result<(), String> {
     processes.write(&id, handle, data, close).await
+}
+
+/// Lets a process spawned with an agent credential act as that agent, once:
+/// a spare harness process is bound when an agent takes it.
+#[tauri::command]
+pub(crate) async fn plugin_host_process_bind_agent(
+    processes: tauri::State<'_, HostProcesses>,
+    credentials: tauri::State<'_, CredentialService>,
+    id: String,
+    handle: u64,
+    pubkey: String,
+    relay: String,
+) -> Result<(), String> {
+    // None was issued where there is no transport (Windows): nothing to bind.
+    let (credential, launch) = processes.owned(&id, handle, |entry| {
+        (entry.credential.clone(), entry.launch.clone())
+    })?;
+    match credential {
+        Some(issued) => {
+            credentials
+                .bind(&issued, &id, launch.as_ref(), pubkey, relay)
+                .await
+        }
+        None => Ok(()),
+    }
+}
+
+/// The environment value that lets this agent's tools, run by a host shared
+/// by several agents, act as it; the same one for every call. It is revoked
+/// once the host exits. None where there is no transport (Windows).
+#[tauri::command]
+pub(crate) async fn plugin_host_process_tool_credential(
+    processes: tauri::State<'_, HostProcesses>,
+    credentials: tauri::State<'_, CredentialService>,
+    id: String,
+    handle: u64,
+    pubkey: String,
+    relay: String,
+) -> Result<Option<String>, String> {
+    processes
+        .tool_credential(&credentials, &id, handle, pubkey, relay)
+        .await
+}
+
+impl HostProcesses {
+    async fn tool_credential(
+        &self,
+        credentials: &CredentialService,
+        id: &str,
+        handle: u64,
+        pubkey: String,
+        relay: String,
+    ) -> Result<Option<String>, String> {
+        self.tool_credential_after_miss(credentials, id, handle, pubkey, relay, async {})
+            .await
+    }
+
+    /// [`Self::tool_credential`], awaiting `after_miss` once no current token
+    /// was found, so a test can hold competing callers past that point.
+    async fn tool_credential_after_miss(
+        &self,
+        credentials: &CredentialService,
+        id: &str,
+        handle: u64,
+        pubkey: String,
+        relay: String,
+        after_miss: impl std::future::Future<Output = ()>,
+    ) -> Result<Option<String>, String> {
+        let (tools, launch) = self.owned(id, handle, |entry| {
+            (entry.tools.clone(), entry.launch.clone())
+        })?;
+        // A protected host's tokens all act for the agent it was launched
+        // for, under its protection then: once that changes, none acts again.
+        let protection_current = match &launch {
+            Some(launch) => credentials.launch_current(launch).await,
+            None => true,
+        };
+        // This agent's token, if it still acts. One outlived by the agent's
+        // removal and re-adding, or by a sign-out, is dropped, which revokes it
+        // for good, so a fresh one is issued for the agent as it is now.
+        let current = |list: &mut Vec<ToolCredential>| {
+            list.retain(|tool| {
+                tool.pubkey != pubkey
+                    || tool.relay != relay
+                    || (protection_current && credentials.acts(&tool.issued))
+            });
+            list.iter()
+                .find(|tool| tool.pubkey == pubkey && tool.relay == relay)
+                .map(|tool| tool.env.to_string())
+        };
+        {
+            let mut guard = tools.0.lock().unwrap_or_else(|poison| poison.into_inner());
+            if let Some(env) = current(guard.as_mut().ok_or("The process has exited")?) {
+                return Ok(Some(env));
+            }
+        }
+        after_miss.await;
+        let Some((issued, env)) = credentials.issue().await? else {
+            return Ok(None);
+        };
+        credentials
+            .bind(&issued, id, launch.as_ref(), pubkey.clone(), relay.clone())
+            .await
+            .inspect_err(|_| issued.revoke())?;
+        let mut guard = tools.0.lock().unwrap_or_else(|poison| poison.into_inner());
+        let Some(list) = guard.as_mut() else {
+            issued.revoke();
+            return Err("The process has exited".into());
+        };
+        // A concurrent call for the same agent won: keep one token.
+        if let Some(env) = current(list) {
+            issued.revoke();
+            return Ok(Some(env));
+        }
+        let value = env.to_string();
+        list.push(ToolCredential {
+            pubkey,
+            relay,
+            issued,
+            env,
+        });
+        Ok(Some(value))
+    }
 }
 
 /// Asks the process to stop, then kills it and its descendants. Its `exit`
@@ -642,6 +874,13 @@ fn runs_protected_claude(plugin: &str, process_id: &str, protected: bool) -> boo
             process_id,
             "claude-protected-arm64" | "claude-protected-x64"
         )
+}
+
+/// A host command's artifact, verified where it is installed, as an
+/// uncontained process's is.
+pub(crate) fn verified_artifact(mut artifact: ProcessArtifact) -> Result<PathBuf, String> {
+    artifact.path = expand_home(&artifact.path)?.to_string_lossy().into_owned();
+    verify_artifact(&artifact)
 }
 
 /// A manifest may place an artifact under the user's home, written `~/…`.

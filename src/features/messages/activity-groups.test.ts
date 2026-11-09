@@ -1,8 +1,5 @@
 import { expect, it } from "vitest";
-import {
-  activityDisplayRows,
-  activityPresentation,
-} from "./activity-presentation";
+import { activityPresentation } from "./activity-presentation";
 import { activityRuns } from "./activity-groups";
 import type { ChannelMessage } from "../relay/contracts";
 
@@ -69,11 +66,9 @@ it("retires superseded tool updates while the steered request keeps working", ()
     },
     new Set(["agent"]),
   );
-  expect(activityDisplayRows(rows, presentation.groups)).toEqual([
-    request,
-    steer,
-    newStep,
-  ]);
+  expect(presentation.groups[0]?.retired).toBe(true);
+  expect(presentation.groups[0]?.history).toEqual([oldStep]);
+  expect(presentation.groups[1]?.retired).toBe(false);
   expect(presentation.byRow.get(newStep.id)?.active).toBe(true);
 });
 
@@ -127,23 +122,20 @@ it("splits groups across local days and channels", () => {
 });
 
 it.each([1, 2])(
-  "hides %i completed steps while keeping the reply and unfinished work in place",
+  "retires the live treatment of %i historical steps without losing their history",
   (count) => {
     const history = run("step", count);
     const { audience: _, ...reply } = activity("reply");
     const rows = [...history, reply];
     const completed = activityPresentation(rows, undefined, new Set(["agent"]));
-    expect(
-      activityDisplayRows(rows, completed.groups).map((row) => row.id),
-    ).toEqual(["reply"]);
+    expect(completed.groups[0]?.retired).toBe(true);
+    expect(completed.groups[0]?.history).toEqual(history);
     const otherReply = { ...reply, authorId: "human" };
     const pending = [...history, otherReply];
     expect(
-      activityDisplayRows(
-        pending,
-        activityPresentation(pending, undefined, new Set(["agent"])).groups,
-      ),
-    ).toEqual(pending);
+      activityPresentation(pending, undefined, new Set(["agent"])).groups[0]
+        ?.retired,
+    ).toBe(false);
   },
 );
 
@@ -174,29 +166,29 @@ it.each([
     label: "coordinator",
     authorId: "coordinator",
     replyParentId: "request",
-    hidden: true,
+    retired: true,
   },
   {
     label: "unrelated agent",
     authorId: "other",
     replyParentId: "request",
-    hidden: false,
+    retired: false,
   },
   {
     label: "human recipient",
     authorId: "human",
     replyParentId: "request",
-    hidden: false,
+    retired: false,
   },
   {
     label: "another request",
     authorId: "coordinator",
     replyParentId: "earlier",
-    hidden: false,
+    retired: false,
   },
 ])(
-  "only hides helper work after its coordinator replies: $label",
-  ({ authorId, replyParentId, hidden }) => {
+  "only retires the live helper treatment after its coordinator replies: $label",
+  ({ authorId, replyParentId, retired }) => {
     const request = publicMessage("request", {
       authorId: "human",
     });
@@ -213,12 +205,10 @@ it.each([
     const rows = [earlier, request, checking, result, reply];
     const agents = new Set(["agent", "coordinator", "other"]);
     const project = (messages: ChannelMessage[]) =>
-      activityDisplayRows(
-        messages,
-        activityPresentation(messages, undefined, agents).groups,
-      );
-    expect(project(rows.slice(0, -1))).toEqual(rows.slice(0, -1));
-    expect(project(rows)).toEqual(hidden ? [earlier, request, reply] : rows);
+      activityPresentation(messages, undefined, agents).groups[0];
+    expect(project(rows.slice(0, -1))?.retired).toBe(false);
+    expect(project(rows)?.retired).toBe(retired);
+    expect(project(rows)?.history).toEqual([checking, result]);
   },
 );
 
@@ -267,9 +257,8 @@ it.each([
       new Set(["agent", "coordinator"]),
     );
     const settled = ["done", "stopped", "superseded"].includes(state);
-    expect(activityDisplayRows(rows, projection.groups)).toEqual(
-      settled ? [request, reply] : rows,
-    );
+    expect(projection.groups[0]?.retired).toBe(settled);
+    expect(projection.groups[0]?.history).toEqual([step]);
     expect(projection.byRow.get(step.id)?.active).toBe(state === "working");
   },
 );
@@ -302,7 +291,7 @@ it("does not borrow completion from a preceding human message without a reply li
     },
     new Set(["agent"]),
   );
-  expect(activityDisplayRows(rows, projection.groups)).toEqual(rows);
+  expect(projection.groups[0]?.retired).toBe(false);
 });
 
 it("keeps interleaved requests separate when one helper finishes", () => {
@@ -331,11 +320,8 @@ it("keeps interleaved requests separate when one helper finishes", () => {
     },
     new Set(["agent"]),
   );
-  expect(activityDisplayRows(rows, projection.groups)).toEqual([
-    first,
-    second,
-    secondStep,
-  ]);
+  expect(projection.groups[0]?.retired).toBe(true);
+  expect(projection.groups[1]?.retired).toBe(false);
   expect(projection.byRow.get(secondStep.id)?.active).toBe(true);
 });
 
@@ -397,9 +383,8 @@ it.each(["working", "disconnected", "completed", "failed", "trimmed"] as const)(
       },
       new Set(["agent"]),
     );
-    expect(activityDisplayRows(rows, projection.groups)).toEqual(
-      phase === "completed" ? [request, reply] : rows,
-    );
+    expect(projection.groups[0]?.retired).toBe(phase === "completed");
+    expect(projection.groups[0]?.history).toEqual([step]);
     expect(projection.byRow.get(step.id)?.active).toBe(phase === "working");
   },
 );
@@ -429,7 +414,7 @@ it("waits for both helpers to finish and keeps their history available", () => {
   };
   const agents = new Set(["agent", "helper"]);
   const pending = activityPresentation(rows, snapshot, agents);
-  expect(activityDisplayRows(rows, pending.groups)).toEqual(rows);
+  expect(pending.groups[0]?.retired).toBe(false);
   expect(pending.byRow.get(second.id)?.active).toBe(true);
   const finished = activityPresentation(
     rows,
@@ -439,9 +424,9 @@ it("waits for both helpers to finish and keeps their history available", () => {
     },
     agents,
   );
-  expect(activityDisplayRows(rows, finished.groups)).toEqual([]);
+  expect(finished.groups[0]?.retired).toBe(true);
   expect(finished.groups[0]?.history).toEqual(rows);
-  expect(activityDisplayRows(rows, finished.groups, first.id)).toEqual([first]);
+  expect(finished.byRow.get(first.id)?.active).toBe(false);
 });
 
 it.each(["working", "waiting", "error"] as const)(
@@ -474,7 +459,7 @@ it.each(["working", "waiting", "error"] as const)(
       },
       new Set(["agent"]),
     );
-    expect(activityDisplayRows(rows, projection.groups)).toEqual(rows);
+    expect(projection.groups[0]?.retired).toBe(false);
     expect(projection.byRow.get(step.id)?.active).toBe(state === "working");
     if (state === "working")
       expect(projection.byRow.get(step.id)?.ownsLive).toBe(true);

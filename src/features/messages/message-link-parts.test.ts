@@ -151,6 +151,49 @@ it("keeps balanced bare URL delimiters in the decorated range and trims only unm
 });
 
 it.each([
+  ["https://github.com/block/buzz-app。", "https://github.com/block/buzz-app"],
+  ["看这个 https://example.com/spec，大家看一下", "https://example.com/spec"],
+  ["（https://example.com）", "https://example.com"],
+  ["https://example.com/a?b=c。", "https://example.com/a?b=c"],
+  ["https://example.com/path．", "https://example.com/path"],
+  ["https://example.com/path［注］", "https://example.com/path"],
+  ["他说“https://example.com”。", "https://example.com"],
+  ["｢https://example.com｣", "https://example.com"],
+  ["https://example.com。大家", "https://example.com"],
+  ["https://example.com/a。b", "https://example.com/a"],
+  ["https://github。com/block/buzz-app", "https://github。com/block/buzz-app"],
+  ["https://github．com:8080/x。", "https://github．com:8080/x"],
+  ["http://localhost:3000。OK", "http://localhost:3000"],
+  ["https://[::1]。OK", "https://[::1]"],
+  ["https:///example.com/x。", "https:///example.com/x"],
+  [
+    "https://github。com:/block/buzz-app",
+    "https://github。com:/block/buzz-app",
+  ],
+  ["https://github｡com/x。", "https://github｡com/x"],
+  [
+    "见 https://zh.wikipedia.org/wiki/中文",
+    "https://zh.wikipedia.org/wiki/中文",
+  ],
+])(
+  "ends a bare URL at fullwidth punctuation but keeps CJK letters: %s",
+  (content, url) => {
+    const parts = messageLinkParts(content);
+    expect(parts.filter((part) => part.url)).toEqual([{ text: url, url }]);
+    expect(parts.map((part) => part.text).join("")).toBe(content);
+  },
+);
+
+it("ends a bare URL at fullwidth punctuation before another scheme", () => {
+  expect(
+    messageLinkParts("https://a.com。https://b.com").filter((part) => part.url),
+  ).toEqual([
+    { text: "https://a.com", url: "https://a.com" },
+    { text: "https://b.com", url: "https://b.com" },
+  ]);
+});
+
+it.each([
   "[this shadcdn/ui clone](https://github.com/duobaseio/forui)",
   "[this shadcdn/ui clone](<https://github.com/duobaseio/forui>)",
   String.raw`[this shadcdn/ui clone]\(https://github.com/duobaseio/forui\)`,

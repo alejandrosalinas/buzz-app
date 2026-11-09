@@ -120,10 +120,13 @@ export function useTabDrag({
           !latest.current.canMove(active.id, pane)
         )
           continue;
-        const list = host.querySelector<HTMLElement>('[role="tablist"]');
         // The direct header is the pane's semantic chrome, not a nested
-        // contribution's header or a style selector.
+        // contribution's header or a style selector. A lone conversation has
+        // an identity instead of tabs, but still accepts incoming thread tabs.
         const header = host.querySelector<HTMLElement>(":scope > header");
+        const list =
+          header?.querySelector<HTMLElement>('[role="tablist"]') ??
+          header?.querySelector<HTMLElement>("[data-workspace-identity]");
         if (!list || !header) continue;
         const box = list.getBoundingClientRect();
         const headerBox = header.getBoundingClientRect();

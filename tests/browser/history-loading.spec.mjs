@@ -24,8 +24,8 @@ tall(
   async ({ page, app }) => {
     await open(page, app);
     await expect(
-      page.getByRole("status", {
-        name: "Reconnecting to relay…",
+      page.getByRole("dialog", {
+        name: "Buzz is having trouble connecting",
         exact: true,
       }),
     ).toHaveCount(0);
@@ -64,8 +64,8 @@ test("returning to the top continues history loading on wheel without a button",
 }) => {
   await open(page, app);
   await expect(
-    page.getByRole("status", {
-      name: "Reconnecting to relay…",
+    page.getByRole("dialog", {
+      name: "Buzz is having trouble connecting",
       exact: true,
     }),
   ).toHaveCount(0);
@@ -97,8 +97,8 @@ test("saved top resumes automatic history on an upward gesture after remount", a
 }) => {
   await open(page, app);
   await expect(
-    page.getByRole("status", {
-      name: "Reconnecting to relay…",
+    page.getByRole("dialog", {
+      name: "Buzz is having trouble connecting",
       exact: true,
     }),
   ).toHaveCount(0);
@@ -125,8 +125,8 @@ test("saved top resumes automatic history on an upward gesture after remount", a
   await openPage(page, "Messages");
   await expect(history(page)).toBeVisible();
   await expect(
-    page.getByRole("status", {
-      name: "Reconnecting to relay…",
+    page.getByRole("dialog", {
+      name: "Buzz is having trouble connecting",
       exact: true,
     }),
   ).toHaveCount(0);
@@ -147,8 +147,8 @@ test.describe("quota retry without threshold-driven continuation", () => {
   }) => {
     await open(page, app);
     await expect(
-      page.getByRole("status", {
-        name: "Reconnecting to relay…",
+      page.getByRole("dialog", {
+        name: "Buzz is having trouble connecting",
         exact: true,
       }),
     ).toHaveCount(0);

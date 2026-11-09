@@ -1,4 +1,10 @@
-import { useLayoutEffect, useRef, useState, useSyncExternalStore } from "react";
+import {
+  type RefObject,
+  useLayoutEffect,
+  useRef,
+  useState,
+  useSyncExternalStore,
+} from "react";
 import type {
   ChannelPanelContext,
   PanelContext,
@@ -11,16 +17,21 @@ import { PanelView } from "../../features/panels/PanelView";
 import styles from "./Channels.module.css";
 
 const launcherOrder = (key: string) =>
-  key === "buzz.huddles/huddles" ? 0 : key === "buzz.github/object" ? 1 : 2;
+  key === "buzz.huddles/huddles" ? 2 : key === "buzz.github/object" ? 1 : 0;
 
-type Opening = {
+/** A retained side panel opening; it holds no DOM elements. */
+export type ChannelDrawerOpening = Readonly<{
   panel: RegisteredPanel;
   context: ChannelPanelContext;
   target: string;
-  trigger: HTMLElement | null;
+}>;
+type Opening = ChannelDrawerOpening & {
+  readonly trigger?: HTMLElement | null;
 };
 /** The page's tab workspace, which owns `channelPlacement: "tab"` panels. */
 export type ChannelPanelTabs = {
+  /** Side panels show only while the pane is open; closing it retains them. */
+  paneOpen: boolean;
   pressed(panel: RegisteredPanel, context: ChannelPanelContext): boolean;
   toggle(
     panel: RegisteredPanel,
@@ -40,13 +51,36 @@ export function useChannelPanels(
     open(target: string): boolean;
   }>,
   openMembers?: () => void,
+  /** The channel's side-column opening, retained across visits until closed. */
+  side?: Readonly<{
+    opening: ChannelDrawerOpening | undefined;
+    set(opening: ChannelDrawerOpening | undefined): void;
+    /** Focus after closing when the opening's trigger has since been replaced. */
+    fallbackFocus?: RefObject<HTMLElement | null> | undefined;
+  }>,
 ) {
   const available = useSyncExternalStore(
     panels.subscribe,
     panels.snapshot,
     panels.snapshot,
   );
-  const [opened, setOpened] = useState<Opening>();
+  // Bottom drawers belong to this mount and channel. Side-column panels stay
+  // with their channel in `side`, so returning shows them until closed.
+  const [local, setLocal] = useState<Opening>();
+  // A retained opening's trigger stays with this mount, never in the store.
+  const triggers = useRef(new WeakMap<ChannelDrawerOpening, HTMLElement>());
+  const opened = side?.opening ?? local;
+  const setOpened = (next: Opening | undefined) => {
+    if (side && next?.panel.channelPlacement === "side") {
+      const { trigger, ...retained } = next;
+      if (trigger) triggers.current.set(retained, trigger);
+      setLocal(undefined);
+      side.set(retained);
+      return;
+    }
+    setLocal(next);
+    if (side?.opening) side.set(undefined);
+  };
   const mounted = useRef<ChannelPanelContext>(undefined);
   useLayoutEffect(() => {
     mounted.current = context;
@@ -62,9 +96,19 @@ export function useChannelPanels(
     available.includes(opened.panel)
       ? opened
       : undefined;
+  const retained = side?.opening;
+  const forgetRetained = side?.set;
   useLayoutEffect(() => {
-    if (opened && !selected) setOpened(undefined);
-  }, [opened, selected]);
+    if (local && local !== selected) setLocal(undefined);
+    // A disabled or replaced contribution never reopens; an unavailable
+    // channel only hides its panel until access returns.
+    if (retained && !available.includes(retained.panel))
+      forgetRetained?.(undefined);
+  }, [local, selected, retained, forgetRetained, available]);
+  const shown =
+    selected?.panel.channelPlacement !== "side" || tabs?.paneOpen !== false
+      ? selected
+      : undefined;
   const activeOpening = useRef<Opening>(undefined);
   useLayoutEffect(() => {
     activeOpening.current = selected;
@@ -74,8 +118,12 @@ export function useChannelPanels(
   }, [selected]);
   const hide = (opening: Opening) => {
     if (activeOpening.current !== opening) return;
-    setOpened((current) => (current === opening ? undefined : current));
-    if (opening.trigger?.isConnected) opening.trigger.focus();
+    setOpened(undefined);
+    const trigger = opening.trigger ?? triggers.current.get(opening);
+    const target = trigger?.isConnected
+      ? trigger
+      : side?.fallbackFocus?.current;
+    target?.focus();
   };
   const openingContext = (opening: Opening): PanelContext => ({
     channelId: opening.context.channelId,
@@ -105,7 +153,7 @@ export function useChannelPanels(
                 pressed={
                   tabbed
                     ? !!tabs?.pressed(panel, context)
-                    : selected?.panel === panel
+                    : shown?.panel === panel
                 }
                 openMembers={
                   openMembers
@@ -125,7 +173,7 @@ export function useChannelPanels(
                 toggle={(target) => {
                   if (!bound(context, panel)) return;
                   if (tabbed) tabs?.toggle(panel, context, target);
-                  else if (selected?.panel === panel) hide(selected);
+                  else if (shown?.panel === panel) hide(shown);
                   else {
                     onOpen?.();
                     setOpened({

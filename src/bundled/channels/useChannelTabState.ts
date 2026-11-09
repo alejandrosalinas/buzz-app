@@ -9,6 +9,7 @@ import {
 } from "react";
 import type { RelaySession } from "../../features/relay/session";
 import type { PanelOpening } from "../../features/panels/service";
+import type { ChannelDrawerOpening } from "./useChannelPanels";
 import {
   profileActivityViewKey,
   profileHistoryActive,
@@ -83,6 +84,8 @@ type State = {
   settings: { id: string; channelId: string | undefined } | undefined;
   /** A launcher's side panel shows in the pane; the page owns that panel. */
   sidePanel?: boolean;
+  /** The launcher side panel left open here, shown again on return until closed. */
+  sideDrawer?: ChannelDrawerOpening | undefined;
 };
 // Apply one history visit once. Leaving a visit remembers its selection, so
 // Back/Forward restore which tabs were selected and never close any.
@@ -97,7 +100,8 @@ const snapshotOf = (state: State): VisitSelection => ({
       state.tabs.some((tab) => tabPane(tab) === "side") ||
       sideEntries(state).length ||
       state.settings ||
-      state.thread
+      state.thread ||
+      state.sideDrawer
     ),
 });
 const remember = (state: State) => {
@@ -393,6 +397,7 @@ export function channelTabs(session: RelaySession, navigation?: Navigation) {
         // An empty side pane stays closed; its toggle offers the new tab.
         const sideEmpty =
           !state.sidePanel &&
+          !state.sideDrawer &&
           !state.settings &&
           !sideEntries(state).length &&
           !state.tabs.some((tab) => tabPane(tab) === "side");
@@ -480,24 +485,6 @@ export function useChannelTabState(
           ...s,
           entries,
           mainEntries: mainEntries?.length ? mainEntries : undefined,
-        };
-      }),
-    [update],
-  );
-  const retireMenuEntries = useCallback(
-    () =>
-      update((s) => {
-        const entries = s.entries.filter((entry) => !entry.panel.channelMenu);
-        if (entries.length === s.entries.length) return s;
-        return {
-          ...s,
-          entries,
-          selected: s.entries.some(
-            (entry) =>
-              entry.panel.channelMenu && panelTabId(entry) === s.selected,
-          )
-            ? "thread"
-            : s.selected,
         };
       }),
     [update],
@@ -848,7 +835,8 @@ export function useChannelTabState(
           tabs: tab ? [tab] : [],
           selected: (side && keep) || "",
           mainSelected: main ? keep : undefined,
-          paneOpen: side,
+          // A launcher's side panel is not a tab, so a pane showing one stays.
+          paneOpen: side || (s.paneOpen && !!s.sidePanel),
           thread: undefined,
           settings,
         };
@@ -901,6 +889,11 @@ export function useChannelTabState(
       update((s) => (!!s.sidePanel === sidePanel ? s : { ...s, sidePanel })),
     [update],
   );
+  const setSideDrawer = useCallback(
+    (sideDrawer: ChannelDrawerOpening | undefined) =>
+      update((s) => (s.sideDrawer === sideDrawer ? s : { ...s, sideDrawer })),
+    [update],
+  );
   // Selection reads stay synchronous and stable for navigation handoff effects.
   const getSelected = useCallback(
     () => snapshot()[key]?.selected ?? empty.selected,
@@ -921,7 +914,6 @@ export function useChannelTabState(
       threadVisits,
       detailVisits,
       setEntries,
-      retireMenuEntries,
       setTabs,
       openThreadTab,
       moveTab,
@@ -936,6 +928,7 @@ export function useChannelTabState(
       setSettings,
       setPaneOpen,
       setSidePanel,
+      setSideDrawer,
       renameTab,
       closeTabs,
     }),
@@ -946,7 +939,6 @@ export function useChannelTabState(
       threadVisits,
       detailVisits,
       setEntries,
-      retireMenuEntries,
       setTabs,
       openThreadTab,
       moveTab,
@@ -961,6 +953,7 @@ export function useChannelTabState(
       setSettings,
       setPaneOpen,
       setSidePanel,
+      setSideDrawer,
       renameTab,
       closeTabs,
     ],

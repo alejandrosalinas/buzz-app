@@ -43,7 +43,19 @@ export class BrowserSessions {
       if (park !== undefined && parked) {
         clearTimeout(parked.timer);
         this.parked.delete(park);
-        return parked.sessionId;
+        let resumed = true;
+        try {
+          await this.platform.setMediaSuspended(parked.sessionId, false);
+        } catch {
+          resumed = false;
+        }
+        // The view may have gone while the page resumed; then nothing would
+        // ever detach it again.
+        const wanted = current() && !builderlab?.signal.aborted;
+        if (resumed && wanted) return parked.sessionId;
+        await this.close(parked.sessionId);
+        // A page that cannot play again opens fresh instead.
+        if (!wanted) return undefined;
       }
       while (this.live.length >= MAX_GUESTS) await this.close(this.victim());
       const sessionId = await this.platform.attach(
@@ -77,14 +89,19 @@ export class BrowserSessions {
   /** Closes the guest, or with `park` hides it for the next view that
    * attaches with that key. */
   detach(sessionId: string, park?: string): Promise<void> {
-    // An unrelated attach can wait on network exchange; presentation must stop now.
+    // An unrelated attach can wait on network exchange; presentation, sound
+    // included, must stop now.
     const hidden = this.owns(sessionId)
-      ? this.platform.setBounds(sessionId, HIDDEN, false)
+      ? Promise.all([
+          this.platform.setBounds(sessionId, HIDDEN, false),
+          this.platform.setMediaSuspended(sessionId, true),
+        ])
       : Promise.resolve();
     this.shown.delete(sessionId);
     const detached = this.enqueue(async () => {
       // Re-adoption must not overtake the old view's in-flight hide. A guest
-      // that failed to hide still closes rather than staying live or parked.
+      // that failed to hide or go quiet still closes rather than staying live
+      // or parked.
       try {
         await hidden;
       } catch {

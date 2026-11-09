@@ -24,10 +24,11 @@ export function ConfirmAction({
   error?: string | null;
 }) {
   const cancelAction = useRef<HTMLButtonElement>(null);
+  const confirmAction = useRef<HTMLButtonElement>(null);
   return (
     <AlertDialog
       title={title}
-      initialFocus={cancelAction}
+      initialFocus={destructive ? cancelAction : confirmAction}
       description={description}
       pending={pending}
       onClose={onCancel}
@@ -37,6 +38,7 @@ export function ConfirmAction({
             {cancel}
           </Button>
           <Button
+            ref={confirmAction}
             variant={destructive ? "destructive" : "prominent"}
             disabled={pending}
             onClick={onConfirm}

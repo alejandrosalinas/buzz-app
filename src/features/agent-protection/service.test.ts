@@ -100,6 +100,8 @@ it("binds the runtime process and containment to the protection provider and kil
   expect(p.launch).toHaveBeenCalledWith("protected-engine", {
     cwd: "/workspace",
     protection: { readOnlyPaths: ["/immutable"], hiddenPaths: ["/private"] },
+    // Native binds its credential only for this agent, as its provider.
+    protectedAgent: { pubkey: f.agent.pubkey, relay: f.agent.relay },
   });
   lease.dispose();
   expect(p.process.kill).toHaveBeenCalledOnce();

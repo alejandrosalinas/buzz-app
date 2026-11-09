@@ -18,7 +18,7 @@ import {
 } from "../../shared/design-system/ui/PanelHeader";
 import { BestieChooser } from "./BestieChooser";
 import { PinnedBestie } from "./PinnedBestie";
-import { bestieRoute } from "./routes";
+import { bestieRoute, bestieDetailRoute } from "./routes";
 import { onBestieMade } from "../agents/BestieChoice";
 import { bestieTab, formerBestieTab } from "./BestieTab";
 import {
@@ -56,7 +56,11 @@ export const apply: PluginModule["apply"] = (ctx) => {
     title: "Bestie",
     layout: "workspace",
     primary: true,
-    route: { version: 1, validate: (params) => !!bestieRoute(params) },
+    route: {
+      version: 1,
+      validate: (params) =>
+        !!(bestieRoute(params) || bestieDetailRoute(params)),
+    },
     component: ({ navigation: pageNavigation }) => (
       <BestieDestination
         relay={ctx.relay}

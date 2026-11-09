@@ -6,7 +6,7 @@ offers the listed plugins in **Settings → Plugins**. Nothing in Buzz depends o
 writes the file.
 
 The file only recommends. It never installs, enables, updates or removes anything.
-Each plugin still goes through the Git import and its access review, and the person
+Each plugin still goes through the Git or URL import and its access review, and the person
 using Buzz confirms every change. The desktop app reads the file; the browser build
 has no native plugin storage, so the feature is absent there.
 
@@ -82,6 +82,30 @@ app data folder, including this file, so a writer should restore it on its next 
 | `plugins[].commit` | yes | The full 40 digit (SHA-1) or 64 digit (SHA-256) hexadecimal object ID the reference must resolve to. Matching ignores case. Abbreviated IDs are rejected. |
 | `plugins[].path` | no | Relative folder of the built plugin (containing `manifest.json` and `plugin.js`, or a signed release pair) inside the repository. Default `.`. Written canonically: `.` alone, or plain segments joined by single `/` (`plugins/notes/dist`). No empty, `.` or `..` segments, so no leading or trailing `/`, `//` or `./`, and no `\`, `:` or control characters. A path that is not written this way is rejected, because it could never match the folder Buzz finds. |
 
+### URL entries
+
+For people without access to the Git host, an entry can name a single plugin artifact
+over HTTPS instead of a repository:
+
+```json
+{
+  "id": "example.notes",
+  "url": "https://downloads.example.com/buzz/example.notes-1.4.0.json",
+  "sha256": "9f2c…64 hexadecimal digits"
+}
+```
+
+| Field | Required | Rules |
+| --- | --- | --- |
+| `plugins[].url` | yes | An HTTPS URL without credentials, query or fragment. Buzz downloads at most 8 MiB and follows redirects only to HTTPS. |
+| `plugins[].sha256` | yes | The SHA-256 of the artifact, 64 hexadecimal digits. Matching ignores case. Buzz installs nothing unless the download hashes to this value, so the server need not be trusted. |
+
+A URL entry has no `repository`, `reference`, `commit` or `path`. The artifact is the
+file `buzzodz plugin pack DIST_DIRECTORY FILE` writes from a built plugin: the exact
+bytes Buzz installs, whose SHA-256 is the installed revision. Publish each version at its
+own URL, because a changed file at the same URL no longer matches its pin. A release
+signature is not carried in the artifact.
+
 Unknown fields are errors, at the top level and inside entries, so a typo is reported
 instead of silently ignored. A new schema revision gets a new `version`.
 
@@ -107,8 +131,8 @@ recorded commit.
 | State | Meaning | Offered |
 | --- | --- | --- |
 | Missing | No plugin with this ID is installed. | **Review and install** |
-| Current | Installed from the same repository at the pinned commit and path. | Marked "Managed by *source*" |
-| Outdated | Installed from the same repository, but at another or an unrecorded commit or path. | **Review update**; marked "Managed by *source*" |
+| Current | Installed from the same repository at the pinned commit and path. For a URL entry, installed at a revision equal to `sha256`, from any source. | Marked "Managed by *source*" |
+| Outdated | Installed from the same repository, but at another or an unrecorded commit or path. For a URL entry, installed from a URL at another revision. | **Review update**; marked "Managed by *source*" |
 | Other | Installed from a folder, an unrecorded source, another repository, or included with Buzz. | A note only. Buzz does not replace it. Remove it to see the recommendation again. |
 
 Repositories match when scheme, user, host, port and path agree after normalization. The

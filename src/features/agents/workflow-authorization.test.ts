@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import { schnorr } from "@noble/curves/secp256k1.js";
 import { bytesToHex } from "nostr-tools/utils";
-import { expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { eventDto, type RelayEvent } from "../relay/events";
 import { createProfileDirectory } from "../relay/profile-directory";
 import type { RelayReader } from "../relay/reader";
@@ -151,6 +151,81 @@ it("recovers from failed or missing reads and respects a replaced profile head",
   } finally {
     f.profiles.dispose();
   }
+});
+
+describe("communities the build restricts", () => {
+  const restricted = "wss://restricted.example.test";
+  const direct = (key = owner, tags: string[][] = []) =>
+    eventDto(signed(key, { kind: 9, content: "@target do it", tags }));
+  beforeEach(() => {
+    vi.stubEnv(
+      "VITE_BUZZ_WORKFLOW_RESTRICTED_COMMUNITIES",
+      "https://restricted.example.test",
+    );
+  });
+  afterEach(() => {
+    vi.unstubAllEnvs();
+  });
+
+  it("deny every workflow mention there and keep delegation elsewhere", async () => {
+    const f = directory();
+    try {
+      const blocked = { ...f.context, community: restricted };
+      expect(await fromOwner(prompt(), owner.pubkey, blocked)).toBe(false);
+      expect(await fromOwner(prompt(), creator.pubkey, blocked)).toBe(false);
+      expect(f.read).not.toHaveBeenCalled();
+      const open = {
+        ...f.context,
+        community: "wss://team.communities.buzz.xyz",
+      };
+      expect(await fromOwner(prompt(), owner.pubkey, open)).toBe(true);
+      expect(await fromOwner(prompt(), creator.pubkey, open)).toBe(true);
+    } finally {
+      f.profiles.dispose();
+    }
+  });
+
+  it("deny workflow-marked messages from the owner but keep direct requests", async () => {
+    const workflow = [["buzz:workflow", "true"]];
+    const blocked = { authority: relay.pubkey, agent: target.pubkey };
+    expect(
+      await fromOwner(direct(owner, workflow), owner.pubkey, {
+        ...blocked,
+        community: restricted,
+      }),
+    ).toBe(false);
+    expect(
+      await fromOwner(direct(owner, workflow), owner.pubkey, {
+        ...blocked,
+        community: "https://team.communities.buzz.xyz",
+      }),
+    ).toBe(true);
+    expect(
+      await fromOwner(direct(), owner.pubkey, {
+        ...blocked,
+        community: restricted,
+      }),
+    ).toBe(true);
+    expect(
+      await fromOwner(direct(creator, [auth()]), owner.pubkey, {
+        ...blocked,
+        community: restricted,
+      }),
+    ).toBe(true);
+  });
+
+  it("treat an unknown community as restricted while any is listed", async () => {
+    const f = directory();
+    try {
+      expect(await fromOwner(prompt(), creator.pubkey, f.context)).toBe(false);
+      expect(await fromOwner(prompt(), creator.pubkey)).toBe(false);
+      expect(await fromOwner(direct(), owner.pubkey)).toBe(true);
+      vi.stubEnv("VITE_BUZZ_WORKFLOW_RESTRICTED_COMMUNITIES", "");
+      expect(await fromOwner(prompt(), creator.pubkey, f.context)).toBe(true);
+    } finally {
+      f.profiles.dispose();
+    }
+  });
 });
 
 it("denies a profile read invalidated by session disposal", async () => {

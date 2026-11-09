@@ -1,0 +1,195 @@
+.attention-sonar {
+  position: relative;
+  flex-shrink: 0;
+  color: var(--text-subtle);
+  border-radius: 50%;
+  isolation: isolate;
+  --sonar-theme-gain: 1;
+  background:
+    linear-gradient(
+      color-mix(in srgb, currentColor 8%, transparent),
+      color-mix(in srgb, currentColor 8%, transparent)
+    )
+    center / 1px 100% no-repeat,
+    linear-gradient(
+      90deg,
+      color-mix(in srgb, currentColor 8%, transparent),
+      color-mix(in srgb, currentColor 8%, transparent)
+    )
+    center / 100% 1px no-repeat;
+}
+.attention-sonar-ring {
+  position: absolute;
+  border: 1px solid currentColor;
+  border-radius: 50%;
+  opacity: var(--sonar-ring-opacity);
+}
+.attention-sonar-sweep {
+  position: absolute;
+  inset: 0;
+  border-radius: 50%;
+  background: conic-gradient(
+    from 0deg,
+    transparent 0deg var(--sonar-beam),
+    color-mix(
+        in srgb,
+        currentColor
+          calc(var(--sonar-sweep-opacity) * var(--sonar-theme-gain) * 25%),
+        transparent
+      )
+      330deg,
+    color-mix(
+        in srgb,
+        currentColor
+          calc(var(--sonar-sweep-opacity) * var(--sonar-theme-gain) * 100%),
+        transparent
+      )
+      359deg,
+    transparent 360deg
+  );
+  animation: attention-sonar-scan var(--sonar-period) linear infinite;
+  scale: 1;
+  opacity: 1;
+  transition:
+    scale var(--duration-panel-enter) var(--easing-settle),
+    opacity var(--duration-panel-enter) var(--easing-enter);
+}
+.attention-sonar-signal {
+  position: absolute;
+  inline-size: var(--sonar-dot-size);
+  block-size: var(--sonar-dot-size);
+}
+.attention-sonar-dot {
+  position: relative;
+  left: -50%;
+  top: -50%;
+  display: block;
+  inline-size: 100%;
+  block-size: 100%;
+  border-radius: 50%;
+  background: currentColor;
+  opacity: 0;
+  animation: attention-sonar-signal var(--sonar-period) var(--sonar-dot-ease)
+    var(--sonar-delay) infinite;
+}
+.attention-sonar-signal[data-citrus] .attention-sonar-dot {
+  background: var(--accent-9-light);
+}
+.attention-sonar-agent {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  pointer-events: none;
+}
+.attention-sonar-hint-anchor {
+  position: absolute;
+  bottom: calc(100% + var(--sonar-hint-offset) + var(--sonar-dot-size) / 2);
+  left: 0;
+  transform: translateX(-50%);
+  z-index: 3;
+  pointer-events: none;
+}
+.attention-sonar-hint {
+  display: block;
+  padding: var(--space-1) var(--space-2);
+  border: 1.5px solid var(--surface-panel);
+  border-radius: var(--radius-capsule);
+  background: var(--accent-4-light);
+  color: var(--accent-12-light);
+  white-space: nowrap;
+  opacity: 0;
+  box-shadow: var(--shadow-xs);
+  animation: attention-sonar-hint var(--sonar-period) var(--sonar-hint-ease)
+    var(--sonar-delay) infinite;
+}
+@keyframes attention-sonar-scan {
+  to {
+    transform: rotate(360deg);
+  }
+}
+@keyframes attention-sonar-signal {
+  0% {
+    opacity: 0;
+    transform: scale(var(--sonar-dot-scale));
+  }
+  6% {
+    opacity: var(--sonar-dot-opacity);
+    transform: scale(1);
+  }
+  35%,
+  100% {
+    opacity: 0;
+    transform: scale(0.8);
+  }
+}
+@keyframes attention-sonar-hint {
+  from {
+    opacity: 0;
+    transform: translateY(4px) scale(0.9);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .attention-sonar-sweep {
+    animation: none;
+    transform: rotate(35deg);
+  }
+  .attention-sonar-dot {
+    animation: none;
+    opacity: 0.5;
+  }
+  .attention-sonar-hint {
+    display: none;
+    animation: none;
+  }
+}
+
+.attention-sonar-portrait {
+  display: block;
+  inline-size: var(--sonar-avatar-size);
+  block-size: var(--sonar-avatar-size);
+}
+@media (prefers-reduced-motion: reduce) {
+  .attention-sonar-sweep {
+    transition: none;
+  }
+}
+
+/* Quiet neutral signals; Citrus signals carry the emphasis and message layer. */
+.attention-sonar-signal:not([data-citrus]) {
+  --sonar-dot-size: var(--sonar-neutral-size);
+  --sonar-dot-scale: 0.75;
+}
+.attention-sonar-agent {
+  z-index: 1;
+}
+
+:root[data-color-mode="dark"] .attention-sonar {
+  --sonar-theme-gain: 2;
+}
+.attention-sonar-sweep[data-palette] {
+  color: var(--accent-9-light);
+}
+:root[data-color-mode="dark"] .attention-sonar-sweep[data-palette] {
+  color: var(--accent-9-dark);
+}
+:root .attention-sonar-sweep[data-palette="mono"] {
+  color: var(--text-subtle);
+}
+:root .attention-sonar-sweep[data-palette="red"] {
+  color: var(--text-danger);
+}
+
+:root[data-color-mode="dark"]
+  .attention-sonar-signal[data-citrus]
+  .attention-sonar-dot {
+  background: var(--accent-9-dark);
+}
+:root[data-color-mode="dark"] .attention-sonar-hint {
+  background: var(--accent-4-dark);
+  color: var(--accent-12-dark);
+}

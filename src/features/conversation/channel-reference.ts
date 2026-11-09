@@ -7,8 +7,8 @@ const noop = () => () => {};
 /**
  * What a link can show about a channel the reader may not have joined. The
  * store owns the lookup, its batching, expiry and retry; this hook only
- * demands one while the list is ready and the answer isn't a readable
- * `found`, because discovery owns access.
+ * demands the channel while the list is ready. The store looks up only an
+ * answer that isn't a readable `found`, because discovery owns access.
  */
 export function useChannelReference(
   queries: ChannelQueries | undefined,
@@ -32,12 +32,14 @@ export function useChannelReference(
   );
   // Mounted links hold the demand, so the store rechecks them when an answer
   // expires or a failure's backoff ends. Moving between answers that aren't
-  // readable keeps the same demand.
+  // readable keeps the same demand; becoming readable or not asks again. A
+  // readable answer needs no lookup, but its demand still tells the store the
+  // viewer's own traffic names the channel.
   const readable = reference.state === "found" && reference.readable !== false;
+  const demand = ready ? (readable ? "named" : "lookup") : undefined;
   useEffect(() => {
-    if (active && channelId && ready && !readable)
-      return active.refer?.(channelId);
-  }, [active, channelId, ready, readable]);
+    if (active && channelId && demand) return active.refer?.(channelId);
+  }, [active, channelId, demand]);
   return reference;
 }
 

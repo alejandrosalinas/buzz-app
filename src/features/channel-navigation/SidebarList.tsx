@@ -1,5 +1,6 @@
-import type { ReactNode, RefObject } from "react";
+import { useCallback, type ReactNode, type RefObject } from "react";
 import styles from "../../bundled/channels/Channels.module.css";
+import { useScrollEdges } from "../../shared/design-system/ui/useScrollEdges";
 
 type Props = {
   children: ReactNode;
@@ -17,6 +18,16 @@ export function SidebarList({
   contentRef,
   overlay,
 }: Props) {
+  const edges = useScrollEdges("block");
+  const navigationRef = navigation?.ref;
+  // Stable, so React does not detach and reattach the list on every render.
+  const listRef = useCallback(
+    (node: HTMLElement | null) => {
+      edges(node);
+      if (navigationRef) navigationRef.current = node;
+    },
+    [edges, navigationRef],
+  );
   const content = (
     <div ref={contentRef} className={styles.channelListContent}>
       {children}
@@ -26,14 +37,21 @@ export function SidebarList({
     <div className={styles.channelListFrame}>
       {navigation ? (
         <nav
-          ref={navigation.ref}
+          ref={listRef}
           className={styles.channelList}
+          data-scroll-fade="scrolled"
           aria-label={navigation.label}
         >
           {content}
         </nav>
       ) : (
-        <div className={styles.channelList}>{content}</div>
+        <div
+          ref={edges}
+          className={styles.channelList}
+          data-scroll-fade="scrolled"
+        >
+          {content}
+        </div>
       )}
       {overlay}
     </div>

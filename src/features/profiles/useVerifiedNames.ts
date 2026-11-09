@@ -1,6 +1,11 @@
 import { useEffect, useMemo, useState, useSyncExternalStore } from "react";
 import { PROFILE_CACHE_BASE } from "../relay/budget";
 import type { ProfileQueries } from "../relay/profile-directory";
+import {
+  type NamePreference,
+  namePreference,
+  verifiedLabel,
+} from "./name-preference";
 import type { RelaySession } from "../relay/session";
 import type {
   VerifiedProfile,
@@ -11,7 +16,9 @@ import type {
  * cannot read verified names (a composer bridge) still gets shared ones. */
 export type VerifiedNamesSession = {
   profiles: ProfileQueries;
-  directMessages: Partial<Pick<RelaySession["directMessages"], "verified">>;
+  directMessages: Partial<
+    Pick<RelaySession["directMessages"], "verified" | "searched">
+  >;
 };
 type Found = Map<string, { profile: VerifiedProfile | undefined; at: number }>;
 
@@ -80,6 +87,7 @@ export function useVerifiedNames(
 ): ReadonlyMap<string, VerifiedProfile> {
   const { profiles } = session;
   const read = session.directMessages?.verified;
+  const searched = session.directMessages?.searched;
   const authority = useSyncExternalStore(profiles.subscribe, () =>
     profiles.verifiedAuthority?.(),
   );
@@ -100,12 +108,14 @@ export function useVerifiedNames(
     const known = profiles.snapshot();
     const now = Date.now();
     // One pass asks each unasked person once, in pages, at most as many as the
-    // cache holds; eviction during the pass cannot ask anyone again.
+    // cache holds; eviction during the pass cannot ask anyone again. A search
+    // that answered for someone since their lookup outdates it.
     const queue = subjects
       .split(",")
       .filter(
         (pubkey) =>
-          now - (found.get(pubkey)?.at ?? -Infinity) >= FRESH_MS &&
+          (now - (found.get(pubkey)?.at ?? -Infinity) >= FRESH_MS ||
+            !!searched?.(pubkey, authority)) &&
           !known.get(pubkey)?.verified &&
           !profiles.verifiedHeld?.(pubkey),
       )
@@ -139,7 +149,7 @@ export function useVerifiedNames(
       }
     })();
     return () => controller.abort();
-  }, [profiles, read, authority, subjects, settled, key]);
+  }, [profiles, read, searched, authority, subjects, settled, key]);
   // biome-ignore lint/correctness/useExhaustiveDependencies: a landed read moves the revision.
   return useMemo(() => {
     const current = authority && lookups.get(profiles);
@@ -185,6 +195,7 @@ export function withVerifiedNames<
   people: readonly T[],
   page: ReadonlyMap<string, VerifiedProfile>,
   shared: ReadonlyMap<string, { verified?: VerifiedProfile | undefined }>,
+  preference: NamePreference = namePreference(),
 ): readonly VerifiedPerson<T>[] {
   let changed = false;
   const named = people.map((person): VerifiedPerson<T> => {
@@ -194,7 +205,7 @@ export function withVerifiedNames<
     changed = true;
     return {
       ...person,
-      name: verified.displayName,
+      name: verifiedLabel(verified, preference),
       username: verified.username,
       ...(verified.fullName ? { fullName: verified.fullName } : {}),
       profileNames: [person.name, person.username].filter(

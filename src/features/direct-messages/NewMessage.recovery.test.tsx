@@ -42,6 +42,7 @@ import { MentionCompletion } from "../../bundled/mentions/MentionCompletion";
 import { mentionQuery } from "../../bundled/mentions/mention-query";
 import { attachmentDraft } from "../messages/attachment-draft";
 import { NewMessage } from "./NewMessage";
+import type { PageNavigation } from "../navigation/service";
 import { OutboxStatus } from "../../bundled/channels/OutboxStatus";
 import { useHiddenDms } from "../../bundled/channels/useHiddenDms";
 import { createRelayProfiler } from "../relay/profiling";
@@ -202,9 +203,11 @@ function setup(
   function Draft({
     owner,
     extensions,
+    visit,
   }: {
     owner: ReturnType<typeof create>;
     extensions?: ConversationExtensions | undefined;
+    visit?: PageNavigation | undefined;
   }) {
     const { channels } = useChannelList(owner.session.channels);
     return (
@@ -232,13 +235,15 @@ function setup(
         onOpenThread={vi.fn()}
         onStarted={onStarted}
         extensions={extensions}
+        visit={visit}
       />
     );
   }
   const mount = (
     owner: ReturnType<typeof create>,
     extensions?: ConversationExtensions,
-  ) => render(<Draft owner={owner} extensions={extensions} />);
+    visit?: PageNavigation,
+  ) => render(<Draft owner={owner} extensions={extensions} visit={visit} />);
   const user = userEvent.setup();
   const compose = async () => {
     await user.click(await screen.findByRole("option", { name: "Avery" }));
@@ -442,6 +447,30 @@ it("removing a failed operation in Diagnostics unlocks the preserved draft on re
   await t.user.click(send());
   await waitFor(() => expect(t.onStarted).toHaveBeenCalledOnce());
   expect(t.publish).toHaveBeenCalledTimes(2);
+});
+
+it("keeps a failed message in Back history when only the outbox holds it", async () => {
+  const t = setup();
+  t.publish.mockRejectedValueOnce(new PublishRejected("Not sent"));
+  const owner = t.create();
+  const outbox = owner.session.outbox;
+  assert.exists(outbox);
+  const page = t.mount(owner);
+  await t.compose();
+  await t.user.click(send());
+  await screen.findByRole("alert");
+  await waitFor(() => expect(outbox.snapshot()[0]?.delivery).toBe("failed"));
+  page.unmount();
+  // The disposable draft view is gone; the durable outbox entry remains.
+  writeView(scope, "direct-message:new-draft", null);
+  const passThrough = vi.fn<PageNavigation["passThrough"]>(() => () => {});
+  t.mount(owner, undefined, { passThrough } as unknown as PageNavigation);
+  await waitFor(() =>
+    expect(screen.getByRole("textbox")).toHaveTextContent(
+      "Durable first message",
+    ),
+  );
+  expect(passThrough.mock.lastCall?.[0]()).toBe(false);
 });
 
 it("never publishes if the durable recovery write fails", async () => {
@@ -1336,8 +1365,12 @@ it("confirms a photo-only uncertain send after session restart without files or 
   const original = t.publish.mock.calls[0]?.[0];
   f.view.unmount();
   f.owner.dispose();
-  t.mount(t.create());
-  await t.user.click(await screen.findByRole("button", { name: "Retry send" }));
+  const passThrough = vi.fn<PageNavigation["passThrough"]>(() => () => {});
+  t.mount(t.create(), undefined, { passThrough } as unknown as PageNavigation);
+  const retry = await screen.findByRole("button", { name: "Retry send" });
+  // The held photo keeps the retry page in Back history.
+  expect(passThrough.mock.lastCall?.[0]()).toBe(false);
+  await t.user.click(retry);
   await waitFor(() => expect(t.onStarted).toHaveBeenCalledOnce());
   expect(t.publish.mock.calls[1]?.[0]).toEqual(original);
 });

@@ -60,7 +60,7 @@ html[data-keyboard-navigation] .link:focus-visible {
 
 /* Flush against the name, as a channel's hash reads as part of it. */
 .icon.flush,
-[data-mention-kind] > .icon {
+[data-mention-kind] .icon {
   margin-right: 0;
 }
 

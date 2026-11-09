@@ -131,7 +131,7 @@ test("keyboard Retry hands off focus while reconnecting a failed Messages tab op
   ).toBeFocused();
 });
 
-test("a refused account is explained as access, in place and in the sidebar", async ({
+test("a refused account is explained once, as access", async ({
   page,
   app,
 }) => {
@@ -142,22 +142,22 @@ test("a refused account is explained as access, in place and in the sidebar", as
   });
   await page.goto(app.origin);
   const main = page.getByRole("main");
-  // Messages explains the refusal itself rather than giving network advice.
-  await expect(
-    main.getByRole("heading", { name: "You don’t have access to this" }),
-  ).toBeVisible();
+  const access = "You don’t have access to this community";
+  // Messages says why it's empty rather than giving network advice; the one
+  // notice on every page offers what fixes it.
+  await expect(main.getByRole("heading", { name: access })).toBeVisible();
   await expect(main.getByText(/Check your connection/)).toHaveCount(0);
-  await expect(
-    page.getByText("You don’t have access to this community."),
-  ).toBeVisible();
+  const notice = page.getByRole("dialog", { name: access });
+  await expect(notice).toBeVisible();
+  const sidebar = page.getByRole("complementary", { name: "Sidebar" });
+  await expect(sidebar.getByText(/have access/)).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "Try again" })).toHaveCount(0);
   const refusals = app.report.relayFailures.length;
-  await button(main, "Try again").click();
+  await button(notice, "Check again").click();
   await expect
     .poll(() => app.report.relayFailures.length)
     .toBeGreaterThan(refusals);
-  await expect(
-    main.getByRole("heading", { name: "You don’t have access to this" }),
-  ).toBeVisible();
+  await expect(main.getByRole("heading", { name: access })).toBeVisible();
 });
 
 test("Skip to content focuses main without adding a visit or dropping Back", async ({

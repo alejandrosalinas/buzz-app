@@ -1,3 +1,4 @@
+import { interestPaused } from "./attention";
 // Saved catch-up progress for event watches, as Janet keeps it: one stream
 // for each watch and channel, which reads the watch's own kinds. Each window
 // of missed events is read whole, newest page first, within a bound, and then
@@ -240,13 +241,14 @@ export function readCheckpoints(storage: AgentStore): Checkpoints {
   );
 }
 
-/** Valid checkpoints by agent. */
-function byAgent(checkpoints: Checkpoints) {
+/** Valid checkpoints by agent, of the `only` agents when they are given. */
+function byAgent(checkpoints: Checkpoints, only?: ReadonlySet<string>) {
   const agents = new Map<string, Record<string, Checkpoint>>();
   for (const [key, value] of Object.entries(checkpoints)) {
     const agent = ownerOf(key);
+    if (agent === undefined || (only && !only.has(agent))) continue;
     const checkpoint = checkpointOf(value);
-    if (agent === undefined || !checkpoint) continue;
+    if (!checkpoint) continue;
     const streams = agents.get(agent) ?? {};
     streams[key] = checkpoint;
     agents.set(agent, streams);
@@ -264,8 +266,18 @@ export async function writeCheckpoints(
   checkpoints: Checkpoints,
   saved: Checkpoints,
 ) {
-  const next = byAgent(checkpoints);
-  const last = byAgent(saved);
+  // A stream's checkpoint is replaced, never changed in place, so an
+  // identical one is unchanged and its agent need not be compared.
+  const changed = new Set<string>();
+  for (const key of new Set([
+    ...Object.keys(checkpoints),
+    ...Object.keys(saved),
+  ])) {
+    const agent = checkpoints[key] === saved[key] ? undefined : ownerOf(key);
+    if (agent !== undefined) changed.add(agent);
+  }
+  const next = byAgent(checkpoints, changed);
+  const last = byAgent(saved, changed);
   const writes: Promise<void>[] = [];
   for (const agent of new Set([...next.keys(), ...last.keys()])) {
     const streams = next.get(agent);
@@ -314,7 +326,8 @@ export function streamsOf(agent: Pick<Agent, "key" | "attention">) {
         ...(channel ? { channel } : {}),
         kinds: value.kinds.length ? value.kinds : CHANNEL_KINDS,
         since: value.since,
-        enabled: value.enabled,
+        enabled:
+          value.enabled && !interestPaused(agent.attention, value.interest_id),
       });
   }
   return streams;

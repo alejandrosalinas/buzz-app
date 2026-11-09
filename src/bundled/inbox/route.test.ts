@@ -1,5 +1,5 @@
 import { expect, it } from "vitest";
-import { inboxRouteTarget, isInboxRoute, routeOf } from "./route";
+import { inboxRouteTarget, inboxTarget, isInboxRoute, routeOf } from "./route";
 
 it.each([
   {},
@@ -69,4 +69,14 @@ it("reads a route only from a version 1 page target", () => {
     }),
   ).toBeUndefined();
   expect(routeOf(undefined)).toBeUndefined();
+});
+
+it("drops a link's retired Archived and Drafts choices", () => {
+  const at = (params: Record<string, string | boolean>) =>
+    routeOf({ ...inboxTarget, route: { version: 1, params } });
+  expect(at({ show: "archived", sender: "agents" })).toEqual({
+    sender: "agents",
+  });
+  expect(at({ show: "inbox" })).toEqual({});
+  expect(at({ drafts: "true" })).toEqual({});
 });

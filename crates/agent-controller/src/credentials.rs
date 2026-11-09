@@ -20,6 +20,16 @@ const MAX_BLOB: usize = 2 * 1024 * 1024;
 /// Another operation, in this app or another, holds the store; it may be retried.
 pub const BUSY: &str = "Credentials are busy; retry after the current operation finishes";
 
+/// Why the earlier app's human key could not be read.
+#[derive(Debug)]
+pub struct LegacyHumanError {
+    pub message: String,
+    /// The store was busy or unavailable, as when it is locked, so a later read
+    /// may succeed. Otherwise no usable key is there: none, access was denied,
+    /// or it is malformed.
+    pub transient: bool,
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Failure {
     Absent,
@@ -110,16 +120,27 @@ impl PlatformCredentials {
     }
     /// The human key the selected earlier app saved, for a person's explicit
     /// bring-over. Read-only; the caller validates and persists it.
-    pub fn read_legacy_human(&self, source: LegacySource) -> Result<Zeroizing<String>> {
+    pub fn read_legacy_human(
+        &self,
+        source: LegacySource,
+    ) -> std::result::Result<Zeroizing<String>, LegacyHumanError> {
         match self.legacy_map(source) {
             Ok(map) => map
                 .0
                 .get("identity")
                 .map(|value| Zeroizing::new(value.clone())),
             Err(Failure::Absent) => None,
-            Err(failure) => return Err(failure.message()),
+            Err(failure) => {
+                return Err(LegacyHumanError {
+                    transient: matches!(failure, Failure::Busy | Failure::Unavailable),
+                    message: failure.message(),
+                })
+            }
         }
-        .ok_or_else(|| "No identity from the earlier Buzz app was found".into())
+        .ok_or_else(|| LegacyHumanError {
+            message: "No identity from the earlier Buzz app was found".into(),
+            transient: false,
+        })
     }
 }
 

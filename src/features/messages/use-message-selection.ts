@@ -1,5 +1,6 @@
 import { useLayoutEffect, useRef, type RefObject } from "react";
 import type { ChannelMessage } from "../relay/contracts";
+import { compareMessages } from "../relay/message-order";
 import type { RelaySession } from "../relay/session";
 import { useMessageEditScope } from "./MessageEditScope";
 import { useMessageKeyActions } from "./MessageManagement";
@@ -26,7 +27,7 @@ export function useMessageSelection(
       newest: () =>
         latest.current.reduce<ChannelMessage | undefined>(
           (newest, row) =>
-            !row.membership && (!newest || row.createdAt > newest.createdAt)
+            !row.membership && (!newest || compareMessages(row, newest) > 0)
               ? row
               : newest,
           undefined,

@@ -11,7 +11,10 @@ import {
   parseKitRecord,
   type Groups,
   type KitRecord,
+  type KitValue,
+  type Template,
 } from "../channel-templates/model";
+import { projectTemplateId, templateEntry } from "../solo/workspace";
 import { matchesEvent } from "./projection";
 import { flush, keypair, roster, scriptedTransport, signed } from "./testing";
 import type { ReadFilter, RelayEvent } from "./events";
@@ -41,7 +44,7 @@ function fixture() {
     starred: [],
     muted: [],
   };
-  const install = (value: Groups, deleted = false) => {
+  const install = (value: KitValue, deleted = false) => {
     const record: KitRecord = { version: 1, community, deleted, value };
     events.push(
       signed(viewer, {
@@ -389,6 +392,317 @@ it("checks the exact project capacity before saving and reclaims a removed filin
     const assignments = f.session.soloPreferences.snapshot().data?.assignments;
     expect(assignments?.[id]).toBe("work");
     expect(assignments?.[removed]).toBeUndefined();
+  } finally {
+    f.dispose();
+  }
+});
+
+const agent = "a".repeat(64);
+const settings = async (projectId: string): Promise<Template> => ({
+  type: "template",
+  id: await projectTemplateId(projectId),
+  name: "Solo work chats",
+  description: "Starting workspace and Canvas for new chats in this workspace.",
+  teamIds: [],
+  agents: [agent],
+  canvas: "## Project folders\n\n- `/src/launch`",
+});
+const workspaces: Groups = {
+  type: "groups",
+  id: "me",
+  groups: [
+    { id: "work", name: "Solo work", defaultTemplateId: "" },
+    { id: "keep", name: "Kept", defaultTemplateId: "" },
+  ],
+  assignments: { [other]: "work" },
+};
+const written = (f: ReturnType<typeof fixture>) =>
+  f.publish.mock.calls.map(([event]) => JSON.parse(event.content) as KitRecord);
+
+it("tombstones only the removed workspace's settings, without their name, instructions, folders or agents", async () => {
+  const f = fixture();
+  try {
+    const saved = await settings("work");
+    const kept = await settings("keep");
+    f.install(workspaces);
+    f.install(saved);
+    f.install(kept);
+    await f.session.soloPreferences.ensure();
+    await f.session.soloPreferences.removeSection("work");
+    expect(
+      f.session.soloPreferences.snapshot().data?.sections.map(({ id }) => id),
+    ).toEqual(["keep"]);
+    await vi.waitFor(() => expect(f.publish).toHaveBeenCalledTimes(2));
+    const events = f.publish.mock.calls.map(([event]) => event);
+    const record = (type: KitValue["type"]) => {
+      const event = events.find(
+        ({ content }) => JSON.parse(content).value.type === type,
+      );
+      return event && { event, record: JSON.parse(event.content) as KitRecord };
+    };
+    expect(record("groups")?.record).toEqual({
+      version: 1,
+      community,
+      deleted: false,
+      value: {
+        ...workspaces,
+        groups: workspaces.groups.slice(1),
+        assignments: {},
+      },
+    });
+    const tombstone = record("template");
+    expect(tombstone?.record).toEqual({
+      version: 1,
+      community,
+      deleted: true,
+      value: { ...saved, name: "Deleted workspace", agents: [], canvas: "" },
+    });
+    expect(tombstone?.event.tags).toContainEqual([
+      "d",
+      coordinate({ version: 1, community, deleted: false, value: saved }),
+    ]);
+    await f.session.channelKit.refresh();
+    const { entries } = f.session.channelKit.snapshot();
+    expect(
+      entries.find(({ record }) => record.value.id === saved.id)?.record
+        .deleted,
+    ).toBe(true);
+    expect(templateEntry(entries, saved.id)).toBeUndefined();
+    expect(templateEntry(entries, kept.id)?.record.value).toEqual(kept);
+  } finally {
+    f.dispose();
+  }
+});
+
+it("resolves a removal before its tombstone and queues later writes behind it", async () => {
+  const f = fixture();
+  let release = () => {};
+  const held = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  let holding = false;
+  try {
+    f.install(workspaces);
+    f.install(await settings("work"));
+    f.prepare.mockImplementation(async (record) => {
+      if (record.value.type === "template") {
+        holding = true;
+        await held;
+      }
+      return JSON.stringify(record);
+    });
+    await f.session.soloPreferences.ensure();
+    await f.session.soloPreferences.removeSection("work");
+    await vi.waitFor(() => expect(holding).toBe(true));
+    const created = f.session.soloPreferences.createSection({
+      id: "next",
+      name: "Next",
+    });
+    let settled = false;
+    const settle = () => {
+      settled = true;
+    };
+    void created.then(settle, settle);
+    await flush();
+    expect(settled).toBe(false);
+    expect(f.publish).toHaveBeenCalledOnce();
+    release();
+    await expect(created).resolves.toBeUndefined();
+    expect(written(f).map(({ value }) => value.type)).toEqual([
+      "groups",
+      "template",
+      "groups",
+    ]);
+  } finally {
+    release();
+    f.dispose();
+  }
+});
+
+it("saves another workspace's settings while a removed workspace's settings are deleted", async () => {
+  const f = fixture();
+  let release = () => {};
+  const held = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  let holding = false;
+  try {
+    const removed = await settings("work");
+    const kept = await settings("keep");
+    f.install(workspaces);
+    f.install(removed);
+    f.install(kept);
+    f.prepare.mockImplementation(async (record) => {
+      if (record.deleted) {
+        holding = true;
+        await held;
+      }
+      return JSON.stringify(record);
+    });
+    await f.session.soloPreferences.ensure();
+    await f.session.soloPreferences.removeSection("work");
+    await vi.waitFor(() => expect(holding).toBe(true));
+    // Workspace settings save through the kit itself, outside the Solo queue.
+    const edited = { ...kept, canvas: "## Project folders\n\n- `/src/kept`" };
+    await f.session.channelKit.save(
+      edited,
+      templateEntry(f.session.channelKit.snapshot().entries, kept.id)?.eventId,
+    );
+    expect(
+      templateEntry(f.session.channelKit.snapshot().entries, kept.id)?.record
+        .value,
+    ).toEqual(edited);
+    release();
+    await vi.waitFor(() => expect(f.publish).toHaveBeenCalledTimes(3));
+    expect(
+      written(f).map(({ deleted, value }) => [value.type, value.id, deleted]),
+    ).toEqual([
+      ["groups", "me", false],
+      ["template", kept.id, false],
+      ["template", removed.id, true],
+    ]);
+  } finally {
+    release();
+    f.dispose();
+  }
+});
+
+it("deletes the settings when a retried removal finds its unconfirmed groups write landed", async () => {
+  const f = fixture();
+  try {
+    const removed = await settings("work");
+    f.install(workspaces);
+    f.install(removed);
+    await f.session.soloPreferences.ensure();
+    // The relay stores the groups write but never confirms it by id.
+    const read = f.query.getMockImplementation();
+    let unconfirmed = true;
+    f.query.mockImplementation(async (filters) =>
+      unconfirmed && filters.some(({ ids }) => ids)
+        ? []
+        : (read?.(filters) ?? []),
+    );
+    await expect(
+      f.session.soloPreferences.removeSection("work"),
+    ).rejects.toThrow("awaiting exact relay confirmation");
+    expect(written(f).map(({ value }) => value.type)).toEqual(["groups"]);
+    unconfirmed = false;
+    await f.session.soloPreferences.removeSection("work");
+    expect(
+      f.session.soloPreferences.snapshot().data?.sections.map(({ id }) => id),
+    ).toEqual(["keep"]);
+    await vi.waitFor(() => expect(f.publish).toHaveBeenCalledTimes(2));
+    expect(written(f)[1]).toMatchObject({
+      deleted: true,
+      value: { id: removed.id, name: "Deleted workspace" },
+    });
+  } finally {
+    f.dispose();
+  }
+});
+
+it("drops the tombstone when the preferences clear while it hashes the id", async () => {
+  const f = fixture();
+  const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+  let release = () => {};
+  const held = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  try {
+    f.install(workspaces);
+    f.install(await settings("work"));
+    await f.session.soloPreferences.ensure();
+    const digest = crypto.subtle.digest.bind(crypto.subtle);
+    let hashing = false;
+    vi.spyOn(crypto.subtle, "digest").mockImplementation(async (...args) => {
+      hashing = true;
+      await held;
+      return digest(...args);
+    });
+    await f.session.soloPreferences.removeSection("work");
+    await vi.waitFor(() => expect(hashing).toBe(true));
+    void f.clearCache();
+    release();
+    await vi.waitFor(() => expect(warn).toHaveBeenCalledOnce());
+    expect(written(f).map(({ value }) => value.type)).toEqual(["groups"]);
+  } finally {
+    release();
+    f.dispose();
+  }
+});
+
+it.each([
+  ["has no saved settings", false],
+  ["already has deleted settings", true],
+] as const)(
+  "writes only the groups record when the workspace %s",
+  async (_case, deleted) => {
+    const f = fixture();
+    try {
+      f.install(workspaces);
+      if (deleted) f.install(await settings("work"), true);
+      await f.session.soloPreferences.ensure();
+      await f.session.soloPreferences.removeSection("work");
+      // A later queued mutation runs after any cleanup the removal queued.
+      await f.session.soloPreferences.removeSection("work");
+      expect(written(f).map(({ value }) => value.type)).toEqual(["groups"]);
+    } finally {
+      f.dispose();
+    }
+  },
+);
+
+it("keeps a workspace deleted when its settings can't be deleted", async () => {
+  const f = fixture();
+  const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+  try {
+    const saved = await settings("work");
+    f.install(workspaces);
+    f.install(saved);
+    f.prepare.mockImplementation(async (record) => {
+      if (record.value.type === "template") throw new Error("Signer offline");
+      return JSON.stringify(record);
+    });
+    await f.session.soloPreferences.ensure();
+    await expect(
+      f.session.soloPreferences.removeSection("work"),
+    ).resolves.toBeUndefined();
+    await vi.waitFor(() => expect(warn).toHaveBeenCalledOnce());
+    expect(String(warn.mock.calls[0]?.[1])).toContain("Signer offline");
+    expect(f.prepare).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        deleted: true,
+        value: expect.objectContaining({ id: saved.id }),
+      }),
+      expect.anything(),
+    );
+    expect(written(f).map(({ value }) => value.type)).toEqual(["groups"]);
+    await f.session.soloPreferences.refresh();
+    expect(
+      f.session.soloPreferences.snapshot().data?.sections.map(({ id }) => id),
+    ).toEqual(["keep"]);
+  } finally {
+    f.dispose();
+  }
+});
+
+it("writes no tombstone when the groups write fails", async () => {
+  const f = fixture();
+  try {
+    f.install(workspaces);
+    f.install(await settings("work"));
+    f.prepare.mockRejectedValueOnce(new Error("Signer offline"));
+    await f.session.soloPreferences.ensure();
+    await expect(
+      f.session.soloPreferences.removeSection("work"),
+    ).rejects.toThrow("Signer offline");
+    // A later queued mutation runs after any cleanup the removal queued.
+    await f.session.soloPreferences.removeSection("missing");
+    expect(f.prepare).toHaveBeenCalledOnce();
+    expect(f.publish).not.toHaveBeenCalled();
+    expect(
+      f.session.soloPreferences.snapshot().data?.sections.map(({ id }) => id),
+    ).toEqual(["work", "keep"]);
   } finally {
     f.dispose();
   }

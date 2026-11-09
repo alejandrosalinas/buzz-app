@@ -20,6 +20,10 @@ export const other = "b".repeat(64);
 export const bot = "c".repeat(64);
 export const sibling = "d".repeat(64);
 export const channel = "0b8e2a3c-1d4f-4a5b-8c6d-7e8f9a0b1c2d";
+/** A public channel the owner is in and the agent is not. */
+export const lobby = "1c9f3b4d-2e5a-4b6c-9d7e-8f9a0b1c2d3e";
+/** A public channel neither is in. */
+export const plaza = "2d0a4c5e-3f6b-4c7d-8e8f-9a0b1c2d3e4f";
 export const dm = "dm-with-bot";
 export const groupDm = "dm-with-bot-and-other";
 export const event = (id: string, patch: Partial<RelayEvent> = {}) =>
@@ -40,17 +44,21 @@ export function fakeRelay(origin = "https://relay.example.test") {
   const replays = new Set<LiveListener>();
   const changes = new Set<() => void>();
   const rosterChanges = new Set<() => void>();
+  const attended = new Set<readonly string[]>();
   // The agent is in `channel`, `dm` and `groupDm`; `private` is the owner's
   // alone, and `dm-others` and `dm-unknown` are DMs it is not known to be in
   // (discovery emits an empty roster, never a missing one). `saved` has only a
-  // roster loaded from disk, not yet confirmed by the relay.
+  // roster loaded from disk, not yet confirmed by the relay. `lobby` is
+  // public, and the agent is not in it.
   const rows: {
     id: string;
     name?: string;
     channelType?: "dm";
+    visibility?: "public";
     members: string[];
     cached?: true;
   }[] = [
+    { id: lobby, name: "lobby", visibility: "public", members: [viewer] },
     { id: channel, name: "general", members: [viewer, bot] },
     { id: "private", name: "private", members: [viewer] },
     { id: dm, channelType: "dm", members: [viewer, bot] },
@@ -90,8 +98,14 @@ export function fakeRelay(origin = "https://relay.example.test") {
     }),
   };
   let status = "connected";
+  /** Channels the session does not know yet, attended or not. */
+  const pending = new Set<string>();
   /** Channels of the list live does not route. */
   const unrouted = new Set<string>();
+  /** Channels it knows only from agents' lookups. */
+  const learned = new Set<string>();
+  /** Channels the viewer has open, live as the list's are. */
+  const opened = new Set<string>();
   const statuses = new Set<() => void>();
   /** The viewer's kind 30177 records the community returns. */
   const listed: RelayEvent[] = [];
@@ -118,9 +132,15 @@ export function fakeRelay(origin = "https://relay.example.test") {
       )
         throw new Error("Relay reads need valid kinds or event IDs");
       // A catch-up read is bounded on both sides; it may ask for any kinds.
+      // The session drops a channel's events until it knows the channel.
       return filters[0]?.kinds?.includes(9) ||
         (filters[0]?.since !== undefined && filters[0]?.until !== undefined)
-        ? page(history, filters[0])
+        ? page(history, filters[0]).filter(
+            ({ tags }) =>
+              !tags.some(
+                ([key, value]) => key === "h" && pending.has(value ?? ""),
+              ),
+          )
         : [...listed];
     }),
     readRemote: vi.fn(async (filters: readonly ReadFilter[]) => {
@@ -139,7 +159,30 @@ export function fakeRelay(origin = "https://relay.example.test") {
         rosterChanges.add(listener);
         return () => rosterChanges.delete(listener);
       },
+      // Public, and neither the owner nor the agent is in it.
+      get: (id: string) =>
+        id === plaza
+          ? {
+              id,
+              name: id,
+              visibility: "public",
+              readOnly: true,
+              members: [other],
+            }
+          : undefined,
     },
+    /** Each list of channels an `attend` keeps live, while it does. */
+    attend: vi.fn((ids: readonly string[]) => {
+      attended.add(ids);
+      return () => attended.delete(ids);
+    }),
+    attendPending: (id: string) => pending.has(id),
+    // The list's channels are the viewer's; attended ones live only for agents.
+    unattended: (id: string, live: boolean) =>
+      rows.some((row) => row.id === id) ||
+      opened.has(id) ||
+      (!learned.has(id) &&
+        (!live || ![...attended].some((ids) => ids.includes(id)))),
     live: {
       // Each channel of the list is live while connected, unless `unrouted`.
       snapshot: () => ({
@@ -237,8 +280,12 @@ export function fakeRelay(origin = "https://relay.example.test") {
       for (const listener of rosterChanges) listener();
     },
     archives,
+    attended,
     listed,
     unrouted,
+    pending,
+    learned,
+    opened,
     history,
     memories,
     session,

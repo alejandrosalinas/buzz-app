@@ -6,6 +6,7 @@ import {
   useSyncExternalStore,
   type ReactNode,
 } from "react";
+import { AnimatePresence, motion, useReducedMotion } from "motion/react";
 import { AgentSaveButton } from "../../../features/agents/AgentSaveButton";
 import { ModelFamilyMenu } from "../../../features/agents/ModelFamilyMenu";
 import { BuilderlabLogoIcon } from "../../../shared/design-system/icons";
@@ -26,6 +27,7 @@ import {
 } from "../agents/client";
 import type { BuilderlabSession } from "../session";
 import { AccountRecoverySheet, SettingsErrorSheet } from "./SignInFooter";
+import { SignInAction } from "./SignInAction";
 import { effortLabel, modelChoice } from "./models";
 
 const statuses = {
@@ -38,7 +40,13 @@ const statuses = {
     "The server has not confirmed the saved model selection. Choose a model and thinking level.",
 };
 const message = (reason: unknown) =>
-  reason instanceof Error ? reason.message : "Could not load model settings.";
+  reason instanceof Error
+    ? reason.message
+    : typeof reason === "string"
+      ? reason
+      : "Could not load model settings.";
+const accessDenied = (reason: unknown) =>
+  reason instanceof Error && "status" in reason && reason.status === 403;
 const accountMismatchMessage =
   "Sign in to the Builderlab account that loaded these settings.";
 
@@ -52,20 +60,38 @@ export function ModelSettings({
   client: AgentClient;
   session: BuilderlabSession;
   openIdentity?: (() => void) | undefined;
-  harnessControl?: ReactNode;
+  harnessControl?: (action: ReactNode) => ReactNode;
   settings:
     | { agent: RemoteAgent; subject: string; email?: string }
-    | { pending: boolean; error: string; retry(): void };
+    | { pending: boolean; error: unknown; retry(): void };
 }) {
   const login = useSyncExternalStore(session.subscribe, session.snapshot);
+  const [retrySignIn, setRetrySignIn] = useState<
+    "switching" | "waiting" | "ready"
+  >();
+  const reducedMotion = useReducedMotion();
   const signedIn = login.status === "signed-in";
+  const waitingToRetry =
+    retrySignIn === "switching" || retrySignIn === "waiting";
+  useEffect(() => {
+    // Account sign-out may finish asynchronously; only its published state
+    // starts the browser account-switch wait.
+    if (retrySignIn === "switching") {
+      if (login.status === "signed-out") setRetrySignIn("waiting");
+      return;
+    }
+    if (signedIn) {
+      setRetrySignIn(undefined);
+      return;
+    }
+    if (retrySignIn !== "waiting") return;
+    const timer = setTimeout(() => setRetrySignIn("ready"), 3000);
+    return () => clearTimeout(timer);
+  }, [login.status, signedIn, retrySignIn]);
   const agent = "agent" in settings ? settings.agent : undefined;
   const subject = "subject" in settings ? settings.subject : undefined;
   const mismatch =
     signedIn && subject !== undefined && login.account?.subject !== subject;
-  const accountProblem =
-    signedIn && (mismatch || login.account?.canUseRemoteAgents === false);
-  const hasAccess = signedIn && !accountProblem;
   const email = mismatch && "email" in settings ? settings.email : undefined;
   const form = useId();
   const notify = useToastNotification();
@@ -76,12 +102,21 @@ export function ModelSettings({
   const [instructions, setInstructions] = useState(agent?.instructions ?? "");
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
+  const [error, setError] = useState<unknown>("");
+  const [catalogError, setCatalogError] = useState<unknown>("");
+  const loadError = "error" in settings ? settings.error : "";
+  const accessError = [loadError, error, catalogError].find(accessDenied);
+  const accountProblem =
+    signedIn &&
+    (mismatch || login.account?.canUseRemoteAgents === false || !!accessError);
+  const hasAccess = signedIn && !accountProblem;
   const busy = !saved || loading || saving || !hasAccess;
-  const [error, setError] = useState("");
   useEffect(() => {
-    if (!signedIn) setError("");
+    if (!signedIn) {
+      setError("");
+      setCatalogError("");
+    }
   }, [signedIn]);
-  const [catalogError, setCatalogError] = useState("");
   const [revision, setRevision] = useState(0);
   const controller = useRef<AbortController | null>(null);
   useEffect(() => {
@@ -110,10 +145,10 @@ export function ModelSettings({
       .modelCatalog(current.signal)
       .then(
         (catalog) => {
-          if (!current.signal.aborted) setModels(catalog);
+          if (!current.signal.aborted) setModels(catalog.models);
         },
         (reason) => {
-          if (!current.signal.aborted) setCatalogError(message(reason));
+          if (!current.signal.aborted) setCatalogError(reason);
         },
       )
       .finally(() => {
@@ -181,7 +216,7 @@ export function ModelSettings({
         notify("Model preferences saved", "success");
     } catch (reason) {
       if (!signal.aborted && session.snapshot().status === "signed-in")
-        setError(message(reason));
+        setError(reason);
     } finally {
       if (!signal.aborted) setSaving(false);
     }
@@ -203,8 +238,7 @@ export function ModelSettings({
         ? slow
           ? "Still loading…"
           : "…"
-        : "Unavailable";
-  const loadError = "error" in settings ? settings.error : "";
+        : "—";
   const failure = hasAccess ? loadError || error || catalogError : "";
   return (
     <LoadingRegion
@@ -235,8 +269,10 @@ export function ModelSettings({
         session={session}
         openIdentity={openIdentity}
         active={accountProblem}
+        onSwitchAccount={() => setRetrySignIn("switching")}
         email={email}
         mismatch={mismatch}
+        detail={accessError ? message(accessError) : undefined}
       />
       <SettingsErrorSheet
         active={!!failure}
@@ -247,7 +283,7 @@ export function ModelSettings({
               ? "Couldn’t save changes"
               : "Couldn’t load models"
         }
-        message={failure}
+        message={message(failure)}
         action={{
           label: loadError ? "Retry" : error ? "Try again" : "Retry models",
           disabled: loadError ? false : error ? disabled : busy,
@@ -276,17 +312,42 @@ export function ModelSettings({
           </p>
         )}
         <SettingsGroup>
-          {harnessControl ?? (
-            <PreferenceRow
-              title="Harness"
-              trailing={
-                <span className="flex min-w-0 items-center gap-2">
-                  <BuilderlabLogoIcon size={20} aria-hidden="true" />
-                  Builderlab
-                </span>
-              }
-            />
-          )}
+          <SignInAction
+            session={session}
+            automatic
+            retry={
+              retrySignIn
+                ? {
+                    waiting: waitingToRetry,
+                    cancel: () => setRetrySignIn("ready"),
+                  }
+                : undefined
+            }
+            render={(action, feedback) => (
+              <div>
+                {harnessControl?.(action) ?? (
+                  <PreferenceRow
+                    title="Harness"
+                    trailing={
+                      <div className="flex min-w-0 flex-wrap items-center justify-end gap-2">
+                        <span className="flex min-w-0 items-center gap-2">
+                          <BuilderlabLogoIcon size={20} aria-hidden="true" />
+                          Builderlab
+                        </span>
+                        {action}
+                      </div>
+                    }
+                  />
+                )}
+                {login.status === "signed-out" && !waitingToRetry && (
+                  <p className="m-0 pb-3 text-body-sm text-secondary">
+                    Sign in to edit settings. You can still message this agent.
+                  </p>
+                )}
+                {feedback && <div className="pb-3">{feedback}</div>}
+              </div>
+            )}
+          />
           <ModelFamilyMenu
             label="Model"
             align="end"
@@ -328,24 +389,37 @@ export function ModelSettings({
             No models are available. Retry when the catalog is available.
           </p>
         )}
-        <Field
-          label="Instructions"
-          error={
-            hasAccess && !validInstructions(instructions)
-              ? "Use text or leave this empty."
-              : undefined
-          }
-        >
-          <Textarea
-            appearance="outlined"
-            value={instructions}
-            onChange={(event) => setInstructions(event.target.value)}
-            disabled={!saved || saving || !hasAccess}
-            placeholder={!saved ? placeholder : undefined}
-            rows={8}
-            maxLength={MAX_INSTRUCTIONS_LENGTH}
-          />
-        </Field>
+        <AnimatePresence initial={false}>
+          {signedIn && (
+            <motion.div
+              key="instructions"
+              initial={{
+                opacity: reducedMotion ? 1 : 0,
+                y: reducedMotion ? 0 : 8,
+              }}
+              animate={{ opacity: 1, y: 0 }}
+              transition={{ duration: reducedMotion ? 0 : 0.22 }}
+            >
+              <Field
+                label="Instructions"
+                error={
+                  hasAccess && !validInstructions(instructions)
+                    ? "Use text or leave this empty."
+                    : undefined
+                }
+              >
+                <Textarea
+                  appearance="outlined"
+                  value={instructions}
+                  onChange={(event) => setInstructions(event.target.value)}
+                  disabled={!saved || saving || !hasAccess}
+                  rows={8}
+                  maxLength={MAX_INSTRUCTIONS_LENGTH}
+                />
+              </Field>
+            </motion.div>
+          )}
+        </AnimatePresence>
         <AgentSaveButton
           form={form}
           saving={saving}

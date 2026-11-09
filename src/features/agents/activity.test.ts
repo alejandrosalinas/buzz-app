@@ -6,6 +6,7 @@ import {
   createAgentActivity,
 } from "./activity";
 import type { LiveSnapshot } from "../relay/live";
+import { requestWork } from "./request-work";
 const agent = "a".repeat(64);
 const connected: LiveSnapshot = {
   status: "connected",
@@ -60,6 +61,70 @@ function fixture(findMessage?: Parameters<typeof createAgentActivity>[4]) {
   };
 }
 afterEach(() => vi.useRealTimers());
+it("does not settle an aggregate after its other linked lifecycle turn was evicted", () => {
+  const f = fixture();
+  const request = "1".repeat(64);
+  f.send(
+    f.item("turn_started", "older", {
+      timestamp: new Date(Date.now() - 10000).toISOString(),
+      payload: { triggeringEventIds: [request] },
+    }),
+  );
+  f.send(
+    f.item("turn_started", "retained", {
+      payload: { triggeringEventIds: [request] },
+    }),
+  );
+  f.send(f.item("turn_completed", "retained", { seq: 2 }));
+  for (let i = 0; i < ACTIVITY_TURN_LIMIT - 1; i++)
+    f.send(f.item("turn_liveness", `unrelated-${i}`));
+  expect(f.snapshot().turns.some((turn) => turn.turnId === "older")).toBe(
+    false,
+  );
+  expect(f.snapshot().turnsTrimmed).toBe(true);
+  const work = requestWork(f.snapshot(), "a", request);
+  expect(work[0]?.state).toBe("unknown");
+  f.activity.clear();
+  expect(f.snapshot().turnsTrimmed).toBe(false);
+  f.activity.dispose();
+});
+it.each([
+  [undefined, "ended"],
+  ["completed", "ended"],
+  ["failed", "error"],
+  ["terminated", "error"],
+  ["cancelled", "stopped"],
+  ["future-outcome", "unknown"],
+])(
+  "retains the exact request outcome %s through silence, trimming and reconnect",
+  (outcome, expected) => {
+    const f = fixture();
+    const request = "1".repeat(64);
+    const read = () => requestWork(f.snapshot(), "a", request);
+    f.send(
+      f.item("turn_started", "one", {
+        payload: { triggeringEventIds: [request] },
+      }),
+    );
+    vi.advanceTimersByTime(31000);
+    expect(read()[0]?.state).toBe("unknown");
+    f.send(f.item("turn_completed", "one", { seq: 2, payload: { outcome } }));
+    expect(read()[0]?.state).toBe(expected);
+    // Evict both the start and end from raw records, keeping the bounded lifecycle.
+    for (let i = 0; i <= ACTIVITY_RECORD_LIMIT; i++)
+      f.send(f.item("acp_read", "unrelated", { seq: i }));
+    expect(f.snapshot().trimmed).toBeGreaterThan(0);
+    expect(read()[0]?.state).toBe(expected);
+    expect(requestWork(f.snapshot(), "a", "2".repeat(64))).toEqual([]);
+    expect(requestWork(f.snapshot(), "other-channel", request)).toEqual([]);
+    f.activity.state({ status: "retrying", routes: [] });
+    f.activity.state(connected);
+    f.send(f.item("turn_liveness", "one", { seq: 1 }));
+    vi.advanceTimersByTime(31000);
+    expect(read()[0]?.state).toBe(expected);
+    f.activity.dispose();
+  },
+);
 it("folds each mixed-turn batch child; resolution is not completion; null-session completion ends only its turn", () => {
   const f = fixture();
   f.send(f.item("turn_started"));
@@ -163,7 +228,11 @@ it("keeps terminal evidence monotonic across clock rollback, eviction and delaye
 });
 it("bounds records, UTF-8 bytes, turn state and immutable snapshots; dedups IDs, not process-local sequence", () => {
   const f = fixture();
-  const first = f.make(f.item("acp_read"));
+  const first = f.make(
+    f.item("turn_started", "one", {
+      payload: { triggeringEventIds: ["1".repeat(64)] },
+    }),
+  );
   f.activity.receive(first, f.generation());
   const old = f.snapshot();
   f.activity.receive(first, f.generation());
@@ -475,4 +544,20 @@ it("associates lifecycle with retained signed triggers and preserves it through 
   );
   expect(f.snapshot().turns[1]?.requests).toEqual([]);
   f.release();
+});
+it("skips the snapshot comparison for channel traffic that changes no typing", () => {
+  const f = fixture();
+  f.send(f.item("turn_liveness"));
+  const stringify = vi.spyOn(JSON, "stringify");
+  try {
+    f.activity.channelEvents([
+      { ...typingEvent(), pubkey: "b".repeat(64), kind: 9 },
+    ]);
+    expect(stringify).not.toHaveBeenCalled();
+    f.activity.channelEvents([typingEvent()]);
+    expect(f.snapshot().typing).toHaveLength(1);
+  } finally {
+    stringify.mockRestore();
+    f.activity.dispose();
+  }
 });

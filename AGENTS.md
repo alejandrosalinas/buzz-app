@@ -79,6 +79,9 @@ other ignored paths: Keychain credentials and pnpm's package cache are
 machine-shared, while dependencies and build output are regenerated. Git hooks
 need no per-worktree setup; see [Git hooks](docs/contributing.md#git-hooks).
 
+Agents run the desktop app with plain `just desktop`, never `just desktop me`:
+`me` signs in with the owner's release key and sets up their Keychain helper.
+
 ## Engineering standard
 
 When changing a shipped plugin to default-off, follow the
@@ -231,6 +234,41 @@ Tests must control the ordering they assert, not depend on runner speed.
   engines for browser changes. Report exact validation scope and remaining gaps;
   a green run does not establish that all flakes are gone.
 
+## Open-source boundary
+
+This repository is public. Never commit values that only make sense inside
+Block: Block's employee-only community and its hosts (bb-block:
+`block.builderlab.xyz`, `buzz.block.builderlab.xyz`, `*.communities.block.xyz`),
+private GitHub organizations, repositories or org SSH users, internal hosts,
+cloud accounts, IAM roles or buckets, internal ticket keys, go/ links, Slack
+channels, or personal setups. Public Builderlab
+(`app.builderlab.xyz`, `*.communities.builderlab.xyz`) is a supported public
+service and is fine, as is the generic rule that routes any
+`buzz.{name}.builderlab.xyz` community to `{name}.builderlab.xyz` sign-in.
+
+The rule covers functionality, not only identifiers. Every feature here must be
+generic: useful and complete for any community or distributor, with no knowledge
+of one company's internal services, workflows or identity setup. Functionality
+that only serves Block belongs in a plugin kept in a private repository and
+bundled by Block's own builds. A host change made for such a plugin must be a
+general-purpose extension point: a documented public contract that an
+independent plugin author could reasonably use, inert when no plugin uses it,
+and never naming, detecting or special-casing a specific plugin, organization or
+service. Review judges a change's purpose and approach, not just its strings.
+
+A distributor's values come from build-time settings set by that distributor's
+release build: `BUZZ_BUILDERLAB_URL`, `BUZZ_BUILDERLAB_APPS_DOMAIN`,
+`BUZZ_BUILDERLAB_APPS_CONTROL_PLANE`, `BUZZ_BUILD_FEDERATED_IDENTITY_CONFIG`,
+`BUZZ_BUILD_REPOSITORY_ACCESS`, `BUZZ_EXTERNAL_MCP_COMMUNITIES`,
+`BUZZ_DEFAULT_COMMUNITY_URL`, `BUZZ_NSEC_BACKUP_SERVICE_URL` and
+`BUZZ_NSEC_BACKUP_NAMESPACE` (see [configuration](docs/configuration.md)). If
+one is missing, add a generic setting; never hardcode the value or special-case
+a host or organization.
+
+Tests, fixtures, docs and examples use example values (`example.org`,
+`example-org`). Reviewers treat a violation as a blocking
+finding.
+
 ## Commit attribution and DCO
 
 Every PR commit needs a `Signed-off-by` (the hosted **DCO Check** fails without
@@ -303,15 +341,6 @@ confirmation, not app runs.
   and code-owner approval. This preflight is not automatic permission to merge.
 
 Icons use Tabler only, through `src/shared/design-system/icons`. Add individual exports as needed; icon and weight choices belong to the designer. The local lint and design checks enforce this import boundary.
-
-## Arjun's desktop acceptance setup
-
-When launching Buzz desktop builds for Arjun's acceptance testing, use his existing
-configured identity through the established local setup and verify that his
-communities load. Do not expose credentials in logs or responses. If the identity
-or community loading cannot be verified, report that limitation before presenting
-the build as ready to test. Follow the worktree bootstrap instructions above;
-do not hardcode identity values into tracked files.
 
 ## Inspect a live agent session
 

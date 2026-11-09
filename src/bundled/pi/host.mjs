@@ -772,7 +772,16 @@ export function serve({
             : models,
           registry,
           settings: SETTINGS,
-          env: ({ cwd }) => new NodeExecutionEnv({ cwd: cwd ?? homedir() }),
+          // Its tools' commands, and only theirs, act as this agent.
+          env: ({ cwd }) => {
+            const credential = credentials.get(agent);
+            return new NodeExecutionEnv({
+              cwd: cwd ?? homedir(),
+              ...(credential && {
+                shellEnv: { BUZZ_CREDENTIAL_PROVIDER: credential },
+              }),
+            });
+          },
           onReport: (error, info) => {
             console.error(`Pi reported ${info.type}`, error);
             // Cut off by crashes too often, a task waits for a retry that
@@ -820,6 +829,10 @@ export function serve({
       throw error;
     }
   }
+
+  /** Each agent's credential for its tools' commands, never this host's own
+   * environment. */
+  const credentials = new Map();
 
   /** The agent's storage, opened once. */
   function opening(agent) {
@@ -1308,7 +1321,8 @@ export function serve({
         : { ok: true, message: `Connected to ${model.modelId}` };
     },
     /** Opens the agent's storage, once, with its Buzz tools as they are now. */
-    async open({ agent, tools, hint }) {
+    async open({ agent, tools, hint, credential }) {
+      if (credential) credentials.set(agent, credential);
       const opened = await opening(agent);
       const listed = JSON.stringify([tools, hint]);
       if (opened.tools !== listed) {

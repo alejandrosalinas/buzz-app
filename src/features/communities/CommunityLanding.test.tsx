@@ -99,6 +99,28 @@ it("opens the join steps from a community address", async () => {
   );
 });
 
+// A short v2 host is an address; only a code-length label is a bare code.
+it.each(["relay.example", "v2.dev"])(
+  "reads bare host %j as a secure community address",
+  async (host) => {
+    const user = userEvent.setup();
+    landing();
+    await user.type(
+      screen.getByLabelText("Invite link or community URL"),
+      host,
+    );
+    await user.click(screen.getByRole("button", { name: "Join" }));
+    const dialog = await screen.findByRole("main");
+    expect(await within(dialog).findByLabelText("Invite code")).toHaveValue("");
+    expect(communityRequest).toHaveBeenLastCalledWith(
+      `https://${host}`,
+      "info",
+      undefined,
+      expect.any(AbortSignal),
+    );
+  },
+);
+
 it("asks for an invite link or community URL when the pasted value is neither", async () => {
   const user = userEvent.setup();
   landing();
@@ -112,6 +134,31 @@ it("asks for an invite link or community URL when the pasted value is neither", 
   ).toBeVisible();
   expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
 });
+
+it.each([
+  "v2.acTJgVMn-cEaz84r5g7Az40Vz_JB5nAURtFFSq1oUIo",
+  // A sentence-ending dot copied with the code still normalizes to it.
+  "v2.acTJgVMn-cEaz84r5g7Az40Vz_JB5nAURtFFSq1oUIo.",
+])(
+  "asks for the whole invite link when only its code is pasted: %j",
+  async (code) => {
+    const user = userEvent.setup();
+    vi.mocked(communityRequest).mockClear();
+    landing();
+    const input = screen.getByLabelText("Invite link or community URL");
+    await user.click(input);
+    await user.paste(code);
+    await user.click(screen.getByRole("button", { name: "Join" }));
+    expect(
+      await screen.findByText(
+        "Paste the whole invite link, not only its code.",
+      ),
+    ).toBeVisible();
+    // The refusal replaces opening the join steps, so nothing was looked up.
+    expect(input).toBeInTheDocument();
+    expect(communityRequest).not.toHaveBeenCalled();
+  },
+);
 
 it("presents an opened invite and clears it on close", async () => {
   const user = userEvent.setup();
@@ -150,6 +197,35 @@ it("lets a failed submitted lookup be corrected without losing the landing link"
   );
   await user.click(within(dialog).getByRole("button", { name: "Continue" }));
   expect(await within(dialog).findByLabelText("Invite code")).toBeVisible();
+});
+
+it("lets Back leave a submitted lookup the host never answers, keeping the landing link", async () => {
+  let lookup: AbortSignal | undefined;
+  vi.mocked(communityRequest).mockImplementationOnce(
+    (_id, _route, _body, signal) =>
+      new Promise((_, reject) => {
+        lookup = signal;
+        signal?.addEventListener("abort", () => reject(signal.reason));
+      }),
+  );
+  const user = userEvent.setup();
+  landing();
+  await user.type(
+    screen.getByLabelText("Invite link or community URL"),
+    "https://quiet.example",
+  );
+  await user.click(screen.getByRole("button", { name: "Join" }));
+  const dialog = await screen.findByRole("main");
+  expect(within(dialog).getByRole("status")).toHaveTextContent(
+    "Finding your community…",
+  );
+  const back = within(dialog).getByRole("button", { name: "Back" });
+  expect(back).toBeEnabled();
+  await user.click(back);
+  expect(lookup?.aborted).toBe(true);
+  expect(screen.getByLabelText("Invite link or community URL")).toHaveValue(
+    "https://quiet.example",
+  );
 });
 
 it("omits invite entry when the access check succeeds and keeps policy links inline", async () => {

@@ -7,6 +7,7 @@ import {
   type RefObject,
 } from "react";
 import { flushSync } from "react-dom";
+import { useMessageDensity } from "../../shared/theme/message-density";
 import {
   behindActiveOverlay,
   observeOverlays,
@@ -103,6 +104,7 @@ export function useFloatingActionBar(
   open: boolean,
 ) {
   const floating = useSyncExternalStore(subscribe, snapshot, () => false);
+  const compact = useMessageDensity() === "compact";
   const [revealed, setRevealed] = useState(false);
   const contentBounds = useRef<{
     content: DOMRect;
@@ -131,7 +133,11 @@ export function useFloatingActionBar(
         target.closest("[data-media-timecode], [data-message-reactions]")
       )
         return false;
-      if (bar.contains(target) || contentAt(target)) return true;
+      if (
+        bar.contains(target) ||
+        (compact ? row.contains(target) : contentAt(target))
+      )
+        return true;
       // Retain only an active hover: content gaps and the tapered route to the
       // toolbar are pass-through geometry, never activation or hit surfaces.
       const bounds = contentBounds.current;
@@ -182,11 +188,10 @@ export function useFloatingActionBar(
       );
       return x >= left && x <= right;
     };
-    // The row includes empty space, bylines and accessories. Only painted
-    // message content and the top-layer toolbar reveal pointer actions.
+    // Compact activates across the row; Default uses painted message content.
     const initialContent = row.querySelector(`:is(${contentSelector}):hover`);
     let hovered =
-      (!!initialContent &&
+      ((compact ? row.matches(":hover") : !!initialContent) &&
         !row.querySelector(
           ":is([data-media-timecode], [data-message-reactions]):hover",
         )) ||
@@ -301,7 +306,7 @@ export function useFloatingActionBar(
       observer.disconnect();
       row.removeAttribute("data-actions-revealed");
     };
-  }, [floating, open, rowRef, barRef]);
+  }, [floating, compact, open, rowRef, barRef]);
 
   useLayoutEffect(() => {
     const row = rowRef?.current;
@@ -309,6 +314,9 @@ export function useFloatingActionBar(
     const slot = slotRef.current;
     if (!floating || !revealed || !row || !bar || !slot) return;
     const scroller = row.closest<HTMLElement>("[data-message-scroller]");
+    const threadRoot =
+      row.parentElement?.matches("[data-thread-rows] > [data-message-id]") ??
+      false;
     const workspaceSelector = "[data-main-workspace], [data-panel-workspace]";
     const workspace = row.closest(workspaceSelector);
     let frame = 0;
@@ -417,6 +425,10 @@ export function useFloatingActionBar(
       const rtl = getComputedStyle(row).direction === "rtl";
       const viewport = scroller?.getBoundingClientRect();
       const rowBounds = row.getBoundingClientRect();
+      if (viewport && (threadRoot ? whole.bottom : whole.top) <= viewport.top) {
+        hide();
+        return;
+      }
       const start =
         Math.max(0, viewport?.left ?? rowBounds.left) + (viewport ? gap : 0);
       const end =
@@ -433,22 +445,35 @@ export function useFloatingActionBar(
       const width = bar.offsetWidth;
       // Layout height: an opening scale transition must not move the bar.
       const height = bar.offsetHeight;
-      // Keep main's single above location while clearing every part of the
-      // message. No attachment-specific placement or pointer anchor is needed.
-      bar.style.transformOrigin = rtl ? "left bottom" : "right bottom";
       // Only a text-first message has bubble padding to overlap.
       const aboveOverlap = first.closest("[data-message-attachments]")
         ? 0
         : overlap;
-      const top = whole.top + aboveOverlap;
-      const paintedTop = top - height;
-      if (
-        viewport &&
-        (whole.top <= viewport.top || paintedTop >= viewport.bottom)
-      ) {
+      const aboveTop = compact
+        ? rowBounds.top + overlap
+        : whole.top + aboveOverlap;
+      const abovePaintedTop = aboveTop - height;
+      // Only the thread root nests below its sticky header. Timeline and reply
+      // toolbars retain their above-message placement and clipping.
+      const nested =
+        threadRoot &&
+        !!viewport &&
+        abovePaintedTop < viewport.top + height + overlap;
+      const paintedTop = nested
+        ? Math.max(rowBounds.top + overlap, viewport.top + overlap)
+        : abovePaintedTop;
+      const top = paintedTop + height;
+      if (viewport && paintedTop >= viewport.bottom) {
         hide();
         return;
       }
+      bar.style.transformOrigin = nested
+        ? rtl
+          ? "left top"
+          : "right top"
+        : rtl
+          ? "left bottom"
+          : "right bottom";
       // The row's siblings observer would reschedule on every row write; an
       // unchanged toggle records no mutation.
       row.toggleAttribute("data-actions-revealed", rowRevealed);
@@ -456,11 +481,18 @@ export function useFloatingActionBar(
       const hidden = viewport ? viewport.top - paintedTop : 0;
       bar.style.clipPath =
         hidden > 0 ? `inset(${hidden}px -100vmax -100vmax)` : "";
-      const left = rtl ? whole.left - overlap : whole.right - width + overlap;
+      const left = compact
+        ? rtl
+          ? start
+          : end - width
+        : rtl
+          ? whole.left - overlap
+          : whole.right - width + overlap;
       // Over a short message the bar would cover the name, so it clears the
       // name on the side with room. A mirrored row keeps its place: its bar
       // already ends at the avatar.
       const cleared =
+        !compact &&
         author?.width &&
         author.bottom > paintedTop &&
         author.top < top &&
@@ -595,7 +627,7 @@ export function useFloatingActionBar(
       // hover update removing it and React committing the hidden bar.
       row.removeAttribute("data-actions-revealed");
     };
-  }, [floating, revealed, rowRef, barRef, slotRef]);
+  }, [floating, compact, revealed, rowRef, barRef, slotRef]);
 
   return floating;
 }

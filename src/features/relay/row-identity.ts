@@ -81,6 +81,7 @@ function sameRow(left: ChannelMessage, right: ChannelMessage) {
     ) &&
     left.threadRootId === right.threadRootId &&
     left.replyParentId === right.replyParentId &&
+    left.mediaTargetUrl === right.mediaTargetUrl &&
     left.sentFromThread?.rootId === right.sentFromThread?.rootId &&
     left.sentFromThread?.excerpt === right.sentFromThread?.excerpt &&
     left.replyCount === right.replyCount &&

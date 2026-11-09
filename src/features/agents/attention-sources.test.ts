@@ -20,7 +20,11 @@ const object = (): AttentionObject & { value: SourceWatch } => ({
   value: source,
   modifiedAt: 1,
 });
-function agent(watch: ReturnType<typeof object>, enabled = true): Agent {
+function agent(
+  watch: ReturnType<typeof object>,
+  enabled = true,
+  paused = false,
+): Agent {
   return {
     key: "a",
     pubkey: "a",
@@ -37,7 +41,7 @@ function agent(watch: ReturnType<typeof object>, enabled = true): Agent {
       [watch.slug]: watch,
       "interest/release": {
         slug: "interest/release",
-        value: { type: "interest", instructions: "Report changes" },
+        value: { type: "interest", instructions: "Report changes", paused },
         modifiedAt: 1,
       },
     },
@@ -118,7 +122,7 @@ it("runs one agent's watch separately in each of its communities", async () => {
   expect(h.inputs[1]?.signal.aborted).toBe(true);
   h.manager.stop();
 });
-it.each(["off", "removed", "edited", "unloaded"])(
+it.each(["off", "removed", "edited", "unloaded", "interest paused"])(
   "cancels on %s and refuses late output",
   async (reason) => {
     const h = harness(),
@@ -132,7 +136,13 @@ it.each(["off", "removed", "edited", "unloaded"])(
         h.provider,
         reason === "removed"
           ? []
-          : [agent(reason === "edited" ? object() : watch, reason !== "off")],
+          : [
+              agent(
+                reason === "edited" ? object() : watch,
+                reason !== "off",
+                reason === "interest paused",
+              ),
+            ],
       );
     expect(h.inputs[0]?.signal.aborted).toBe(true);
     expect(() => h.inputs[0]?.emit("late")).toThrow(/no longer/);

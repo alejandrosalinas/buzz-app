@@ -1,5 +1,6 @@
 // One Settings section policy for the standalone and shell presentations and
 // route classification. Visibility and authorization stay with settingsCards.
+import { isTauri } from "@tauri-apps/api/core";
 import { developerMode } from "../features/developer/mode";
 import {
   BellIcon,
@@ -16,6 +17,7 @@ import {
   UsersIcon,
   WrenchIcon,
   GearIcon,
+  LockIcon,
 } from "../shared/design-system/icons/index";
 import type { SettingsCard } from "../features/settings/service";
 import type { Contribution } from "../plugins/contributions";
@@ -72,6 +74,11 @@ const identity: SettingsSection = {
   label: "Identity",
   icon: ShieldIcon,
 };
+const security: SettingsSection = {
+  id: "security",
+  label: "Security",
+  icon: LockIcon,
+};
 const local: SettingsSection = {
   id: "local-settings",
   label: "Local settings",
@@ -87,6 +94,7 @@ const builtIn = new Set(
   [
     profile,
     identity,
+    security,
     local,
     departure,
     plugins,
@@ -167,6 +175,8 @@ export function settingsSections(
       label: "Buzz",
       sections: [
         identity,
+        // Paired command-line tools exist only in the desktop app.
+        ...(isTauri() ? [security] : []),
         ...app.filter((item) => item.id !== "updates"),
         ...cards
           .filter((card) => card.group === "App")

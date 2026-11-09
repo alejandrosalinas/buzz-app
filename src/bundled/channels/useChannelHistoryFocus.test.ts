@@ -38,6 +38,7 @@ function setup(
     signal: abort.signal,
     position: () => undefined,
     savePosition: vi.fn(),
+    passThrough: vi.fn(),
     complete: vi.fn(),
     resolve: vi.fn(),
     forSession: vi.fn(),

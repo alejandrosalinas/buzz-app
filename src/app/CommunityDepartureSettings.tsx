@@ -181,7 +181,7 @@ export function CommunityDepartureSettings({
                 Cancel
               </Button>
               <Button
-                variant={intent === "leave" ? "destructive" : "primary"}
+                variant={intent === "leave" ? "destructive" : "prominent"}
                 loading={pending}
                 onClick={() => void run()}
               >

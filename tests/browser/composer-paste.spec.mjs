@@ -298,18 +298,18 @@ test("external linked text stays linked in the composer and sent message", async
   });
   await input.click();
   await pasteInto(input, {
-    text: "Read the guide",
-    html: '<p>Read <a href="https://example.com/guide">the guide</a></p>',
+    text: "Read :wave: the guide",
+    html: '<p>Read <img alt=":wave:" src="https://example.com/emoji.png"> <a href="https://example.com/guide">the guide</a></p>',
   });
   await expect(input).toHaveJSProperty(
     "value",
-    "Read [the guide](https://example.com/guide)",
+    "Read :wave: [the guide](https://example.com/guide)",
   );
   await expect(input.locator("[data-link-renderer]")).toHaveText("the guide");
   await input.press("Enter");
   await expect.poll(() => app.report.publications.length).toBe(1);
   expect(app.report.publications[0].event.content).toBe(
-    "Read [the guide](https://example.com/guide)",
+    "Read :wave: [the guide](https://example.com/guide)",
   );
 });
 

@@ -163,9 +163,10 @@
   /* No scrollbar frame extension here, so the end fill omits its 6px. */
   --channel-row-fill-end: var(--space-1);
 }
-/* Shorten every painted row symmetrically while preserving icon, label, trailing
-   control, and scrollbar positions. Wrapped channel rows paint on the wrapper;
-   direct destination and Solo chat rows paint on the navigation item itself. */
+/* Wrapped channel rows paint on the wrapper; direct destination and Solo chat
+   rows paint on the navigation item itself, so shorten them to the fill and
+   measure their padding from that painted edge. As in ChannelSidebarRow, icons
+   start 4px and trailing content ends 6px inside the pill. */
 .channelList [data-variant="row"],
 .sidebarFilter [data-variant="row"] {
   width: calc(
@@ -175,7 +176,7 @@
   );
   margin-inline: var(--channel-row-fill-start) var(--channel-row-fill-end);
   padding-inline: calc(var(--space-2) - var(--channel-row-fill-start))
-    calc(var(--space-1) + var(--space-half) - var(--channel-row-fill-start));
+    calc(var(--space-1) + var(--space-half));
 }
 .channelList [data-variant="row"][data-inset],
 .sidebarFilter [data-variant="row"][data-inset] {
@@ -399,45 +400,8 @@
 body:has([data-create-section-drop][data-drop-target]) .channelDragOverlay {
   visibility: hidden;
 }
-.sectionHeader {
-  position: relative;
-}
-.sectionHeader > :where(details) > summary,
-.sidebarSectionHeading {
-  display: flex;
-  align-items: center;
-  gap: var(--space-1);
-  min-height: var(--size-control-sm);
-  padding: var(--space-half) calc((2 * var(--size-control-sm)) + var(--space-2))
-    var(--space-half) var(--space-2);
-  color: var(--text-metadata);
-  font-size: var(--text-label-sm);
-  line-height: var(--text-label-sm--line-height);
-  letter-spacing: var(--text-label-sm--letter-spacing);
-  font-weight: var(--text-label-sm--font-weight);
-  cursor: pointer;
-  list-style: none;
-  border-radius: var(--radius-control);
-  /* Like NavigationItem, this disclosure is navigation, not document text. */
-  -webkit-user-select: none;
-  user-select: none;
-}
-/* Cap the action reservation before it consumes the label and chevron.
-   In cramped enlarged headers, revealed actions overlay the trailing text. */
-.sectionHeader > :where(details) > summary {
-  padding-inline-end: clamp(
-    var(--space-1),
-    calc(100% - (3 * var(--size-control-sm))),
-    calc((2 * var(--size-control-sm)) + var(--space-2))
-  );
-}
-.channelSection summary::-webkit-details-marker {
-  display: none;
-}
-.channelSection summary:focus-visible {
-  outline: 2px solid var(--border-focus);
-  outline-offset: -2px;
-}
+/* The heading row is the design system's NavigationSectionHeading; this module
+   keeps only the section's own label content and unread emphasis. */
 .sectionLabel {
   display: inline-flex;
   align-items: center;
@@ -452,6 +416,20 @@ body:has([data-create-section-drop][data-drop-target]) .channelDragOverlay {
 .scopeSectionTitle {
   color: var(--text-standard);
 }
+/* Collapsed headings stand in for their hidden rows, using the same unread
+   evidence as the sidebar edge cues. Muted destinations stay quiet. */
+.channelSection:has(
+    > .sectionContent
+      :is([data-channel-unread], [data-channel-activity]):not(
+        [data-channel-muted]
+      )
+  )
+  > :not(.sectionContent)
+  details:not([open])
+  .sectionTitle {
+  color: var(--text-navigation-unread);
+  font-weight: var(--type-weight-semibold);
+}
 .contributionFeedback {
   margin: 0;
   padding: var(--space-1) var(--space-2);
@@ -464,7 +442,6 @@ body:has([data-create-section-drop][data-drop-target]) .channelDragOverlay {
   margin-inline-end: var(--space-1);
 }
 .sectionChevron {
-  opacity: 0;
   display: inline-grid;
   width: var(--space-4);
   height: var(--space-6);
@@ -473,65 +450,10 @@ body:has([data-create-section-drop][data-drop-target]) .channelDragOverlay {
   color: var(--text-subtle);
   transition: transform 160ms ease-out;
 }
-.channelSection[data-persistent-chevron] .sectionChevron {
-  opacity: 1;
-}
-.sectionHeader details:not([open]) .sectionChevron {
+details:not([open]) > summary .sectionChevron {
   transform: rotate(-90deg);
 }
-.sectionActions {
-  position: absolute;
-  z-index: 1;
-  top: var(--space-half);
-  right: 0.25rem;
-  display: flex;
-  align-items: center;
-  color: var(--text-subtle);
-  opacity: 0;
-  pointer-events: auto;
-}
-.sectionHeader > .sectionActions {
-  top: 50%;
-  transform: translateY(-50%);
-}
-.sectionActions [data-icon-variant]:not([data-disabled]) {
-  color: inherit;
-}
-.untitledSection {
-  padding-block-start: var(--space-1);
-}
-.untitledSection .sectionActions {
-  top: 0;
-  opacity: 1;
-  pointer-events: auto;
-}
-.untitledSectionContent {
-  padding-inline-end: calc(var(--space-8) + var(--space-1));
-}
-/* Revealed actions cover trailing text when the reservation is capped. */
-.sectionHeader:has(> details) > .sectionActions {
-  background: var(--surface-panel);
-}
-html[data-keyboard-navigation] .sectionActions:focus-within,
-.sectionHeader:hover :is(.sectionActions, .sectionChevron),
-html[data-keyboard-navigation]
-  .sectionHeader:focus-within
-  :is(.sectionActions, .sectionChevron),
-.channelSection:is(
-    [data-menu-open],
-    :has(> .sectionHeader [aria-expanded="true"][aria-haspopup="menu"])
-  )
-  :is(.sectionActions, .sectionChevron) {
-  opacity: 1;
-  pointer-events: auto;
-}
 @media (hover: none) {
-  .sectionAction,
-  .sectionActions,
-  .sectionChevron {
-    opacity: 1;
-    pointer-events: auto;
-  }
   .channelList {
     scrollbar-color: var(--scrollbar-thumb-quiet) transparent;
   }
@@ -588,15 +510,18 @@ html[data-keyboard-navigation]
   min-height: 0;
   min-width: 0;
 }
+/* Enlarged text in a narrow pane reflows and scrolls here, not past the frame's clip. */
 .connect {
   height: 100%;
   background: var(--surface-panel);
   display: flex;
   align-items: center;
-  justify-content: center;
+  justify-content: safe center;
   flex-direction: column;
   padding: var(--space-section-gap);
   text-align: center;
+  overflow-wrap: anywhere;
+  overflow-y: auto;
 }
 .connectIcon {
   padding: var(--space-5);
@@ -614,8 +539,17 @@ html[data-keyboard-navigation]
   max-width: 34.375rem;
   color: var(--text-subtle);
 }
+/* The pane cannot reflow the action as a whole control, so its label wraps. */
 .connect button {
   margin: var(--space-4) 0;
+  max-inline-size: 100%;
+  white-space: normal;
+}
+/* As in EmptyState, a narrow pane keeps more of each line for whole words. */
+@container (max-width: 16rem) {
+  .connect {
+    padding-inline: var(--space-2);
+  }
 }
 .failed {
   height: 100%;
@@ -1189,4 +1123,18 @@ html[data-keyboard-navigation]
 }
 .sidebar [data-selected] :is(.priorityDot, .threadActivityDot) {
   background: var(--text-row-selected);
+}
+
+/* Feather only message history, with the shared always-on scroll fade; the
+   header and composer stay sharp. */
+.conversation [data-message-scroller] {
+  mask-image: var(--scroll-fade-always);
+}
+
+.conversationBody {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  min-height: 0;
+  min-width: 0;
 }

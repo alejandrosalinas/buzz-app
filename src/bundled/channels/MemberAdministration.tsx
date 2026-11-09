@@ -295,6 +295,7 @@ export function MemberRow({
                     size="sm"
                     shape="row-end"
                     aria-label={`Actions for ${name}`}
+                    data-member={pubkey}
                     icon={<DotsThreeIcon size={18} aria-hidden="true" />}
                   />
                 }

@@ -4,6 +4,7 @@ export default defineConfig({
   testDir: ".",
   testMatch: [
     "viewer.spec.ts",
+    "navigation-card.spec.ts",
     "select.spec.ts",
     "toast.spec.ts",
     "typing-dots.spec.ts",

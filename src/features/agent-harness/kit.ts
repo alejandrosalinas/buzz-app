@@ -223,8 +223,17 @@ export function harnessKit(sources: Sources): HarnessKit {
       const wake = trigger.type !== "mention" ? trigger : undefined;
       if (trigger.type === "mention") {
         // Only the owner or an attested sibling. Unlike the bundled harnesses,
-        // which kept relay workflow mentions for compatibility, no workflow check.
-        if (!(await fromOwner(trigger.event, agent.owner))) return undefined;
+        // which kept relay workflow mentions for compatibility, no workflow
+        // authority is given, so no workflow mention is delegated; the
+        // community still applies the build's workflow restriction.
+        if (
+          !(await fromOwner(trigger.event, agent.owner, {
+            agent: agent.pubkey,
+            authority: undefined,
+            community: sources.relay(agent.key)?.snapshot().origin,
+          }))
+        )
+          return undefined;
         signal.throwIfAborted();
       }
       const event =
@@ -445,7 +454,7 @@ export function harnessKit(sources: Sources): HarnessKit {
         });
         const added = sources.added();
         return respond(client, context, message, added, {
-          instructions: sessionHint(added),
+          instructions: sessionHint(added, !!client.ownerAccess),
         });
       };
     },

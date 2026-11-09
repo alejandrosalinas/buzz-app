@@ -20,7 +20,10 @@ export const uint32 = (value: unknown): value is number =>
 export const record = (value: unknown): value is Record<string, unknown> =>
   value !== null && typeof value === "object" && !Array.isArray(value);
 export const contextId = (value: unknown): value is string =>
-  typeof value === "string" && value.length > 0 && bytes(value) <= 256;
+  typeof value === "string" &&
+  value.length > 0 &&
+  // UTF-8 takes at most 3 bytes per UTF-16 unit: short strings need no encoding.
+  (value.length <= 85 || bytes(value) <= 256);
 export const slotId = (value: unknown): value is string =>
   typeof value === "string" && /^[0-9a-f]{32}$/.test(value);
 

@@ -28,6 +28,7 @@ const SAVED_LIMIT = 200;
 export type SavedSession = Readonly<{
   protection?: string;
   id: string;
+  pending?: true;
   /** created_at of the newest event this session has been shown. */
   seen: number;
   /** Thread-local history in a shared channel session. Older saves have none. */
@@ -36,12 +37,13 @@ export type SavedSession = Readonly<{
 }>;
 export type SessionStore = {
   get(key: string): SavedSession | undefined;
-  set(key: string, session: SavedSession): void;
+  set(key: string, session: SavedSession): void | Promise<void>;
   delete(key: string): void | Promise<void>;
 };
 
 export type SessionsOptions = Readonly<{
   spawn: Spawn;
+  strictResume?: boolean;
   /** Where a new conversation looks for a process already started. */
   spare?: Spare;
   store: SessionStore;
@@ -81,6 +83,7 @@ type Stoppable = Readonly<{ kill(): unknown; exited: Promise<unknown> }>;
 
 type Live = {
   process: ClaudeProcess;
+  submitted?: boolean;
   fingerprint: string;
   used: number;
   timer?: ReturnType<typeof setTimeout>;
@@ -237,7 +240,16 @@ export class AgentSessions {
       if (this.handing.get(key) === pending) this.handing.delete(key);
     };
     const send = () => this.submit(key, text, seen, options, handed);
-    return (prior ? prior.then(send) : send()).finally(handed);
+    const delivered = (prior ? prior.then(send) : send()).finally(handed);
+    return this.options.strictResume
+      ? delivered.catch(
+          (error): Settled => ({
+            ok: false,
+            error: message(error),
+            undelivered: true,
+          }),
+        )
+      : delivered;
   }
 
   private async submit(
@@ -304,7 +316,21 @@ export class AgentSessions {
           !live.process.busy)
       )
         continue;
-      this.touch(key, live, seen, contextRoot);
+      if (this.options.strictResume) live.submitted = true;
+      const savedState = this.touch(key, live, seen, contextRoot);
+      if (this.options.strictResume) {
+        await savedState;
+        if (current && !current()) return { ok: true, undelivered: true };
+        if (this.disposed)
+          return { ok: false, error: "Claude was stopped", undelivered: true };
+        if (
+          this.live.get(key) !== live ||
+          !live.process.running ||
+          (live.fingerprint !== this.options.fingerprint(key) &&
+            !live.process.busy)
+        )
+          continue;
+      }
       const activity = {
         ...pick,
         ...(activityScope ? { activityScope } : {}),
@@ -324,6 +350,15 @@ export class AgentSessions {
       // A saved session that no longer loads starts over rather than failing
       // every message in the conversation, shown the conversation so far.
       if (!delivered.ok && saved && !live.process.started) {
+        if (
+          this.options.strictResume &&
+          !(saved.pending && delivered.error?.includes("No conversation found"))
+        )
+          return {
+            ...delivered,
+            error:
+              "The remote Claude session cannot be restored. Start a new session to continue.",
+          };
         let retry: string;
         try {
           await this.options.store.delete(key);
@@ -368,10 +403,22 @@ export class AgentSessions {
       if (!("process" in opened)) return opened;
       live = opened;
     }
+    if (this.options.strictResume) {
+      live.submitted = true;
+      await this.touch(key, live);
+      if (this.disposed || this.live.get(key) !== live || !live.process.running)
+        return { ok: false, error: "Claude was stopped", undelivered: true };
+    }
     // Claude takes the command in stream-json input as it does in a terminal.
     const settled = await this.answer(key, live, "/compact", {});
     // A saved session that no longer loads is the message's to start over.
     if (!settled.ok && !live.process.started) {
+      if (this.options.strictResume)
+        return {
+          ...settled,
+          error:
+            "The remote Claude session cannot be restored. Start a new session to continue.",
+        };
       await this.options.store.delete(key);
       this.drop(key, live);
       return { ok: true };
@@ -477,13 +524,20 @@ export class AgentSessions {
     contextRoot?: string,
   ): Promise<Live | Settled> {
     const opened = this.start(resume, key).then(
-      (live): Live | Settled => {
-        if (this.opening.get(key) === opened) this.opening.delete(key);
+      async (live): Promise<Live | Settled> => {
         if (this.disposed) {
+          if (this.opening.get(key) === opened) this.opening.delete(key);
           void live.process.kill();
           return { ok: false, error: "Claude was stopped", undelivered: true };
         }
-        this.adopt(key, live, seen, contextRoot);
+        try {
+          await this.adopt(key, live, seen, contextRoot);
+        } catch (error) {
+          this.drop(key, live);
+          if (this.opening.get(key) === opened) this.opening.delete(key);
+          throw error;
+        }
+        if (this.opening.get(key) === opened) this.opening.delete(key);
         return live;
       },
       (error): Settled => {
@@ -546,15 +600,23 @@ export class AgentSessions {
     await process.initialize(launch);
     return process;
   }
-  private adopt(key: string, live: Live, seen: number, contextRoot?: string) {
+  private async adopt(
+    key: string,
+    live: Live,
+    seen: number,
+    contextRoot?: string,
+  ) {
     live.process.conversation = key;
     live.process.onActivity = this.options.onChange;
     // Not a stop: a turn that reports finished work may be about to start.
     live.process.onQuiet = () => {
-      if (this.live.get(key) === live) this.touch(key, live);
+      if (this.live.get(key) === live)
+        void Promise.resolve(this.touch(key, live)).catch((error) =>
+          console.error(`Claude session ${key} was not saved`, error),
+        );
     };
     this.live.set(key, live);
-    this.touch(key, live, seen, contextRoot);
+    await this.touch(key, live, seen, contextRoot);
     this.options.onChange?.();
     void live.process.exited.then(() => {
       if (this.live.get(key) === live) this.drop(key, live);
@@ -571,7 +633,11 @@ export class AgentSessions {
     this.options.onChange?.();
     const settled = await sent;
     if (this.live.get(key) === live) {
-      this.touch(key, live);
+      try {
+        await this.touch(key, live);
+      } catch (error) {
+        return { ok: false, error: message(error) };
+      }
       if (
         live.fingerprint !== this.options.fingerprint(key) &&
         !live.process.busy
@@ -600,8 +666,14 @@ export class AgentSessions {
         }).slice(-SAVED_LIMIT),
       );
     }
-    this.options.store.set(key, {
+    return this.options.store.set(key, {
       id,
+      ...(this.options.strictResume &&
+      !live.submitted &&
+      !live.process.started &&
+      (!prior || prior.pending)
+        ? { pending: true as const }
+        : {}),
       seen: Math.max(seen ?? 0, prior?.seen ?? 0),
       ...(threads ? { threads } : {}),
       at: live.used,
@@ -750,6 +822,7 @@ export function localSessions(
   storage: AgentStore,
   agent: string,
   name = LEGACY_SESSIONS,
+  durable = false,
 ): SessionStore & {
   /** Saved sessions, most recently used first. */
   list(): [string, SavedSession][];
@@ -798,9 +871,11 @@ export function localSessions(
       return saved && typeof saved.id === "string" ? saved : undefined;
     },
     set: (conversation, session) => {
-      void update((sessions) => {
+      const saved = update((sessions) => {
         sessions[conversation] = session;
-      }).catch((error) =>
+      });
+      if (durable) return saved;
+      void saved.catch((error) =>
         console.warn("Claude sessions were not saved", error),
       );
     },

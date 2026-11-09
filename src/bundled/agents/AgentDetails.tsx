@@ -2,6 +2,7 @@ import { AnimatePresence, motion, useReducedMotion } from "motion/react";
 import { Input } from "../../shared/design-system/ui/Input";
 import {
   Fragment,
+  useCallback,
   useEffect,
   useId,
   useLayoutEffect,
@@ -20,7 +21,10 @@ import {
   useAgentSaveState,
 } from "../../features/agents/AgentSaveButton";
 import type { ChannelChoice } from "../../features/agents/attention";
-import type { AgentMemories } from "../../features/agents/MemoryPanel";
+import type {
+  AgentMemories,
+  MemoryLinks,
+} from "../../features/agents/MemoryPanel";
 import type {
   Agent,
   Agents,
@@ -58,6 +62,11 @@ import {
   MenuItem,
 } from "../../shared/design-system/ui/Menu";
 import { PreferenceRow } from "../../shared/design-system/ui/PreferenceRow";
+import {
+  syncText,
+  type SyncLine,
+  type SyncState,
+} from "../../features/agents/team-migration";
 import { SettingsGroup } from "../../shared/design-system/ui/SettingsGroup";
 import { InlineHeader } from "../../shared/design-system/ui/Header";
 import {
@@ -85,6 +94,7 @@ export function AgentDetails({
   types,
   channels,
   memories,
+  memoryLinks,
   onRemoved,
   messageAction,
   conversation,
@@ -92,6 +102,8 @@ export function AgentDetails({
   initialTranscript,
   close,
   openConversation,
+  openLink,
+  canOpenLink,
   communities,
   openSettings,
   historyPresentation,
@@ -103,6 +115,7 @@ export function AgentDetails({
   types: readonly RegisteredAgentType[];
   channels: readonly ChannelChoice[];
   memories: AgentMemories | undefined;
+  memoryLinks?: MemoryLinks | undefined;
   onRemoved(): void;
   messageAction: (variant: "glass" | "subtle") => ReactNode;
   conversation?: AgentConversation | undefined;
@@ -112,6 +125,9 @@ export function AgentDetails({
   close?: () => void;
   /** Opens a turn's conversation from its activity; see AgentViewProps. */
   openConversation?: AgentViewProps["openConversation"];
+  /** Opens a link from a plugin's tab; see AgentAddedTab. */
+  openLink?: ((target: string) => boolean) | undefined;
+  canOpenLink?: ((target: string) => boolean) | undefined;
   communities?: CommunityReader | undefined;
   openSettings?: ((section: string) => void) | undefined;
 }) {
@@ -145,7 +161,7 @@ export function AgentDetails({
   useLayoutEffect(() => {
     const footer = panelFooter;
     const scroll = content.current;
-    if (!type?.PanelFooter || !footer || !scroll) {
+    if (!footer || !scroll) {
       setSignInVisible(false);
       setFooterVisible(false);
       return;
@@ -197,7 +213,7 @@ export function AgentDetails({
       cancelAnimationFrame(frame);
       scroll.style.removeProperty("--agent-footer-height");
     };
-  }, [type?.PanelFooter, panelFooter]);
+  }, [panelFooter]);
   useEffect(() => {
     // Setup or sign-in removes its focused button; continue in the selected tab.
     if (!footerVisible && document.activeElement === document.body)
@@ -209,12 +225,13 @@ export function AgentDetails({
   const [editingIdentity, setEditingIdentity] = useState(false);
   const identityMenu = useRef<HTMLButtonElement>(null);
   const [editingName, setEditingName] = useState(false);
+  const closeIdentityEditors = useCallback(() => {
+    setEditingName(false);
+    setEditingIdentity(false);
+  }, []);
   useLayoutEffect(() => {
-    if (signInVisible) {
-      setEditingName(false);
-      setEditingIdentity(false);
-    }
-  }, [signInVisible]);
+    if (signInVisible) closeIdentityEditors();
+  }, [signInVisible, closeIdentityEditors]);
   const [name, setName] = useState(agent.name);
   const [namePending, setNamePending] = useState(false);
   const [nameError, setNameError] = useState("");
@@ -391,8 +408,12 @@ export function AgentDetails({
               )}
             </motion.div>
             <div className={hero.actions}>
-              <ProfileActions>
-                {!editingName && messageAction(backdrop ? "glass" : "subtle")}
+              {!editingName && messageAction(backdrop ? "glass" : "subtle")}
+              <ProfileActions
+                {...(type?.ProfileActions
+                  ? { onUnavailable: closeIdentityEditors }
+                  : {})}
+              >
                 {editingName ? (
                   <motion.div
                     className={styles.nameActions}
@@ -499,9 +520,12 @@ export function AgentDetails({
               initialTranscript={initialTranscript}
               close={close}
               openConversation={openConversation}
+              openLink={openLink}
+              canOpenLink={canOpenLink}
               settingsHost={settings.settingsHost}
               onDiscard={settings.discard}
               memories={memories}
+              memoryLinks={memoryLinks}
               communities={communities}
               settingsContent={
                 <div>
@@ -535,6 +559,9 @@ export function AgentDetails({
                         />
                       }
                     />
+                    {agent.place === "here" && (
+                      <AgentSyncRow agents={agents} agent={agent} />
+                    )}
                     {agent.place === "here" && (
                       <AgentConfigHistoryRow
                         agents={agents}
@@ -617,13 +644,12 @@ export function AgentDetails({
           </section>
           <div ref={setSaveFooter} className={styles.saveFooter} />
         </div>
-        {type?.PanelFooter && (
-          <div ref={setPanelFooter} className={styles.panelFooter}>
-            <AnimatePresence mode="wait">
-              {panelNotice ?? <type.PanelFooter key="sign-in" />}
-            </AnimatePresence>
-          </div>
-        )}
+        <div ref={setPanelFooter} className={styles.panelFooter}>
+          <AnimatePresence mode="wait">
+            {panelNotice ??
+              (type?.PanelFooter && <type.PanelFooter key="notice" />)}
+          </AnimatePresence>
+        </div>
       </div>
     </AgentSaveFooter>
   );
@@ -703,4 +729,34 @@ function SharedSettingsNotice({
       </PopoverRoot>
     </div>
   );
+}
+
+/** Where the agent's config lives; nothing while that is still settling. */
+function AgentSyncRow({ agents, agent }: { agents: Agents; agent: Agent }) {
+  const line = useSyncLine(
+    agents,
+    () => agents.agentSync(agent.pubkey),
+    "agent",
+  );
+  return line ? (
+    <PreferenceRow title={line.title} subtitle={line.reason} />
+  ) : null;
+}
+
+/** A team or agent's sync status line, the same object while it reads the
+ * same, as a store snapshot must be. */
+export function useSyncLine(
+  agents: Pick<Agents, "subscribe">,
+  read: () => SyncState | undefined,
+  of: "team" | "agent",
+) {
+  const last = useRef<SyncLine | undefined>(undefined);
+  return useSyncExternalStore(agents.subscribe, () => {
+    const next = syncText(read(), of);
+    const prior = last.current;
+    if (prior?.title === next?.title && prior?.reason === next?.reason)
+      return prior;
+    last.current = next;
+    return next;
+  });
 }

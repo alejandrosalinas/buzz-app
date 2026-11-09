@@ -1,5 +1,24 @@
-import { test, expect } from "./source-fixture.mjs";
+import { test, expect } from "./playwright-test.mjs";
+import { previewFixtures } from "./vite-server.mjs";
 import { watchPageErrors } from "./page-errors.mjs";
+
+let fixtures;
+// A dev server serves these fixtures as about 1,600 modules, and a worker's
+// first navigation outlasted the navigation timeout on a busy runner.
+test.beforeAll(async () => {
+  fixtures = await previewFixtures([
+    "tests/fixtures/emoji.html",
+    "tests/fixtures/mentions.html",
+    "tests/fixtures/messages.html",
+    "tests/fixtures/typeahead.html",
+  ]);
+});
+test.afterAll(() => fixtures?.close());
+// Journeys open the pages by path. The bundle's port is known only after
+// beforeAll, which runs before each test's fixtures. Playwright also resolves
+// baseURL for beforeAll itself, before the bundle exists.
+// biome-ignore lint/correctness/noEmptyPattern: Playwright requires a destructured fixture argument.
+test.use({ baseURL: async ({}, use) => use(fixtures?.origin) });
 
 const open = async (page) => {
   await page.goto("/tests/fixtures/mentions.html?test-controls");

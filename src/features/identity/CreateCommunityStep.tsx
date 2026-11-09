@@ -27,7 +27,8 @@ export function CreateCommunityStep({
 }) {
   const address = useCommunityAddress(account.communityAvailable, true);
   const [busy, setBusy] = useState(false);
-  // A refusal belongs to the name it refused, so editing the name clears it.
+  // A refusal belongs to the name it refused, so editing the name clears it;
+  // until then it replaces "available" and Create waits for a new name.
   const [error, setError] = useState<{ name: string; message: string }>();
   const refusal = error?.name === address.name ? error.message : "";
   return (
@@ -35,7 +36,7 @@ export function CreateCommunityStep({
       className="flex flex-1 flex-col gap-6"
       onSubmit={(event) => {
         event.preventDefault();
-        if (!address.ready || busy) return;
+        if (!address.ready || refusal || busy) return;
         const { name } = address;
         setBusy(true);
         setError(undefined);
@@ -61,13 +62,12 @@ export function CreateCommunityStep({
         </p>
       </div>
       <WireframePanel>
-        <CommunityAddressField address={address} busy={busy} />
+        <CommunityAddressField
+          address={address}
+          busy={busy}
+          refusal={refusal}
+        />
       </WireframePanel>
-      {refusal && (
-        <p role="alert" className="text-body text-danger">
-          {refusal}
-        </p>
-      )}
       {/* Footer order: secondary first, primary last. */}
       <div data-onboarding-actions="">
         <OnboardingBack onClick={onBack} disabled={busy} />
@@ -76,7 +76,7 @@ export function CreateCommunityStep({
           size="lg"
           variant="prominent"
           loading={busy}
-          disabled={!address.ready}
+          disabled={!address.ready || Boolean(refusal)}
         >
           Create community
         </Button>

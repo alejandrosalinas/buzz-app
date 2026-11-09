@@ -35,13 +35,16 @@ import {
   type ComposerSession,
 } from "../messages/composer-session";
 import { parseBuzzLink, isBuzzLink } from "../navigation/buzz-links";
+import { safeLinkUrl } from "../relay/message-content";
 import {
   LinkChannelPrivateContext,
   LinkDescriptionContext,
   LinkInteractiveContext,
   LinkLabelContext,
   LinkContentContext,
+  LinkPreviewContext,
   LinkThreadTabContext,
+  type LinkPreview,
 } from "./LinkLabelContext";
 import {
   BuzzLinkPreview,
@@ -87,6 +90,7 @@ export function MessageLink({
   children,
   registry,
   onOpenLink,
+  canOpenLink,
   label,
   directoryLabel,
   session,
@@ -98,6 +102,7 @@ export function MessageLink({
   children?: ReactNode;
   registry: ContributionReader<LinkRenderer> | undefined;
   onOpenLink(url: string): boolean;
+  canOpenLink?: ((url: string) => boolean) | undefined;
   label?: string | undefined;
   /** The receiving community's name for a raw destination. Display only: a raw
    * link copies as its URL. */
@@ -117,11 +122,15 @@ export function MessageLink({
   const [unavailable, setUnavailable] = useState(false);
   const [previewOpen, setPreviewOpen] = useState(false);
   const [description, setDescription] = useState<string>();
+  // A renderer's own hover card, such as an agent card's Add to Buzz.
+  const [offered, setOffered] = useState<LinkPreview>();
+  const offeredAction = useRef<HTMLDivElement>(null);
   if (!active && previewOpen) setPreviewOpen(false);
   const trigger = useRef<HTMLAnchorElement>(null);
   // Entering the card hides the row's actions; keep its lift while it's open.
   const lift = useRef(previewGap);
-  const internal = isBuzzLink(url);
+  const panelTarget = !safeLinkUrl(url) && !isBuzzLink(url) && !!canOpenLink;
+  const internal = isBuzzLink(url) || panelTarget;
   const parsed = internal ? parseBuzzLink(url) : null;
   const destination = parsed?.format === "legacy" ? parsed : undefined;
   const host = fullSession(session);
@@ -225,7 +234,7 @@ export function MessageLink({
   const openInternal = () => {
     if (trigger.current?.isConnected)
       trigger.current.focus({ preventScroll: true });
-    const opened = onOpenLink(url);
+    const opened = (!panelTarget || !!canOpenLink?.(url)) && onOpenLink(url);
     setUnavailable(!opened);
     if (opened) setPreviewOpen(false);
   };
@@ -319,6 +328,7 @@ export function MessageLink({
             : description
         }
         data-link-label={label ?? ""}
+        data-panel-target={panelTarget ? url : undefined}
         data-solo-link={chatChip ? "" : undefined}
         title={
           chatLabel
@@ -384,18 +394,42 @@ export function MessageLink({
                 label: "Channel preview",
                 body: <ChannelLinkPreview channel={named} />,
               }
-            : undefined;
+            : offered
+              ? {
+                  label: offered.label,
+                  body: (
+                    <div ref={offeredAction} tabIndex={-1}>
+                      {offered.render((target) => {
+                        if (!active) return false;
+                        const opened = onOpenLink(target);
+                        setUnavailable(!opened);
+                        if (opened) setPreviewOpen(false);
+                        return opened;
+                      })}
+                    </div>
+                  ),
+                  controls: true,
+                }
+              : undefined;
     // A channel-only link keeps one root while its name resolves, so a link
     // focused during the lookup keeps its focus. Its card opens once found.
+    // A renderer that may offer its own card keeps one root too: wrapping
+    // the link when the card arrives would remount the renderer offering it.
     const root =
       card ??
       (active && interactive && session && referenced
         ? { label: "Channel preview", body: null }
-        : undefined);
+        : active && interactive && host && entry
+          ? { label: "Link preview", body: null }
+          : undefined);
+    // A card with its own controls is not itself the link's destination.
+    const controls = !!card && "controls" in card;
     const linked = root ? (
       <PreviewCard
         trigger={menuTrigger}
-        link={<a href={url} {...navigation} />}
+        {...(controls
+          ? { actionRef: offeredAction }
+          : { link: <a href={url} {...navigation} /> })}
         open={previewOpen && !!card && !menuOpen}
         onOpenChange={(next) => {
           if (next) lift.current = previewGap;
@@ -506,7 +540,11 @@ export function MessageLink({
             <LinkDescriptionContext
               value={interactive ? setDescription : undefined}
             >
-              {result}
+              <LinkPreviewContext
+                value={interactive && host ? setOffered : undefined}
+              >
+                {result}
+              </LinkPreviewContext>
             </LinkDescriptionContext>
           </LinkInteractiveContext>
         </LinkContentContext>

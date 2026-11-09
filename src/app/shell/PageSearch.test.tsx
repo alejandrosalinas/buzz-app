@@ -13,14 +13,18 @@ import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { PageSearch, type SearchServices } from "./PageSearch";
 import type { RegisteredPage } from "../../features/pages/service";
-import {
-  createShortcutBindings,
-  SHORTCUT_BINDINGS_KEY,
-} from "../../features/shortcuts/preferences";
+import { createShortcutBindings } from "../../features/shortcuts/preferences";
 import { ShortcutsService } from "../../features/shortcuts/service";
 import { isApplePlatform } from "../../features/shortcuts/format";
 import { createRelaySession } from "../../features/relay/session";
-import { keypair, scriptedTransport } from "../../features/relay/testing";
+import type { RelaySnapshot } from "../../features/relay/service";
+import {
+  keypair,
+  metadata,
+  roster,
+  scriptedTransport,
+} from "../../features/relay/testing";
+import { SEARCH_DEBOUNCE_MS } from "../../shared/search-debounce";
 
 // jsdom lacks scrollIntoView; the palette reveals its typed-text selection.
 beforeEach(() => {
@@ -290,7 +294,7 @@ it("selects the first typed result and keeps it as results change", async () => 
   expect(select).toHaveBeenCalledExactlyOnceWith("test/second");
 });
 
-it("shows the live search shortcut in the trigger hint and follows a rebind", async () => {
+it("shows the live search shortcut in the trigger and its hint, following a rebind", async () => {
   Object.defineProperty(navigator, "platform", {
     configurable: true,
     value: "MacIntel",
@@ -316,7 +320,9 @@ it("shows the live search shortcut in the trigger hint and follows a rebind", as
     // The title renders as a focus/hover tooltip rather than a native attribute.
     const user = userEvent.setup();
     await user.tab();
-    expect(screen.getByRole("button", { name: "Search Buzz" })).toHaveFocus();
+    const trigger = screen.getByRole("button", { name: "Search Buzz" });
+    expect(trigger).toHaveFocus();
+    expect(within(trigger).getByText("⌘K")).toBeInTheDocument();
     expect(await screen.findByRole("tooltip")).toHaveTextContent(
       "Search Buzz (⌘K)",
     );
@@ -324,6 +330,7 @@ it("shows the live search shortcut in the trigger hint and follows a rebind", as
       bindings.set("global-search", { key: "p", mod: true, shift: true }),
     );
     expect(screen.getByRole("tooltip")).toHaveTextContent("Search Buzz (⇧⌘P)");
+    expect(within(trigger).getByText("⇧⌘P")).toBeInTheDocument();
     act(() => bindings.reset());
     expect(screen.getByRole("tooltip")).toHaveTextContent("Search Buzz (⌘K)");
   } finally {
@@ -608,41 +615,6 @@ it("ranks pages by match when no community is connected", async () => {
   }
 });
 
-it("renders a restored prototype-named search key and remains resettable", async () => {
-  localStorage.setItem(
-    SHORTCUT_BINDINGS_KEY,
-    JSON.stringify({ "global-search": { key: "constructor", mod: true } }),
-  );
-  const root = new Context();
-  root.provide("pluginStatus", {
-    isActive: () => true,
-    subscribe: () => () => {},
-  });
-  const bindings = createShortcutBindings(window);
-  const shortcuts = new ShortcutsService(root, window, bindings);
-  try {
-    render(
-      <PageSearch
-        pages={[]}
-        onSelect={vi.fn()}
-        services={
-          { shortcuts, shortcutBindings: bindings } as unknown as SearchServices
-        }
-      />,
-    );
-    const user = userEvent.setup();
-    await user.tab();
-    expect(screen.getByRole("button", { name: "Search Buzz" })).toHaveFocus();
-    expect(await screen.findByRole("tooltip")).toHaveTextContent("constructor");
-    act(() => bindings.reset());
-    expect(screen.getByRole("tooltip")).toHaveTextContent("Ctrl+K");
-  } finally {
-    bindings.dispose();
-    localStorage.clear();
-    await root.fiber.dispose();
-  }
-});
-
 it.each(["pointer", "keyboard"])(
   "hands %s page selection to main, not its first control",
   async (method) => {
@@ -808,6 +780,243 @@ it("opens a Settings section from overall search, never from a conversation's", 
     });
   } finally {
     cleanup();
+    bindings.dispose();
+    await root.fiber.dispose();
+  }
+});
+
+it("finds and opens saved conversations while the community is unreachable or still connecting", async () => {
+  const root = new Context();
+  root.provide("pluginStatus", {
+    isActive: () => true,
+    subscribe: () => () => {},
+  });
+  const bindings = createShortcutBindings(window);
+  const shortcuts = new ShortcutsService(root, window, bindings);
+  const viewer = keypair(),
+    relay = keypair();
+  // Every relay read fails, as it does for a saved session.
+  const query = vi.fn(async () => {
+    throw new Error("Reconnect to update saved conversations.");
+  });
+  const owner = createRelaySession(
+    {
+      viewer: viewer.pubkey,
+      relayAuthor: relay.pubkey,
+      query,
+      media: () => undefined,
+    },
+    {
+      cachedOnly: true,
+      prepared: true,
+      persistence: {
+        readStartup: async () => ({
+          discovery: {
+            savedAt: Date.now(),
+            relayAuthor: relay.pubkey,
+            events: [
+              roster(relay, "alpha", [viewer.pubkey]),
+              metadata(relay, "alpha", "Alpha", 1_700_000_000),
+              roster(relay, "beta", [viewer.pubkey]),
+              metadata(relay, "beta", "Beta", 1_700_000_100),
+            ],
+          },
+        }),
+        read: async () => [],
+        write: async () => {},
+        remove: async () => {},
+        retain: async () => {},
+        clear: async () => {},
+        close() {},
+      },
+    },
+  );
+  await owner.restore();
+  // The live session that replaces it, whose reads stay pending.
+  const live = createRelaySession(
+    scriptedTransport(viewer.pubkey, relay.pubkey).transport,
+  );
+  let connection: RelaySnapshot = {
+    status: "error",
+    error: "Relay broker session is malformed",
+    cached: true,
+    generation: 1,
+    scope: "s",
+    session: owner.session,
+  };
+  const listeners = new Set<() => void>();
+  // Retrying publishes connecting at once, as the relay service does.
+  const retry = vi.fn(() => {
+    connection = { ...connection, status: "connecting" };
+    for (const listener of listeners) listener();
+  });
+  const open = vi.fn(async () => {});
+  const community = { selected: "wss://relay.example", viewer: viewer.pubkey };
+  const navigation = {
+    entry: { target: { kind: "conversation", channelId: "alpha" } },
+  };
+  const services = {
+    shortcuts,
+    shortcutBindings: bindings,
+    navigation: {
+      subscribe: () => () => {},
+      snapshot: () => navigation,
+      open,
+    },
+    communities: {
+      subscribe: () => () => {},
+      snapshot: () => community,
+      relay: {
+        subscribe: (listener: () => void) => {
+          listeners.add(listener);
+          return () => listeners.delete(listener);
+        },
+        snapshot: () => connection,
+        retry,
+      },
+    },
+  } as unknown as SearchServices;
+  vi.useFakeTimers();
+  try {
+    render(
+      <PageSearch
+        pages={[
+          {
+            key: "buzz.channels/channels",
+            pluginId: "buzz.channels",
+            id: "channels",
+            title: "Channels",
+            revision: "bundled",
+            component: () => null,
+          },
+        ]}
+        onSelect={vi.fn()}
+        services={services}
+      />,
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Search Buzz" }));
+    const dialog = screen.getByRole("dialog", { name: "Search Buzz" });
+    const field = within(dialog).getByRole("combobox", { name: "Search Buzz" });
+    // Recent activity lists the saved conversations.
+    const recent = within(dialog).getByRole("group", {
+      name: "Recent activity",
+    });
+    expect(
+      within(recent)
+        .getAllByRole("option")
+        .map((option) => option.textContent)
+        .sort(),
+    ).toEqual(["AlphaConversation", "BetaConversation"]);
+    // A saved session has no message scope or open-channel view to offer.
+    expect(within(dialog).queryByText(/^Search in Alpha/)).toBeNull();
+    expect(within(dialog).queryByRole("tab", { name: "Channels" })).toBeNull();
+    // The author picker offers only people already known, and says the
+    // people search that needs the relay waits for the connection.
+    for (const text of ["from:al", "in:@al", "in:beta from:al"]) {
+      fireEvent.change(field, { target: { value: text } });
+      await act(async () => vi.advanceTimersByTimeAsync(SEARCH_DEBOUNCE_MS));
+      expect(
+        within(dialog).getByText("Connect to this community to search people."),
+      ).toBeVisible();
+    }
+    expect(query).not.toHaveBeenCalled();
+    fireEvent.change(field, { target: { value: "beta" } });
+    await act(async () => vi.advanceTimersByTimeAsync(SEARCH_DEBOUNCE_MS));
+    expect(within(dialog).getByRole("option", { name: /^Beta/ })).toBeVisible();
+    expect(within(dialog).queryByText("No matching pages.")).toBeNull();
+    const savedNotice = within(dialog).getByText(
+      "Only saved conversations are searched while this community is disconnected.",
+    );
+    expect(savedNotice).toBeVisible();
+    // Lookups that need the relay wait for it, so nothing offers a Retry that
+    // cannot succeed; the connection's own Retry is the way back.
+    expect(query).not.toHaveBeenCalled();
+    expect(
+      within(dialog)
+        .getAllByRole("button", { name: /^Retry/ })
+        .map((button) => button.textContent),
+    ).toEqual(["Retry connection"]);
+    const retryButton = within(dialog).getByRole("button", {
+      name: "Retry connection",
+    });
+    // The notice and its Retry stay below the results, outside their
+    // scrollport, so a long list of rows can't push them out of view.
+    const results = dialog.querySelector(".search-palette-scroll");
+    expect(results).toContainElement(
+      within(dialog).getByRole("option", { name: /^Beta/ }),
+    );
+    expect(results).not.toContainElement(savedNotice);
+    expect(results).not.toContainElement(retryButton);
+    retryButton.focus();
+    fireEvent.click(retryButton);
+    expect(retry).toHaveBeenCalledOnce();
+    // The button goes as the retry starts; focus stays with the field.
+    expect(field).toHaveFocus();
+
+    // While a launch is still connecting, the same results say why.
+    expect(within(dialog).getByRole("option", { name: /^Beta/ })).toBeVisible();
+    const connectingNotice = within(dialog).getByText(
+      "Only saved conversations are searched until this community connects.",
+    );
+    expect(connectingNotice).toBeVisible();
+    expect(results).not.toContainElement(connectingNotice);
+    expect(within(dialog).queryByRole("button", { name: /^Retry/ })).toBeNull();
+
+    fireEvent.click(within(dialog).getByRole("option", { name: /^Beta/ }));
+    expect(open).toHaveBeenCalledWith(
+      expect.objectContaining({ kind: "conversation", channelId: "beta" }),
+    );
+    expect(query).not.toHaveBeenCalled();
+
+    // Search scoped to a conversation is unchanged with a saved copy: it
+    // waits for the connection without the saved or connecting line.
+    const apple = isApplePlatform(navigator.platform);
+    fireEvent.keyDown(window, { key: "f", metaKey: apple, ctrlKey: !apple });
+    const scoped = screen.getByRole("dialog", {
+      name: "Search this conversation",
+    });
+    fireEvent.change(within(scoped).getByRole("combobox"), {
+      target: { value: "beta" },
+    });
+    expect(
+      within(scoped).getByText("Connect to this community to search messages."),
+    ).toBeVisible();
+    expect(within(scoped).queryByText(/^Only saved conversations/)).toBeNull();
+    expect(within(scoped).queryByText(/^Connecting/)).toBeNull();
+
+    // Once the session is live, the author picker waits for the relay rather
+    // than repeating the saved session's answer.
+    fireEvent.click(
+      within(scoped).getByRole("button", {
+        name: "Remove This conversation search scope",
+      }),
+    );
+    fireEvent.change(screen.getByRole("combobox", { name: "Search Buzz" }), {
+      target: { value: "from:al" },
+    });
+    await act(async () => vi.advanceTimersByTimeAsync(SEARCH_DEBOUNCE_MS));
+    expect(
+      screen.getByText("Connect to this community to search people."),
+    ).toBeVisible();
+    connection = {
+      status: "ready",
+      generation: 1,
+      scope: "s",
+      session: live.session,
+    };
+    await act(async () => {
+      for (const listener of listeners) listener();
+    });
+    await act(async () => vi.advanceTimersByTimeAsync(SEARCH_DEBOUNCE_MS));
+    expect(screen.getByText("Searching people…")).toBeVisible();
+    expect(
+      screen.queryByText("Connect to this community to search people."),
+    ).toBeNull();
+  } finally {
+    vi.useRealTimers();
+    cleanup();
+    live.dispose();
+    owner.dispose();
     bindings.dispose();
     await root.fiber.dispose();
   }

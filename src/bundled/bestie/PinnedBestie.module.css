@@ -1,5 +1,6 @@
 /* Bestie is a DM: the shared timeline and composer own their width and insets. */
 .work {
+  height: 100%;
   display: flex;
   flex: 1;
   flex-direction: column;

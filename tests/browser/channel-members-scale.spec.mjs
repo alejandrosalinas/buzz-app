@@ -22,7 +22,7 @@ test("large channel members stays usable while browsing and searching the roster
   await page.locator(`button[data-channel-id="${channelId}"]`).click();
   const trigger = page
     .getByRole("article", { name: "Conversation" })
-    .getByRole("button", { name: "Manage members", exact: true });
+    .getByRole("button", { name: /^Manage members of /, exact: true });
   await trigger.click();
   const dialog = page.getByRole("dialog", {
     name: "Manage members",

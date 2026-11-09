@@ -353,7 +353,7 @@ it("reads rosters scoped to the viewer, then metadata only for unnamed channels"
   await flush();
   const names = next();
   expect(names.filters).toEqual([
-    { kinds: [39000], "#d": ["a", "b"], limit: 500 },
+    { kinds: [39000], authors: [relay.pubkey], "#d": ["a", "b"], limit: 500 },
   ]);
   expect(
     queries.list().channels.map((channel) => channel.metadataPending),
@@ -388,7 +388,7 @@ it("reads rosters scoped to the viewer, then metadata only for unnamed channels"
   const nameRead = pending.at(-1);
   assert.exists(nameRead);
   expect(nameRead.filters).toEqual([
-    { kinds: [39000], "#d": ["a"], limit: 500 },
+    { kinds: [39000], authors: [relay.pubkey], "#d": ["a"], limit: 500 },
   ]);
   next().respond([metadata(relay, "a", "Alpha")]);
   await flush();
@@ -473,6 +473,7 @@ it("hides DM channels behind the NIP-29 hidden tag", async () => {
       joinRole: "member",
       hidden: true,
       members: [viewer.pubkey, alice.pubkey].sort(),
+      owners: [],
       preview: undefined,
     },
   ]);

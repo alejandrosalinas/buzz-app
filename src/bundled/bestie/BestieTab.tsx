@@ -8,9 +8,7 @@ import type {
 import { useRelayConnection } from "../../features/relay/react";
 import type { RelayData } from "../../features/relay/service";
 import type { RelaySession } from "../../features/relay/session";
-import { clearDefaultAgent } from "../../features/solo/default-agent";
 import { BestieIcon } from "../../shared/design-system/icons";
-import { AlertDialog } from "../../shared/design-system/ui/AlertDialog";
 import { Button } from "../../shared/design-system/ui/Button";
 import { InlineHeader } from "../../shared/design-system/ui/Header";
 import {
@@ -188,7 +186,6 @@ function BestieTab({
   );
   // One save at a time: each switch saves from the instructions it shows.
   const [saving, setSaving] = useState(false);
-  const [removing, setRemoving] = useState(false);
   const { shown, hosted } = useHostedInstructions(agents, agent);
   const others = bestie.choices.selectable.filter(
     (choice) => choice.pubkey !== agent.pubkey,
@@ -259,9 +256,7 @@ function BestieTab({
             }
           />
         )}
-        {/* Without an account to save none to, this device would pick
-            another agent at once. */}
-        {!former && session.mainAgent && (
+        {!former && bestie.remove && (
           <PreferenceRow
             title="Remove as Bestie"
             subtitle="Have no Bestie until you make one again."
@@ -269,7 +264,7 @@ function BestieTab({
               <Button
                 variant="outline"
                 aria-describedby={label["aria-labelledby"]}
-                onClick={() => setRemoving(true)}
+                onClick={() => bestie.remove?.(agent.pubkey, name)}
               >
                 Remove
               </Button>
@@ -291,65 +286,7 @@ function BestieTab({
         {...(former && { former: name })}
       />
       {bestie.view}
-      {removing && (
-        <RemoveBestie
-          name={name}
-          remove={() => clearDefaultAgent(session, scope ?? "")}
-          onClose={() => setRemoving(false)}
-        />
-      )}
     </div>
-  );
-}
-
-/** Asks before the agent stops being Bestie, then saves no Bestie. The tab
- * goes with it; the agent then shows Former Bestie while a setting is on. */
-function RemoveBestie({
-  name,
-  remove,
-  onClose,
-}: {
-  name: string;
-  remove(): Promise<void>;
-  onClose(): void;
-}) {
-  const [pending, setPending] = useState(false);
-  const [error, setError] = useState("");
-  const keep = useRef<HTMLButtonElement>(null);
-  return (
-    <AlertDialog
-      title={`Remove ${name} as your Bestie?`}
-      description={`${name} stays in Agents, with your chats in your DMs. Its check-ins stop. Its memory rules and private channels stay; turn them off in its Former Bestie tab.`}
-      initialFocus={keep}
-      pending={pending}
-      onClose={onClose}
-      {...(error && { children: <p role="alert">{error}</p> })}
-      actions={
-        <>
-          <Button ref={keep} disabled={pending} onClick={onClose}>
-            Cancel
-          </Button>
-          <Button
-            variant="prominent"
-            loading={pending}
-            onClick={() => {
-              setPending(true);
-              setError("");
-              remove()
-                .then(onClose)
-                .catch((cause: unknown) =>
-                  setError(
-                    cause instanceof Error ? cause.message : String(cause),
-                  ),
-                )
-                .finally(() => setPending(false));
-            }}
-          >
-            Remove as Bestie
-          </Button>
-        </>
-      }
-    />
   );
 }
 
@@ -478,9 +415,9 @@ function FeatureSwitch({
                 checked && timer?.value.type === "timer" && !timer.value.enabled
                 ? `Paused in Attention. Turn ${feature.title} off and on again to restart it.`
                 : // Attention reads off while no plugin shows it, as when the
-                  // Watching plugin is off, or while the agent's switch is off.
+                  // Watching plugin is off.
                   checked && feature.timer && !agent.attentionEnabled
-                  ? "Paused: watches aren't running on this device. Turn on the Watching plugin and its Run watches switch."
+                  ? "Paused: watches aren't running on this device. Turn on the Attention plugin."
                   : feature.description
         }
         checked={checked}

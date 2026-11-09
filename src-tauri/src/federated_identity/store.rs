@@ -3,6 +3,9 @@ use serde::{Deserialize, Serialize};
 use std::{collections::BTreeMap, fs, path::PathBuf, sync::Mutex};
 use zeroize::{Zeroize, Zeroizing};
 
+/// Not keyed by app identifier: like the human key, every Buzz copy of this
+/// flavour shares each server's session per profile, and Sign out of Buzz
+/// erases them all.
 pub(crate) const SERVICE: &str = if cfg!(debug_assertions) {
     "xyz.block.buzz.desktop.federated-session.debug"
 } else {
@@ -511,7 +514,17 @@ pub(crate) fn remove_all(root: PathBuf) -> Result<(), String> {
     for entry in entries {
         let entry = entry.map_err(|_| "Federated session removal failed")?;
         let path = entry.path();
-        if path.extension().and_then(|value| value.to_str()) != Some("record") {
+        let extension = path.extension().and_then(|value| value.to_str());
+        // Builderlab customers' servers, listed so each launch adds them
+        // (`Customers`): with their sessions and grants gone, so is the list.
+        if extension == Some("customers") {
+            match fs::remove_file(&path) {
+                Ok(()) => continue,
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
+                Err(_) => return Err("Federated session removal failed".into()),
+            }
+        }
+        if extension != Some("record") {
             continue;
         }
         let account = path.file_stem().and_then(|value| value.to_str());
@@ -834,6 +847,23 @@ mod tests {
         let held = elsewhere(&store);
         assert_eq!(store.grant(&keys[0]).err(), Some("storage-busy"));
         drop(held);
+    }
+
+    #[test]
+    fn a_stale_copys_removal_keeps_its_refusal_and_the_newer_session() {
+        let root = tempfile::tempdir().unwrap();
+        // Two Buzz copies on one item: B replaces the session A still holds.
+        let (a, b) = (secure(&root), secure(&root));
+        let (old, newer) = (super::super::tests::record(), super::super::tests::record());
+        a.compare(None, Some(&old.raw)).unwrap();
+        b.compare(Some(&old.raw), Some(&newer.raw)).unwrap();
+        assert_eq!(
+            a.remove(&old.raw, &old.record.revision),
+            Err("session-changed")
+        );
+        assert_eq!(b.read().unwrap().unwrap().as_slice(), &newer.raw[..]);
+        // A's old record stays refused if it is ever put back.
+        assert!(a.refused(&old.record.revision).unwrap().is_some());
     }
 
     #[test]

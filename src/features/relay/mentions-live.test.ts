@@ -406,8 +406,10 @@ it("signed retry re-reads membership rather than reusing the first attempt's pre
   h.session.messages.retry(id);
   await vi.advanceTimersByTimeAsync(0);
   expect(
-    h.query.mock.calls.filter(([filters]) =>
-      filters[0]?.authors?.includes(h.relay.pubkey),
+    h.query.mock.calls.filter(
+      ([filters]) =>
+        filters[0]?.authors?.includes(h.relay.pubkey) &&
+        filters[0]?.kinds?.includes(39002),
     ),
   ).toHaveLength(2);
   expect(h.sign).toHaveBeenCalledTimes(1);

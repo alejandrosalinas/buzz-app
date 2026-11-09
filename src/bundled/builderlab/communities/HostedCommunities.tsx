@@ -61,16 +61,22 @@ type Confirm = {
   title: string;
   description: string;
   action: string;
+  /** Both start on Cancel; permanent also shows the action in red. */
+  caution?: "permanent" | "guarded";
   run(): Promise<void>;
 };
 
 export function HostedCommunities({
   api,
   active,
+  join,
   sharedSignIn = false,
 }: {
   api: Api;
   active(): boolean;
+  /** Opens the app's join dialog on a community this account just created;
+   * false when it cannot, and the address is handed off instead. */
+  join?: ((address: string) => boolean) | undefined;
   /** The surrounding page owns sign-in, sign-out and the account row. */
   sharedSignIn?: boolean;
 }) {
@@ -87,6 +93,8 @@ export function HostedCommunities({
   const [action, setAction] = useState<string | null>(null);
   const [error, setError] = useState("");
   const [confirm, setConfirm] = useState<Confirm | null>(null);
+  const cancel = useRef<HTMLButtonElement>(null);
+  const proceed = useRef<HTMLButtonElement>(null);
   const [transfer, setTransfer] = useState<Community | null>(null);
   const [deleteTarget, setDeleteTarget] = useState<Community | null>(null);
   const [pendingDeletion, setPendingDeletion] =
@@ -589,6 +597,7 @@ export function HostedCommunities({
                       description:
                         "The key your account uses now will be permanently unlinked. It can never be linked to a Builderlab account again. If this device’s key was unlinked before, Builderlab refuses it too, and your account is left with no key.",
                       action: "Switch identity",
+                      caution: "permanent",
                       run: async () => {
                         check(
                           await api.call("unbind"),
@@ -816,6 +825,7 @@ export function HostedCommunities({
                                     description:
                                       "New and existing connections stop and the address stays reserved. Archiving can’t be undone from here without unarchiving, and the community keeps counting toward your quota — it isn’t deleted.",
                                     action: "Archive",
+                                    caution: "guarded",
                                     run: () =>
                                       mutate(
                                         "archive",
@@ -871,14 +881,28 @@ export function HostedCommunities({
             creating={action === "create"}
             onCreate={(name) =>
               run("create", async () => {
+                // `run` has just started this operation's generation.
+                const at = generation.current;
                 const reply = check(
                   await api.call("create", { name }),
                   "Could not create the community.",
                   quotaState?.limit,
                 );
-                // Hand off the address before refreshing, so a failed refresh cannot lose it.
+                // Join or hand off the address before refreshing, so a failed
+                // refresh cannot lose it. The join dialog connects at once, as
+                // first run's Create community does. Like the clipboard, a
+                // retired or replaced card (another account) opens nothing.
                 const url = reply.community && relayUrl(reply.community);
-                if (url) await copy(url);
+                if (
+                  url &&
+                  !(
+                    join &&
+                    activeRef.current() &&
+                    at === generation.current &&
+                    join(url)
+                  )
+                )
+                  await copy(url);
                 await settle();
               })
             }
@@ -949,15 +973,23 @@ export function HostedCommunities({
           title={confirm.title}
           description={confirm.description}
           pending={busy}
+          initialFocus={confirm.caution ? cancel : proceed}
           onClose={() => setConfirm(null)}
           {...(failure ? { children: failure } : {})}
           actions={
             <>
-              <Button disabled={busy} onClick={() => setConfirm(null)}>
+              <Button
+                ref={cancel}
+                disabled={busy}
+                onClick={() => setConfirm(null)}
+              >
                 Cancel
               </Button>
               <Button
-                variant="prominent"
+                ref={proceed}
+                variant={
+                  confirm.caution === "permanent" ? "destructive" : "prominent"
+                }
                 loading={busy}
                 onClick={() =>
                   void run("confirm", confirm.run).then(
@@ -1016,6 +1048,7 @@ function DeleteCommunityDialog({
   close(): void;
   onDelete(): void;
 }) {
+  const hostInput = useRef<HTMLInputElement>(null);
   const [host, setHost] = useState("");
   const [acknowledged, setAcknowledged] = useState(false);
   const expected = community.normalized_host ?? "";
@@ -1026,6 +1059,7 @@ function DeleteCommunityDialog({
       open
       onOpenChange={(open) => !open && close()}
       size="compact"
+      initialFocus={hostInput}
       title={`Permanently delete ${name}?`}
       description="This starts an irreversible deletion."
       preventClose={pending}
@@ -1053,6 +1087,7 @@ function DeleteCommunityDialog({
         </p>
         <Field label="Type the exact host">
           <Input
+            ref={hostInput}
             autoComplete="off"
             spellCheck={false}
             value={host}
@@ -1139,6 +1174,7 @@ function TransferDialog({
   close(): void;
   onTransfer(npub: string): void;
 }) {
+  const recipientInput = useRef<HTMLInputElement>(null);
   const [recipient, setRecipient] = useState("");
   const valid = /^npub1[02-9ac-hj-np-z]{58}$/.test(recipient);
   return (
@@ -1146,6 +1182,7 @@ function TransferDialog({
       open
       onOpenChange={(open) => !open && close()}
       preventClose={busy}
+      initialFocus={recipientInput}
       title="Transfer ownership"
       description={`Transfer ${name} to another person. You become a regular member. The recipient needs a connected Buzz identity first, and this can’t be undone.`}
       actions={
@@ -1174,6 +1211,7 @@ function TransferDialog({
         }
       >
         <Input
+          ref={recipientInput}
           autoComplete="off"
           spellCheck={false}
           placeholder="npub1…"

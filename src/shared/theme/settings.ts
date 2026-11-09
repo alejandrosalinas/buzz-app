@@ -5,6 +5,7 @@ import {
   MIN_FONT_SCALE,
   type Appearance,
   type ColorModePreference,
+  type MessageDensity,
 } from "./service";
 
 /** Appearance as device settings, through the one live `appearance`. */
@@ -50,6 +51,14 @@ export function appearanceSettings(appearance: Appearance): DeviceSetting[] {
       schema: { type: "string", enum: ["low", "high"] },
       read: () => ({ value: now().contrast, unsaved: now().contrastError }),
       write: (value) => appearance.setContrast(value as Contrast),
+      live,
+    },
+    {
+      key: "conversations.message_density",
+      description: "Message density: compact is a flat list of messages.",
+      schema: { type: "string", enum: ["default", "compact"] },
+      read: () => ({ value: now().density, unsaved: now().densityError }),
+      write: (value) => appearance.setDensity(value as MessageDensity),
       live,
     },
   ];

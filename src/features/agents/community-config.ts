@@ -11,6 +11,7 @@ import {
 import {
   type ArtifactType,
   artifactD,
+  artifactOp,
   type artifactTemplate,
   checkedHead,
   readHead,
@@ -120,6 +121,8 @@ export type CommunityConfigInput = Readonly<{
   info(signal: AbortSignal): Promise<unknown>;
   /** Reports each binding change, so starts and the UI re-resolve. */
   changed(): void;
+  /** Reports a history change, which may leave every head as it was. */
+  historyChanged(): void;
 }>;
 
 /** Config sync's view of a relay session. */
@@ -189,6 +192,7 @@ export async function communityConfig(
     community,
     signal,
     changed: input.changed,
+    historyChanged: input.historyChanged,
     dispose: stopReconnected,
   });
   return configs;
@@ -218,6 +222,7 @@ export function agentConfigs(
     community: string;
     signal: AbortSignal;
     changed(): void;
+    historyChanged?(): void;
     dispose?(): void;
   }>,
 ) {
@@ -235,6 +240,8 @@ export function agentConfigs(
   const versions = new Map<string, number>();
   let disposed = false;
   const ops = teamOps({ ...input, signal });
+  /** Each discovered team's History side, by team id. */
+  const teamSides = new Map<string, WriteSide>();
   /** The discovery running, and whether another is due after it. */
   let discovering: Promise<void> | undefined;
   let again = false;
@@ -258,6 +265,24 @@ export function agentConfigs(
         if (found) {
           input.teams.set(owner, community, found);
           input.changed();
+          // Then History's side for each team's selected channel, made again
+          // when it selects another: its `d` is async.
+          const stale = found.filter(
+            (team) =>
+              !team.archived &&
+              !team.unproven &&
+              teamSides.get(team.id)?.expected.channel !== team.channel,
+          );
+          await Promise.all(
+            stale.map(async (team) => {
+              // No title: History only revises, and a revert's template
+              // carries its own; a discovered team has no name here.
+              const side = await ops.side(team.id, team.channel, "");
+              if (!disposed) teamSides.set(team.id, side);
+            }),
+          );
+          if (disposed) return;
+          if (stale.length) input.historyChanged?.();
         }
       } while (again);
     })().finally(() => {
@@ -544,6 +569,7 @@ export function agentConfigs(
       const key = `${channel} ${d}`;
       versions.set(key, (versions.get(key) ?? 0) + 1);
       input.changed();
+      input.historyChanged?.();
     },
     /** Each synced side's artifact, for History. */
     history(pubkey: string) {
@@ -561,6 +587,37 @@ export function agentConfigs(
           },
         ];
       });
+    },
+    /** The team's synced instructions, for History; undefined while it
+     * isn't a listed team here. */
+    teamHistory(id: string) {
+      const team = input.teams
+        .get(owner, community)
+        ?.find((entry) => entry.id === id && !entry.archived);
+      const local = teamSides.get(id);
+      if (!team || team.unproven || local?.expected.channel !== team.channel)
+        return undefined;
+      const { expected, subject } = local;
+      return {
+        side: "instructions" as const,
+        expected,
+        head: store.state(subject).head,
+        version: versions.get(`${expected.channel} ${expected.d}`) ?? 0,
+      };
+    },
+    /** Saves a team History revert, online, then shows what the relay has. */
+    async reviseTeam(
+      id: string,
+      template: ReturnType<typeof artifactTemplate>,
+    ) {
+      const local = teamSides.get(id);
+      const prev = template.tags.find(([name]) => name === "prev")?.[1];
+      if (!local || !prev) throw new Error("This team isn't synced here");
+      try {
+        return await ops.revise(id, local, template, prev);
+      } finally {
+        await refreshTeams();
+      }
     },
     /** Reads history pages from the config channel. */
     read: input.read,
@@ -595,6 +652,33 @@ export function agentConfigs(
         );
       }
       return results;
+    },
+    /** Another device's agent's synced instructions, read without creating
+     * or binding anything; undefined when there are none to read. */
+    async readInstructions(pubkey: string) {
+      const channel = await channels.find(
+        "agent-config",
+        agentSubject(pubkey),
+        signal,
+      );
+      if (!channel || channel.archived) return undefined;
+      const type = "buzz.agent.instructions";
+      const expected = {
+        channel: channel.id,
+        type,
+        d: await artifactD(type, channel.id),
+      } as const;
+      const head = await readHead(input.read, channel.id, expected.d, signal);
+      if (
+        !head ||
+        artifactOp(head) === "delete" ||
+        "problem" in checkedHead(head, expected)
+      )
+        return undefined;
+      return {
+        instructions: (JSON.parse(head.content) as { text: string }).text,
+        revision: head.id,
+      };
     },
     /** Archives the agent's config channel as its Delete's last relay step
      * (NIP-AP "Deleting an agent"). Online only: a failure throws, and the

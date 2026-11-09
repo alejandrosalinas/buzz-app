@@ -12,6 +12,10 @@ import "@fontsource/jetbrains-mono/400.css";
 import { useKeyboardFocusVisibility } from "./shared/design-system/useKeyboardFocusVisibility";
 import { useRejectUnclaimedDrops } from "./features/messages/use-file-drop";
 import { TooltipProvider } from "./shared/design-system/ui/Tooltip";
+import { clearReactDevMeasures } from "./features/developer/react-dev-timing";
+
+// React dev builds otherwise fill the User Timing buffer without limit.
+if (import.meta.env.DEV) clearReactDevMeasures();
 
 const container = document.getElementById("root");
 

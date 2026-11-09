@@ -5,7 +5,6 @@ import { ActivityExpansion } from "./ActivityExpansion";
 import { ActivityGroupPreview } from "./ActivityGroupPreview";
 import {
   activityPresentation,
-  activityDisplayRows,
   useChannelActivitySnapshot,
   useStableRowActivity,
 } from "./activity-presentation";
@@ -94,12 +93,16 @@ export type ThreadPanelProps = {
   autoFocus?: MessageComposerProps["autoFocus"];
   /** Inline Inbox visit retains and reveals its exact selected message. */
   revealSelected?: boolean | undefined;
+  /** Reveal an inline target without taking focus from its host. */
+  revealFocus?: boolean | undefined;
   /** With revealSelected: each new value reveals the selected message again. */
   revealRequest?: number | undefined;
   headerActions?: ReactNode | undefined;
   /** Saved drafts may compose only against a verified matching root. */
   requireReadyRoot?: boolean | undefined;
   onDraftSaved?: (() => void) | undefined;
+  /** The hosting preview may track delivery of this exact outgoing message. */
+  onSend?: ((id: string) => void) | undefined;
   active?: boolean | undefined;
   navigation?: PageNavigation | undefined;
   /** Omit to embed the thread: no header or Escape dismissal; the owner supplies both. */
@@ -420,8 +423,10 @@ function OwnedThreadPanel({
   autoFocus,
   active = true,
   revealSelected,
+  revealFocus,
   requireReadyRoot,
   onDraftSaved,
+  onSend,
 }: ThreadPanelProps) {
   const [view, setView] = useState<ThreadView>();
   const [error, setError] = useState<string>();
@@ -492,8 +497,10 @@ function OwnedThreadPanel({
       autoFocus={autoFocus}
       active={active}
       revealSelected={revealSelected}
+      revealFocus={revealFocus}
       requireReadyRoot={requireReadyRoot}
       onDraftSaved={onDraftSaved}
+      onSend={onSend}
       onOpenLink={onOpenLink}
       onOpenMediaReview={onOpenMediaReview}
       canOpenLink={canOpenLink}
@@ -521,9 +528,11 @@ function ThreadMessages({
   autoFocus,
   active,
   revealSelected,
+  revealFocus,
   revealRequest,
   requireReadyRoot,
   onDraftSaved,
+  onSend,
   selectionFailure,
   onResolvedRoot,
   routePending,
@@ -550,9 +559,12 @@ function ThreadMessages({
   autoFocus?: ThreadPanelProps["autoFocus"];
   active?: boolean | undefined;
   revealSelected?: boolean | undefined;
+  /** Reveal an inline target without taking focus from its host. */
+  revealFocus?: boolean | undefined;
   revealRequest?: number | undefined;
   requireReadyRoot?: boolean | undefined;
   onDraftSaved?: ThreadPanelProps["onDraftSaved"];
+  onSend?: ThreadPanelProps["onSend"];
   navigation?: PageNavigation | undefined;
   onOpenLink(url: string, origin?: MessageLinkOrigin): boolean;
   onOpenMediaReview?: ThreadPanelProps["onOpenMediaReview"];
@@ -645,20 +657,6 @@ function ThreadMessages({
   const [expandedActivity, setExpandedActivity] = useState<ReadonlySet<string>>(
     new Set(),
   );
-  const [pinnedActivity, setPinnedActivity] = useState<
-    ReadonlyMap<string, number>
-  >(() => new Map());
-  const keepActivityMounted = useCallback((id: string) => {
-    setPinnedActivity((ids) => new Map(ids).set(id, (ids.get(id) ?? 0) + 1));
-    return () =>
-      setPinnedActivity((ids) => {
-        const next = new Map(ids);
-        const count = (ids.get(id) ?? 0) - 1;
-        if (count > 0) next.set(id, count);
-        else next.delete(id);
-        return next;
-      });
-  }, []);
   const activityVisit = useRef<unknown[]>([]);
   useLayoutEffect(() => {
     const request = [messageId, navigation?.signal, revealRequest];
@@ -945,7 +943,13 @@ function ThreadMessages({
     inlineReveal ?? (positionedVisit ? undefined : navigation?.signal);
   const revealed = useMessageReveal({
     scroller,
-    focus: !(
+    focus:
+      revealFocus !== false &&
+      !(
+        navigation?.target.kind === "conversation" &&
+        navigation.target.panel === "members"
+      ),
+    mark: !(
       navigation?.target.kind === "conversation" &&
       navigation.target.panel === "members"
     ),
@@ -1465,30 +1469,29 @@ function ThreadMessages({
     : undefined;
   function renderReplies(parent: string | undefined, depth = 0): ReactNode {
     const chronologicalSiblings = tree.children.get(parent) ?? [];
+    // Outcome captions stay within one displayed level, so a collapsed branch
+    // cannot hide the reply that owns a request's outcome.
+    const requestRows = new Map(
+      chronologicalSiblings.map((row) => [row.id, row]),
+    );
+    if (parent === undefined && snapshot.root)
+      requestRows.set(snapshot.root.id, snapshot.root);
     const presentation = activityPresentation(
       chronologicalSiblings,
       activitySnapshot,
       agentPubkeys,
       parent ?? rootId,
-      pinnedActivity,
+      // A failure with replies needs its own visible branch controls.
+      (failure) => !tree.children.get(failure.id)?.length,
     );
     const groups = presentation.groups.filter((group) =>
       group.ids.every((id) => !tree.children.get(id)?.length),
     );
-    const siblings = activityDisplayRows(
-      chronologicalSiblings,
-      groups,
-      messageId,
-    );
-    const activeGroups = groups.filter(
-      (group) => !group.hidden || group.retained,
-    );
-    const groupsByFirst = new Map(
-      activeGroups.map((group) => [group.ids[0], group]),
-    );
-    const groupedIds = new Set(activeGroups.flatMap((group) => group.ids));
+    const siblings = chronologicalSiblings;
+    const groupsByFirst = new Map(groups.map((group) => [group.ids[0], group]));
+    const groupedIds = new Set(groups.flatMap((group) => group.ids));
     const hidden = new Set(
-      activeGroups.flatMap((group) =>
+      groups.flatMap((group) =>
         expandedActivity.has(group.ids[0] ?? "") ? [] : group.ids,
       ),
     );
@@ -1526,18 +1529,18 @@ function ThreadMessages({
         : undefined;
       const renderMessage = (row: ChannelMessage, inside = false) => {
         const recordedActivity = presentation.byRow.get(row.id);
+        const requestId = presentation.replyRequests.get(row.id);
         return (
           <MessageRow
-            keepMounted={keepActivityMounted}
             representedAgents={stableActivity.agents(
               row.id,
               presentation.representedAgents.get(row.id),
             )}
-            stoppedRequest={
-              rootId && rootReplies.replyRequests.get(row.id) === rootId
-                ? snapshot.root
-                : undefined
-            }
+            repliedAgents={stableActivity.agents(
+              `replied:${row.id}`,
+              presentation.repliedAgents.get(row.id),
+            )}
+            stoppedRequest={requestId ? requestRows.get(requestId) : undefined}
             recordedActivity={stableActivity.activity(
               row.id,
               recordedActivity,
@@ -1597,11 +1600,14 @@ function ThreadMessages({
           className={styles.replyItem}
           data-layout={continuation ? "continuation" : "thread"}
         >
-          {!parent && row.replyParentId && row.replyParentId !== rootId && (
-            <p className={styles.threadNote}>
-              Earlier reply unavailable in loaded history.
-            </p>
-          )}
+          {!parent &&
+            row.replyParentId &&
+            row.replyParentId !== rootId &&
+            !requestRows.has(row.replyParentId) && (
+              <p className={styles.threadNote}>
+                Earlier reply unavailable in loaded history.
+              </p>
+            )}
 
           {group && (
             <>
@@ -1755,7 +1761,10 @@ function ThreadMessages({
         channelId={channelId}
         scroller={scroller}
         settled={readingSettled}
-        rootId={snapshot.root?.id}
+        // The thread opened bounds DM reads even before its root resolves. An
+        // exact reply under an unavailable original shows alone, so it, not
+        // its signed root, is the thread: its hidden siblings stay unread.
+        rootId={snapshot.root?.id ?? messageId}
         // A visible exact reply can outlive its unavailable root. Until resolved,
         // observe rows individually; an absent root must not mean channel catch-up.
         latestMessageId={
@@ -2075,6 +2084,7 @@ function ThreadMessages({
           canOpenLink={canOpenLink}
           onDraftSaved={onDraftSaved}
           onSend={(id) => {
+            onSend?.(id);
             targetAnchor.current = undefined;
             positioned.current = true;
             follow.current = !selectedParent;

@@ -105,12 +105,16 @@ function account(responses = {}) {
   };
 }
 async function signIn(h) {
+  const previous = h.opened();
   // Observe rejection before the callback's network round trip; still propagate it to the caller.
   const pending = h.builderlab.login(new AbortController().signal).then(
     (auth) => ({ auth }),
     (error) => ({ error }),
   );
-  while (!h.opened()) await new Promise((resolve) => setTimeout(resolve, 5));
+  await vi.waitFor(() => {
+    expect(h.opened()).toBeDefined();
+    expect(h.opened()).not.toBe(previous);
+  });
   const returnTo = h.opened().searchParams.get("redirect_uri");
   expect(new URL(returnTo).hostname).toBe("127.0.0.1");
   await globalThis.fetch(
@@ -137,7 +141,7 @@ it("completes browser sign-in through a loopback callback without exposing the c
   });
   expect(JSON.stringify(auth)).not.toContain("secret");
   expect(h.opened().pathname).toBe("/api/goose/v1/auth/login");
-  expect(h.opened().searchParams.get("product")).toBe("builderlab");
+  expect(h.opened().searchParams.get("product")).toBe("buzz");
   const exchange = JSON.parse(h.requests[0].init.body);
   expect(exchange.code).toBe("one-time");
   const { createHash } = await import("node:crypto");
@@ -922,5 +926,192 @@ it("redacts the login credential before publishing a shared failure or returning
     expect(JSON.stringify(h.builderlab.snapshot())).not.toContain("secret");
   } finally {
     h.builderlab.signOut();
+  }
+});
+
+it("keeps the broker sign-in and account projection when a capability-only check is refused", async () => {
+  let status = 200;
+  let invalid = false;
+  const h = account({
+    "/v1/auth/me": () =>
+      Response.json(
+        invalid
+          ? []
+          : {
+              subject: "user",
+              email: "a@example.org",
+              expires_at: "2030",
+              capabilities: { can_use_remote_agents: true },
+            },
+        { status },
+      ),
+  });
+  await signIn(h);
+  const previous = h.builderlab.snapshot();
+  status = 401;
+  await expect(h.builderlab.capabilities(previous.revision)).rejects.toThrow(
+    "HTTP 401",
+  );
+  expect(h.builderlab.snapshot()).toEqual({
+    ...previous,
+    capabilitiesCheckedAt: expect.any(Number),
+  });
+  status = 200;
+  invalid = true;
+  await expect(h.builderlab.capabilities(previous.revision)).rejects.toThrow(
+    "invalid capabilities",
+  );
+  expect(h.builderlab.snapshot()).toEqual({
+    ...previous,
+    capabilitiesCheckedAt: expect.any(Number),
+  });
+  invalid = false;
+  await expect(h.builderlab.capabilities(previous.revision)).resolves.toEqual({
+    revision: previous.revision,
+    capabilities: {
+      can_use_remote_agents: true,
+      can_use_builderlab_decisions: false,
+      can_delete_buzz_communities: false,
+    },
+  });
+  expect(h.builderlab.snapshot()).toEqual({
+    ...previous,
+    capabilitiesCheckedAt: expect.any(Number),
+  });
+  h.builderlab.signOut();
+});
+
+it("retains refreshed flags and their age for reloaded pages without changing the sign-in profile", async () => {
+  let now = Date.now();
+  const clock = vi.spyOn(Date, "now").mockImplementation(() => now);
+  let granted = false;
+  const held = Promise.withResolvers();
+  const started = Promise.withResolvers();
+  let pending;
+  let restored;
+  const h = account({
+    "/v1/auth/me": async () => {
+      if (granted) {
+        started.resolve();
+        await held.promise;
+      }
+      return Response.json({
+        subject: granted ? "replacement-profile" : "original",
+        email: granted ? "changed@example.org" : "original@example.org",
+        name: granted ? "Changed" : "Original",
+        expires_at: "2030",
+        capabilities: { can_use_remote_agents: granted },
+      });
+    },
+  });
+  try {
+    await signIn(h);
+    const before = h.builderlab.snapshot();
+    granted = true;
+    now += 60_000;
+    const checkedAt = now;
+    pending = h.builderlab.capabilities(before.revision);
+    await started.promise;
+    // A page restoring mid-read must see an expired cache and join this request.
+    expect(h.builderlab.snapshot()).toEqual(before);
+    restored = h.builderlab.capabilities(before.revision);
+    now += 1_000;
+    held.resolve();
+    await Promise.all([pending, restored]);
+    expect(
+      h.requests.filter((request) => request.path === "/v1/auth/me"),
+    ).toHaveLength(2);
+    expect(h.builderlab.snapshot()).toMatchObject({
+      revision: before.revision,
+      capabilitiesCheckedAt: checkedAt,
+      auth: {
+        subject: "original",
+        email: "original@example.org",
+        name: "Original",
+        expiresAt: "2030",
+        capabilities: { can_use_remote_agents: true },
+      },
+    });
+  } finally {
+    held.resolve();
+    await Promise.allSettled([pending, restored]);
+    h.builderlab.signOut();
+    clock.mockRestore();
+  }
+});
+
+it("rejects a stale page before joining a replacement account's capability read and fences old cleanup", async () => {
+  let now = Date.now();
+  const clock = vi.spyOn(Date, "now").mockImplementation(() => now);
+  let subject = "A";
+  let held;
+  const first = {
+    started: Promise.withResolvers(),
+    reply: Promise.withResolvers(),
+  };
+  const second = {
+    started: Promise.withResolvers(),
+    reply: Promise.withResolvers(),
+  };
+  const h = account({
+    "/v1/auth/me": () => {
+      if (held) {
+        const read = held;
+        held = undefined;
+        read.started.resolve();
+        return read.reply.promise;
+      }
+      return Response.json({ subject, expires_at: "2030" });
+    },
+  });
+  const pending = [];
+  try {
+    await signIn(h);
+    const oldRevision = h.builderlab.snapshot().revision;
+    now += 60_000;
+    held = first;
+    const old = h.builderlab.capabilities(oldRevision);
+    const rejected = expect(old).rejects.toThrow("session changed");
+    pending.push(rejected);
+    await first.started.promise;
+    subject = "B";
+    now += 1_000;
+    await signIn(h);
+    const before = h.builderlab.snapshot();
+    now += 60_000;
+    held = second;
+    const current = h.builderlab.capabilities(before.revision);
+    pending.push(current);
+    await second.started.promise;
+    const stale = h.builderlab.capabilities(oldRevision).then(
+      () => "accepted",
+      (error) => error.message,
+    );
+    pending.push(stale);
+    first.reply.resolve(
+      Response.json({ capabilities: { can_use_remote_agents: false } }),
+    );
+    await rejected;
+    expect(h.builderlab.snapshot()).toEqual(before);
+    const joined = h.builderlab.capabilities(before.revision);
+    pending.push(joined);
+    second.reply.resolve(
+      Response.json({ capabilities: { can_use_remote_agents: true } }),
+    );
+    await Promise.all([current, joined]);
+    await expect(stale).resolves.toBe("Builderlab session changed");
+    expect(
+      h.requests.filter((request) => request.path === "/v1/auth/me"),
+    ).toHaveLength(4);
+    expect(h.builderlab.snapshot()).toMatchObject({
+      revision: before.revision,
+      auth: { subject: "B", capabilities: { can_use_remote_agents: true } },
+    });
+  } finally {
+    first.reply.resolve(Response.json({}));
+    second.reply.resolve(Response.json({}));
+    await Promise.allSettled(pending);
+    h.builderlab.signOut();
+    clock.mockRestore();
   }
 });

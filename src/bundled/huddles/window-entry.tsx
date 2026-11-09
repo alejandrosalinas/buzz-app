@@ -9,6 +9,10 @@ import { Channel, invoke } from "@tauri-apps/api/core";
 import type { HuddleAction, HuddleView } from "../../features/huddle/window";
 import { HuddleWindowView } from "./HuddleWindowView";
 import { useKeyboardFocusVisibility } from "../../shared/design-system/useKeyboardFocusVisibility";
+import { clearReactDevMeasures } from "../../features/developer/react-dev-timing";
+
+// React dev builds otherwise fill the User Timing buffer without limit.
+if (import.meta.env.DEV) clearReactDevMeasures();
 
 function Companion() {
   useKeyboardFocusVisibility();

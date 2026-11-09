@@ -1,6 +1,7 @@
 import type { ReactNode } from "react";
 import { Avatar } from "../../shared/design-system/ui/Avatar";
 import { RobotIcon } from "../../shared/design-system/icons";
+import { useMessageDensity } from "../../shared/theme/message-density";
 import styles from "./Messages.module.css";
 
 /** Incoming message geometry for work that has not published a response yet. */
@@ -11,7 +12,9 @@ export function AgentResponsePreview({
   layout = "timeline",
   children,
   stackPrevious = false,
+  bylineHint,
 }: {
+  bylineHint?: ReactNode;
   stackPrevious?: boolean;
   name: string;
   picture?: string | undefined;
@@ -23,6 +26,10 @@ export function AgentResponsePreview({
   layout?: "timeline" | "thread" | "continuation" | undefined;
   children: ReactNode;
 }) {
+  // A flat list's group avatar is on its first row; a continuation keeps only
+  // the label, which names the row while its byline is omitted.
+  const flat = useMessageDensity() === "compact";
+  const hiddenAvatar = stackPrevious && flat;
   const avatars: typeof participants = participants.length
     ? participants.slice(0, 3)
     : [{ id: "primary", name, picture }];
@@ -36,7 +43,7 @@ export function AgentResponsePreview({
       <span className={styles.messageGutter} />
       <div className={styles.messageBody}>
         <div className={styles.messageContent}>
-          <div className={styles.messageAvatar}>
+          <div className={hiddenAvatar ? "sr-only" : styles.messageAvatar}>
             <span
               className={styles.agentAvatarGroup}
               data-count={Math.max(1, Math.min(participants.length, 3))}
@@ -74,6 +81,7 @@ export function AgentResponsePreview({
                   />
                   {name}
                 </strong>
+                {bylineHint}
               </div>
             </div>
           )}

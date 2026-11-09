@@ -2,6 +2,7 @@ import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import type { ChannelLifecycleCapability } from "../relay/channel-lifecycle";
 import { ChannelLifecycleUnconfirmed } from "../relay/channel-lifecycle";
 import { Button } from "../../shared/design-system/ui/Button";
+import { useToastClearance } from "../../shared/design-system/ui/Toast";
 import styles from "./Messages.module.css";
 
 /** Archived and read-only channels share the public preview's lower notice.
@@ -32,6 +33,8 @@ export function ChannelJoinNotice({
   onHeightChange?(height: number): void;
 }) {
   const notice = useRef<HTMLElement>(null);
+  // Notices float above Join, not over it.
+  useToastClearance(notice);
   const [revealedChannel, setRevealedChannel] = useState<string>();
   const visible = ready || revealedChannel === channelId;
   useEffect(() => {

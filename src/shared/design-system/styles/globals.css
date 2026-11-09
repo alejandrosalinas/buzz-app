@@ -37,7 +37,8 @@
 @layer base {
   /* Pointer focus has a caret or pressed control to make its destination clear.
      Chrome also matches :focus-visible for text fields clicked with a pointer,
-     so the app-root modality fact gates every focus treatment consistently. */
+     so the app-root modality fact gates ordinary keyboard focus treatments.
+     Shared dialog buttons provide their own always-visible focus ring. */
   :focus:not(:focus-visible),
   html:not([data-keyboard-navigation]) :focus-visible {
     outline: none;

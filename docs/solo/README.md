@@ -51,6 +51,11 @@ behavior on the label, so a rename touches copy only.
   account/community-scoped `groups:me` preference record. Messages groups remain
   independent. Records from before the label also list a `channels` placement
   array; it is ignored and dropped on the next workspace write.
+- Deleting a workspace tombstones its `me-section-<sha256(id)>` defaults record,
+  emptied and renamed, best effort after the groups write. If that write fails,
+  the record stays live but unreachable. A delete retried after a groups write
+  that landed unconfirmed finds the workspace gone and still writes the
+  tombstone. Saving another workspace's defaults meanwhile is unaffected.
 - **Label only:** a private channel without `buzz.solo` is an ordinary Team
   channel, whatever its `about` text. No code reads the retired
   `Buzz session (buzz.sessions/v1)` marker, and there is no migration,
@@ -124,8 +129,8 @@ behavior on the label, so a rename touches copy only.
   **Chats** section is not revealed during a drag.
 - **Archive chat** (⌃⌘A on Apple platforms, Ctrl+Shift+E elsewhere; rebindable in
   Settings → Shortcuts) opens the Chat actions Archive confirmation for the open
-  chat, including from the composer, after the menu's fresh permission read; it does
-  nothing where the menu offers no Archive. Success returns to Solo. Archived chats
+  chat, including from the composer, after a fresh permission read; it does
+  nothing where current relay state permits no Archive. Success returns to Solo. Archived chats
   are restored from search and Channel Settings, as before.
 - The owner can add agents from the same **Chat access** search without sending
   a message or starting a run. The chooser uses the same available agents as
@@ -267,6 +272,13 @@ The validated `ttlSeconds` is sent as the third `channelWrites.create` argument;
 there is no create-then-edit. Local settings store name, Canvas and lifetime
 together. Invalid stored durations are visible failures, not implicit Ongoing.
 
+A draft with no saved lifetime follows the default from **Settings → Local
+settings → New Solo chats**, stored on the device for each community and account
+and read again when the chat starts. Choosing a lifetime in **Chat settings**,
+including Ongoing, saves it for that draft; saving with the shown default
+unchanged keeps following the default. A default other than one of the offered
+durations is read as Ongoing, unlike an invalid duration saved on a draft.
+
 The **Chat settings** gear in the header opens the form directly; Solo chat
 row menus offer the same form as **Chat settings**. Both open one
 scrollable dialog, with **Chat name** above Workspace/Canvas
@@ -279,6 +291,13 @@ workspace filing remain unchanged. A no-op closes without writing. If details fa
 after Canvas confirms, the dialog keeps the choices
 and retry skips that confirmed Canvas revision. Partial confirmation is explained
 as an error, not presented as two independent normal save states.
+
+**Cancel** in new and saved **Chat settings** and **Workspace settings** discards
+without asking. Close, Escape and, except in a new chat, backdrop clicks close untouched
+forms at once; changed ones first show **Discard changes?**: **Keep editing** (focused)
+or Escape returns to the intact form, and **Discard changes** closes it. A failed save's
+local draft or a name/lifetime save awaiting **Check save status** closes without
+asking: reopening restores it. A typed, unadded folder path is not part of the draft.
 
 Conflicts require explicit Reload while retaining the selected lifetime; an
 unconfirmed save survives modal remount and relabels the single primary action

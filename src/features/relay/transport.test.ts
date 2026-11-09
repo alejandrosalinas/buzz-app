@@ -450,7 +450,7 @@ it("requests relay thumbnails only for small media", async () => {
   const transport = await connectBrokerTransport();
   const hash = "1".repeat(64);
   const original = `https://relay.test/media/${hash}.png`;
-  const thumbnail = `https://relay.test/media/${hash}.thumb.jpg`;
+  const thumbnail = `https://relay.test/media/${hash}.thumb.webp`;
 
   expect(transport.media(original)).toBe(
     `/api/relay/media?url=${encodeURIComponent(original)}`,
@@ -483,7 +483,7 @@ it("loads the still image of a desktop animated avatar", async () => {
   );
   expect(transport.media(animated, "small")).toBe(
     `/api/relay/media?url=${encodeURIComponent(
-      `https://relay.test/media/${hash}.thumb.jpg`,
+      `https://relay.test/media/${hash}.thumb.webp`,
     )}`,
   );
 });

@@ -12,7 +12,7 @@ import type { HostProcess, HostProcessOptions } from "../host/service";
 /** Launches only a review worker declared by the protecting plugin. It lasts
  * as long as that plugin's protection, which kills what it launched. */
 export type ProtectedSpawn = (
-  options: Omit<HostProcessOptions, "protection">,
+  options: Omit<HostProcessOptions, "protection" | "protectedAgent">,
 ) => Promise<HostProcess>;
 /** Plugin-owned instructions and evidence, separate from runtime credentials. */
 export type ReviewPrompt = Readonly<{

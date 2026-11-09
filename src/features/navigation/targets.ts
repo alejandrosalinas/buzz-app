@@ -17,6 +17,13 @@ export type GitPluginSource = Readonly<{
   path?: string;
   commit?: string;
 }>;
+/** A single plugin artifact over HTTPS, accepted only at `sha256` and as plugin `id`. */
+export type UrlPluginSource = Readonly<{
+  id: string;
+  url: string;
+  sha256: string;
+}>;
+export type PluginLinkSource = GitPluginSource | UrlPluginSource;
 export type OpenTarget =
   | Readonly<{ version: 1; kind: "home" }>
   | Readonly<{
@@ -26,7 +33,7 @@ export type OpenTarget =
       /** Nested provider controls within Agent setup; presentation only. */
       provider?: string;
       scope?: NavigationScope | null;
-      pluginImport?: GitPluginSource;
+      pluginImport?: PluginLinkSource;
       pluginId?: string;
     }>
   | Readonly<{
@@ -57,6 +64,9 @@ export type OpenTarget =
       messageId?: string;
       /** Hint only. Resolve the actual root from verified message evidence. */
       threadRootId?: string;
+      /** With threadRootId: the thread opens beside that root, revealed in the
+       * channel timeline even beyond its newest page, as Open in channel asks. */
+      context?: "channel";
       /** Presentation within this conversation; never mutation or confirmation state. */
       panel?: "members";
       /** Message selected for the forwarding dialog; never submission state. */
@@ -166,6 +176,40 @@ export function parseGitPluginSource(input: unknown): GitPluginSource {
       : {}),
   });
 }
+export function parseUrlPluginSource(input: unknown): UrlPluginSource {
+  const value = record(input);
+  fields(value, ["id", "url", "sha256"]);
+  if (
+    typeof value.url !== "string" ||
+    value.url.length > 2048 ||
+    /[\s\p{Cc}\p{Cf}\P{ASCII}]/u.test(value.url) ||
+    typeof value.sha256 !== "string" ||
+    !hex.test(value.sha256)
+  )
+    throw invalid();
+  const url = new URL(value.url);
+  if (
+    url.protocol !== "https:" ||
+    !url.hostname ||
+    url.hostname.startsWith("-") ||
+    url.username ||
+    url.password ||
+    url.search ||
+    url.hash ||
+    !url.pathname.replaceAll("/", "")
+  )
+    throw invalid();
+  return Object.freeze({
+    id: text(value.id),
+    url: url.href,
+    sha256: value.sha256.toLowerCase(),
+  });
+}
+export function parsePluginLinkSource(input: unknown): PluginLinkSource {
+  return input && typeof input === "object" && "url" in input
+    ? parseUrlPluginSource(input)
+    : parseGitPluginSource(input);
+}
 function boundScope(input: unknown): NavigationScope {
   const value = record(input);
   fields(value, ["viewer", "communityOrigin"]);
@@ -266,7 +310,7 @@ export function parseOpenTarget(input: unknown): OpenTarget {
             ? { scope: value.scope === null ? null : boundScope(value.scope) }
             : {}),
           ...(value.pluginImport !== undefined
-            ? { pluginImport: parseGitPluginSource(value.pluginImport) }
+            ? { pluginImport: parsePluginLinkSource(value.pluginImport) }
             : {}),
           ...(value.pluginId !== undefined
             ? { pluginId: text(value.pluginId) }
@@ -335,11 +379,17 @@ export function parseOpenTarget(input: unknown): OpenTarget {
           "channelId",
           "messageId",
           "threadRootId",
+          "context",
           "panel",
           "forward",
           "detail",
         ]);
         if (value.threadRootId !== undefined && value.messageId === undefined)
+          throw invalid();
+        if (
+          value.context !== undefined &&
+          (value.context !== "channel" || value.threadRootId === undefined)
+        )
           throw invalid();
         if (
           value.panel !== undefined &&
@@ -373,6 +423,7 @@ export function parseOpenTarget(input: unknown): OpenTarget {
           ...(value.threadRootId !== undefined
             ? { threadRootId: text(value.threadRootId, hex).toLowerCase() }
             : {}),
+          ...(value.context === "channel" ? { context: value.context } : {}),
           ...(value.panel === "members" ? { panel: value.panel } : {}),
           ...(value.forward !== undefined
             ? { forward: text(value.forward, hex).toLowerCase() }

@@ -532,7 +532,7 @@ it("asks for fresh Private consent when a pasted View only chat narrows before S
   });
   await waitFor(() =>
     expect(
-      within(renewed).getByRole("button", { name: "Cancel" }),
+      within(renewed).getByRole("button", { name: "Share" }),
     ).toHaveFocus(),
   );
   expect(renewed).toHaveTextContent("from Private to View only");
@@ -560,7 +560,7 @@ it.each(["before confirmation", "during signing"])(
     } else f.changeDetails({ name: "Updated work" });
     await confirm();
     await waitFor(() =>
-      expect(screen.getByRole("button", { name: "Cancel" })).toHaveFocus(),
+      expect(screen.getByRole("button", { name: "Share" })).toHaveFocus(),
     );
     expect(screen.queryByRole("alert")).toBeNull();
     expect(screen.getByRole("button", { name: "Share" })).toBeEnabled();

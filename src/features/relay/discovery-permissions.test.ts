@@ -205,3 +205,25 @@ it("reads a roster once across gets and afresh when it is replaced", () => {
     viewerRole: "admin",
   });
 });
+
+it("lists roster owners from the signed role hints", () => {
+  const owner = keypair(),
+    admin = keypair();
+  const state = new DiscoveryState(viewer.pubkey, relay.pubkey);
+  state.accept(details("member", 10));
+  state.accept(
+    signed(relay, {
+      kind: 39002,
+      content: "",
+      created_at: 10,
+      tags: [
+        ["d", id],
+        ["p", owner.pubkey, "", "owner"],
+        ["p", admin.pubkey, "", "admin"],
+        ["p", "not-a-key", "", "owner"],
+        ["p", viewer.pubkey, "", "owner"],
+      ],
+    }),
+  );
+  expect(state.get(id)?.owners).toEqual([owner.pubkey, viewer.pubkey].sort());
+});

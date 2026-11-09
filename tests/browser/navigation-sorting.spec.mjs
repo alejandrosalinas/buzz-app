@@ -1,5 +1,6 @@
 import { test, expect } from "./fixture.mjs";
 import { open } from "./timeline.mjs";
+import { openPage } from "./navigation.mjs";
 import { openChannelDetails } from "./channel-details.mjs";
 
 test.use({ productionBroker: true, savedSidebar: true, sortingSidebar: true });
@@ -823,7 +824,10 @@ test("section sort applies immediately, rolls back on failure, and persists retr
     localStorage.setItem("buzz-appearance.v1", "dark"),
   );
   await open(page, app);
-  const sidebar = page.getByRole("navigation", { name: "Subscribed channels" });
+  const sidebar = page.getByRole("navigation", {
+    name: "Subscribed channels",
+    includeHidden: true,
+  });
   const channels = sidebar.locator('[data-sidebar-section="channels"]');
   const work = sidebar.locator('[data-sidebar-section="group:work"]');
   const trigger = channels.getByRole("button", {
@@ -908,6 +912,9 @@ test("section sort applies immediately, rolls back on failure, and persists retr
   await page.unroute("**/sidebar-sort");
   // Error ownership is session-scoped, not coupled to the dismissed menu/page.
   await page.getByRole("tab", { name: "Agents", exact: true }).first().click();
+  await expect(sidebar).toBeHidden();
+  await expect(error).toBeHidden();
+  await openPage(page, "Messages");
   await expect(sidebar).toBeVisible();
   await expect(error).toBeVisible();
   async function confirmedSort(action) {

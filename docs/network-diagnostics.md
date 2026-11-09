@@ -1,8 +1,8 @@
 # Reading network diagnostics
 
-Install the optional Network diagnostics desktop plugin from the Block plugin
-marketplace, then enable it in Settings → Manage plugins,
-then open Settings → Buzz → Network diagnostics and select Debug. Reproduce the
+Install a compatible Network diagnostics desktop plugin and enable it in
+Settings → Manage plugins, then open Settings → Buzz → Network diagnostics and
+select Debug. Reproduce the
 problem and export JSON. The selected level stays active until you change it;
 optionally enable **Return to Info automatically** and set **Capture duration
 (minutes)**. Desktop
@@ -47,7 +47,7 @@ are upper histogram bucket bounds, not exact sampled percentiles; values above
 | Active connections | Actual open, authenticated and connecting relay sockets, plus tracked native HTTP requests still in flight. An abandoned native request remains in flight until cancellation or completion acknowledges through IPC. |
 | Handshake latency | Transport construction to open, open to authenticated, and construction to authenticated. Native opening includes its existing discovery/admission/upgrade work. Only attempts begun in this capture produce samples. |
 | Reconnection rate | Failure-driven connect attempts per minute; successful restorations, planned credential renewals and manual retries are separate counters. |
-| Heartbeat timeouts | The existing idle liveness probe's sent, timeout, deferred and cancelled counts. This adds no probes or network traffic. |
+| Heartbeat timeouts | The existing liveness probes' sent, timeout, deferred and cancelled counts, including wake, focus and network checks. This adds no probes or network traffic. |
 | Application RTT | The existing probe REQ to matching EOSE, including relay processing and renderer scheduling. It is not transport Ping/Pong or pure network RTT. A busy connection may have no samples. |
 | Publication acknowledgement | EVENT dispatch to a matching valid OK, whether accepted or refused. Unmatched/malformed receipts, cancellation, timeout and disconnected work add no latency sample. |
 | Native HTTP response | Native IPC dispatch to the complete response delivered to the app, including authorization/signing, relay work, response-body transfer and IPC. Non-2xx responses count; transport failures and responses discarded after cancellation do not. |

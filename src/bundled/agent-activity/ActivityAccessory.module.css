@@ -42,7 +42,7 @@
   display: inline-flex;
   align-items: center;
   gap: var(--space-1);
-  flex-wrap: nowrap;
+  flex-wrap: wrap;
 }
 .failure {
   color: var(--text-danger);
@@ -63,10 +63,4 @@
   align-items: center;
   gap: var(--space-1);
   padding: var(--space-1);
-}
-
-.stopped {
-  display: inline-flex;
-  align-items: center;
-  gap: var(--space-1);
 }

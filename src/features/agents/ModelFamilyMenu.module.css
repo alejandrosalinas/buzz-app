@@ -1,5 +1,5 @@
-/* Reserve the inheritance marker; model and effort names share the remaining
-   space and truncate independently instead of painting over one another. */
+/* Reserve the inheritance marker; the model name and effort level share the
+   remaining space without painting over one another. */
 .value {
   display: flex;
   align-items: center;
@@ -10,11 +10,32 @@
 .model,
 .effort {
   min-width: 0;
-  flex: 1;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+/* The name takes what the short effort level leaves and truncates first. */
+.model {
+  flex: 0 1 auto;
+}
 .effort {
+  flex: none;
   margin-inline-start: var(--space-2);
+}
+/* A name and its Fast bolt read as one unit in rows, labels and triggers. */
+.name {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  min-width: 0;
+}
+.fast {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  margin-inline-start: var(--space-1);
+  color: var(--text-subtle);
+}
+.name > .fast {
+  margin-inline-start: 0;
 }

@@ -33,10 +33,11 @@ import {
 import type { ShortcutBindings } from "../features/shortcuts/preferences";
 import type { ShortcutsService } from "../features/shortcuts/service";
 import {
-  setSendWithModEnterPreference,
+  sendKeyPreference,
   useSendWithModEnterPreference,
 } from "../features/messages/send-key-preference";
 import type { PluginManager } from "../plugins/manager";
+import { editKeyPreference } from "../features/messages/edit-key-preference";
 
 type Row = Readonly<{
   key: string;
@@ -333,10 +334,6 @@ export function ShortcutSettings({
   });
   const [editing, setEditing] = useState<string | null>(null);
   const [notice, setNotice] = useState<Notice | null>(null);
-  const sendWithModEnter = useSendWithModEnterPreference();
-  const [sendKeyError, setSendKeyError] = useState<string | null>(null);
-  const changeSendKey = (enabled: boolean) =>
-    setSendKeyError(setSendWithModEnterPreference(enabled));
   const sendChord = apple ? "⌘ Enter" : "Ctrl+Enter";
   // A chord can become shared after capture (a plugin enabled later, a new
   // default in a release). The dispatcher then picks one silently, so each
@@ -428,30 +425,18 @@ export function ShortcutSettings({
     <section aria-labelledby="shortcut-settings-title">
       <Header id="shortcut-settings-title" title="Shortcuts" />
       <div className="grid gap-5">
-        <section>
-          <InlineHeader title="Sending messages" />
-          <SettingsGroup>
-            <SwitchPreferenceRow
-              label={`Send with ${sendChord}`}
-              description={`Enter adds a new line. ${sendChord} sends your message.`}
-              checked={sendWithModEnter}
-              onCheckedChange={changeSendKey}
-            />
-          </SettingsGroup>
-          {sendKeyError && (
-            <div role="alert" className="grid gap-3 text-body-sm text-standard">
-              <p className="m-0">{sendKeyError}</p>
-              <div>
-                <Button
-                  type="button"
-                  onClick={() => changeSendKey(sendWithModEnter)}
-                >
-                  Retry saving
-                </Button>
-              </div>
-            </div>
-          )}
-        </section>
+        <MessageKeyPreference
+          title="Sending messages"
+          label={`Send with ${sendChord}`}
+          description={`Enter adds a new line. ${sendChord} sends your message.`}
+          preference={sendKeyPreference}
+        />
+        <MessageKeyPreference
+          title="Editing messages"
+          label="Edit last message with Up Arrow"
+          description="When the composer is empty, Up Arrow edits your most recent editable message instead of selecting messages."
+          preference={editKeyPreference}
+        />
         {rows.length ? (
           <div className="grid gap-section-gap">
             {shownGroups.map((group) => (
@@ -513,6 +498,45 @@ export function ShortcutSettings({
           </div>
         )}
       </div>
+    </section>
+  );
+}
+
+function MessageKeyPreference({
+  title,
+  label,
+  description,
+  preference,
+}: {
+  title: string;
+  label: string;
+  description: string;
+  preference: typeof sendKeyPreference;
+}) {
+  const checked = preference.usePreference();
+  const [error, setError] = useState<string | null>(null);
+  const change = (enabled: boolean) => setError(preference.set(enabled));
+  return (
+    <section>
+      <InlineHeader title={title} />
+      <SettingsGroup>
+        <SwitchPreferenceRow
+          label={label}
+          description={description}
+          checked={checked}
+          onCheckedChange={change}
+        />
+      </SettingsGroup>
+      {error && (
+        <div role="alert" className="grid gap-3 text-body-sm text-standard">
+          <p className="m-0">{error}</p>
+          <div>
+            <Button type="button" onClick={() => change(checked)}>
+              Retry saving
+            </Button>
+          </div>
+        </div>
+      )}
     </section>
   );
 }

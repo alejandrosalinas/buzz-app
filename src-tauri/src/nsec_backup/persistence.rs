@@ -196,6 +196,34 @@ pub(super) fn remember_restored(
     slot.write(&record)
 }
 
+/// Whether any account's record on this device confirms a stored backup of
+/// `pubkey` under the build's service and namespace: an upload the service
+/// receipted, or a restore from it. Unreadable records count as no backup.
+pub(super) fn confirmed(root: &Path, config: &Config, pubkey: &str) -> bool {
+    let Ok(entries) = fs::read_dir(root) else {
+        return false;
+    };
+    entries.flatten().any(|entry| {
+        let path = entry.path();
+        // Only regular files: never a link or a pipe that could block the read.
+        entry.file_type().is_ok_and(|kind| kind.is_file())
+            && path
+                .extension()
+                .is_some_and(|extension| extension == "json")
+            && File::open(&path).is_ok_and(|file| {
+                let mut bytes = Vec::new();
+                file.take(LIMIT + 1).read_to_end(&mut bytes).is_ok()
+                    && bytes.len() as u64 <= LIMIT
+                    && serde_json::from_slice::<Record>(&bytes).is_ok_and(|record| {
+                        record.envelope.is_none()
+                            && record
+                                .matches_identity(config, &record.subject, pubkey)
+                                .is_ok()
+                    })
+            })
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -218,5 +246,54 @@ mod tests {
         drop(held);
         assert!(open().is_ok());
         drop(child);
+    }
+
+    #[test]
+    fn only_a_finished_record_for_the_key_confirms_its_backup_under_any_account() {
+        let root = tempfile::tempdir().unwrap();
+        let config = Config {
+            service_url: "https://backup.example".into(),
+            namespace: "buzz-test".into(),
+        };
+        assert!(!confirmed(root.path(), &config, "pubkey"));
+        let backup_id = uuid::Uuid::new_v4().to_string();
+        let record = |subject: &str, envelope: Option<&str>| Record {
+            version: 1,
+            service: config.service_url.clone(),
+            namespace: config.namespace.clone(),
+            subject: subject.into(),
+            owner: String::new(),
+            recipient_id: String::new(),
+            recipient_key: String::new(),
+            pubkey: "pubkey".into(),
+            backup_id: backup_id.clone(),
+            envelope: envelope.map(Into::into),
+        };
+        // An upload still pending is no backup yet.
+        let pending = LockedRecord::open(root.path(), &config, "alex", "pubkey").unwrap();
+        pending.write(&record("alex", Some("{}"))).unwrap();
+        drop(pending);
+        assert!(!confirmed(root.path(), &config, "pubkey"));
+        // Another service's record says nothing about this build's.
+        let elsewhere = Config {
+            service_url: "https://other.example".into(),
+            namespace: config.namespace.clone(),
+        };
+        assert!(!confirmed(root.path(), &elsewhere, "pubkey"));
+        // A finished one confirms it, whichever account saved it.
+        let done = LockedRecord::open(root.path(), &config, "sam", "pubkey").unwrap();
+        done.write(&record("sam", None)).unwrap();
+        drop(done);
+        assert!(confirmed(root.path(), &config, "pubkey"));
+        assert!(!confirmed(root.path(), &config, "another"));
+        // A restore's record confirms it too; unreadable files never do.
+        remember_restored(root.path(), &config, "kim", "restored", &backup_id).unwrap();
+        fs::write(root.path().join("corrupt.json"), b"{").unwrap();
+        fs::write(
+            root.path().join("large.json"),
+            vec![b' '; LIMIT as usize + 1],
+        )
+        .unwrap();
+        assert!(confirmed(root.path(), &config, "restored"));
     }
 }

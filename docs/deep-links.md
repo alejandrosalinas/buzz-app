@@ -15,11 +15,13 @@ its `#buzz=` address form.
 
 ## Accepted links
 
-The OS ingress accepts the Buzz link forms and nothing else:
+The OS ingress accepts the Buzz link forms, plus two OS-only links described
+after this list:
 
 - `buzz://mcp-authorize?version=1&client=<name>&callback=<loopback-url>&state=<state>&scope=<scopes>&code_challenge=<challenge>&code_challenge_method=S256`
 - `buzz://message?channel=<id>&id=<event>[&thread=<root>]`
 - `buzz://plugin-install?repository=<encoded-https-or-ssh-url>[&ref=<encoded-branch-or-tag>][&path=<encoded-folder>][&commit=<40-or-64-hex>]`
+- `buzz://plugin-install?id=<plugin-id>&url=<encoded-https-artifact-url>&sha256=<64-hex>`
 - `buzz://channel/<id>`
 - `buzz://channel/<id>/<event>` (the original desktop message alias)
 - `buzz://repo?owner=<64-hex key>&d=<identifier>[&tab=<section>]`
@@ -29,6 +31,19 @@ The OS ingress accepts the Buzz link forms and nothing else:
 - `buzz://connect?relay=<wss-url>`
 - `buzz://add-community?relay=<wss-url>[&name=<name>]`
 - `buzz://plugin?id=<plugin id>[&page=<page id>][&route.<key>=<value>...]`
+- `buzz://agent/new?card=<id>`
+- `buzz://settings[?section=<section>][&provider=<agent type>]`, such as `buzz://settings?section=agents&provider=buzz.claude-code%2Fclaude-code`, which opens Claude's setup in Agent setup. `provider` needs `section=agents`. Like the Settings target it becomes, it only presents Settings and has no community scope.
+
+Two more links work only at the OS boundary. Neither names a destination, and
+neither is a Buzz link form, so messages and Notes show them as plain text.
+Bare `buzz://` (also `buzz:///`), the Builderlab console's **Open Buzz app**,
+brings Buzz to the front and opens nothing, at cold start too. It shows no
+notice, any query or fragment is ignored, and it never replaces a link still
+waiting to open, whether that link arrived with it or earlier.
+`buzz://sign-in`, the account pages' **Open Buzz**, asks first run to sign in
+again (`identity/sign-in-requests.ts`). Unlike bare `buzz://`, it wins like any
+other latest link: when links arrive together and it is the last, it is the one
+acted on and the others do not open.
 
 External authorization links show owner consent. They never grant access on arrival. The [external app protocol](agents.md#external-app-authorization) defines the callback, S256 exchange, scopes, and expiry. Handshake values stay outside navigation history.
 
@@ -52,6 +67,17 @@ that community to be selected and connected for authentication. See
 Query-based invite, message and plugin links also accept a single `/` before `?`,
 as supplied by Windows URL activation (for example, `buzz://join/?relay=…&code=…`).
 Non-root paths remain unsupported for these forms; channel paths are unchanged.
+
+Agent card links open **Agents** with **Create agent** filled in from a
+published Builderlab agent card, as Buzz mobile does. `card` is 1-64 ASCII
+letters, digits, `_` or `-`. The app reads `<id>/agent.json` from this build's
+avatars CDN (staging for a `https://app.builderlabstaging.xyz` build, production
+otherwise), never from a host the link names: `id` must match, `name` and an
+HTTPS `avatarUrl` are required, and `instructions` is optional. The card's
+`model` is not applied. Instructions are filled in for harnesses that keep
+them. Opening the link creates nothing; Close retires it. A card that can't be
+loaded says why and offers **Try again**. Like the other navigation forms, it
+binds to the selected community and viewer.
 
 Plugin page links open a page contributed by an installed, enabled plugin. `id` and
 `page` use the same 1-128 character lowercase token as plugin and page IDs (letters
@@ -92,8 +118,9 @@ link; HTTPS itself is not registered as an OS handler. `buzz://connect`
 (the relay website's **Open in Buzz**) and `buzz://add-community` (hosted
 community **Open in Buzz**; `name` is ignored) are the same form without a code:
 they open the join dialog with the relay prefilled or, when this device already
-belongs to that community, switch to it. Links that name no destination, such
-as bare `buzz://`, unknown hosts, missing or malformed parameters, malformed join
+belongs to that community, switch to it. Apart from the two OS-only links
+above, links that name no destination, such as unknown hosts, missing or
+malformed parameters, malformed join
 or community links, incomplete entity or plugin links and oversize links, show a "This
 link doesn't work" notice. In a running app the notice shows over the current
 page, and history is unchanged. A link that launches the app, read before the
@@ -112,7 +139,10 @@ frontend expects the canonical lowercase `buzz:` scheme; the native URL parser
 can normalize scheme case before delivery, so uppercase OS input is not
 guaranteed to be rejected.
 
-The latest arriving link wins. Before readiness, one pending intent is retained;
+The latest arriving link wins, a malformed one included. Bare `buzz://` is the
+exception: it names no destination and never replaces another link.
+`buzz://sign-in` wins only among links that arrive with it. Before readiness,
+one pending intent is retained;
 if identity or community is missing, select a community and use **Retry navigation**.
 The first known viewer and community bind the intent: switching either afterward
 cannot reinterpret it. New navigation cancels it. A cold start opens the ordinary
@@ -134,9 +164,10 @@ explicit Git sections report navigation failure, not an empty successful page.
 This deliberately omits the sender's community and identity: recipients must select
 the correct community before opening it. Original mobile Buzz requires a UUID
 channel identifier; named development channels are supported here but do not imply
-mobile compatibility. The app has no link form of its own beyond the Buzz ones:
-unknown `buzz://` hosts are rejected everywhere, staying plain text in message
-content and showing the notice at the OS boundary.
+mobile compatibility. The app has no link form of its own beyond the Buzz ones
+and the two OS-only links, which message content also keeps as plain text. Any
+other unknown `buzz://` host is rejected everywhere, staying plain text in
+message content and showing the notice at the OS boundary.
 
 ## Testing locally
 
@@ -144,7 +175,7 @@ For OS ingress, use a packaged app or debug bundle. Write a link by hand, such a
 `buzz://channel/general` or `buzz://message?channel=general&id=<64-hex event id>`.
 A warm packaged app should come to the front and open the conversation. A cold
 start should launch, show the start page, then open the destination once the
-client is ready. A malformed link such as `buzz://` or
+client is ready. A malformed link such as `buzz://unknown` or
 `buzz://join?relay=example` must show the "This link doesn't work" notice over
 the current page when warm, and open Inbox with it on a cold start. Ordinary `just desktop` keeps in-app Buzz links and
 **Copy link**, but external `buzz://` delivery is not a supported development

@@ -3,7 +3,11 @@
 // Memory is relay-backed for both local and hosted agents. Agents classified
 // as `elsewhere` expose no sections in these views.
 import { useId, useState, type ReactNode } from "react";
-import { MemoryPanel, type AgentMemories } from "./MemoryPanel";
+import {
+  MemoryPanel,
+  type AgentMemories,
+  type MemoryLinks,
+} from "./MemoryPanel";
 import type { CommunityReader } from "../communities/service";
 import type {
   Agent,
@@ -17,6 +21,8 @@ import type {
 import { AgentSaveButton } from "./AgentSaveButton";
 import { AgentConfigHistoryRow } from "./AgentConfigHistoryRow";
 import { SettingsGroup } from "../../shared/design-system/ui/SettingsGroup";
+import { AgentExecutionNote } from "./AgentExecutionNote";
+import { agentExecution } from "./execution-location";
 
 export type AgentSection = Readonly<{
   /** `agent:<type tab id>`, `agent:settings`, `agent:activity`,
@@ -35,8 +41,11 @@ export function agentSections({
   initialTranscript,
   close,
   openConversation,
+  openLink,
+  canOpenLink,
   settingsHost,
   memories,
+  memoryLinks,
   communities,
   settingsSection,
   settingsContent,
@@ -51,11 +60,15 @@ export function agentSections({
   close?: (() => void) | undefined;
   /** Opens a turn's conversation; see AgentViewProps. */
   openConversation?: AgentViewProps["openConversation"];
+  /** Opens a link from a plugin's tab; see AgentAddedTab. */
+  openLink?: ((target: string) => boolean) | undefined;
+  canOpenLink?: ((target: string) => boolean) | undefined;
   settingsHost?: AgentSettingsHost;
   settingsSection?: "identity" | "runtime";
   settingsContent?: ReactNode;
   /** Memory reads through the owner's session; absent while it connects. */
   memories: AgentMemories | undefined;
+  memoryLinks?: MemoryLinks | undefined;
   communities?: CommunityReader | undefined;
 }): readonly AgentSection[] {
   if (agent.place === "elsewhere") return [];
@@ -68,44 +81,72 @@ export function agentSections({
       </SettingsGroup>
     ) : undefined;
   const details = settingsContent ?? historyContent;
+  // Remote harnesses own their availability-dependent execution guidance.
+  const execution = type?.remote ? undefined : agentExecution(agent, type);
   const typeTabs = type?.tabs ?? [];
   const settingsTab = typeTabs.find((tab) => tab.role === "settings");
   const orderedTabs =
     settingsHost && settingsTab
       ? [settingsTab, ...typeTabs.filter((tab) => tab !== settingsTab)]
       : typeTabs;
-  const tabs = orderedTabs.map(({ id, title, role, component: Component }) => ({
-    value: (role ? `agent:${role}` : `agent:type:${id}`) as `agent:${string}`,
-    label: title,
-    render: () => (
-      <EditorBase agents={agents} agent={agent}>
-        {(save) => (
-          <Component
-            agent={agent}
-            {...(role === "settings" && settingsSection
-              ? { settingsSection }
-              : {})}
-            {...(role === "settings" && details
-              ? { settingsContent: details }
-              : {})}
-            {...(conversation && { conversation })}
-            {...(role === "activity" &&
-              conversation &&
-              initialTranscript && { initialTranscript })}
-            {...(role === "activity" && close && { close })}
-            {...(role === "activity" &&
-              openConversation && { openConversation })}
-            save={(config) =>
-              settingsHost?.pendingSave
-                ? settingsHost.pendingSave(config)
-                : save(config)
-            }
-            {...(role === "settings" && settingsHost ? { settingsHost } : {})}
-          />
-        )}
-      </EditorBase>
-    ),
-  }));
+  const tabs = orderedTabs.map(
+    ({ id, title, role, reconcilesConfig, component: Component }) => ({
+      value: (role ? `agent:${role}` : `agent:type:${id}`) as `agent:${string}`,
+      label: title,
+      render: () => (
+        <EditorBase
+          key={
+            reconcilesConfig
+              ? "reconciled"
+              : agent.configProblem
+                ? "unavailable"
+                : "available"
+          }
+          agents={agents}
+          agent={agent}
+        >
+          {(save) => {
+            const content = (
+              <Component
+                agent={agent}
+                {...(role === "settings" && settingsSection
+                  ? { settingsSection }
+                  : {})}
+                {...(role === "settings" && details
+                  ? { settingsContent: details }
+                  : {})}
+                {...(conversation && { conversation })}
+                {...(role === "activity" &&
+                  conversation &&
+                  initialTranscript && { initialTranscript })}
+                {...(role === "activity" && close && { close })}
+                {...(role === "activity" &&
+                  openConversation && { openConversation })}
+                save={(config, options) =>
+                  settingsHost?.pendingSave
+                    ? settingsHost.pendingSave(config)
+                    : save(config, options)
+                }
+                {...(role === "settings" && settingsHost
+                  ? { settingsHost }
+                  : {})}
+              />
+            );
+            return role === "settings" &&
+              settingsSection !== "runtime" &&
+              execution === "remote" ? (
+              <div className="grid gap-4">
+                <AgentExecutionNote runtime={agent.type} />
+                {content}
+              </div>
+            ) : (
+              content
+            );
+          }}
+        </EditorBase>
+      ),
+    }),
+  );
   if (
     !settingsTab &&
     (settingsHost?.typeControl || settingsHost?.pendingSave || historyContent)
@@ -114,10 +155,13 @@ export function agentSections({
       value: "agent:settings",
       label: "Settings",
       render: () => (
-        <>
+        <div className="grid gap-4">
+          {execution === "remote" && (
+            <AgentExecutionNote runtime={agent.type} />
+          )}
           {settingsHost && <HostSettings host={settingsHost} />}
           {historyContent}
-        </>
+        </div>
       ),
     });
   // A tab for local agents only says so in its `when`.
@@ -126,7 +170,9 @@ export function agentSections({
       tabs.push({
         value: `agent:added:${key}`,
         label: title,
-        render: () => <Component agent={agent} />,
+        render: () => (
+          <Component agent={agent} open={openLink} canOpen={canOpenLink} />
+        ),
       });
   return [
     ...tabs,
@@ -138,6 +184,7 @@ export function agentSections({
           agents={agents}
           agent={agent}
           memories={memories}
+          links={memoryLinks}
           communities={communities}
         />
       ),
@@ -205,23 +252,27 @@ function EditorBase({
 }: {
   agents: Pick<Agents, "save" | "snapshot">;
   agent: Agent;
-  children(save: (config: unknown) => Promise<void>): ReactNode;
+  children(save: AgentViewProps["save"]): ReactNode;
 }) {
   const [base, setBase] = useState(agent.configBase);
-  const editor = children(async (config) => {
-    await agents.save(agent.key, { config, ...(base && { base }) });
+  const editor = children(async (config, options) => {
+    const revision = options ? options.base : base;
+    await agents.save(agent.key, {
+      config,
+      ...(revision && { base: revision }),
+    });
     setBase(
       agents.snapshot().agents.find((a) => a.key === agent.key)?.configBase,
     );
   });
-  return agent.configProblem ? (
+  return (
     <>
-      <p role="alert" className="buzz-field-error">
-        {agent.configProblem}
-      </p>
+      {agent.configProblem && (
+        <p role="alert" className="buzz-field-error">
+          {agent.configProblem}
+        </p>
+      )}
       {editor}
     </>
-  ) : (
-    editor
   );
 }

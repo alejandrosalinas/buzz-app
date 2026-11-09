@@ -15,6 +15,7 @@ import { CATCH_UP_KEY, CATCH_UP_PREFIX } from "./catch-up";
 import { INTERRUPTED_PREFIX } from "./interrupted";
 import { PROMPTS_PREFIX } from "./session-prompts";
 import { SYNCED_TEAMS_KEY } from "./team-config";
+import { TEAM_MOVES_KEY } from "./team-migration";
 import {
   localStore,
   type AgentStore,
@@ -48,6 +49,8 @@ export function isAgentKey(key: string) {
     key === CONFIG_STORAGE_KEY ||
     // The synced team rosters that starts use.
     key === SYNCED_TEAMS_KEY ||
+    // Local teams' moves to their community, under way.
+    key === TEAM_MOVES_KEY ||
     // The device-wide defaults that blank agent settings inherit.
     key === "buzz.claude-code.provider-defaults.v1" ||
     key === "buzz.codex.provider-defaults.v1" ||

@@ -18,7 +18,13 @@ export function externalMcpEnabled(community: string | null) {
   }
 }
 
-export type ExternalScope = "read" | "post" | "create";
+/** `agent` is full access as the selected agent. The narrow scopes belong to
+ * older approvals and links: they parse, but grant no tools. */
+export type ExternalScope = "read" | "post" | "create" | "agent";
+export const fullAgentAccess = (scopes: readonly ExternalScope[]) =>
+  scopes.length === 1 && scopes[0] === "agent";
+export const legacyRequest =
+  "This app asks for limited access, which Buzz no longer grants. Update the app, then start setup again.";
 export type ExternalAuthorization = McpAuthorization &
   Readonly<{
     version: 1 | 2;
@@ -78,9 +84,10 @@ export function parseExternalAuthorization(
       value.code_challenge_method !== "S256" ||
       !scope.length ||
       new Set(scope).size !== scope.length ||
-      scope.some(
-        (item) => item !== "read" && item !== "post" && item !== "create",
-      )
+      (value.scope !== "agent" &&
+        scope.some(
+          (item) => item !== "read" && item !== "post" && item !== "create",
+        ))
     )
       return null;
     const resumed = ["pairing_id", "counter", "proof"].some((key) =>
@@ -390,6 +397,12 @@ export function createExternalApps() {
           error:
             "This request has ended. Start setup again in the external app.",
         });
+        return;
+      }
+      // Limited access is no longer granted, and is never widened to full access.
+      if (!fullAgentAccess(pending.request.scope)) {
+        await deny();
+        update({ ...state, error: legacyRequest });
         return;
       }
       clearPending();

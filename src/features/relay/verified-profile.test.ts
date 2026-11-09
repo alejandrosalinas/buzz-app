@@ -16,7 +16,12 @@ const relay = keypair();
 const alice = keypair();
 const bob = keypair();
 const authority = { pubkey: relay.pubkey, multipleIssuers: true };
-function projection(at = 10, subject = alice.pubkey, extra: string[][] = []) {
+function projection(
+  at = 10,
+  subject = alice.pubkey,
+  extra: string[][] = [],
+  name = "Alice",
+) {
   return eventDto(
     signed(relay, {
       kind: 30382,
@@ -26,7 +31,7 @@ function projection(at = 10, subject = alice.pubkey, extra: string[][] = []) {
         ["d", subject],
         ["p", subject],
         ["active", "true"],
-        ["display_name", "Alice"],
+        ["display_name", name],
         ["username", "alice"],
         ["issuer_label", "Example"],
         ["verified_at", String(at)],
@@ -313,7 +318,24 @@ it("does not re-send a batch an outage ended", async () => {
   }
 });
 
-it("overlays verified names, qualifies collisions, preserves kind 0 details, and restores them on retraction", async () => {
+it.each([
+  ["Alice", "Alice"],
+  ["Alice", "Alice "],
+  ["Alice", "\u00a0Alice\u3000"],
+  ["Alice", "Al\u200bice"],
+  ["Alice", "Alice \u200b"],
+  ["Alice", "\u200b Alice"],
+  ["Alice", "Al\u00adice"],
+  ["Alice", "Al\u034fice"],
+  ["Alice", "Alice\u200d"],
+  ["Alice", "Alice\ufe0f"],
+  ["Alice", "Alice\u{e0061}"],
+  ["Alice", "Alice\u3164"],
+  ["Alice\u034f", "Alice"],
+  ["Alice \ufe0f", "Alice"],
+  ["Alice 😀", "Alice 😀\ufe0f"],
+  ["Alice 😀\ufe0f", "Alice 😀"],
+])("qualifies %j against %j", async (verifiedName, claimedName) => {
   const { createProfileDirectory } = await import("./profile-directory");
   let sink: VerifiedProfileSink | undefined;
   const directory = createProfileDirectory(
@@ -345,23 +367,31 @@ it("overlays verified names, qualifies collisions, preserves kind 0 details, and
         signed(bob, {
           kind: 0,
           tags: [],
-          content: JSON.stringify({ name: "Alice" }),
+          content: JSON.stringify({ name: claimedName }),
         }),
       ),
     ]);
     await directory.ensure([alice.pubkey, bob.pubkey]);
     assert(sink);
-    sink.event(projection());
+    sink.event(projection(10, alice.pubkey, [], verifiedName));
     sink.eose();
     await tick(); // Verified changes publish on the next macrotask.
     const profile = directory.queries.snapshot().get(alice.pubkey);
-    expect(profile?.name).toBe("Alice");
+    expect(profile?.name).toBe(verifiedName);
     expect(profile?.about).toBe("About Alice");
     expect(profile?.picture).toBe("https://example.test/alice.png");
     expect(profile?.verified?.status).toBe("checked");
     expect(directory.queries.snapshot().get(bob.pubkey)?.name).toContain(
       bob.pubkey.slice(0, 10),
     );
+    expect(directory.queries.snapshot().get(bob.pubkey)?.name).toBe(
+      `${claimedName.trim()} (${bob.pubkey.slice(0, 10)})`,
+    );
+    expect(
+      JSON.parse(directory.queries.event?.(bob.pubkey)?.content ?? "{}"),
+    ).toEqual({
+      name: claimedName,
+    });
     sink.event(retract(20));
     await tick(); // Verified changes publish on the next macrotask.
     expect(directory.queries.snapshot().get(alice.pubkey)?.name).toBe(
@@ -370,6 +400,9 @@ it("overlays verified names, qualifies collisions, preserves kind 0 details, and
     expect(
       directory.queries.snapshot().get(alice.pubkey)?.verified,
     ).toBeUndefined();
+    expect(directory.queries.snapshot().get(bob.pubkey)?.name).toBe(
+      claimedName.trim(),
+    );
   } finally {
     directory.dispose();
   }

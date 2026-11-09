@@ -1,6 +1,7 @@
 // Ported from Buzz desktop desktop/src/shared/lib/datetime.test.mjs.
 import { expect, it as test, vi } from "vitest";
 import {
+  calendarDay,
   formatDayGroupLabel,
   formatItemTimestamp,
   formatFullTimestamp,
@@ -222,5 +223,31 @@ test("compact labels stay short enough for a narrow list row", () => {
   ]) {
     const label = formatItemTimestamp(probe, { nowSeconds: NOW });
     assert.ok(label.length <= 12, `"${label}" is ${label.length} chars`);
+  }
+});
+
+test("memoizes the local calendar day without changing midnight semantics", () => {
+  const late = new Date(2026, 8, 28, 23, 59, 59);
+  const early = new Date(2026, 8, 29, 0, 0, 0);
+  for (const date of [late, early, late]) {
+    expect(calendarDay(date.getTime() / 1000)).toBe(date.toDateString());
+  }
+  expect(calendarDay(late.getTime() / 1000)).not.toBe(
+    calendarDay(early.getTime() / 1000),
+  );
+});
+test("drops memoized calendar days when the time zone changes", async () => {
+  const zone = process.env.TZ;
+  const createdAt = Date.UTC(2026, 10, 4, 3) / 1000;
+  try {
+    process.env.TZ = "America/Los_Angeles";
+    expect(calendarDay(createdAt)).toBe("Tue Nov 03 2026");
+    // The defaults are checked again after a microtask checkpoint.
+    await Promise.resolve();
+    process.env.TZ = "Asia/Tokyo";
+    expect(calendarDay(createdAt)).toBe("Wed Nov 04 2026");
+  } finally {
+    if (zone === undefined) delete process.env.TZ;
+    else process.env.TZ = zone;
   }
 });

@@ -54,7 +54,10 @@ async function frame() {
 async function idle() {
   for (let i = 0; frames.size && i < 20; i++) await frame();
 }
-function mount(hold?: () => boolean, { focus }: { focus?: boolean } = {}) {
+function mount(
+  hold?: () => boolean,
+  { focus, mark }: { focus?: boolean; mark?: boolean } = {},
+) {
   const request = new AbortController();
   const complete = vi.fn();
   function Surface({
@@ -78,6 +81,7 @@ function mount(hold?: () => boolean, { focus }: { focus?: boolean } = {}) {
       ready: true,
       complete,
       ...(focus === undefined ? {} : { focus }),
+      ...(mark === undefined ? {} : { mark }),
       ...(prepare ? { prepare } : {}),
       ...(hold ? { hold } : {}),
     });
@@ -186,6 +190,38 @@ it("does not mark a reveal behind a covering panel", async () => {
   await frame();
   expect(complete).toHaveBeenCalledOnce();
   expect(highlighted(row)).toBe(false);
+});
+
+it("marks a reveal beside the reader that owns focus, without taking it", async () => {
+  const { row, outside, complete } = mount(undefined, {
+    focus: false,
+    mark: true,
+  });
+  outside.focus();
+  await idle();
+  expect(complete).toHaveBeenCalledOnce();
+  expect(highlighted(row)).toBe(true);
+  expect(document.activeElement).toBe(outside);
+});
+
+it("marks a reveal beside the reader only once its row is uncovered", async () => {
+  const { row, outside, complete } = mount(undefined, {
+    focus: false,
+    mark: true,
+  });
+  outside.focus();
+  await frame(); // Attach observers.
+  await frame(); // Reveal, but do not verify yet.
+  row.setAttribute("inert", "");
+  await idle();
+  expect(complete).not.toHaveBeenCalled();
+  expect(highlighted(row)).toBe(false);
+  row.removeAttribute("inert");
+  await mutate(row);
+  await idle();
+  expect(complete).toHaveBeenCalledOnce();
+  expect(highlighted(row)).toBe(true);
+  expect(document.activeElement).toBe(outside);
 });
 
 it.each([false, true])(

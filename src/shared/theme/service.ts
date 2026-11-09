@@ -13,6 +13,10 @@ import {
 export type ColorMode = "light" | "dark";
 export type ColorModePreference = ColorMode | "system";
 export const APPEARANCE_KEY = "buzz-appearance.v1";
+export type MessageWidth = "narrow" | "wide";
+export const MESSAGE_WIDTH_KEY = "buzz-message-width.v1";
+export const parseMessageWidth = (value: unknown): MessageWidth =>
+  value === "wide" ? "wide" : "narrow";
 export const FONT_SCALE_KEY = "buzz-font-scale.v1";
 export const MIN_FONT_SCALE = 0.8;
 export const MAX_FONT_SCALE = 2;
@@ -32,16 +36,25 @@ export const parseColorModePreference = (
   value: unknown,
 ): ColorModePreference =>
   value === "light" || value === "dark" ? value : "system";
+/** Vertical rhythm of conversation rows; text size stays with the font scale. */
+export type MessageDensity = "default" | "compact";
+export const DENSITY_KEY = "buzz-message-density.v1";
+export const parseMessageDensity = (value: unknown): MessageDensity =>
+  value === "compact" ? "compact" : "default";
 
 export interface AppearanceSnapshot {
   readonly preference: ColorModePreference;
   readonly mode: ColorMode;
+  readonly messageWidth: MessageWidth;
+  readonly messageWidthError: string | null;
   readonly fontScale: number;
   readonly fontError: string | null;
   readonly accent: Accent;
   readonly accentError: string | null;
   readonly contrast: Contrast;
   readonly contrastError: string | null;
+  readonly density: MessageDensity;
+  readonly densityError: string | null;
   readonly error: string | null;
 }
 
@@ -59,12 +72,16 @@ export function createAppearance(
     preference: "system",
     mode: "light",
     error: null,
+    messageWidth: "narrow",
+    messageWidthError: null,
     fontScale: 1,
     fontError: null,
     accent: DEFAULT_ACCENT,
     accentError: null,
     contrast: "low",
     contrastError: null,
+    density: "default",
+    densityError: null,
   };
   let disposed = false;
   let paletteGuard = 0;
@@ -95,6 +112,11 @@ export function createAppearance(
         }),
       );
     }
+    root.style.setProperty(
+      "--buzz-message-width",
+      state.messageWidth === "wide" ? "78rem" : "52rem",
+    );
+    root.dataset.messageDensity = state.density;
     root.style.setProperty("--buzz-text-scale", String(state.fontScale));
     // CSS owns the palette; browser chrome derives from the same canvas token.
     host.document
@@ -151,6 +173,24 @@ export function createAppearance(
     }
     notify();
   };
+  const restoreMessageWidth = () => {
+    try {
+      state = {
+        ...state,
+        messageWidth: parseMessageWidth(
+          host?.localStorage.getItem(MESSAGE_WIDTH_KEY),
+        ),
+        messageWidthError: null,
+      };
+    } catch {
+      state = {
+        ...state,
+        messageWidthError:
+          "Message width could not be restored. Choose a width to try saving it again.",
+      };
+    }
+    notify();
+  };
   const restoreAccent = () => {
     try {
       const saved = host?.localStorage.getItem(ACCENT_KEY);
@@ -189,12 +229,30 @@ export function createAppearance(
     }
     notify();
   };
+  const restoreDensity = () => {
+    try {
+      state = {
+        ...state,
+        density: parseMessageDensity(host?.localStorage.getItem(DENSITY_KEY)),
+        densityError: null,
+      };
+    } catch {
+      state = {
+        ...state,
+        densityError:
+          "Message density could not be restored. Choose a density to try saving it again.",
+      };
+    }
+    notify();
+  };
   const onStorage = (event: StorageEvent) => {
     if (
       event.key !== APPEARANCE_KEY &&
       event.key !== FONT_SCALE_KEY &&
+      event.key !== MESSAGE_WIDTH_KEY &&
       event.key !== ACCENT_KEY &&
       event.key !== CONTRAST_KEY &&
+      event.key !== DENSITY_KEY &&
       event.key !== LEGACY_BUBBLE_KEY &&
       event.key !== null
     )
@@ -204,7 +262,10 @@ export function createAppearance(
       if (event.storageArea !== host?.localStorage) return;
       if (event.key === null || event.key === APPEARANCE_KEY) restore();
       if (event.key === null || event.key === FONT_SCALE_KEY) restoreFont();
+      if (event.key === null || event.key === MESSAGE_WIDTH_KEY)
+        restoreMessageWidth();
       if (event.key === null || event.key === CONTRAST_KEY) restoreContrast();
+      if (event.key === null || event.key === DENSITY_KEY) restoreDensity();
       if (
         event.key === null ||
         event.key === ACCENT_KEY ||
@@ -214,7 +275,10 @@ export function createAppearance(
     } catch {
       if (event.key === null || event.key === APPEARANCE_KEY) restore();
       if (event.key === null || event.key === FONT_SCALE_KEY) restoreFont();
+      if (event.key === null || event.key === MESSAGE_WIDTH_KEY)
+        restoreMessageWidth();
       if (event.key === null || event.key === CONTRAST_KEY) restoreContrast();
+      if (event.key === null || event.key === DENSITY_KEY) restoreDensity();
       if (
         event.key === null ||
         event.key === ACCENT_KEY ||
@@ -225,8 +289,10 @@ export function createAppearance(
   };
   restore();
   restoreFont();
+  restoreMessageWidth();
   restoreAccent();
   restoreContrast();
+  restoreDensity();
   host?.addEventListener("storage", onStorage);
   systemScheme?.addEventListener("change", onSystemSchemeChange);
   return {
@@ -273,6 +339,20 @@ export function createAppearance(
       state = { ...state, fontScale, fontError };
       notify();
     },
+    setMessageWidth(value: MessageWidth) {
+      if (disposed) return;
+      const messageWidth = parseMessageWidth(value);
+      let messageWidthError: string | null = null;
+      try {
+        if (!host) throw new Error("No browser storage");
+        host.localStorage.setItem(MESSAGE_WIDTH_KEY, messageWidth);
+      } catch {
+        messageWidthError =
+          "This message width is active, but could not be saved on this device. Try again.";
+      }
+      state = { ...state, messageWidth, messageWidthError };
+      notify();
+    },
     setAccent(value: Accent) {
       if (disposed) return;
       const accent = parseAccent(value);
@@ -299,6 +379,20 @@ export function createAppearance(
           "This vibe level is active, but could not be saved on this device. Try again.";
       }
       state = { ...state, contrast, contrastError };
+      notify();
+    },
+    setDensity(value: MessageDensity) {
+      if (disposed) return;
+      const density = parseMessageDensity(value);
+      let densityError: string | null = null;
+      try {
+        if (!host) throw new Error("No browser storage");
+        host.localStorage.setItem(DENSITY_KEY, density);
+      } catch {
+        densityError =
+          "This message density is active, but could not be saved on this device. Try again.";
+      }
+      state = { ...state, density, densityError };
       notify();
     },
     /** After `dispose`, setters change nothing. */

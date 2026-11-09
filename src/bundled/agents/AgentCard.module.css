@@ -6,6 +6,28 @@
   grid-template-columns: repeat(auto-fill, minmax(min(100%, 12rem), 1fr));
   gap: var(--space-2);
   outline: none;
+  position: relative;
+}
+.slot {
+  display: grid;
+  min-width: 0;
+}
+.slot[data-dragging] {
+  /* Hide the original visually without dropping its keyboard focus. */
+  opacity: 0;
+}
+.lifted {
+  display: grid;
+  height: 100%;
+  transform: scale(0.98);
+  border-radius: var(--radius-container);
+  box-shadow: var(--shadow-sm);
+  cursor: grabbing;
+}
+@media (prefers-reduced-motion: reduce) {
+  .lifted {
+    transform: none;
+  }
 }
 /* Import actions need room for the selected type; scale their tracks with
    interface text instead of forcing two narrow cards at small viewports. */
@@ -176,6 +198,10 @@ html[data-keyboard-navigation] .card:focus-visible {
   max-width: 100%;
   color: var(--text-secondary);
   font-size: var(--text-body-sm-size, 0.8125rem);
+}
+/* Match the xs card model selector so static harness badges align with it. */
+.agentCard .detail {
+  min-height: var(--space-6);
 }
 .detailText {
   overflow: hidden;

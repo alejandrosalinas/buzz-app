@@ -15,6 +15,27 @@ ignore = [
     # instant 0.1.13 — unmaintained, not vulnerable. nostr 0.44 → instant (via
     # Buzz and buzz-pairing). Remove when nostr 0.44 is gone.
     { id = "RUSTSEC-2024-0384", reason = "instant via nostr 0.44; unmaintained, not vulnerable" },
+    { id = "RUSTSEC-2024-0436", reason = "paste via iroh 1.3.0 → netwatch/netdev/netlink-packet-core (mesh-llm-sdk); archived proc-macro, unmaintained, not vulnerable" },
+    # zip 8.6.0 < 9 (0367/0368/0369/0429) only affect ZipArchive::extract and
+    # stream extraction. Only path: mesh-llm-sdk → mesh-llm-system and
+    # mesh-llm-plugin-manager, which iterate entries by hand. Remove when mesh-llm
+    # moves to zip >= 9.
+    { id = "RUSTSEC-2026-0367", reason = "zip 8.6.0 via mesh-llm-system/mesh-llm-plugin-manager (mesh-llm-sdk rev 5d19ca6); neither calls ZipArchive::extract — both copy entries via enclosed_name + File::create, no permissions or symlinks; remove when mesh-llm moves to zip >= 9" },
+    { id = "RUSTSEC-2026-0368", reason = "zip 8.6.0 via mesh-llm-system/mesh-llm-plugin-manager (mesh-llm-sdk rev 5d19ca6); neither calls ZipArchive::extract — both copy entries via enclosed_name + File::create, no permissions or symlinks; remove when mesh-llm moves to zip >= 9" },
+    { id = "RUSTSEC-2026-0369", reason = "zip 8.6.0 via mesh-llm-system/mesh-llm-plugin-manager (mesh-llm-sdk rev 5d19ca6); neither calls ZipArchive::extract — both copy entries via enclosed_name + File::create, no permissions or symlinks; remove when mesh-llm moves to zip >= 9" },
+    { id = "RUSTSEC-2026-0429", reason = "zip 8.6.0 via mesh-llm-system/mesh-llm-plugin-manager (mesh-llm-sdk rev 5d19ca6); neither calls ZipArchive::extract — both copy entries via enclosed_name + File::create, no permissions or symlinks; remove when mesh-llm moves to zip >= 9" },
+    # libsqlite3-sys 0.38.2 bundles SQLite 3.53.2 (CVE-2026-119375): opening a
+    # database next to a `-wal` file with a different page size can return
+    # uninitialised page-cache memory. rusqlite 0.40 pins libsqlite3-sys 0.38,
+    # mesh-llm-log-store (mesh-llm-sdk rev 5d19ca6) requires rusqlite 0.40, and
+    # only one libsqlite3-sys may link sqlite3, so Buzz cannot move to 0.41
+    # alone. Every database Buzz or mesh-llm opens sits in a per-user directory
+    # the same code created: the archive under app_data_dir, old Buzz's own
+    # WebKit localStorage (read-only) and mesh-llm's log store under its
+    # app-state root. A less-trusted party writing a sibling `-wal` there is
+    # outside the threat model. Remove when mesh-llm moves to rusqlite >= 0.41
+    # and Buzz follows.
+    { id = "RUSTSEC-2026-0459", reason = "libsqlite3-sys 0.38.2 via rusqlite 0.40 (Buzz, mesh-llm-log-store at mesh-llm-sdk rev 5d19ca6); every database is in a per-user directory the same code created; remove when mesh-llm moves to rusqlite >= 0.41" },
     # zbus 5 D-Bus crates — unmaintained, not vulnerable. Linux only:
     # Buzz, tauri-plugin-opener and tauri-plugin-single-instance →
     # zbus 5. Remove when those move off zbus 5.

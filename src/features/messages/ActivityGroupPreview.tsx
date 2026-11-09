@@ -4,17 +4,21 @@ import { ActivityGroupActions } from "./ActivityGroupActions";
 import { useActivityTypingReplacement } from "../conversation/typing-presentation";
 import { useActivityFocusHandoff } from "./use-activity-focus-handoff";
 import { useRef, type ReactNode } from "react";
-import { CaretUpIcon } from "../../shared/design-system/icons";
+import { ActivityDisclosure } from "./ActivityDisclosure";
+import {
+  ActivityOutcome,
+  activityOutcomeLabel,
+  activityOutcomeReason,
+} from "./ActivityOutcome";
 import { AgentResponsePreview } from "./AgentResponsePreview";
+import { RemoteAgentHint, RemoteWorkIcon } from "./RemoteAgentHint";
 import { useActivityIndicator } from "./use-activity-indicator";
 import type { RelaySession } from "../relay/session";
 import { ShimmerText } from "../../shared/design-system/ui/ShimmerText";
 import type { ActivityPresentation } from "./activity-presentation";
-import { Avatar } from "../../shared/design-system/ui/Avatar";
 import type { ChannelMessage, Profile } from "../relay/contracts";
 import { avatarMedia } from "../../shared/avatar-source";
 import { messagePreviewText } from "../conversation/message-preview-text";
-import styles from "./Messages.module.css";
 
 /** One stable disclosure for a run of activity, showing its latest speaker. */
 export function ActivityGroupPreview({
@@ -46,12 +50,19 @@ export function ActivityGroupPreview({
   const disclosure = useRef<HTMLButtonElement>(null);
   const resolveName = useChannelIdentityNames(session, group.latest.channelId);
   useActivityFocusHandoff(container);
-  const { latest: row, history, participants, hidden, working } = group;
+  const {
+    latest: row,
+    history,
+    participants,
+    retired,
+    working,
+    outcomes,
+  } = group;
   const live = useActivityIndicator(
     session,
     row,
-    !hidden && (working || !group.followingMessage),
-    participants,
+    !retired && (working || !group.followingMessage),
+    group.liveParticipants,
     group.requestId,
   );
   useActivityTypingReplacement(
@@ -64,71 +75,45 @@ export function ActivityGroupPreview({
           requestId: group.requestId,
         }
       : undefined,
-    !hidden && !!group.requestId,
-    participants,
+    !!group.requestId,
+    group.presentedParticipants,
   );
-  if (hidden && !group.retained) return null;
   const primary = history[0]?.authorId ?? row.authorId;
   const profile = profiles.get(primary);
   const named = (id: string) =>
     resolveName(id, profiles.get(id)?.name ?? id.slice(0, 10));
   const name = named(primary);
-  const speaker = named(row.authorId);
-  const text = Array.from(messagePreviewText(row.content).replace(/\s+/g, " "));
+  const previewRow = group.workingUpdate ?? row;
+  const speaker = named(previewRow.authorId);
+  const text = Array.from(
+    messagePreviewText(previewRow.content).replace(/\s+/g, " "),
+  );
   const preview =
     text.length > 280 ? `${text.slice(0, 279).join("")}…` : text.join("");
-  const content = (
-    <div
-      className={styles.audienceRow}
-      data-layout={layout}
-      data-collapse={expanded || undefined}
-    >
-      <div className={styles.audienceEntry}>
-        <button
-          ref={disclosure}
-          type="button"
-          data-buzz-ui=""
-          className={styles.audienceLine}
-          data-collapse={expanded || undefined}
-          aria-expanded={expanded}
-          aria-label={`${expanded ? "Collapse" : "Show"} activity history: ${speaker}: ${preview}`}
-          onClick={(event) => {
-            event.currentTarget.focus({ preventScroll: true });
-            onToggle();
-          }}
-        >
-          {expanded && (
-            <span className={styles.audienceAvatar}>
-              <Avatar
-                alt=""
-                fallback="Collapse"
-                size="fill"
-                shape="squircle"
-                fallbackContent={
-                  <CaretUpIcon
-                    className={styles.activityDisclosureIcon}
-                    aria-hidden="true"
-                  />
-                }
-              />
-            </span>
-          )}
-          <span className={styles.audiencePreviewText}>
-            {expanded ? (
-              "Collapse"
-            ) : (
-              <ShimmerText active={working || live}>
-                {participants.length > 1 ? `${speaker}: ${preview}` : preview}
-              </ShimmerText>
-            )}
-          </span>
-        </button>
-      </div>
-    </div>
-  );
+  const outcomeText = outcomes
+    .map(
+      (entry) => `${named(entry.agent)}: ${activityOutcomeLabel(entry.state)}`,
+    )
+    .join("; ");
+  const namedPreview = `${speaker}: ${preview}`;
+  const summaryLabel = [
+    outcomeText,
+    working
+      ? `${speaker}: still working — ${preview}`
+      : !outcomeText && namedPreview,
+  ]
+    .filter(Boolean)
+    .join("; ");
   return (
     <AgentResponsePreview
       name={name}
+      bylineHint={
+        <RemoteAgentHint
+          session={session}
+          viewer={session?.viewer}
+          pubkey={primary}
+        />
+      }
       participants={participants.map((id) => ({
         id,
         name: named(id),
@@ -138,38 +123,83 @@ export function ActivityGroupPreview({
       picture={avatarMedia(profile?.picture, media)}
       layout={layout}
     >
-      <div
-        ref={container}
-        className={styles.standaloneActivity}
-        data-contained-history=""
+      <ActivityDisclosure
+        container={container}
+        trigger={disclosure}
+        expanded={expanded}
+        onToggle={onToggle}
+        label={`${expanded ? "Collapse" : "Show"} activity history: ${summaryLabel}`}
+        icon={
+          <RemoteWorkIcon
+            session={session}
+            viewer={session?.viewer}
+            pubkey={row.authorId}
+            active={working || live}
+          />
+        }
+        summary={
+          outcomes.length ? (
+            <span className="inline-flex flex-wrap items-center gap-2">
+              {outcomes.map((entry) => (
+                <ActivityOutcome
+                  key={entry.agent}
+                  state={entry.state}
+                  name={
+                    participants.length > 1 ? named(entry.agent) : undefined
+                  }
+                />
+              ))}
+              {working && <ShimmerText active>{namedPreview}</ShimmerText>}
+            </span>
+          ) : (
+            <ShimmerText active={working || live}>
+              {participants.length > 1 ? namedPreview : preview}
+            </ShimmerText>
+          )
+        }
+        expandedSummary={outcomes.map((entry) => (
+          <ActivityOutcome
+            key={entry.agent}
+            state={entry.state}
+            name={participants.length > 1 ? named(entry.agent) : undefined}
+          />
+        ))}
+        actions={
+          session && (
+            <ActivityGroupActions
+              session={session}
+              group={group}
+              returnFocus={disclosure}
+              active={expanded}
+              profiles={profiles}
+              open={openActivity}
+              canOpen={canOpenActivity}
+            />
+          )
+        }
       >
-        <div
-          className={styles.activityGroupHeader}
-          data-expanded={expanded || undefined}
-        >
-          {content}
-          {session && (
-            <div hidden={!expanded}>
-              <ActivityGroupActions
-                session={session}
-                group={group}
-                returnFocus={disclosure}
-                active={expanded}
-                profiles={profiles}
-                open={openActivity}
-                canOpen={canOpenActivity}
-              />
-            </div>
-          )}
-        </div>
-        {expanded && renderHistory && (
-          <div className={styles.containedActivityHistory}>
-            {history.map((entry) => (
-              <div key={entry.id}>{renderHistory(entry)}</div>
-            ))}
-          </div>
-        )}
-      </div>
+        {outcomes
+          .filter(
+            (entry) =>
+              !history.some(
+                (row) =>
+                  row.authorId === entry.agent &&
+                  row.notice === "execution-failure" &&
+                  !row.edited &&
+                  !row.attachments.length,
+              ),
+          )
+          .map((entry) => (
+            <p key={entry.agent} className="text-body-sm">
+              {participants.length > 1 && `${named(entry.agent)}: `}
+              {activityOutcomeReason(entry.state, entry.reason)}
+            </p>
+          ))}
+        {renderHistory &&
+          history.map((entry) => (
+            <div key={entry.id}>{renderHistory(entry)}</div>
+          ))}
+      </ActivityDisclosure>
     </AgentResponsePreview>
   );
 }

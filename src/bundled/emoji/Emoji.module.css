@@ -50,7 +50,7 @@
 }
 .emojiMart {
   position: relative;
-  height: min(21.75rem, 40vh);
+  height: var(--emoji-picker-height, min(21.75rem, 40vh));
   min-height: 0;
 }
 .emojiMart > div {

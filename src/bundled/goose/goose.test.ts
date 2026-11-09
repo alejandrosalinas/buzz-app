@@ -128,6 +128,56 @@ describe("GooseProcess", () => {
     expect(fake.geese[0]?.killed).toBe(true);
   });
 
+  /** A fake goose that reports `capability` for its security hooks. */
+  const reporting = (capability: object) => {
+    const fake = fakeSpawn();
+    const spawn: typeof fake.spawn = async (id, options = {}) => {
+      const process = await fake.spawn(id, options);
+      return {
+        ...process,
+        write: async (data) => {
+          if (!data.includes('"method":"_buzz/security/capabilities"'))
+            return process.write(data);
+          const { id: request } = JSON.parse(data);
+          options.onStdout?.(
+            `${JSON.stringify({ jsonrpc: "2.0", id: request, result: capability })}\n`,
+          );
+        },
+      };
+    };
+    return { fake, spawn };
+  };
+
+  it.each([
+    ["off with the security bridge", "http://127.0.0.1:1/", false],
+    ["on without it", null, true],
+  ])(
+    "refuses a protected goose whose security gate is %s",
+    async (_, url, enabled) => {
+      const { fake, spawn } = reporting({ version: 2, enabled });
+      await expect(
+        GooseProcess.start(spawn, {
+          cwd: "/work",
+          protected: true,
+          env: { BUZZ_SECURITY_URL: url },
+        }),
+      ).rejects.toThrow(
+        "Protected Goose's security gate is in the wrong state",
+      );
+      expect(fake.geese[0]?.killed).toBe(true);
+    },
+  );
+
+  it("starts a protected goose released before it reported its security gate", async () => {
+    const { fake, spawn } = reporting({ version: 2 });
+    await GooseProcess.start(spawn, {
+      cwd: "/work",
+      protected: true,
+      env: { BUZZ_SECURITY_URL: "http://127.0.0.1:1/" },
+    });
+    expect(fake.geese[0]?.killed).toBe(false);
+  });
+
   it("still fails a protected start at its time limit when a goose without the security hooks never exits", async () => {
     vi.useFakeTimers();
     const fake = fakeSpawn();
@@ -191,6 +241,31 @@ describe("GooseProcess", () => {
     ]);
     expect(process.prompts.get(session.id)).toBe("Be Buzz");
   });
+
+  it("replaces goose's base prompt with ours, raw, when asked", async () => {
+    const { open, process } = await start();
+    const session = await open({
+      systemPrompt: "Be {{brief}}",
+      replacePrompt: true,
+    });
+    expect(process.prompts.get(session.id)).toBe(
+      "{% raw %}Be {{brief}}{% endraw %}",
+    );
+  });
+
+  it.each(["{% endraw %}", "{%endraw%}", "{%- endraw %}", "{% endraw -%}"])(
+    "keeps an embedded raw-block terminator %s from closing the prompt wrapper",
+    async (endraw) => {
+      const { open, process } = await start();
+      const session = await open({
+        systemPrompt: `Before ${endraw} {{literal}} after`,
+        replacePrompt: true,
+      });
+      expect(process.prompts.get(session.id)).toBe(
+        "{% raw %}Before  {{literal}} after{% endraw %}",
+      );
+    },
+  );
 
   it("gives each session its own server, closed with it", async () => {
     const { goose, open, fake } = await start();
@@ -299,7 +374,7 @@ describe("GooseProcess", () => {
         name,
         arguments: { content: "hi", final: true },
       });
-      await expect(settled).resolves.toEqual({ ok: true });
+      await expect(settled).resolves.toEqual({ ok: true, answered: true });
       expect(session.busy).toBe(false);
       expect(session.working).toBe(true);
       session.interrupt();
@@ -309,6 +384,193 @@ describe("GooseProcess", () => {
       expect(session.working).toBe(false);
     },
   );
+
+  it("ends the turn once goose reports a final send's result", async () => {
+    const { open, process } = await start();
+    process.hold = true;
+    const session = await open();
+    const settled = session.send("hello");
+    await flush();
+    await process.mcp(session.id, "tools/call", {
+      name: "send",
+      arguments: { content: "hi", final: true },
+      _meta: { "agent-tool-call-request-id": "t1" },
+    });
+    await expect(settled).resolves.toEqual({ ok: true, answered: true });
+    // Cancelled before goose has the result, the send would be saved as
+    // interrupted.
+    process.update(session.id, {
+      sessionUpdate: "tool_call_update",
+      toolCallId: "t1",
+      status: "in_progress",
+    });
+    await flush();
+    expect(process.cancelled).toEqual([]);
+    process.update(session.id, {
+      sessionUpdate: "tool_call_update",
+      toolCallId: "t1",
+      status: "completed",
+    });
+    await flush();
+    expect(process.cancelled).toEqual([session.id]);
+    await session.idle();
+    expect(session.working).toBe(false);
+    // The next turn is not cancelled by its own results.
+    const next = session.send("again");
+    await flush();
+    process.update(session.id, {
+      sessionUpdate: "tool_call_update",
+      toolCallId: "t2",
+      status: "completed",
+    });
+    await flush();
+    expect(process.cancelled).toEqual([session.id]);
+    process.turns[1]?.finish();
+    await expect(next).resolves.toEqual({ ok: true });
+  });
+
+  it("runs a message that arrives as a final send ends its turn as the next turn", async () => {
+    const { open, process } = await start();
+    process.hold = true;
+    const session = await open();
+    const first = session.send("one");
+    await flush();
+    await process.mcp(session.id, "tools/call", {
+      name: "send",
+      arguments: { content: "hi", final: true },
+      _meta: { "agent-tool-call-request-id": "t1" },
+    });
+    await expect(first).resolves.toEqual({ ok: true, answered: true });
+    const second = session.send("two");
+    await flush();
+    expect(process.turns[0]?.steered).toEqual([]);
+    process.update(session.id, {
+      sessionUpdate: "tool_call_update",
+      toolCallId: "t1",
+      status: "completed",
+    });
+    await flush();
+    expect(process.cancelled).toEqual([session.id]);
+    expect(process.turns.map((turn) => turn.text)).toEqual(["one", "two"]);
+    process.turns[1]?.finish();
+    await expect(second).resolves.toEqual({ ok: true });
+  });
+
+  it("queues a message sent while a final send's cancel is ending the turn", async () => {
+    const { goose, process, release } = await slow("session/cancel");
+    process.hold = true;
+    const session = await goose.open({
+      cwd: "/work",
+      systemPrompt: "",
+      tools: ok,
+    });
+    const first = session.send("one");
+    await flush();
+    await process.mcp(session.id, "tools/call", {
+      name: "send",
+      arguments: { content: "hi", final: true },
+      _meta: { "agent-tool-call-request-id": "t1" },
+    });
+    await expect(first).resolves.toEqual({ ok: true, answered: true });
+    process.update(session.id, {
+      sessionUpdate: "tool_call_update",
+      toolCallId: "t1",
+      status: "completed",
+    });
+    await flush();
+    // The cancel is on its way, and goose has not ended the turn yet.
+    const second = session.send("two");
+    await flush();
+    expect(process.turns[0]?.steered).toEqual([]);
+    release();
+    await vi.waitFor(() =>
+      expect(process.turns.map((turn) => turn.text)).toEqual(["one", "two"]),
+    );
+    process.turns[1]?.finish();
+    await expect(second).resolves.toEqual({ ok: true });
+  });
+
+  it("ends the turn on its final send's result, not another call's", async () => {
+    const { open, process } = await start();
+    process.hold = true;
+    const session = await open();
+    const settled = session.send("hello");
+    await flush();
+    await process.mcp(session.id, "tools/call", {
+      name: "send",
+      arguments: { content: "hi", final: true },
+      _meta: { "agent-tool-call-request-id": "t2" },
+    });
+    await expect(settled).resolves.toEqual({ ok: true, answered: true });
+    // An earlier call's result, reported late.
+    process.update(session.id, {
+      sessionUpdate: "tool_call_update",
+      toolCallId: "t1",
+      status: "completed",
+    });
+    await flush();
+    expect(process.cancelled).toEqual([]);
+    process.update(session.id, {
+      sessionUpdate: "tool_call_update",
+      toolCallId: "t2",
+      status: "failed",
+    });
+    await flush();
+    expect(process.cancelled).toEqual([session.id]);
+    await session.idle();
+    expect(session.working).toBe(false);
+  });
+
+  it("lets a turn end on its own after a final send goose did not name", async () => {
+    const { open, process } = await start();
+    process.hold = true;
+    const session = await open();
+    const settled = session.send("hello");
+    await flush();
+    await process.mcp(session.id, "tools/call", {
+      name: "send",
+      arguments: { content: "hi", final: true },
+    });
+    await expect(settled).resolves.toEqual({ ok: true, answered: true });
+    process.update(session.id, {
+      sessionUpdate: "tool_call_update",
+      toolCallId: "t1",
+      status: "completed",
+    });
+    await flush();
+    expect(process.cancelled).toEqual([]);
+    process.turns[0]?.finish();
+    await session.idle();
+    expect(session.working).toBe(false);
+  });
+
+  it("keeps the turn going after a final send while another message waits", async () => {
+    const { open, process } = await start();
+    process.hold = true;
+    const session = await open();
+    const first = session.send("one");
+    await flush();
+    const second = session.send("two");
+    await flush();
+    expect(process.turns[0]?.steered).toEqual(["two"]);
+    await process.mcp(session.id, "tools/call", {
+      name: "send",
+      arguments: { content: "hi", final: true },
+      _meta: { "agent-tool-call-request-id": "t1" },
+    });
+    process.update(session.id, {
+      sessionUpdate: "tool_call_update",
+      toolCallId: "t1",
+      status: "completed",
+    });
+    await flush();
+    expect(process.cancelled).toEqual([]);
+    process.turns[0]?.finish();
+    await expect(Promise.all([first, second])).resolves.toEqual([
+      { ok: true },
+      { ok: true, answered: true },
+    ]);
+  });
 
   it("steers a message that arrives mid-turn into it", async () => {
     const { open, process } = await start();
@@ -907,6 +1169,12 @@ describe("GooseProcess", () => {
     });
   });
 
+  it("does not claim a blank model turn answered in Buzz", async () => {
+    const { open } = await start();
+    const session = await open();
+    await expect(session.send("hello")).resolves.toEqual({ ok: true });
+  });
+
   it.each(["send", "reply_in_subthread"])(
     "ends work that acted in Buzz with %s without its closing text",
     async (name) => {
@@ -925,7 +1193,7 @@ describe("GooseProcess", () => {
       });
       await flush();
       process.turns[0]?.finish();
-      await expect(settled).resolves.toEqual({ ok: true });
+      await expect(settled).resolves.toEqual({ ok: true, answered: true });
     },
   );
 

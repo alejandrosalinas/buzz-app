@@ -98,6 +98,7 @@ function setup(
   const storage = options.storage ?? memoryStorage();
   const store = new AgentConfigStore(storage);
   const changed = vi.fn();
+  const historyChanged = vi.fn();
   const feed: ConfigFeed = {
     read,
     relayAuthor: relayKey.pubkey,
@@ -188,6 +189,7 @@ function setup(
     community: "c",
     signal: new AbortController().signal,
     changed,
+    historyChanged,
   });
   const text = () => {
     const [head] = heads.values();
@@ -200,6 +202,7 @@ function setup(
     configs,
     text,
     changed,
+    historyChanged,
     archive,
     room,
     ensure,
@@ -701,6 +704,131 @@ describe("a team roster changed elsewhere", () => {
     await vi.waitFor(() =>
       expect(teamSources(f.teams, "o", agent.pubkey)).toEqual([]),
     );
+  });
+});
+
+describe("team history", () => {
+  it("lists a discovered team's instructions and reverts them online", async () => {
+    const id = "6f1c2b9e-3d4a-4f5b-8c7d-1e2f3a4b5c6d";
+    const teamChannel = "2c8e7a1d-5b4f-4e3a-9d2c-7f6e5d4c3b2a";
+    const d = await artifactD("buzz.team", teamChannel);
+    const head = sign(
+      artifactTemplate({
+        channel: teamChannel,
+        type: "buzz.team",
+        d,
+        op: "create",
+        title: "Team",
+        content: JSON.stringify({ version: 1, name: "Crew", instructions: "" }),
+      }),
+    );
+    head.tags.push(["team", id]);
+    const team = {
+      id,
+      channel: teamChannel,
+      head,
+      members: ["o", agent.pubkey],
+    };
+    const f = setup({
+      realSync: true,
+      team,
+      beforePublish: (event) => {
+        team.head = event;
+      },
+    });
+    expect(f.configs.teamHistory(id)).toBeUndefined();
+    await f.configs.reconnected();
+    await vi.waitFor(() =>
+      expect(f.configs.teamHistory(id)).toMatchObject({
+        side: "instructions",
+        expected: { channel: teamChannel, type: "buzz.team", d, team: id },
+        head: { id: head.id },
+      }),
+    );
+    expect(f.configs.teamHistory("another")).toBeUndefined();
+    const revert = artifactTemplate({
+      channel: teamChannel,
+      type: "buzz.team",
+      d,
+      op: "update",
+      prev: head.id,
+      title: "Team",
+      content: JSON.stringify({
+        version: 1,
+        name: "Crew",
+        instructions: "old",
+      }),
+    });
+    revert.tags.push(["team", id]);
+    f.heads.set(d, head);
+    expect((await f.configs.reviseTeam(id, revert)).status).toBe("saved");
+    expect(f.heads.get(d)?.content).toContain('"instructions":"old"');
+  });
+
+  it("keeps history when the team selects another channel, and reports history-only changes", async () => {
+    const id = "6f1c2b9e-3d4a-4f5b-8c7d-1e2f3a4b5c6d";
+    const headIn = async (channel: string) => {
+      const event = sign(
+        artifactTemplate({
+          channel,
+          type: "buzz.team",
+          d: await artifactD("buzz.team", channel),
+          op: "create",
+          title: "Team",
+          content: JSON.stringify({
+            version: 1,
+            name: "Crew",
+            instructions: "",
+          }),
+        }),
+      );
+      event.tags.push(["team", id]);
+      return event;
+    };
+    const first = "2c8e7a1d-5b4f-4e3a-9d2c-7f6e5d4c3b2a";
+    const second = "3d9f8b2e-6c5a-4f4b-8e3d-8a7f6e5d4c3b";
+    const team = {
+      id,
+      channel: first,
+      head: await headIn(first),
+      members: ["o", agent.pubkey],
+    };
+    const f = setup({ realSync: true, team });
+    await f.configs.reconnected();
+    await vi.waitFor(() =>
+      expect(f.configs.teamHistory(id)?.expected.channel).toBe(first),
+    );
+    team.channel = second;
+    team.head = await headIn(second);
+    await f.configs.reconnected();
+    await vi.waitFor(() =>
+      expect(f.configs.teamHistory(id)?.expected.channel).toBe(second),
+    );
+    // An older revision's redaction leaves the head as it was.
+    const side = f.configs.teamHistory(id);
+    if (!side) throw new Error("no history");
+    f.historyChanged.mockClear();
+    f.configs.historyChanged(second, side.expected.d);
+    expect(f.historyChanged).toHaveBeenCalledTimes(1);
+    expect(f.configs.teamHistory(id)).toMatchObject({
+      head: { id: side.head?.id },
+      version: side.version + 1,
+    });
+  });
+});
+
+describe("another device's agent", () => {
+  it("reads its synced instructions without creating or binding anything", async () => {
+    const f = setup();
+    expect(await f.configs.readInstructions(agent.pubkey)).toBeUndefined();
+    const head = await created("elsewhere text");
+    f.heads.set(tag(head, "d") ?? "", head);
+    expect(await f.configs.readInstructions(agent.pubkey)).toEqual({
+      instructions: "elsewhere text",
+      revision: head.id,
+    });
+    expect(f.ensure).not.toHaveBeenCalled();
+    expect(f.configs.binding(agent.pubkey)).toBeUndefined();
   });
 });
 

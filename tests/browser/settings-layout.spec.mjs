@@ -393,84 +393,92 @@ test.describe("settings empty collections", () => {
   });
 });
 
+// The Builderlab section applies only in FI builds. With no native host its
+// session stays signed out, and hosted communities use the fixture broker.
+const fiBuild = test.extend({ federatedIdentity: true });
+
 // Hosted setup states use the real settings page with isolated account replies;
 // account operations and failures are covered by the owning component tests.
-test("hosted settings empty and setup cards fit without covering their actions", async ({
-  page,
-  app,
-}, info) => {
-  let signedIn = false;
-  await page.route("**/api/builderlab/**", async (route) => {
-    const action = new URL(route.request().url()).pathname.split("/").pop();
-    const replies = {
-      auth: {
-        auth: signedIn
-          ? { email: "test@example.com", expiresAt: "2030" }
-          : null,
-      },
-      identity: { identity: { pubkey_hex: app.viewer } },
-      list: { communities: [] },
-    };
-    if (!(action in replies))
-      throw new Error(`Unexpected account action: ${action}`);
-    await route.fulfill({ json: replies[action] });
-  });
-  for (const state of ["setup", "empty"]) {
-    signedIn = state === "empty";
-    await page.goto(app.origin);
-    await page
-      .getByRole("button", { name: "Your profile", exact: true })
-      .click();
-    await page.getByRole("menuitem", { name: "Settings", exact: true }).click();
-    for (const mode of ["light", "dark"]) {
-      await selectSettingsSection(page, "Appearance");
-      await chooseColorMode(page, mode === "light" ? "Light" : "Dark");
-      for (const width of [1440, 800, 390]) {
-        await page.setViewportSize({ width, height: 1000 });
-        await selectSettingsSection(page, "Builderlab");
-        const card = page.locator(".buzz-empty-state").filter({
-          has: page.getByRole("heading", {
-            name: signedIn
-              ? "No hosted communities yet"
-              : "Sign in to manage hosted communities",
-          }),
-        });
-        await expect(card).toBeVisible();
-        for (const scale of ["100%", "200%"]) {
-          await page.evaluate((value) => {
-            document.documentElement.style.fontSize = value;
-          }, scale);
-          await expect
-            .poll(
-              () =>
-                card.evaluate((root) => {
-                  const box = root.getBoundingClientRect();
-                  return (
-                    [...root.querySelectorAll("*")].every((node) => {
-                      const child = node.getBoundingClientRect();
-                      return child.left >= box.left && child.right <= box.right;
-                    }) && root.scrollWidth <= root.clientWidth
-                  );
-                }),
-              { message: `${state}, ${mode}, ${width}px, ${scale}` },
-            )
-            .toBe(true);
-          if (!signedIn) {
-            const action = card.getByRole("button", {
-              name: "Sign in with Builderlab",
-            });
-            await action.scrollIntoViewIfNeeded();
-            await expect(action).toBeInViewport({ ratio: 1 });
+fiBuild(
+  "hosted settings empty and setup cards fit without covering their actions",
+  async ({ page, app }, info) => {
+    let signedIn = false;
+    await page.route("**/api/builderlab/**", async (route) => {
+      const action = new URL(route.request().url()).pathname.split("/").pop();
+      const replies = {
+        auth: {
+          auth: signedIn
+            ? { email: "test@example.com", expiresAt: "2030" }
+            : null,
+        },
+        identity: { identity: { pubkey_hex: app.viewer } },
+        list: { communities: [] },
+      };
+      if (!(action in replies))
+        throw new Error(`Unexpected account action: ${action}`);
+      await route.fulfill({ json: replies[action] });
+    });
+    for (const state of ["setup", "empty"]) {
+      signedIn = state === "empty";
+      await page.goto(app.origin);
+      await page
+        .getByRole("button", { name: "Your profile", exact: true })
+        .click();
+      await page
+        .getByRole("menuitem", { name: "Settings", exact: true })
+        .click();
+      for (const mode of ["light", "dark"]) {
+        await selectSettingsSection(page, "Appearance");
+        await chooseColorMode(page, mode === "light" ? "Light" : "Dark");
+        for (const width of [1440, 800, 390]) {
+          await page.setViewportSize({ width, height: 1000 });
+          await selectSettingsSection(page, "Builderlab");
+          const card = page.locator(".buzz-empty-state").filter({
+            has: page.getByRole("heading", {
+              name: signedIn
+                ? "No hosted communities yet"
+                : "Sign in to manage hosted communities",
+            }),
+          });
+          await expect(card).toBeVisible();
+          for (const scale of ["100%", "200%"]) {
+            await page.evaluate((value) => {
+              document.documentElement.style.fontSize = value;
+            }, scale);
+            await expect
+              .poll(
+                () =>
+                  card.evaluate((root) => {
+                    const box = root.getBoundingClientRect();
+                    return (
+                      [...root.querySelectorAll("*")].every((node) => {
+                        const child = node.getBoundingClientRect();
+                        return (
+                          child.left >= box.left && child.right <= box.right
+                        );
+                      }) && root.scrollWidth <= root.clientWidth
+                    );
+                  }),
+                { message: `${state}, ${mode}, ${width}px, ${scale}` },
+              )
+              .toBe(true);
+            if (!signedIn) {
+              const action = card.getByRole("button", {
+                name: "Sign in with Builderlab",
+              });
+              await action.scrollIntoViewIfNeeded();
+              await expect(action).toBeInViewport({ ratio: 1 });
+            }
+            if (width === 390 && scale === "200%")
+              await page.screenshot({
+                path: info.outputPath(`hosted-${state}-${mode}-200.png`),
+              });
           }
-          if (width === 390 && scale === "200%")
-            await page.screenshot({
-              path: info.outputPath(`hosted-${state}-${mode}-200.png`),
-            });
+          await page.evaluate(() => {
+            document.documentElement.style.fontSize = "";
+          });
         }
-        await page.evaluate(() => {
-          document.documentElement.style.fontSize = "";
-        });
       }
     }
-  }
-});
+  },
+);

@@ -45,6 +45,42 @@ async function harness(info, identity = generateSecretKey()) {
   };
 }
 it.each([
+  [undefined, false],
+  [null, false],
+  [[], false],
+  [["nip-cl"], false],
+  ["nip-ar", false],
+  [["nip-ar"], true],
+])(
+  "offers artifact writes only with a NIP-AR advertisement: %j",
+  async (supported_extensions, supported) => {
+    const h = await harness(() =>
+      Response.json({ self, supported_extensions }),
+    );
+    try {
+      const transport = await h.connect();
+      expect(transport.writer.kinds.includes(45010)).toBe(supported);
+      expect(transport.configArtifacts !== undefined).toBe(supported);
+      if (supported) {
+        const event = await transport.configArtifacts.sign(
+          {
+            kind: 45010,
+            created_at: Math.floor(Date.now() / 1000),
+            tags: [["ar", "1"]],
+            content: "{}",
+          },
+          new AbortController().signal,
+        );
+        expect(event.kind).toBe(45010);
+        expect(event.pubkey).toBe(transport.viewer);
+      }
+      expect(h.requests).toHaveLength(1);
+    } finally {
+      await h.close();
+    }
+  },
+);
+it.each([
   ["explicit self", { self, pubkey: contact }, self, self],
   ["self without contact", { self }, self, self],
   ["contact only", { pubkey: contact }, contact, undefined],

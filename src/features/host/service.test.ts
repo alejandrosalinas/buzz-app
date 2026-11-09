@@ -313,12 +313,15 @@ it("starts a declared process as the calling plugin and streams it", async () =>
     cwd: "~/.buzz",
     env: { CLAUDECODE: null },
     protection: null,
+    agentCredential: false,
+    protectedAgent: null,
     onEvent: spawn.onEvent,
     mcp: {
       url: "http://127.0.0.1:1234/mcp",
       headers: [{ name: "Authorization", value: "Bearer agent" }],
     },
   });
+  expect(process?.actAs).toBeUndefined();
   spawn.onEvent.onmessage({ type: "stdout", data: "out" });
   spawn.onEvent.onmessage({ type: "stderr", data: "err" });
   expect(stdout).toEqual(["out"]);
@@ -341,6 +344,27 @@ it("starts a declared process as the calling plugin and streams it", async () =>
   });
   spawn.onEvent.onmessage({ type: "exit", code: 0 });
   await expect(process?.exited).resolves.toBe(0);
+});
+
+it("asks native for an agent credential and binds it to one agent", async () => {
+  const { plugin } = pluginContext();
+  vi.mocked(invoke).mockResolvedValueOnce(7);
+  const process = await plugin.host.spawn?.("agent", {
+    agentCredential: true,
+  });
+  expect(invoke).toHaveBeenCalledWith(
+    "plugin_host_process_spawn",
+    expect.objectContaining({ agentCredential: true }),
+  );
+
+  vi.mocked(invoke).mockResolvedValueOnce(undefined);
+  await process?.actAs?.({ pubkey: "ab".repeat(32), relay: "wss://relay" });
+  expect(invoke).toHaveBeenLastCalledWith("plugin_host_process_bind_agent", {
+    id: "example.plugin",
+    handle: 7,
+    pubkey: "ab".repeat(32),
+    relay: "wss://relay",
+  });
 });
 
 it("writes a long input in order, in pieces the host accepts", async () => {

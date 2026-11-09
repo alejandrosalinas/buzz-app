@@ -43,56 +43,21 @@ test("archive confirmation returns focus on cancel and retains the conversation 
       exact: true,
     }),
   ).toBeVisible();
-  // Hold the real permission request: the composed row menu must have no
-  // orphan divider or unchecked actions.
-  let release;
-  let intercepted;
-  const held = new Promise((resolve) => {
-    release = resolve;
-  });
-  const seen = new Promise((resolve) => {
-    intercepted = resolve;
-  });
+  // Lifecycle actions come from the live roster, so the composed row menu is
+  // complete when it opens and opening it reads no channel permissions.
+  const permissionReads = [];
   const permissionRoute = async (route) => {
     const filters = route.request().postDataJSON();
-    if (
-      !filters.some(
-        (filter) =>
-          filter.kinds?.includes(39001) &&
-          filter["#d"]?.includes("11111111-1111-4111-8111-111111111111"),
-      )
-    )
-      return route.continue();
-    intercepted();
-    await held;
+    if (filters.some((filter) => filter.kinds?.includes(39001)))
+      permissionReads.push(filters);
     await route.continue();
   };
   await page.route("**/api/relay/**/query", permissionRoute);
   const menu = page.getByRole("menu", {
     name: "Actions for Lifecycle channel",
   });
-  try {
-    await row.focus();
-    await page.keyboard.press("Shift+F10");
-    await seen;
-    await expect(menu).toBeVisible();
-    // Attention actions remain usable while lifecycle permissions are held;
-    // the menu stays divider-free before and after permission resolution.
-    await expect(menu.getByRole("separator")).toHaveCount(0);
-    await expect(menu.getByRole("menuitem")).toHaveText([
-      "Move channel",
-      "Mute",
-      "Mark as unread",
-      "Copy link",
-    ]);
-    await expect(menu.getByRole("menuitemradio")).toHaveCount(0);
-  } finally {
-    release();
-  }
-  await expect(
-    menu.getByRole("menuitem", { name: "Archive channel", exact: true }),
-  ).toBeVisible();
-  await expect(menu.getByRole("separator")).toHaveCount(0);
+  await row.focus();
+  await page.keyboard.press("Shift+F10");
   await expect(menu.getByRole("menuitem")).toHaveText([
     "Move channel",
     "Mute",
@@ -101,6 +66,10 @@ test("archive confirmation returns focus on cancel and retains the conversation 
     "Archive channel",
     "Delete channel",
   ]);
+  await expect(menu.getByRole("separator")).toHaveCount(0);
+  await expect(menu.getByRole("menuitemradio")).toHaveCount(0);
+  // The rendered lifecycle items are the barrier: a read would precede them.
+  expect(permissionReads).toEqual([]);
   await expect(
     page.getByRole("button", { name: /More options for/ }),
   ).toHaveCount(0);
@@ -126,7 +95,15 @@ test("archive confirmation returns focus on cancel and retains the conversation 
     name: "Archive channel: Lifecycle channel",
   });
   await expect(dialog).toBeVisible();
-  await expect(dialog.getByRole("button", { name: "Cancel" })).toBeFocused();
+  const cancel = dialog.getByRole("button", { name: "Cancel" });
+  await expect(cancel).toBeFocused();
+  // Pointer entry still shows what Enter will activate without swapping emphasis.
+  await expect(cancel).toHaveCSS("outline-style", "solid");
+  await expect(cancel).toHaveCSS("outline-width", "2px");
+  await expect(cancel).toHaveAttribute("data-variant", "subtle");
+  await expect(
+    dialog.getByRole("button", { name: "Archive channel", exact: true }),
+  ).toHaveAttribute("data-variant", "prominent");
   await dialog.screenshot({
     path: testInfo.outputPath("lifecycle-confirmation.png"),
   });
@@ -136,7 +113,7 @@ test("archive confirmation returns focus on cancel and retains the conversation 
   await expect(dialog).toHaveCount(0);
   await expect(row).toBeFocused();
   expect(app.report.lifecyclePublications ?? []).toHaveLength(0);
-  await openPage(page, "Workflows");
+  await sidebar.getByRole("button", { name: "Beta", exact: true }).click();
   await row.click({ button: "right" });
   await menu
     .getByRole("menuitem", { name: "Archive channel", exact: true })
@@ -146,7 +123,7 @@ test("archive confirmation returns focus on cancel and retains the conversation 
   await expect(dialog).toHaveCount(0);
   await expect(row).toBeFocused();
   await expect(
-    page.getByRole("heading", { name: "Workflows", exact: true }),
+    page.getByRole("textbox", { name: "Message #Beta", exact: true }),
   ).toBeVisible();
   await row.click();
   await row.click({ button: "right" });
@@ -477,7 +454,7 @@ test.describe("Solo chat lifecycle", () => {
     });
     await expect(composer).toBeVisible();
     await expect(
-      page.getByRole("button", { name: "Share access", exact: true }),
+      page.getByRole("button", { name: /^Share access to /, exact: true }),
     ).toBeVisible();
     const url = page.url();
     await row.focus();
@@ -518,7 +495,7 @@ test.describe("Solo chat lifecycle", () => {
     ).toHaveText("This chat is archived");
     await expect(composer).toHaveCount(0);
     await expect(
-      page.getByRole("button", { name: "Share access", exact: true }),
+      page.getByRole("button", { name: /^Share access to /, exact: true }),
     ).toHaveCount(0);
     await page.reload();
     await expect(
@@ -569,7 +546,7 @@ test.describe("Solo chat lifecycle", () => {
     await expect(row).toBeVisible();
     await expect(composer).toBeEnabled();
     await expect(
-      page.getByRole("button", { name: "Share access", exact: true }),
+      page.getByRole("button", { name: /^Share access to /, exact: true }),
     ).toBeVisible();
     await expect(page).toHaveURL(url);
     await header.click();
@@ -858,6 +835,44 @@ test.describe("remote Solo unarchive", () => {
       );
       await expect(notice).toHaveText("This chat is archived");
     }
+    expect(app.report.lifecyclePublications ?? []).toHaveLength(0);
+    expect(app.report.unexpected).toEqual([]);
+  });
+});
+
+// Browser-only: Playwright clicks scroll items into view, so only layout shows
+// whether the shared menu clips a permitted action behind a hidden scrollbar.
+test.describe("Solo chat owned through its agent", () => {
+  test.use({
+    soloChannels: ["11111111-1111-4111-8111-111111111111"],
+    lifecycleRole: "member",
+    lifecycleOwnerAgent: true,
+    readState: true,
+  });
+  test("shows every lifecycle action without scrolling the menu", async ({
+    page,
+    app,
+  }) => {
+    await page.goto(app.origin);
+    await openPage(page, "Messages");
+    const row = page
+      .getByRole("navigation", { name: "Subscribed channels" })
+      .getByRole("button", { name: "Lifecycle channel", exact: true });
+    await row.focus();
+    await page.keyboard.press("Shift+F10");
+    const menu = page.getByRole("menu", {
+      name: "Actions for Lifecycle channel",
+    });
+    // The owner-agent grant offers all three to a plain member.
+    for (const name of ["Leave chat", "Archive chat", "Delete chat"])
+      await expect(
+        menu.getByRole("menuitem", { name, exact: true }),
+      ).toBeInViewport({ ratio: 1 });
+    // At the default text scale, the old 24rem cap clipped this menu by its
+    // fixed-pixel parts; larger text grows rows and a rem cap alike.
+    expect(
+      await menu.evaluate((popup) => popup.scrollHeight - popup.clientHeight),
+    ).toBe(0);
     expect(app.report.lifecyclePublications ?? []).toHaveLength(0);
     expect(app.report.unexpected).toEqual([]);
   });

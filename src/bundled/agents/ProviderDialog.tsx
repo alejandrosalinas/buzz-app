@@ -14,7 +14,7 @@ export function ProviderDialog({
   onClose,
 }: {
   type: RegisteredAgentType | undefined;
-  finalFocus: RefObject<HTMLButtonElement | null>;
+  finalFocus: RefObject<HTMLElement | null>;
   /** Opened as its own navigation visit, so Back closes it; local opens are not. */
   visit?: boolean;
   onClose(): void;
@@ -59,7 +59,7 @@ function ManagedProviderDialog({
 }: {
   type: RegisteredAgentType;
   provider: NonNullable<RegisteredAgentType["provider"]>;
-  finalFocus: RefObject<HTMLButtonElement | null>;
+  finalFocus: RefObject<HTMLElement | null>;
   visit: boolean;
   onClose(): void;
 }) {

@@ -10,6 +10,7 @@ import {
   within,
 } from "@testing-library/react";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { npubEncode } from "nostr-tools/nip19";
 import type {
   ProbeDto,
   RelayStaffBackend,
@@ -1298,6 +1299,28 @@ it("a late member search for an earlier query is dropped", async () => {
   expect(screen.queryByRole("option", { name: /Oldie/ })).toBeNull();
 });
 
+it("a pasted nostr: npub offers that member without a name search", async () => {
+  mount();
+  await reopenActions();
+  const input = await screen.findByLabelText("Member");
+  const before = sent("searchMembers").length;
+  vi.useFakeTimers();
+  try {
+    fireEvent.change(input, {
+      target: { value: `nostr:${npubEncode(member)}` },
+    });
+    // The typing pause has passed, so a name search would have been sent.
+    await act(() => vi.advanceTimersByTimeAsync(SEARCH_DEBOUNCE_MS));
+    expect(sent("searchMembers")).toHaveLength(before);
+    expect(screen.getAllByRole("option")).toHaveLength(1);
+  } finally {
+    vi.useRealTimers();
+  }
+  fireEvent.click(screen.getByRole("option"));
+  expect(await screen.findByText("Role: member")).toBeVisible();
+  expect(sent("getMember").at(-1)).toMatchObject({ pubkey: member });
+});
+
 /**
  * Both selections are visited first, so their roles are remembered and the
  * switch back and forth needs no probe: the console stays authorized, and
@@ -1713,6 +1736,20 @@ it("a lift refused after reopening shows on the active Restrictions view, once",
   await openRestrictions();
   await screen.findByRole("button", { name: "Lift ban" });
   expect(screen.queryByText("Lift refused")).toBeNull();
+});
+
+it("adds staff by a pasted nostr: npub as its hex key", async () => {
+  routes.probe = () => probe({ role: "operator", canStaff: true });
+  routes.listOperators = () => ok([]);
+  routes.putOperator = () => ok(null);
+  mount();
+  fireEvent.click(await screen.findByRole("tab", { name: "Staff" }));
+  fireEvent.change(await screen.findByLabelText("Public key"), {
+    target: { value: `nostr:${npubEncode(member)}` },
+  });
+  fireEvent.click(screen.getByRole("button", { name: "Add" }));
+  await waitFor(() => expect(sent("putOperator")).toHaveLength(1));
+  expect(sent("putOperator")[0]).toMatchObject({ pubkey: member });
 });
 
 it("operator changes without a request id start fresh each time", async () => {

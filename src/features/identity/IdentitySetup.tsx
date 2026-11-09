@@ -73,8 +73,7 @@ export function IdentitySetup({
               <OnboardingWordmark />
             </h1>
             <p className={styles.tagline}>
-              Your people, your agents, your projects —<br />
-              all in one place.
+              Your people, your agents, one place.
             </p>
           </>
         }

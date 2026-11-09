@@ -18,11 +18,27 @@
   margin-block-start: 0;
 }
 
+/* Page rows reserve the channel list's scrollbar gutter (.channelList in
+   Channels.module.css), so they end in its column wherever scrollbars take
+   space; the controls above keep the header's full width. The gutter needs a
+   scroll container, and this one never overflows. It clips, so its padding
+   holds row focus rings (2px wide, offset 2px, unscaled by Interface size),
+   and its margins offset that padding so rows do not move. */
 .destinations {
+  --row-ring-extent: 4px;
   display: flex;
   flex-direction: column;
   gap: var(--space-half);
-  margin-bottom: calc(var(--space-3) + var(--space-2));
+  margin: calc(-1 * var(--row-ring-extent)) calc(-1 * var(--row-ring-extent))
+    calc(var(--space-3) + var(--space-2) - var(--row-ring-extent));
+  padding: var(--row-ring-extent);
+  overflow: hidden;
+  scrollbar-gutter: stable;
+  scrollbar-width: thin;
+  scrollbar-color: transparent transparent;
+}
+.destinations::-webkit-scrollbar {
+  width: 5px;
 }
 .connectionStatus {
   display: flex;

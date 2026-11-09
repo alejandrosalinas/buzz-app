@@ -92,6 +92,8 @@ it("asks before continuing with an unseen secret; copying the secret satisfies t
     name: "Continue without this secret?",
   });
   expect(confirm).toHaveTextContent("cannot be recovered");
+  // The secret is lost for good, so Enter goes back.
+  await waitFor(() => expect(button("Go back", confirm)).toHaveFocus());
   expect(onContinue).not.toHaveBeenCalled();
   fireEvent.click(button("Go back", confirm));
   await waitFor(() => expect(screen.queryByRole("alertdialog")).toBeNull());

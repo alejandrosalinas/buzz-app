@@ -152,6 +152,52 @@ it("republishes activity folded before an owner answer changed", async () => {
   expect(preview("c0")).toBe("Spoken");
 });
 
+it("keeps folded rows through a profile change that leaves owners alone", async () => {
+  const agent = keypair(),
+    controller = keypair();
+  let notify = () => {};
+  const owner = vi.fn((pubkey: string) =>
+    pubkey === agent.pubkey ? controller.pubkey : undefined,
+  );
+  const profiles = {
+    snapshot: () => new Map(),
+    subscribe(listener: () => void) {
+      notify = listener;
+      return () => {};
+    },
+    ensure: async () => {},
+    owner,
+  } satisfies ProfileQueries;
+  const h = await setup(2, profiles);
+  h.owner.accept(
+    h.rows.flatMap((row, i) => {
+      const reply = message(agent, `c${i}`, "Whole answer", 12, [
+        ["e", row.id, "", "reply"],
+        ["p", h.viewer.pubkey],
+      ]);
+      const edit = signed(controller, {
+        kind: 40003,
+        created_at: 13,
+        content: "Spoken",
+        tags: [
+          ["h", `c${i}`],
+          ["e", reply.id],
+        ],
+      });
+      return [reply, edit];
+    }),
+  );
+  h.unread.subscribeActivity("c0", () => {});
+  h.unread.subscribeActivity("c1", () => {});
+  expect(owner).toHaveBeenCalled();
+  owner.mockClear();
+  // A display-only change reads the one recorded owner; the next projections
+  // reuse their folded rows instead of asking again.
+  notify();
+  await h.reads.markLocalUnread("c0", () => true);
+  expect(owner).toHaveBeenCalledTimes(1);
+});
+
 it("keeps read-state and freshness invalidation global", async () => {
   const h = await setup();
   const before = h.targets.map(h.unread.snapshot);

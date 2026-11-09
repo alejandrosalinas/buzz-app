@@ -215,11 +215,23 @@ export function RichComposerInput({
     () => emoji.filter((entry) => !!session.media(entry.url)),
     [emoji, session],
   );
+  const shortcodes = useMemo(
+    () =>
+      new Set(renderableEmoji.map((entry) => entry.shortcode.toLowerCase())),
+    [renderableEmoji],
+  );
   // The normalizer, the render and the token reconcile decorate the same
   // document in one keystroke; parse its Markdown once.
   const scanned = useRef<{
     text: string;
     scan: ReturnType<typeof scanMarkdown>;
+  }>(undefined);
+  // Channel references scan every channel name against the text; reuse them
+  // until the text or the directory changes.
+  const referenced = useRef<{
+    text: string;
+    inputs: unknown[];
+    references: ReturnType<typeof messageReferences>;
   }>(undefined);
   useLayoutEffect(() => {
     previous.current = labels;
@@ -325,17 +337,24 @@ export function RichComposerInput({
     messageLinkParts(context.text, undefined, (start, end) =>
       add(start, end, undefined, true),
     );
-    for (const reference of messageReferences(
-      context.text,
-      [],
-      profiles,
-      directory.named,
-      directory.agents,
-    ))
+    const inputs = [profiles, directory.named, directory.agents];
+    if (
+      referenced.current?.text !== context.text ||
+      referenced.current.inputs.some((input, i) => input !== inputs[i])
+    )
+      referenced.current = {
+        text: context.text,
+        inputs,
+        references: messageReferences(
+          context.text,
+          [],
+          profiles,
+          directory.named,
+          directory.agents,
+        ),
+      };
+    for (const reference of referenced.current.references)
       add(reference.start, reference.end, undefined, true);
-    const shortcodes = new Set(
-      renderableEmoji.map((entry) => entry.shortcode.toLowerCase()),
-    );
     for (const match of context.text.matchAll(/:([a-z0-9_-]{1,64}):/gi))
       if (shortcodes.has(match[1]?.toLowerCase() ?? ""))
         add(match.index, match.index + match[0].length);

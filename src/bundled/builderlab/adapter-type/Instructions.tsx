@@ -5,17 +5,14 @@ import {
   type ReactNode,
 } from "react";
 import type { AgentViewProps } from "../../../features/agents/service";
+import { AgentExecutionNote } from "../../../features/agents/AgentExecutionNote";
+import { executionCopy } from "../../../features/agents/execution-location";
 import { PreferenceRow } from "../../../shared/design-system/ui/PreferenceRow";
 import { SettingsGroup } from "../../../shared/design-system/ui/SettingsGroup";
 import inlineStyles from "../../../shared/InlineReference.module.css";
 import type { AgentClient, RemoteAgent } from "../agents/client";
 import type { BuilderlabSession } from "../session";
 import { ModelSettings } from "./ModelSettings";
-
-const message = (reason: unknown) =>
-  reason instanceof Error
-    ? reason.message
-    : "Could not load Builderlab settings.";
 
 /** Hosted settings belong to Builderlab, rather than Agents' local config. */
 export function createSettingsTab(
@@ -30,7 +27,7 @@ export function createSettingsTab(
   }: {
     pubkey: string;
     retry(): void;
-    harnessControl: ReactNode;
+    harnessControl: (action: ReactNode) => ReactNode;
   }) {
     const login = useSyncExternalStore(session.subscribe, session.snapshot);
     const [loaded, setLoaded] = useState<{
@@ -39,7 +36,7 @@ export function createSettingsTab(
       email: string;
     }>();
     const [busy, setBusy] = useState(true);
-    const [error, setError] = useState("");
+    const [error, setError] = useState<unknown>("");
     useEffect(() => {
       if (loaded || login.status !== "signed-in") return;
       setBusy(true);
@@ -68,7 +65,7 @@ export function createSettingsTab(
       };
       void load()
         .catch((reason: unknown) => {
-          if (!current.signal.aborted) setError(message(reason));
+          if (!current.signal.aborted) setError(reason);
         })
         .finally(() => {
           if (!current.signal.aborted) setBusy(false);
@@ -98,14 +95,21 @@ export function createSettingsTab(
     settingsHost,
   }: AgentViewProps) {
     const [revision, setRevision] = useState(0);
+    const login = useSyncExternalStore(session.subscribe, session.snapshot);
+    const signedIn = login.status === "signed-in";
     return (
       <div className="grid gap-4">
+        {settingsSection !== "runtime" && signedIn && (
+          <AgentExecutionNote runtime={agent.type} />
+        )}
         {settingsSection !== "runtime" && (
           <Editor
             key={`${agent.pubkey}/${revision}`}
             pubkey={agent.pubkey}
             retry={() => setRevision((value) => value + 1)}
-            harnessControl={settingsHost?.typeControl?.(false)}
+            harnessControl={(action) =>
+              settingsHost?.typeControl?.(false, action)
+            }
           />
         )}
         {settingsSection !== "identity" && (
@@ -128,10 +132,12 @@ export function createSettingsTab(
                   </>
                 }
               />
-              <PreferenceRow
-                title="Workspace"
-                subtitle="Remote runtime shared with all agents by default."
-              />
+              {signedIn && (
+                <PreferenceRow
+                  title="Workspace"
+                  subtitle={`Remote runtime shared with your other agents in this workspace by default. ${executionCopy.remote.description}`}
+                />
+              )}
               <PreferenceRow
                 title="Sessions"
                 subtitle="One session per thread"

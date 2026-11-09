@@ -179,7 +179,7 @@ test.describe("View only channel share", () => {
     await page.goto(app.origin);
     await openChat(page, app, sharedChatId);
     const trigger = page.getByRole("button", {
-      name: "Share access",
+      name: /^Share access to /,
       exact: true,
     });
     await trigger.click();
@@ -577,9 +577,7 @@ test.describe("View only channel share", () => {
       await expect(confirmation).toContainText(
         "full history, Canvas, workspace folders, and agent instructions",
       );
-      await expect(
-        confirmation.getByRole("button", { name: "Cancel", exact: true }),
-      ).toBeFocused();
+      await expect(primary).toBeFocused();
       await reachable(primary);
       await expect(primary).toBeInViewport({ ratio: 1 });
       if (info.project.name === "chromium")
@@ -672,9 +670,7 @@ test.describe("View only channel share", () => {
       .getByRole("button", { name: "Share", exact: true })
       .click();
     await expect(confirmation).toContainText("from Private to View only");
-    await expect(
-      confirmation.getByRole("button", { name: "Cancel", exact: true }),
-    ).toBeFocused();
+    await expect(primary).toBeFocused();
     expect(app.report.detailsPublications).toHaveLength(1);
     expect(
       app.report.publications.filter(({ event }) => event.kind === 9),
@@ -729,7 +725,7 @@ test("People search holds loading, lists inline results and restores keyboard fo
   await page.goto(app.origin);
   await openChat(page, app, "beta");
   const trigger = page.getByRole("button", {
-    name: "Share access",
+    name: /^Share access to /,
     exact: true,
   });
   await trigger.click();
@@ -877,7 +873,7 @@ test.describe("owned Solo invitation headings", () => {
       await openChat(page, app, soloId);
       await expect(page.locator("html")).toHaveCSS("--buzz-text-scale", "2");
       await page
-        .getByRole("button", { name: "Share access", exact: true })
+        .getByRole("button", { name: /^Share access to /, exact: true })
         .click();
       const dialog = page.getByRole("dialog", { name: "Share access" });
       const search = dialog.getByRole("searchbox");
@@ -958,7 +954,7 @@ test.describe("Messages Share navigation", () => {
     await page.goto(app.origin);
     await openChat(page, app, firstChat);
     await page
-      .getByRole("button", { name: "Share access", exact: true })
+      .getByRole("button", { name: /^Share access to /, exact: true })
       .click();
     const dialog = page.getByRole("dialog", { name: "Share access" });
     const search = dialog.getByRole("searchbox", {
@@ -976,7 +972,7 @@ test.describe("Messages Share navigation", () => {
     await expect(dialog).toHaveCount(0);
     await expect(confirmation).toHaveCount(0);
     await page
-      .getByRole("button", { name: "Share access", exact: true })
+      .getByRole("button", { name: /^Share access to /, exact: true })
       .click();
     await expect(
       dialog.getByRole("searchbox", { name: "Search people and channels" }),
@@ -996,7 +992,7 @@ test.describe("Messages Share navigation", () => {
     await expect(dialog).toHaveCount(0);
     await expect(confirmation).toHaveCount(0);
     await page
-      .getByRole("button", { name: "Share access", exact: true })
+      .getByRole("button", { name: /^Share access to /, exact: true })
       .click();
     await expect(
       dialog.getByRole("searchbox", { name: "Search people and channels" }),
@@ -1019,7 +1015,7 @@ test.describe("Messages Share navigation", () => {
     await expect(dialog).toHaveCount(0);
     await expect(confirmation).toHaveCount(0);
     await page
-      .getByRole("button", { name: "Share access", exact: true })
+      .getByRole("button", { name: /^Share access to /, exact: true })
       .click();
     await expect(
       dialog.getByRole("searchbox", { name: "Search people and channels" }),

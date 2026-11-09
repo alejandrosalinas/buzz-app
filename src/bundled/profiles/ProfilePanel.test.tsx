@@ -11,7 +11,7 @@ import {
   waitFor,
   within,
 } from "@testing-library/react";
-import { useEffect, useState } from "react";
+import { useEffect, useState, type ReactNode } from "react";
 import { afterEach, expect, it, vi } from "vitest";
 import { createRelaySession } from "../../features/relay/session";
 import type { RelayData } from "../../features/relay/service";
@@ -23,6 +23,13 @@ import {
   profileHistoryTarget,
 } from "../../features/profiles/target";
 import { ProfilePanel } from "./ProfilePanel";
+import { createAgentMemories } from "../../features/agents/memory";
+import { resolveMatch } from "../../plugins/contributions";
+import { parseEntityLink } from "../../features/repos/routes";
+import type {
+  PanelProps,
+  RegisteredPanel,
+} from "../../features/panels/service";
 import { useAgentSaveState } from "../../features/agents/AgentSaveButton";
 import type { Navigation } from "../../features/navigation/controller";
 import type {
@@ -39,6 +46,7 @@ import { keypair, profile, signed } from "../../features/relay/testing";
 const key = "a".repeat(64),
   viewer = "b".repeat(64),
   threadRoot = "c".repeat(64);
+const personLink = profileTarget("d".repeat(64)) ?? "";
 afterEach(cleanup);
 
 function deferred() {
@@ -377,8 +385,27 @@ function renderAgentActivity(
   transcript: "opened" | "shown again" | false = false,
   navigation?: Navigation,
   channelType?: "solo" | "dm" | "stream",
+  linkTab = false,
+  memory?: {
+    body: string;
+    context: PanelProps["context"];
+    dirty: boolean;
+    saving: boolean;
+  },
 ) {
   const owner = createRelaySession(null);
+  const memories =
+    memory &&
+    createAgentMemories(
+      async () => ({
+        entries: [
+          { slug: "core", body: memory.body, eventId: key, createdAt: 1 },
+        ],
+        partial: false,
+      }),
+      viewer,
+      () => true,
+    );
   // The originating channel, as the community lists it.
   const listed = channelType && {
     ...owner.session.channels.list(),
@@ -393,7 +420,9 @@ function renderAgentActivity(
   const snapshot = {
     status: "ready" as const,
     generation: 1,
-    session,
+    session: memories
+      ? { ...session, agentMemories: memories.capability }
+      : session,
     ...(navigation && { scope: `https://relay.test:${viewer}`, viewer }),
   };
   const relay: RelayData = {
@@ -407,6 +436,12 @@ function renderAgentActivity(
   const type = {
     key: "test/echo",
     title: "Echo",
+    ...(memory && {
+      ProfileActions: ({ children }: { children: ReactNode }) => {
+        useAgentSaveState(memory.dirty, memory.saving);
+        return children;
+      },
+    }),
     tabs: tabs.map(({ title, role }) => ({
       id: title.toLowerCase(),
       title,
@@ -467,6 +502,7 @@ function renderAgentActivity(
   const agent = {
     key,
     pubkey: key,
+    ...(memory && { owner: viewer }),
     name: "Echo",
     type: type.key,
     place: "here",
@@ -482,10 +518,24 @@ function renderAgentActivity(
     find: (pubkey: string) => (pubkey === key ? agent : undefined),
     memberships: () => [],
     configHistory: () => undefined,
-    addedTabs: () => [],
+    addedTabs: () =>
+      linkTab
+        ? [
+            {
+              key: "link",
+              title: "Link",
+              component: ({ open }: { open?: (target: string) => boolean }) => (
+                <button type="button" onClick={() => open?.(personLink)}>
+                  Open person
+                </button>
+              ),
+            },
+          ]
+        : [],
     registerTab: () => {},
     controlAttention: () => {},
   } as unknown as Agents;
+  const open = vi.fn(() => true);
   let target = profileActivityViewTarget(key) ?? "";
   // Like Working now: the opener asks as it opens the target.
   if (transcript === "opened") openProfileTranscript(target, () => true);
@@ -495,12 +545,14 @@ function renderAgentActivity(
       relay={relay}
       agents={agents}
       target={target}
-      context={{
-        channelId: "originating-channel",
-        ...(rootId && { rootId }),
-        canOpen: () => true,
-        open: vi.fn(() => true),
-      }}
+      context={
+        memory?.context ?? {
+          channelId: "originating-channel",
+          ...(rootId && { rootId }),
+          canOpen: () => true,
+          open,
+        }
+      }
       close={() => {}}
       {...(navigation && { navigation })}
     />
@@ -515,12 +567,14 @@ function renderAgentActivity(
     {
       target,
       offered,
+      open,
       navigate: (next: string) => {
         target = next;
         view.rerender(panel(mounts));
       },
       /** Remounts the retained profile, as on returning to its channel. */
       remount: () => view.rerender(panel(++mounts)),
+      refresh: () => view.rerender(panel(mounts)),
     },
   );
 }
@@ -759,6 +813,156 @@ it("keeps an unsaved change until the reader chooses to leave it for a transcrip
     dispose();
   }
 });
+
+it("asks before a plugin tab's link replaces a profile with an unsaved name", async () => {
+  const dispose = renderAgentActivity(
+    [],
+    undefined,
+    false,
+    undefined,
+    undefined,
+    true,
+  );
+  const user = userEvent.setup();
+  try {
+    await user.click(screen.getByRole("tab", { name: "Link" }));
+    await user.click(screen.getByRole("button", { name: "Open person" }));
+    expect(dispose.open).toHaveBeenCalledTimes(1);
+    dispose.open.mockClear();
+    await user.click(
+      screen.getByRole("button", { name: "Agent profile actions" }),
+    );
+    await user.click(
+      await screen.findByRole("menuitem", { name: "Change name" }),
+    );
+    await user.type(screen.getByRole("textbox", { name: "Agent name" }), "!");
+    await user.click(screen.getByRole("button", { name: "Open person" }));
+    const dialog = screen.getByRole("alertdialog", {
+      name: "Discard changes?",
+    });
+    expect(dispose.open).not.toHaveBeenCalled();
+    await user.click(
+      within(dialog).getByRole("button", { name: "Keep editing" }),
+    );
+    expect(screen.getByRole("textbox", { name: "Agent name" })).toHaveValue(
+      "Echo!",
+    );
+    await user.click(screen.getByRole("button", { name: "Open person" }));
+    await user.click(
+      within(screen.getByRole("alertdialog")).getByRole("button", {
+        name: "Discard changes",
+      }),
+    );
+    expect(dispose.open).toHaveBeenCalledExactlyOnceWith(personLink);
+  } finally {
+    dispose();
+  }
+});
+
+it.each([
+  { dirty: false, saving: false },
+  { dirty: true, saving: false },
+  { dirty: true, saving: true },
+])(
+  "routes profile memory links with real panel matching (guard %j)",
+  async ({ dirty, saving }) => {
+    const channelId = "11111111-1111-4111-8111-111111111111";
+    const messageId = "e".repeat(64);
+    const messageLink = `buzz://message?channel=${channelId}&id=${messageId}`;
+    const panelLink = `buzz://repo?owner=${key}&d=example`;
+    const navigate = vi.fn(async () => ({ status: "opened" as const }));
+    const push = vi.fn((_target: string) => true);
+    const panels: RegisteredPanel[] = [
+      {
+        id: "repo",
+        title: "Repository",
+        key: "test/repo",
+        pluginId: "test",
+        revision: "one",
+        matches: (target) => !!parseEntityLink(new URL(target)),
+        component: () => null,
+      },
+    ];
+    // The production panel host resolves only registered panels, not messages.
+    const context = {
+      channelId: "originating-channel",
+      canOpen: (target: string) => !!resolveMatch(panels, target),
+      open: () => false,
+      push: (target: string) => !!resolveMatch(panels, target) && push(target),
+    };
+    expect(context.canOpen(messageLink)).toBe(false);
+    expect(context.canOpen(panelLink)).toBe(true);
+    const memory = {
+      body: `[Source](${messageLink})\n\n[Repository](${panelLink})`,
+      context,
+      dirty: false,
+      saving: false,
+    };
+    const dispose = renderAgentActivity(
+      [],
+      undefined,
+      false,
+      {
+        open: navigate,
+        snapshot: () => ({ entry: { target: { kind: "conversation" } } }),
+      } as unknown as Navigation,
+      undefined,
+      false,
+      memory,
+    );
+    const user = userEvent.setup();
+    try {
+      await user.click(screen.getByRole("tab", { name: "Memory" }));
+      await user.click(await screen.findByRole("button", { name: "core" }));
+      memory.dirty = dirty;
+      memory.saving = saving;
+      dispose.refresh();
+      for (const name of ["Source", "Repository"]) {
+        navigate.mockClear();
+        push.mockClear();
+        await user.click(screen.getByRole("link", { name }));
+        if (saving) {
+          expect(screen.queryByRole("alertdialog")).toBeNull();
+          expect(navigate).not.toHaveBeenCalled();
+          expect(push).not.toHaveBeenCalled();
+          continue;
+        }
+        if (dirty) {
+          expect(navigate).not.toHaveBeenCalled();
+          expect(push).not.toHaveBeenCalled();
+          await user.click(
+            within(screen.getByRole("alertdialog")).getByRole("button", {
+              name: "Keep editing",
+            }),
+          );
+          expect(navigate).not.toHaveBeenCalled();
+          expect(push).not.toHaveBeenCalled();
+          await user.click(screen.getByRole("link", { name }));
+          await user.click(
+            within(screen.getByRole("alertdialog")).getByRole("button", {
+              name: "Discard changes",
+            }),
+          );
+        }
+        if (name === "Source") {
+          expect(navigate).toHaveBeenCalledExactlyOnceWith({
+            version: 1,
+            kind: "conversation",
+            channelId,
+            messageId,
+            scope: { viewer, communityOrigin: "https://relay.test" },
+          });
+          expect(push).not.toHaveBeenCalled();
+        } else {
+          expect(push).toHaveBeenCalledExactlyOnceWith(panelLink);
+          expect(navigate).not.toHaveBeenCalled();
+        }
+      }
+    } finally {
+      dispose();
+    }
+  },
+);
 
 it("asks an Activity tab already open for the transcript, rather than opening another", () => {
   const dispose = renderAgentActivity(

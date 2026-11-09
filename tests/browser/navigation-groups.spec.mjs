@@ -922,17 +922,15 @@ test("Create new retains its draft when preferences fail before submission and r
     );
     held.resolve();
     await failed;
-    // The one recovery notice reports it; there is no separate preferences toast.
-    // The modal makes the page inert, so match the inline notice by attribute.
-    await expect(
-      page.locator('[role="status"][aria-label="Reconnecting to relay…"]'),
-    ).toBeVisible();
     await expect(
       dialog.getByRole("button", { name: "Create and move" }),
     ).toBeDisabled();
     await expect(dialog).toBeVisible();
     await expect(field).toHaveValue("Retained launch");
     await expect(dialog.getByRole("alert")).toContainText("Retry preferences");
+    // Relay recovery owns the transient failure: it stays quiet through its
+    // delay, and there is no separate preferences toast.
+    await expect(page.locator(".buzz-toast")).toHaveCount(0);
     expect(app.report.sidebarPublications ?? []).toHaveLength(0);
     // Another failed recovery must keep both the draft and recovery action.
     // Recovery would retry a transient failure on its own seconds later, and
@@ -1017,8 +1015,6 @@ scrollTest(
     await expect(
       page.getByRole("textbox", { name: "Message #Beta", exact: true }),
     ).toBeVisible();
-    await openPage(page, "Workflows");
-    await expect(sidebar).toBeVisible();
     // Navigation reveals the current entry; keep Beta in view at a nonzero
     // offset so the warm return has no reason to move the list.
     const scroll = await sidebar.evaluate((element) => {
@@ -1029,6 +1025,8 @@ scrollTest(
       return element.scrollTop;
     });
     expect(scroll).toBeGreaterThan(100);
+    await openPage(page, "Workflows");
+    await expect(sidebar).toBeHidden();
     let release;
     const held = new Promise((resolve) => {
       release = resolve;
@@ -1046,7 +1044,7 @@ scrollTest(
         const list = document.querySelector(
           'nav[aria-label="Subscribed channels"]',
         );
-        if (list)
+        if (list?.checkVisibility())
           window.sidebarFrames.push({
             top: list.scrollTop,
             groups: Array.from(list.querySelectorAll("summary"), (el) =>
@@ -1092,9 +1090,12 @@ scrollTest(
   },
 );
 
-// Browser-owned integration: the persistent sidebar's
-// menu/dialog portals, and encrypted saves while Messages is not mounted.
-test("Move and Create stay available on Workflows", async ({ page, app }) => {
+// Browser-owned integration: menu/dialog portals, encrypted saves, and
+// retained sidebar placement across app changes and reload.
+test("Move and Create persist across apps without a sidebar", async ({
+  page,
+  app,
+}) => {
   await open(page, app);
   await openPage(page, "Workflows");
   const projects = page.getByRole("heading", {
@@ -1102,6 +1103,8 @@ test("Move and Create stay available on Workflows", async ({ page, app }) => {
     exact: true,
   });
   await expect(projects).toBeVisible();
+  await expect(sidebar(page)).toBeHidden();
+  await openPage(page, "Messages");
   const node = await sidebar(page).elementHandle();
   const menu = await openMove(page, rowIn(page, "group:work"));
   const actions = page.getByRole("menu", {
@@ -1124,9 +1127,12 @@ test("Move and Create stay available on Workflows", async ({ page, app }) => {
     ({ name }) => name === "Off-page group",
   );
   await expect(rowIn(page, `group:${section.id}`)).toBeFocused();
+  await openPage(page, "Workflows");
   await expect(projects).toBeVisible();
   expect(await node.evaluate((element) => element.isConnected)).toBe(true);
   await page.reload();
   await expect(projects).toBeVisible();
+  await expect(sidebar(page)).toBeHidden();
+  await openPage(page, "Messages");
   await expect(rowIn(page, `group:${section.id}`)).toBeVisible();
 });

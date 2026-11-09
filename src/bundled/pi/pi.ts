@@ -106,6 +106,16 @@ type Connection = {
   gone?: Error;
 };
 
+/** An `open` naming the agent `as` carries its tools' credential instead:
+ * only this host's agent's commands get it, never the host itself. */
+async function credentialed(connection: Connection, params: object) {
+  const { as, ...rest } = params as {
+    as?: Readonly<{ pubkey: string; relay: string }>;
+  };
+  const credential = as && (await connection.process.toolCredential?.(as));
+  return credential ? { ...rest, credential } : rest;
+}
+
 export class Pi {
   private connection: Promise<Connection> | undefined;
   private requests = 0;
@@ -167,6 +177,7 @@ export class Pi {
   private async rawRequest<T>(method: string, params: object = {}): Promise<T> {
     const connection = await this.connect();
     if (connection.gone) throw connection.gone;
+    if (method === "open") params = await credentialed(connection, params);
     const id = ++this.requests;
     const answer = new Promise<unknown>((resolve, reject) =>
       connection.calls.set(id, { resolve, reject }),

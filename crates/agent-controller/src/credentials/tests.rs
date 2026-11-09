@@ -244,6 +244,20 @@ fn legacy_blob_rejects_wrong_keys_duplicates_and_unbounded_data() {
 }
 
 #[test]
+fn a_busy_or_unavailable_store_is_a_transient_legacy_human_failure() {
+    for failure in [Failure::Busy, Failure::Unavailable] {
+        let (credentials, fake) = fixture();
+        *fake.failure.lock().unwrap() = Some(failure);
+        let error = credentials
+            .read_legacy_human(LegacySource::Installed)
+            .err()
+            .unwrap();
+        assert!(error.transient, "{error:?}");
+        assert_eq!(error.message, failure.message());
+    }
+}
+
+#[test]
 fn legacy_human_reads_only_the_installed_identity_entry() {
     let human = serde_json::to_vec(&json!({"identity":"nsec-text", format!("agent:{PUB}"):KEY}));
     let human = human.unwrap();
@@ -269,7 +283,10 @@ fn legacy_human_reads_only_the_installed_identity_entry() {
             expected,
         ) {
             (Ok(value), Ok(text)) => assert_eq!(value.as_str(), text),
-            (Err(error), Err(text)) => assert!(error.contains(text), "{error}"),
+            (Err(error), Err(text)) => {
+                assert!(error.message.contains(text), "{error:?}");
+                assert!(!error.transient, "{error:?}");
+            }
             (result, _) => panic!("unexpected {:?}", result.map(|_| ())),
         }
         // One read of the selected source; nothing is written or deleted.

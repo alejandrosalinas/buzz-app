@@ -14,10 +14,13 @@ test("channel members opens from the header, fits each viewport, and returns key
   await openPage(page, "Messages");
   const conversation = page.getByRole("article", { name: "Conversation" });
   await expect(
-    conversation.getByRole("tab", { name: "Alpha", exact: true }),
+    conversation.getByRole("button", {
+      name: "Manage members of Alpha",
+      exact: true,
+    }),
   ).toBeVisible();
   const trigger = conversation.getByRole("button", {
-    name: "Manage members",
+    name: /^Manage members of /,
     exact: true,
   });
   for (const [width, height, mode] of [
@@ -32,7 +35,13 @@ test("channel members opens from the header, fits each viewport, and returns key
         document.documentElement.setAttribute("data-color-mode", value),
       mode,
     );
-    await trigger.click();
+    // The avatar’s leading edge must open members, clear of the resize strip.
+    const inset = await trigger.evaluate((node) =>
+      Number.parseFloat(getComputedStyle(node).paddingLeft),
+    );
+    await trigger.click({
+      position: { x: inset + 1, y: (await trigger.boundingBox()).height / 2 },
+    });
     const dialog = page.getByRole("dialog", {
       name: "Manage members",
       exact: true,
@@ -138,7 +147,7 @@ test("Members closes passively on Back, restores on Forward, and retires on expl
     exact: true,
   });
   const trigger = conversation.getByRole("button", {
-    name: "Manage members",
+    name: /^Manage members of /,
     exact: true,
   });
   const composer = conversation.getByRole("textbox", {
@@ -297,7 +306,7 @@ test.describe("scoped Members history", () => {
       ),
     ).toEqual({ status: "opened" });
     await page
-      .getByRole("button", { name: "Manage members", exact: true })
+      .getByRole("button", { name: /^Manage members of /, exact: true })
       .click();
     const dialog = page.getByRole("dialog", {
       name: "Manage members",

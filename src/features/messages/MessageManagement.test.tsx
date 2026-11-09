@@ -1236,7 +1236,10 @@ it("waits for confirmed membership before entering a restored channel visit", as
     snapshot = live;
     for (const listener of listeners) listener();
   });
-  expect(enterChannel).toHaveBeenCalledExactlyOnceWith("room");
+  expect(enterChannel).toHaveBeenCalledExactlyOnceWith(
+    "room",
+    document.hasFocus(),
+  );
   expect(screen.queryByRole("alert")).toBeNull();
   mounted.unmount();
   expect(leaveChannel).toHaveBeenCalledExactlyOnceWith("room");
@@ -1456,7 +1459,10 @@ it("keeps one unread visit until the last channel or thread view closes", async 
     </MessageManagement>,
   );
   await act(async () => {});
-  expect(enterChannel).toHaveBeenCalledExactlyOnceWith("room");
+  expect(enterChannel).toHaveBeenCalledExactlyOnceWith(
+    "room",
+    document.hasFocus(),
+  );
   channel.rerender(
     <MessageManagement session={session} channelId="room" active={false}>
       Channel
@@ -1526,4 +1532,52 @@ it("does not offer Edit message in a preview without a composer", async () => {
     screen.queryByRole("menuitem", { name: "Edit message" }),
   ).not.toBeInTheDocument();
   expect(t.publications).toHaveLength(0);
+});
+
+it("row visits follow document focus and visibility, including inactive entry and final cleanup", async () => {
+  const focus = vi.spyOn(document, "hasFocus").mockReturnValue(false);
+  const visibility = vi
+    .spyOn(document, "visibilityState", "get")
+    .mockReturnValue("visible");
+  try {
+    const h = await fixture(false, true);
+    cleanup();
+    const setActive = vi.fn(h.owner.session.unread.setChannelActive);
+    const session = {
+      ...h.owner.session,
+      unread: { ...h.owner.session.unread, setChannelActive: setActive },
+    };
+    render(
+      <MessageManagement session={session} channelId="room">
+        Conversation
+      </MessageManagement>,
+    );
+    await act(async () => {});
+    const unread = session.unread;
+    const snapshot = () =>
+      unread.snapshot({ kind: "channel", channelId: "room" });
+    expect(snapshot().row?.observedCount).toBe(1);
+    focus.mockReturnValue(true);
+    act(() => window.dispatchEvent(new Event("focus")));
+    expect(snapshot().row?.observedCount).toBe(0);
+    visibility.mockReturnValue("hidden");
+    act(() => document.dispatchEvent(new Event("visibilitychange")));
+    // A focus notification while hidden must not resume the visit.
+    act(() => window.dispatchEvent(new Event("focus")));
+    expect(setActive).toHaveBeenLastCalledWith("room", false);
+    visibility.mockReturnValue("visible");
+    act(() => document.dispatchEvent(new Event("visibilitychange")));
+    expect(setActive).toHaveBeenLastCalledWith("room", true);
+    focus.mockReturnValue(false);
+    act(() => window.dispatchEvent(new Event("blur")));
+    expect(setActive).toHaveBeenLastCalledWith("room", false);
+    cleanup();
+    setActive.mockClear();
+    focus.mockReturnValue(true);
+    act(() => window.dispatchEvent(new Event("focus")));
+    expect(setActive).not.toHaveBeenCalled();
+  } finally {
+    focus.mockRestore();
+    visibility.mockRestore();
+  }
 });

@@ -268,6 +268,10 @@ pub(super) async fn exchange(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use hyper::{server::conn::http1, service::service_fn};
+    use hyper_util::rt::TokioIo;
+    use std::net::Ipv4Addr;
+    use tokio::net::TcpListener;
     const VERIFIER: &str = "dBjftJeZ4CVP-mB92K27uhbUJU1p1r_wW1gFWFOEjXk";
     const CHALLENGE: &str = "E9Melhoa2OwvFrEMTJguCHaoeK1t8URWbuGJSstw-cM";
     async fn receiver(

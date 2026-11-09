@@ -9,16 +9,20 @@ import {
   useSyncExternalStore,
 } from "react";
 import { useTeamMentions } from "./use-team-mentions";
-import { useMentionChoices } from "./use-mention-choices";
+import { MENTION_ROWS, useMentionChoices } from "./use-mention-choices";
 import type { ComposerCompletionProps } from "../../features/conversation/contracts";
 import type { ComposerSession } from "../../features/messages/composer-session";
 import { Avatar } from "../../shared/design-system/ui/Avatar";
-import { outsideMentionDetail } from "./mention-candidates";
+import {
+  outsideMentionDetail,
+  remoteMentionDetail,
+} from "./mention-candidates";
 import { matchesMentionQuery, pendingMentionQuery } from "./mention-query";
 import { continuedMention, matchingMentions } from "./mention-ranking";
 import { resolveSpaceMention } from "./resolve-space-mention";
 import { SelectedMentionContext } from "../../features/messages/selected-mention-context";
 import { DraftMentionRoster } from "../../features/messages/draft-mention-roster";
+import { mentionTerminator } from "../../features/messages/mention-draft";
 import { AgentsContext } from "../../features/agents/react";
 import { avatarMedia } from "../../shared/avatar-source";
 import {
@@ -209,12 +213,21 @@ export function MentionCompletion({
     const memberKeys = new Set(members);
     const available = [
       ...matching.map(
-        ({ recipient, label, elsewhere, disabled, fullName, agent }) => {
+        ({
+          recipient,
+          label,
+          elsewhere,
+          disabled,
+          otherName,
+          agent,
+          execution,
+        }) => {
           const detail =
             disabled ??
-            // A verified full name sits beside the detail.
+            // The other verified name sits beside the detail.
             ([
-              fullName !== label ? fullName : undefined,
+              otherName,
+              remoteMentionDetail(execution),
               model.managedBy.get(recipient.pubkey),
               memberKeys.has(recipient.pubkey)
                 ? undefined
@@ -229,9 +242,10 @@ export function MentionCompletion({
               undefined);
           return {
             disabled,
+            // Every key that ends a typed name selects only the exact name.
             canSelect: (key: string) =>
-              (key !== " " || !teams.blocksSpace) &&
-              model.canSelect(recipient.pubkey, key === " "),
+              (!mentionTerminator(key) || !teams.blocksSpace) &&
+              model.canSelect(recipient.pubkey, mentionTerminator(key)),
             id: recipient.pubkey,
             label,
             agent,
@@ -287,11 +301,14 @@ export function MentionCompletion({
       : [
           ...available.slice(
             0,
-            Math.min(matching.length, 50 - matchingTeams.length),
+            Math.min(matching.length, MENTION_ROWS - matchingTeams.length),
           ),
           ...available.slice(matching.length),
         ];
-    const next = [...ids, ...additions.map((item) => item.id)].slice(0, 50);
+    const next = [...ids, ...additions.map((item) => item.id)].slice(
+      0,
+      MENTION_ROWS,
+    );
     shown.current = { session, key, ids: next };
     const byId = new Map(available.map((item) => [item.id, item]));
     // Space is undecided, not declined, only while evidence is still arriving:

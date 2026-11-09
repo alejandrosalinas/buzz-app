@@ -4,16 +4,17 @@ import {
   SafeMarkdown,
   safeMarkdownPlugins,
 } from "../../features/messages/SafeMarkdown";
+import { LIVE_CANVAS_BYTES } from "../../features/channel-templates/model";
 import { scanMarkdown } from "../../features/relay/message-content";
 import { Button } from "../../shared/design-system/ui/Button";
 import { LoadingRegion } from "../../shared/design-system/ui/LoadingRegion";
 import styles from "./Canvas.module.css";
 
 /**
- * Rendering budget for the View tab, independent of what Canvas saves accept.
- * Larger or deeply nested documents show their source instead.
+ * Rendering budget for the View tab, at the save limit: a UTF-16 length never
+ * exceeds the UTF-8 size, so every Canvas a save accepts passes this check.
  */
-export const CANVAS_RENDER_CHARS = 128 * 1024;
+export const CANVAS_RENDER_CHARS = LIVE_CANVAS_BYTES;
 
 /**
  * GFM pads every table row to its header's width, so a small sparse table can

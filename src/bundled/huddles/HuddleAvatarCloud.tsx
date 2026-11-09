@@ -362,18 +362,25 @@ function Bubble({
   stage: RefObject<HTMLElement | null>;
 }) {
   const level = muted ? 0 : Math.max(0, Math.min(1, person.level));
-  const label = `${person.name}${person.own ? (muted ? " (you, muted)" : " (you)") : ""}${level > 0 ? ", speaking" : ""}`;
+  // A seated voice agent rests smaller; speech restores its normal size.
+  const quiet = level === 0 && !!(person.listening || person.thinking);
+  const thinking = level === 0 && !!person.thinking;
+  const label = `${person.name}${person.own ? (muted ? " (you, muted)" : " (you)") : ""}${level > 0 ? ", speaking" : ""}${thinking ? ", thinking" : ""}${person.listening ? ", listening to you" : ""}`;
   return (
     <HuddleAvatarToss stage={stage}>
       <span
         className={styles.bubbleArtwork}
+        data-thinking={thinking || undefined}
         style={
           {
-            "--voice-scale": 1 + Math.min(level, 0.6) * 0.06,
+            "--voice-scale": quiet ? 0.8 : 1 + Math.min(level, 0.6) * 0.06,
           } as CSSProperties
         }
       >
         <SpeakingHalo level={level} person={person} />
+        {thinking && (
+          <span className={styles.thinkingRing} aria-hidden="true" />
+        )}
         <HuddleAvatarMotion participant={person.key} playful level={level}>
           <Avatar
             size="fill"

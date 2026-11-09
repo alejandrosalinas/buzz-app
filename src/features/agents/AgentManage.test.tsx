@@ -1,9 +1,15 @@
 // @vitest-environment jsdom
 import "@testing-library/jest-dom/vitest";
-import { cleanup, render, screen } from "@testing-library/react";
+import {
+  cleanup,
+  render,
+  screen,
+  waitFor,
+  within,
+} from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, expect, it, vi } from "vitest";
-import { AgentArchiveRetry, AgentDelete } from "./AgentManage";
+import { AgentArchiveRetry, AgentDelete, AgentRemoveHere } from "./AgentManage";
 import type { Agent, Agents } from "./service";
 
 afterEach(cleanup);
@@ -72,3 +78,49 @@ it("retries an unchecked archive state and shows what is left", async () => {
   expect(await screen.findByText("Ada is still archived.")).toBeVisible();
   expect(unarchive).toHaveBeenCalledWith(agent.key);
 });
+
+it.each(["delete", "remove"] as const)(
+  "%s starts on Cancel and Enter leaves the agent unchanged",
+  async (action) => {
+    const user = userEvent.setup();
+    const remove = vi.fn();
+    const leave = vi.fn();
+    const onRemoved = vi.fn();
+    const agents = {
+      remove,
+      leave,
+      memberships: () => [],
+    } as unknown as Agents;
+    const props = { agents, agent, onRemoved };
+    render(
+      action === "delete" ? (
+        <AgentDelete {...props} />
+      ) : (
+        <AgentRemoveHere
+          {...props}
+          trigger={(open) => (
+            <button type="button" onClick={open}>
+              Remove agent
+            </button>
+          )}
+        />
+      ),
+    );
+    const trigger = screen.getByRole("button", {
+      name: action === "delete" ? "Delete agent" : "Remove agent",
+    });
+    await user.click(trigger);
+    const dialog = await screen.findByRole("dialog");
+    await waitFor(() =>
+      expect(
+        within(dialog).getByRole("button", { name: "Cancel" }),
+      ).toHaveFocus(),
+    );
+    await user.keyboard("{Enter}");
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+    expect(trigger).toHaveFocus();
+    expect(remove).not.toHaveBeenCalled();
+    expect(leave).not.toHaveBeenCalled();
+    expect(onRemoved).not.toHaveBeenCalled();
+  },
+);

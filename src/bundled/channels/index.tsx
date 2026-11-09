@@ -129,7 +129,7 @@ export const apply: PluginModule["apply"] = (ctx) => {
     id: "channels",
     title: "Channels",
     primary: true,
-    placement: "topbar",
+    placement: "dock",
     layout: "workspace",
     companion: true,
     handlesNavigation: true,

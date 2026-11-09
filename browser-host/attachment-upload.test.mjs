@@ -485,3 +485,37 @@ test.each(["text/html"])(
     }
   },
 );
+
+test("an upload the community refuses marks its response for the connection", async () => {
+  let reply;
+  const h = await harness(async () => reply());
+  try {
+    for (const [status, body, mark] of [
+      [403, "authorization denied\n", "access"],
+      [401, "authentication required\n", "sign-in"],
+      [403, "evidence rejected\n", "sign-in"],
+      // The media route's own membership refusal (non-member or banned).
+      [403, JSON.stringify({ error: "relay membership required" }), "access"],
+      // The REST refusal, at 97 bytes past the old 64-byte copy bound.
+      [
+        403,
+        JSON.stringify({
+          error: "relay_membership_required",
+          message: "You must be a relay member to access this relay",
+        }),
+        "access",
+      ],
+      // An item's or an edge's refusal says nothing about the community.
+      [403, JSON.stringify({ error: "restricted: p-gated" }), null],
+      [403, "<html>Forbidden</html>", null],
+    ]) {
+      reply = () => new Response(body, { status });
+      const response = await h.post();
+      // The route still reports its own upload error.
+      expect(await response.json()).toEqual({ code: "denied" });
+      expect(response.headers.get("x-buzz-refusal")).toBe(mark);
+    }
+  } finally {
+    await h.close();
+  }
+});

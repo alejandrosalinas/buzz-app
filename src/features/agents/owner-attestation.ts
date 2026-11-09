@@ -1,5 +1,6 @@
 import { schnorr } from "@noble/curves/secp256k1.js";
 import { hexToBytes } from "nostr-tools/utils";
+import { communityDestination } from "../communities/destination";
 import type { ProfileQueries } from "../relay/profile-directory";
 import { hasEventProof, type EventData } from "../relay/events";
 import { workflowMentionOwner } from "../relay/workflow-attribution";
@@ -89,9 +90,28 @@ function satisfied(
   });
 }
 
-/** How a mention from a relay workflow is checked: the community's workflow
- * key, and its creators' profiles. */
+/** Whether this build keeps workflow messages from authorizing local agent
+ * requests in `community`. The build flag lists exact canonical origins; with
+ * any listed, an unknown or unreadable community is restricted too. */
+export function workflowRequestsRestricted(community: string | undefined) {
+  const restricted = (
+    import.meta.env.VITE_BUZZ_WORKFLOW_RESTRICTED_COMMUNITIES ?? ""
+  )
+    .split(" ")
+    .filter(Boolean);
+  if (!restricted.length) return false;
+  if (!community) return true;
+  try {
+    return restricted.includes(communityDestination(community).url);
+  } catch {
+    return true;
+  }
+}
+
+/** How a mention from a relay workflow is checked: the agent's community, the
+ * community's workflow key, and its creators' profiles. */
 export type WorkflowCheck = {
+  community?: string | undefined;
   authority: string | undefined;
   agent: string;
   profiles?: Pick<ProfileQueries, "ensure" | "event"> | undefined;
@@ -104,6 +124,7 @@ export function workflowOf(
 ): WorkflowCheck {
   return {
     agent,
+    community: reads?.origin,
     authority: reads?.workflowAuthority(),
     profiles: reads && {
       ensure: async (ids) => {
@@ -115,16 +136,23 @@ export function workflowOf(
 }
 
 /** Owner prompts, attested siblings, and verified relay workflow mentions
- * delegated by the owner or a profile-verified sibling to this particular agent. */
+ * delegated by the owner or a profile-verified sibling to this particular agent.
+ * Where the build restricts workflow requests, no workflow-marked message
+ * authorizes one: its rendered text is not bound to the owner's template. */
 export async function fromOwner(
   event: EventData,
   owner: string,
   workflow?: WorkflowCheck,
 ) {
+  const restricted = workflowRequestsRestricted(workflow?.community);
+  if (restricted && event.tags.some(([name]) => name === "buzz:workflow"))
+    return false;
   if (event.pubkey === owner || (await attestedOwner(event)) === owner)
     return true;
   const creator =
-    workflow && workflowMentionOwner(event, workflow.authority, workflow.agent);
+    !restricted &&
+    workflow &&
+    workflowMentionOwner(event, workflow.authority, workflow.agent);
   if (!creator) return false;
   if (creator === owner) return true;
   const profiles = workflow?.profiles;

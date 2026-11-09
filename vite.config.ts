@@ -10,9 +10,11 @@ import {
   relayOrigin,
 } from "./src/features/communities/destination.ts";
 import { parseFirstRunAccountSeed } from "./src/features/identity/first-run-seed.ts";
+import { isBuiltInBuilderlab } from "./src/features/federated-identity/community-hosts.ts";
 
-function sharedBuilderlabUrl() {
-  const key = "BUZZ_BUILDERLAB_URL";
+/** A value native builds also read: process first, then repository-root
+ * .env.local, never Vite mode files; undefined when unset. */
+function sharedBuildValue(key: string) {
   if (process.env[key] !== undefined) return process.env[key];
   let local: string;
   try {
@@ -24,21 +26,55 @@ function sharedBuilderlabUrl() {
       "code" in error &&
       error.code === "ENOENT"
     )
-      return "https://app.builderlab.xyz";
+      return undefined;
     throw new Error("Could not read shared Builderlab build configuration.");
   }
-  return (
-    parseEnv(local.replace(/^\uFEFF/, ""))[key] ?? "https://app.builderlab.xyz"
-  );
+  return parseEnv(local.replace(/^\uFEFF/, ""))[key];
 }
 
-/** An FI build signs in to Builderlab through its NIP-FI identity origin and
- * API base, in the legacy URL's shape (`<url>/api/goose/`). Native builds
- * read the descriptor from the process only, and so does this. */
-function federatedBuilderlabUrl() {
+/** The Apps control plane for the build's login origin, checked as native's
+ * `build.rs` checks it. */
+function sharedAppsControlPlane(login: string) {
+  const raw = sharedBuildValue("BUZZ_BUILDERLAB_APPS_CONTROL_PLANE") ?? "";
+  if (!raw) return "";
+  let url: URL | undefined;
+  try {
+    url = new URL(raw);
+  } catch {}
+  if (!login || url?.protocol !== "https:" || url.origin !== raw)
+    throw new Error(
+      "Builderlab Apps control plane must be an HTTPS origin with a login origin",
+    );
+  return raw;
+}
+
+/** The built-in sign-in server's Builderlab, in the legacy URL's shape. Keep
+ * in step with `BUILT_IN` in src-tauri/src/federated_identity/config.rs. */
+const BUILT_IN_BUILDERLAB = "https://app.builderlab.xyz";
+
+/** An FI build signs in to Builderlab through its first sign-in server's
+ * identity origin and API base, in the legacy URL's shape
+ * (`<url>/api/goose/`). This applies native's rule (`compiled` in
+ * federated_identity/config.rs): unset adds nothing to the built-in server,
+ * empty opts out, and a Builderlab URL for another deployment turns the
+ * built-in server off. Native builds read the descriptor from the process
+ * only, and so does this. */
+function federatedBuilderlabUrl(legacy: string | undefined, live: boolean) {
   const raw = process.env.BUZZ_BUILD_FEDERATED_IDENTITY_CONFIG;
-  if (!raw) return undefined;
-  const { identityOrigin, apiBasePath } = JSON.parse(raw) as {
+  if (raw === "") return undefined;
+  // The development broker keeps its own Builderlab sign-in unless the
+  // build adds a server (native's `dev_viewer`).
+  if (raw === undefined && live) return undefined;
+  if (raw === undefined)
+    return legacy === undefined
+      ? BUILT_IN_BUILDERLAB
+      : isBuiltInBuilderlab(legacy)
+        ? legacy
+        : undefined;
+  const parsed = JSON.parse(raw) as unknown;
+  const { identityOrigin, apiBasePath } = (
+    Array.isArray(parsed) ? parsed[0] : parsed
+  ) as {
     identityOrigin?: unknown;
     apiBasePath?: unknown;
   };
@@ -57,15 +93,29 @@ export default defineConfig(async ({ command, mode }) => {
   // Native builds consume only process values and repository-root .env.local.
   // Keep this frontend value on the same source so Vite mode files cannot
   // select a different same-origin deployment path.
-  const federatedUrl = federatedBuilderlabUrl();
-  const builderlabUrl = federatedUrl ?? sharedBuilderlabUrl();
   // The development broker is the dev server's default: it runs whenever the
   // developer has pinned their public key. Production builds (`pnpm build`,
   // `pnpm tauri build`) never load it, regardless of .env.local contents.
   const live = command === "serve" && Boolean(env.BUZZ_DEV_VIEWER?.trim());
+  const legacyUrl = sharedBuildValue("BUZZ_BUILDERLAB_URL");
+  const federatedUrl = federatedBuilderlabUrl(legacyUrl, live);
+  const builderlabUrl = federatedUrl ?? legacyUrl ?? BUILT_IN_BUILDERLAB;
+  const appsControlPlane = sharedAppsControlPlane(builderlabUrl);
   const aliases = env.BUZZ_COMMUNITY_ALIASES ?? "";
   parseCommunityAliases(aliases);
   const externalMcpCommunities = (env.BUZZ_EXTERNAL_MCP_COMMUNITIES ?? "")
+    .split(/\s+/)
+    .filter(Boolean)
+    .map(relayOrigin)
+    .join(" ");
+  const ownerMcpCommunities = (env.BUZZ_OWNER_MCP_COMMUNITIES ?? "")
+    .split(/\s+/)
+    .filter(Boolean)
+    .map(relayOrigin)
+    .join(" ");
+  const workflowRestrictedCommunities = (
+    env.BUZZ_WORKFLOW_RESTRICTED_COMMUNITIES ?? ""
+  )
     .split(/\s+/)
     .filter(Boolean)
     .map(relayOrigin)
@@ -127,7 +177,7 @@ export default defineConfig(async ({ command, mode }) => {
           api: `${builderlabUrl.replace(/\/$/, "")}/api/goose`,
           appsBase: (
             await import("./src/bundled/builderlab/apps/environment.ts")
-          ).controlPlane(builderlabUrl),
+          ).controlPlane(builderlabUrl, builderlabUrl, appsControlPlane),
         },
       }),
     );
@@ -156,12 +206,18 @@ export default defineConfig(async ({ command, mode }) => {
       "import.meta.env.VITE_BUZZ_EXTERNAL_MCP_COMMUNITIES": JSON.stringify(
         externalMcpCommunities,
       ),
+      "import.meta.env.VITE_BUZZ_OWNER_MCP_COMMUNITIES":
+        JSON.stringify(ownerMcpCommunities),
+      "import.meta.env.VITE_BUZZ_WORKFLOW_RESTRICTED_COMMUNITIES":
+        JSON.stringify(workflowRestrictedCommunities),
       "import.meta.env.VITE_BUZZ_BUILDERLAB_URL": JSON.stringify(builderlabUrl),
       "import.meta.env.VITE_BUZZ_FEDERATED_IDENTITY": JSON.stringify(
         federatedUrl === undefined ? "0" : "1",
       ),
       "import.meta.env.VITE_BUZZ_BUILDERLAB_APPS_DOMAIN":
         JSON.stringify(env.BUZZ_BUILDERLAB_APPS_DOMAIN) ?? "undefined",
+      "import.meta.env.VITE_BUZZ_BUILDERLAB_APPS_CONTROL_PLANE":
+        JSON.stringify(appsControlPlane),
       "import.meta.env.VITE_BUZZ_OPEN_RELAY": JSON.stringify(openOrigin),
       "import.meta.env.VITE_BUZZ_DATABRICKS_HOST":
         JSON.stringify(databricksHost),
@@ -173,6 +229,9 @@ export default defineConfig(async ({ command, mode }) => {
         input: {
           main: fileURLToPath(new URL("index.html", import.meta.url)),
           huddle: fileURLToPath(new URL("huddle.html", import.meta.url)),
+          compute: fileURLToPath(
+            new URL("compute-widget.html", import.meta.url),
+          ),
         },
       },
     },

@@ -31,6 +31,40 @@ pub const LIVE_CANVAS_BYTES: usize = 256 * 1024;
 /// the `["EVENT",…]` wrapper. Mirrors `CANVAS_MAX_EVENT_BYTES`.
 pub const CANVAS_MAX_EVENT_BYTES: usize = 512 * 1024 - 16;
 
+/// Whether an event of `kind` with `content` and `tags` is within the bounds
+/// an agent's or a paired tool's events are signed under: Canvas content up to [`LIVE_CANVAS_BYTES`], other
+/// content up to 64 KiB, and at most 256 tags of 4 KiB.
+pub fn bounded(kind: u16, content: &str, tags: &[Vec<String>]) -> Result<()> {
+    let content_limit = if kind == 40100 {
+        LIVE_CANVAS_BYTES
+    } else {
+        64 * 1024
+    };
+    if content.len() > content_limit
+        || tags.len() > 256
+        || tags
+            .iter()
+            .any(|tag| tag.is_empty() || tag.iter().map(String::len).sum::<usize>() > 4096)
+    {
+        return Err("Event is too large".into());
+    }
+    Ok(())
+}
+
+/// Escaping can carry Canvas content within its limit past the relay's
+/// frame, so check the complete event once every tag is present.
+pub fn framed(kind: u16, event: serde_json::Value) -> Result<serde_json::Value> {
+    if kind == 40100
+        && serde_json::to_vec(&event)
+            .map_err(|_| "Invalid agent event")?
+            .len()
+            > CANVAS_MAX_EVENT_BYTES
+    {
+        return Err("Event is too large".into());
+    }
+    Ok(event)
+}
+
 /// One saved identity. The key itself stays in the OS credential store.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -135,7 +169,7 @@ impl AppAgent {
         let valid = match parts.as_slice() {
             [hash] => crate::config::canonical_key(hash),
             [hash, part] => crate::config::canonical_key(hash) && ext(part),
-            [hash, "thumb", "jpg"] => crate::config::canonical_key(hash),
+            [hash, "thumb", "jpg" | "webp"] => crate::config::canonical_key(hash),
             _ => false,
         };
         if !valid {
@@ -152,8 +186,8 @@ impl AppAgent {
             .next()
             .and_then(|name| name.get(..64))
             .ok_or("Invalid media hash")?;
-        if canonical.ends_with(".thumb.jpg") {
-            // Thumbnails are derived JPEGs, but keep the source blob's name.
+        if canonical.ends_with(".thumb.jpg") || canonical.ends_with(".thumb.webp") {
+            // Thumbnails are derived images, but keep the source blob's name.
             return Ok(());
         }
         if sha256 != expected {
@@ -183,32 +217,26 @@ impl AppAgent {
                     .into(),
             );
         }
-        let content_limit = if kind == 40100 {
-            LIVE_CANVAS_BYTES
-        } else {
-            64 * 1024
-        };
-        if content.len() > content_limit
-            || tags.len() > 256
-            || tags
-                .iter()
-                .any(|tag| tag.is_empty() || tag.iter().map(String::len).sum::<usize>() > 4096)
-        {
-            return Err("Agent event is too large".into());
-        }
+        bounded(kind, &content, &tags)?;
         let tags = self.attested(key, tags)?;
-        let event = key.signed(kind, content, tags)?;
-        // Escaping can carry Canvas content within its limit past the relay's
-        // frame, so check the complete event once every tag is present.
-        if kind == 40100
-            && serde_json::to_vec(&event)
-                .map_err(|_| "Invalid agent event")?
-                .len()
-                > CANVAS_MAX_EVENT_BYTES
-        {
-            return Err("Agent event is too large".into());
+        framed(kind, key.signed(kind, content, tags)?)
+    }
+    /// Signs an event a local caller built, unchanged, as this agent. The
+    /// caller's credential service has already classified its kind; this keeps
+    /// the size bounds every agent event has.
+    pub fn sign_built(
+        &self,
+        key: &Secret,
+        kind: u16,
+        content: String,
+        tags: Vec<Vec<String>>,
+        created_at: u64,
+    ) -> Result<serde_json::Value> {
+        if key.pubkey() != self.pubkey {
+            return Err("Agent identity changed".into());
         }
-        Ok(event)
+        bounded(kind, &content, &tags)?;
+        framed(kind, key.sign_event_at(kind, content, tags, created_at)?)
     }
     /// Whether the community accepted this row's current public metadata.
     pub fn profile_is_current(&self) -> bool {
@@ -304,6 +332,22 @@ impl AppAgent {
             ],
         )?;
         Ok((url, key.signed(27235, String::new(), tags)?))
+    }
+    /// NIP-42 authentication (22242) of a Huddle audio socket in its own
+    /// community: it answers only the relay's `challenge`, with the owner
+    /// attestation the relay links the agent to its owner by.
+    pub fn audio_auth(&self, key: &Secret, challenge: &str) -> Result<serde_json::Value> {
+        if challenge.is_empty() || challenge.len() > 4096 {
+            return Err("Invalid Huddle challenge".into());
+        }
+        let tags = self.attested(
+            key,
+            vec![
+                vec!["relay".into(), self.relay.clone()],
+                vec!["challenge".into(), challenge.into()],
+            ],
+        )?;
+        key.signed(22242, String::new(), tags)
     }
     /// Blossom authorization (24242) to upload the blob with this SHA-256 to
     /// its community, valid for a minute.

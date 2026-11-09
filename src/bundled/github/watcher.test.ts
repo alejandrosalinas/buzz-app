@@ -723,6 +723,47 @@ describe("github_watch_pr", () => {
     next.dispose();
   });
 
+  it("keeps watching when its progress cannot be saved, as when storage is full", async () => {
+    const app = setup();
+    app.gh(answer({ checks: [{ name: "unit", conclusion: null }] }));
+    await app.call({ url });
+    const setItem = Storage.prototype.setItem;
+    const full = vi
+      .spyOn(Storage.prototype, "setItem")
+      .mockImplementation(function (this: Storage, key, value) {
+        if (key === "buzz.github.attention-cursors.v1")
+          throw new DOMException(
+            "The quota has been exceeded.",
+            "QuotaExceededError",
+          );
+        setItem.call(this, key, value);
+      });
+    try {
+      app.gh(answer({ checks: [{ name: "unit", conclusion: "SUCCESS" }] }));
+      await vi.advanceTimersByTimeAsync(POLL_MS);
+      app.gh(
+        answer({
+          head: "2222222222",
+          checks: [{ name: "unit", conclusion: "SUCCESS" }],
+        }),
+      );
+      await vi.advanceTimersByTimeAsync(POLL_MS);
+      app.gh(answer({ head: "2222222222", state: "MERGED" }));
+      await vi.advanceTimersByTimeAsync(POLL_MS);
+    } finally {
+      full.mockRestore();
+    }
+    expect(app.texts()).toEqual([
+      `CI passed on 111111111 for ${url}.`,
+      `CI passed on 222222222 for ${url}.`,
+      expect.stringMatching(
+        new RegExp(`^${url} was merged, so this watch has ended`),
+      ),
+    ]);
+    expect([...app.completed]).toHaveLength(1);
+    app.dispose();
+  });
+
   it("stops on request, when merged, and refuses unreadable pull requests", async () => {
     const app = setup();
     await app.call({ url });
@@ -730,7 +771,10 @@ describe("github_watch_pr", () => {
       `Stopped watching ${url}.`,
     );
     app.gh(null);
-    await expect(app.call({ url })).rejects.toThrow(/gh/);
+    // The refusal says what gh answered, so the agent can tell why.
+    await expect(app.call({ url })).rejects.toThrow(
+      /gh: Could not resolve to a Repository/,
+    );
     await expect(app.call({ url: "https://example.com/x" })).rejects.toThrow(
       /pull request URL/,
     );
@@ -993,6 +1037,7 @@ describe("github_watch_pr", () => {
   it("tells a running watch what rules saved in Settings allow", async () => {
     const app = setup();
     await app.call({ url });
+    savePolicy("", "deny");
     render(createElement(AuthorSettings, { active: () => true }));
     const save = (rules: string) => {
       fireEvent.change(screen.getByRole("textbox", { name: /Rules/ }), {
@@ -1000,7 +1045,6 @@ describe("github_watch_pr", () => {
       });
       fireEvent.click(screen.getByRole("button", { name: "Save" }));
     };
-    fireEvent.click(screen.getByRole("radio", { name: "Don’t wake it" }));
     save("allow author:wes");
     const wes = { id: "I1", login: "wes", body: "body-wes" };
     const stranger = { id: "I2", login: "stranger", body: "body-stranger" };
@@ -1357,10 +1401,10 @@ describe("github_watch_pr", () => {
     savePolicy(`deny body:/^\\s*nit\\b/i
 allow author:/^COPILOT/
 allow org:block
-allow org:squareup author:/^ada_/`);
+allow org:example-org author:/^ada_/`);
     const app = setup();
     await app.call({ url });
-    app.members(["alice@block", "ada_x@squareup", "bob@squareup"]);
+    app.members(["alice@block", "ada_x@example-org", "bob@example-org"]);
     app.gh(
       answer({
         comments: [

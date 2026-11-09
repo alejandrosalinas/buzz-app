@@ -4,6 +4,7 @@ import {
   extendsName,
   foldName,
   matchPerson,
+  matchTier,
   normalizeName,
 } from "./person-match";
 
@@ -30,9 +31,52 @@ describe("matchPerson", () => {
     expect(matchPerson("  Honey", "hon")?.positions).toEqual([2, 3, 4]);
   });
 
+  it("gives matchTier the tier of matchPerson, repeated and across queries", () => {
+    const names = [
+      "Mary José",
+      "Jose\u0301 Luis",
+      "ﬁona",
+      "  Honey ",
+      "ΟΔΥΣΣΕΥΣ",
+      "a-b",
+    ];
+    const queries = [
+      "jose",
+      "jose l",
+      "fio",
+      "hon",
+      "οδυσσευσ",
+      "b",
+      "",
+      "  ",
+      "zz",
+    ];
+    for (const query of queries)
+      for (const name of [...names, ...names])
+        expect(matchTier(name, [...normalizeName(query)])).toBe(
+          matchPerson(name, query)?.tier,
+        );
+  });
+
   it("normalizes the way it matches", () => {
     expect(normalizeName("  ÉLODIE ")).toBe("elodie");
     expect(foldName("José ")).toBe("jose ");
+    // Cached folds normalize as a fresh fold does, short or long, repeated or not.
+    const long = `${"é".repeat(130)} X`;
+    // Short, but folds to more than 128 code points, so it is not kept.
+    const wide = "ﷺ".repeat(8);
+    for (const name of [
+      "  José ",
+      "ﬁona",
+      "ΟΔΥΣΣΕΥΣ",
+      "a\u0301",
+      long,
+      long,
+      wide,
+      wide,
+      "  José ",
+    ])
+      expect(normalizeName(name)).toBe(foldName(name).trim());
   });
 
   it("finds a longer name only when it continues with a new word", () => {

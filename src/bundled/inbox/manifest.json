@@ -1,6 +1,6 @@
 {
   "id": "buzz.inbox",
-  "name": "Inbox",
+  "name": "Activity",
   "apiVersion": 1,
   "description": "Review conversation activity that needs your attention.",
   "discovery": { "category": "communication", "tags": ["Essentials", "tasks"] }

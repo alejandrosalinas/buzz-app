@@ -14,6 +14,7 @@ import {
   isAttentionTool,
 } from "./attention";
 import type { BuzzClient, Context } from "./client";
+import { callOwnerTool, isOwnerTool, OWNER_TOOLS } from "./owner";
 import { callPluginTool, isPluginTool, PLUGIN_TOOLS } from "./plugins";
 import { callSettingsTool, isSettingsTool, SETTINGS_TOOLS } from "./settings";
 import {
@@ -46,14 +47,11 @@ export type AddedTool = Readonly<{
 }>;
 type Listed = Pick<AddedTool, "name" | "description" | "inputSchema">;
 
-/** The Buzz tools that post a message, and so take `final`. Each harness
- * strips its own prefix from a tool's name before asking. */
-export const MESSAGE_TOOLS = ["send", "reply_in_subthread"] as const;
-export const isMessageTool = (name: unknown) =>
-  (MESSAGE_TOOLS as readonly unknown[]).includes(name);
-/** Whether a call posts a message marked final, which can end the turn. */
-export const isFinalMessage = (name: unknown, args: unknown) =>
-  isMessageTool(name) && (args as { final?: unknown } | null)?.final === true;
+export {
+  isFinalMessage,
+  isMessageTool,
+  MESSAGE_TOOLS,
+} from "./message-tools";
 
 export type BuzzSession = Readonly<{ tools: readonly Tool[] }>;
 
@@ -84,25 +82,33 @@ const listed = ({ name, description, inputSchema }: AddedTool): Listed => ({
  * never grows what every turn carries. */
 export type SessionTool = Listed & Readonly<{ load: "always" | "search" }>;
 
-/** The tools a session lists: the Buzz tools, then those plugins add. */
+/** The tools a session lists: the Buzz tools, then those plugins add. The
+ * owner tools only with `owner`: a client with `ownerAccess`. */
 export const sessionTools = (
   added: readonly AddedTool[] = [],
+  owner = false,
 ): readonly SessionTool[] => [
   ...TOOLS.map((tool) => ({ ...tool, load: "always" as const })),
   ...ATTENTION_TOOLS.map((tool) => ({ ...tool, load: "search" as const })),
   ...SOLO_WORKER_TOOLS.map((tool) => ({ ...tool, load: "search" as const })),
   ...PLUGIN_TOOLS.map((tool) => ({ ...tool, load: "search" as const })),
   ...SETTINGS_TOOLS.map((tool) => ({ ...tool, load: "search" as const })),
+  ...(owner
+    ? OWNER_TOOLS.map((tool) => ({ ...tool, load: "search" as const }))
+    : []),
   ...added.map((tool) => ({ ...listed(tool), load: "search" as const })),
 ];
 
 /** What the server (Claude) or namespace (Codex) with the tools says up
  * front, so the model knows what it can search for. */
-export function sessionHint(added: readonly AddedTool[] = []) {
+export function sessionHint(added: readonly AddedTool[] = [], owner = false) {
   const plugins = added.length
     ? ` and tools plugins add (${added.map((tool) => tool.name).join(", ")})`
     : "";
-  return `Read and act in Buzz as this agent. Search for the rest when you need them: your attention (Interests, event watches and timers; interest_set and watch_add say how they work), Nexus workers an owner lets you run (solo_worker_connections), this device's plugins (plugin_list; install, update, enable and remove are requests your owner confirms)${plugins}.`;
+  const owned = owner
+    ? ", your owner's channels, members, messages and canvases read with their access (owner_channel_list, owner_read)"
+    : "";
+  return `Read and act in Buzz as this agent. Search for the rest when you need them: your attention (Interests, event watches and timers; interest_set and watch_add say how they work), Nexus workers an owner lets you run (solo_worker_connections), this device's plugins (plugin_list; install, update, enable and remove are requests your owner confirms)${owned}${plugins}.`;
 }
 
 /** Changes when the added tools change, so a session that keeps the list it
@@ -164,12 +170,17 @@ export async function callSessionTool(
       ...(typeof args.command === "string" ? { command: args.command } : {}),
     });
   let reply: Reply;
+  let held: (() => void) | undefined;
   try {
-    reply = await dispatchSessionTool(client, context, name, args, added);
+    if (isOwnerTool(name) && !added.some((tool) => tool.name === name))
+      ({ text: reply, held } = await callOwnerTool(client, name, args));
+    else reply = await dispatchSessionTool(client, context, name, args, added);
   } catch (error) {
     return checkedToolError(client, session, error);
   }
   await client.protect?.({ kind: "tool-result", session, content: reply });
+  // An owner read is released only while the binding it was read with holds.
+  held?.();
   return reply;
 }
 
@@ -195,8 +206,8 @@ async function dispatchSessionTool(
 ): Promise<Reply> {
   const tool = added.find((tool) => tool.name === name);
   if (tool) {
-    // A plugin's tool doesn't get the agent's device settings.
-    const { settings: _, ...plugin } = client;
+    // A plugin's tool doesn't get the agent's device settings or owner access.
+    const { settings: _, ownerAccess: __, ...plugin } = client;
     return tool.call(plugin, context, args);
   }
   if (isSoloWorkerTool(name)) return callSoloWorkerTool(client, name, args);

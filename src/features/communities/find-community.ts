@@ -77,8 +77,16 @@ async function policyAnswer(response: Response) {
   }
 }
 
+/** buzz-relay's NIP-11 answer for a host it maps to no community. */
+const NO_COMMUNITY = "relay: no community is configured for this host";
+
 async function relayInfo(response: Response) {
   if (response.status >= 500) throw new FindCommunityError("unreachable");
+  if (
+    response.status === 404 &&
+    (await response.text().catch(() => "")) === NO_COMMUNITY
+  )
+    throw new FindCommunityError("no-community");
   const body: unknown = response.ok
     ? await response.json().catch(() => undefined)
     : undefined;
@@ -94,12 +102,5 @@ async function relayInfo(response: Response) {
     )
   )
     throw new FindCommunityError("not-buzz");
-  // Host-bound fields are present only when the relay maps this host to a community.
-  if (
-    info.read_state_snapshot === undefined &&
-    info.icon === undefined &&
-    info.buzz_v1 === undefined
-  )
-    throw new FindCommunityError("no-community");
   return info;
 }

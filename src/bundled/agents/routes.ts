@@ -1,4 +1,5 @@
 import type { AgentViewProps } from "../../features/agents/service";
+import { AGENT_CARD_ID } from "../../features/navigation/buzz-links";
 import type { Navigation } from "../../features/navigation/controller";
 import type {
   JsonValue,
@@ -27,24 +28,58 @@ export function agentProviderRoute(value: JsonValue | undefined) {
     : undefined;
 }
 
-/** An agent of yours to open, as `{ agent: pubkey }`. */
-export function agentRoute(value: JsonValue | undefined) {
+/** `value`'s `key`, alone or with a version `revision`, when `valid`. */
+function subjectRoute(
+  value: JsonValue | undefined,
+  key: "agent" | "team",
+  valid: RegExp,
+) {
   if (!value || typeof value !== "object" || Array.isArray(value)) return;
-  const keys = Object.keys(value);
-  const agent = (value as Readonly<Record<string, JsonValue>>).agent;
+  const params = value as Readonly<Record<string, JsonValue>>;
+  const keys = Object.keys(params);
+  const subject = params[key];
   return (keys.length === 1 ||
     (keys.length === 2 &&
-      ((value as Record<string, JsonValue>).revision === "" ||
-        !!historySelection((value as Record<string, JsonValue>).revision)))) &&
-    keys.includes("agent") &&
-    typeof agent === "string" &&
-    /^[0-9a-f]{64}$/.test(agent)
-    ? agent
+      (params.revision === "" || !!historySelection(params.revision)))) &&
+    keys.includes(key) &&
+    typeof subject === "string" &&
+    valid.test(subject)
+    ? subject
+    : undefined;
+}
+
+/** An agent of yours to open, as `{ agent: pubkey }`. */
+export const agentRoute = (value: JsonValue | undefined) =>
+  subjectRoute(value, "agent", /^[0-9a-f]{64}$/);
+
+/** A team of yours to open, as `{ team: id }`. */
+export const teamRoute = (value: JsonValue | undefined) =>
+  subjectRoute(
+    value,
+    "team",
+    /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/,
+  );
+
+/** A published agent card to start an agent from, as `{ card: id }`. */
+export function agentCardRoute(value: JsonValue | undefined) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return;
+  const keys = Object.keys(value);
+  const card = (value as Readonly<Record<string, JsonValue>>).card;
+  return keys.length === 1 &&
+    keys[0] === "card" &&
+    typeof card === "string" &&
+    AGENT_CARD_ID.test(card)
+    ? card
     : undefined;
 }
 
 export const availableAgentProviderRoute = (value: JsonValue) =>
-  Boolean(agentProviderRoute(value) ?? agentRoute(value));
+  Boolean(
+    agentProviderRoute(value) ??
+      agentRoute(value) ??
+      teamRoute(value) ??
+      agentCardRoute(value),
+  );
 
 /** The Agents page with `pubkey` open. */
 export const agentTarget = (pubkey: string) =>
@@ -83,10 +118,11 @@ export function conversationOpener(
     });
 }
 
-/** A version address preserves the agent and the page's account/community scope. */
-export function agentHistoryTarget(
+/** A version address preserves the agent or team and the page's
+ * account/community scope. */
+export function historyTarget(
   target: PageTarget,
-  agent: string,
+  subject: Readonly<{ agent: string } | { team: string }>,
   selected?: HistorySelection,
 ): PageTarget {
   return {
@@ -94,14 +130,19 @@ export function agentHistoryTarget(
     route: {
       version: 1,
       params: {
-        agent,
+        ...subject,
         revision: selected ? historySelectionKey(selected) : "",
       },
     },
   };
 }
-export function agentHistoryRoute(value: JsonValue | undefined) {
-  return agentRoute(value) &&
+
+/** The version a route opens, with `route` its agent or team route. */
+export function historyRoute(
+  value: JsonValue | undefined,
+  route: (value: JsonValue | undefined) => string | undefined,
+) {
+  return route(value) &&
     value &&
     typeof value === "object" &&
     !Array.isArray(value)
@@ -109,9 +150,12 @@ export function agentHistoryRoute(value: JsonValue | undefined) {
     : undefined;
 }
 
-export function agentHistoryActive(value: JsonValue | undefined) {
+export function historyActive(
+  value: JsonValue | undefined,
+  route: (value: JsonValue | undefined) => string | undefined,
+) {
   return (
-    !!agentRoute(value) &&
+    !!route(value) &&
     value !== null &&
     typeof value === "object" &&
     "revision" in value

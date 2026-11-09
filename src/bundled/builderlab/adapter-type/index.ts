@@ -1,8 +1,14 @@
 import { BuilderlabLogoIcon } from "../../../shared/design-system/icons";
 import { createActivityTab } from "./Activity";
 import { createSettingsTab } from "./Instructions";
-import { createProfileActions, createSignInFooter } from "./SignInFooter";
-import { creationConfig, createCreationFields, EMPTY_CREATION } from "./Create";
+import { createProfileActions } from "./SignInFooter";
+import {
+  creationConfig,
+  createCreationAction,
+  createCreationFields,
+  EMPTY_CREATION,
+  type CreationConfig,
+} from "./Create";
 import type { AgentType } from "../../../features/agents/service";
 import type { RelayData } from "../../../features/relay/service";
 import type { AgentClient } from "../agents/client";
@@ -99,7 +105,7 @@ export function builderlabType(
         "Sign in to the Builderlab account that selected these model settings.",
       );
     if (
-      !catalog
+      !catalog.models
         .find((model) => model.id === draft.modelId)
         ?.supportedReasoningEfforts.includes(draft.reasoningEffort)
     )
@@ -114,8 +120,14 @@ export function builderlabType(
     icon: BuilderlabLogoIcon,
     description: "Sign in to Builderlab when creating an agent.",
     defaults: () => ({ config: { ...EMPTY_CREATION } }),
+    // Instructions brought to a new agent, as from an agent card.
+    adopt: (carry, saved) => ({
+      ...(saved as CreationConfig),
+      instructions:
+        carry.instructions ?? (saved as CreationConfig).instructions,
+    }),
     ...createCreationFields(client, session),
-    PanelFooter: createSignInFooter(session),
+    CreateAction: createCreationAction(session),
     ProfileActions: createProfileActions(session),
     tabs: [
       {

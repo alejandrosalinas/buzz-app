@@ -12,6 +12,8 @@ export function VideoReviewReactions({
   scope,
   channelId,
   rootId,
+  replyParentId,
+  mediaTargetUrl,
   videoRef,
   extensions,
 }: {
@@ -19,6 +21,8 @@ export function VideoReviewReactions({
   scope: string;
   channelId: string;
   rootId: string;
+  replyParentId: string;
+  mediaTargetUrl: string;
   videoRef: RefObject<HTMLVideoElement | null>;
   extensions?: ConversationExtensions | undefined;
 }) {
@@ -39,6 +43,12 @@ export function VideoReviewReactions({
         channelId,
         rootId,
         mediaTimeReply(videoRef.current?.currentTime ?? 0, emoji),
+        [],
+        [],
+        replyParentId,
+        [],
+        {},
+        mediaTargetUrl,
       );
       setError(undefined);
       return true;

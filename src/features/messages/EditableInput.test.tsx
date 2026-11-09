@@ -3023,6 +3023,8 @@ const controlKey = (key: "a" | "e" | "k", shiftKey = false) => ({
 const optionKey = (key: "ArrowUp" | "ArrowDown") => ({
   key,
   code: key,
+  // A browser's keyCode, so ProseMirror's own arrow handling runs as well.
+  keyCode: key === "ArrowUp" ? 38 : 40,
   altKey: true,
 });
 const linked = `first\nbefore https://github.com/block/buzz/pull/117/changes after\nlast`;
@@ -3067,6 +3069,15 @@ it("moves Option-Up and Option-Down across a link chip, then on to the neighbour
     handledAt(linked.length),
   );
   expect(snapshot(h)).toEqual(before);
+});
+
+it("leaves Option-Up and Option-Down to the conversation shortcuts in an empty draft", () => {
+  setPlatform("MacIntel");
+  const h = mount("");
+  // An unprevented key reaches the window's shortcut dispatcher, which steps
+  // to the previous or next conversation while the composer has focus.
+  expect(chord(h.input, optionKey("ArrowUp"))).toEqual([0, 0, false]);
+  expect(chord(h.input, optionKey("ArrowDown"))).toEqual([0, 0, false]);
 });
 
 it("deletes through a link chip for Control-K, leaving plain text to the browser", () => {
@@ -3613,14 +3624,40 @@ it("returns a pending chip to its typed query when a name character is typed rig
   expect(h.draft().recipients).toEqual([]);
   act(() => h.input.undo(false));
   expect(h.draft().pending?.map((item) => item.id)).toEqual([id]);
-  // Punctuation is a name boundary and keeps the chip, as for a recipient.
-  const p = mount("@mira");
-  act(() => {
-    p.input.insertPendingMention("mira", { start: 0, end: 5 });
-  });
-  await p.user.keyboard("{Backspace},");
-  expect(p.input).toHaveValue("@mira,");
-  expect(p.draft().pending).toHaveLength(1);
+  // Punctuation and quotes are name boundaries and keep the chip, as for a
+  // recipient.
+  for (const character of [",", "'", "’"]) {
+    const p = mount("@mira");
+    act(() => {
+      p.input.insertPendingMention("mira", { start: 0, end: 5 });
+    });
+    await p.user.keyboard(`{Backspace}${character}`);
+    expect(p.input).toHaveValue(`@mira${character}`);
+    expect(p.draft().pending).toHaveLength(1);
+  }
+});
+it("keeps a recipient when a quote or apostrophe follows its chip, however the character arrives", async () => {
+  for (const character of ["'", "’", '"', "”"]) {
+    const h = mount();
+    act(() => h.input.insertText("", miraExample));
+    await h.user.keyboard(`{Backspace}${character}s`);
+    expect(h.input).toHaveValue(`@Mira Example${character}s`);
+    expect(h.draft().recipients).toEqual([
+      { ...miraExample, start: 0, end: 13 },
+    ]);
+  }
+  // macOS smart quotes after a picked chip: with no chooser open, the `'`
+  // keystroke is typed natively, then the system substitutes `’` for it with
+  // no keydown of its own.
+  const h = mount();
+  act(() => h.input.insertText("", honey));
+  await h.user.keyboard("{Backspace}'");
+  expect(h.input).toHaveValue("@Honey'");
+  const after = h.input.querySelector("[data-source]")?.nextSibling;
+  if (!(after instanceof Text)) throw new Error("No text after the chip");
+  await act(async () => after.replaceData(0, 1, "’"));
+  expect(h.input).toHaveValue("@Honey’");
+  expect(h.draft().recipients).toEqual([{ ...honey, start: 0, end: 6 }]);
 });
 it("leaves a pending chip to the identity link that adopts it, without restoring its typed query", async () => {
   const h = mount("[@honey", { links: true });
@@ -4610,6 +4647,57 @@ it.each([
   [
     "Ship 🚀 guide",
     'Ship <img data-stringify-type="emoji" alt="🚀"> <a href="https://example.com">guide</a>',
+    "Ship 🚀 [guide](https://example.com/)",
+  ],
+  [
+    "Hello :wave: Review the pull request",
+    'Hello <img alt=":wave:" src="https://example.com/emoji.png"> Review <a href="https://example.com/review">the pull request</a>',
+    "Hello :wave: Review [the pull request](https://example.com/review)",
+  ],
+  [
+    "Read 🚀 guide",
+    'Read <a href="https://example.com"><img alt="🚀"> guide</a>',
+    "Read [🚀 guide](https://example.com/)",
+  ],
+  [
+    "Read 🚀",
+    'Read <a href="https://example.com"><img alt="🚀"></a>',
+    "Read [🚀](https://example.com/)",
+  ],
+  [
+    "Read guide",
+    'Read <img src="https://example.com/image.png"><img alt=""> <a href="https://example.com">guide</a>',
+    "Read  [guide](https://example.com/)",
+  ],
+  [
+    "Read <img src=x onerror=alert(1)> guide",
+    'Read <img alt="&lt;img src=x onerror=alert(1)&gt;"> <a href="https://example.com">guide</a>',
+    "Read <img src=x onerror=alert(1)> [guide](https://example.com/)",
+  ],
+])(
+  "preserves image alt text and safe external links: %s",
+  (plain, html, expected) => {
+    const h = mount();
+    paste(h.input, plain, html);
+    expect(h.markdown()).toBe(expected);
+    expect(h.input.querySelector("img")).toBeNull();
+    act(() => h.input.undo(false));
+    expect(h.markdown()).toBe("");
+  },
+);
+
+it.each([
+  [
+    "Ship 🚀 guide",
+    'Ship <img alt="different"> <a href="https://example.com">guide</a>',
+  ],
+  [
+    "Read guide",
+    'Read <img alt="extra"> <a href="https://example.com">guide</a>',
+  ],
+  [
+    "Ship 🚀 guide",
+    'Ship <img alt="🚀" onerror="alert(1)"> <a href="javascript:alert(1)">guide</a>',
   ],
   [
     "guide",

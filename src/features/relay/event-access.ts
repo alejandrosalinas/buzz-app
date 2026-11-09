@@ -1,5 +1,7 @@
 import type { EventData } from "./events";
 import { channelRowChannel, channelRowKind } from "./membership";
+import { reactionTarget } from "./reaction-target";
+import { channelSourceKind } from "./channel-kinds";
 
 const AUXILIARY = new Set([5, 7, 9005, 40003, 39005]);
 /** Visibility, not a second membership model. Reference-only auxiliaries need
@@ -11,6 +13,32 @@ export function eventVisibility(
 ) {
   const memo = new Map<string, boolean>();
   const visiting = new Set<string>();
+  const homesById = new Map<string, string | undefined>();
+  function home(event: EventData, depth = 0): string | undefined {
+    if (homesById.has(event.id)) return homesById.get(event.id);
+    if (depth >= 32 || !channelSourceKind(event.kind)) return undefined;
+    homesById.set(event.id, undefined);
+    const homes = event.tags.filter(([name]) => name === "h");
+    if (homes.length) {
+      const channel = homes.length === 1 ? homes[0]?.[1] : undefined;
+      homesById.set(event.id, channel);
+      return channel;
+    }
+    if (!AUXILIARY.has(event.kind)) return undefined;
+    const targets =
+      event.kind === 7
+        ? [reactionTarget(event)]
+        : event.tags.filter(([name]) => name === "e").map((tag) => tag[1]);
+    let channel: string | undefined;
+    for (const id of targets) {
+      const parent = id ? find(id) : undefined;
+      const source = parent && home(parent, depth + 1);
+      if (!source || (channel && source !== channel)) return undefined;
+      channel = source;
+    }
+    homesById.set(event.id, channel);
+    return channel;
+  }
   function visible(event: EventData): boolean {
     if (channelRowKind(event.kind) && !channelRowChannel(event)) return false;
     const cached = memo.get(event.id);
@@ -42,6 +70,18 @@ export function eventVisibility(
           // cannot launder a second denied/unknown target in the same raw event.
           return !!parent && visible(parent);
         });
+      // A readable target does not authorize a different claimed source. The
+      // reaction's last valid e is authoritative; deletion targets all apply.
+      const scopedTargets =
+        event.kind === 7 ? [reactionTarget(event)] : targets;
+      if (allowed && channels.length)
+        allowed =
+          channels.length === 1 &&
+          scopedTargets.length > 0 &&
+          scopedTargets.every((id) => {
+            const parent = id ? find(id) : undefined;
+            return !!parent && home(parent) === channels[0];
+          });
     }
     visiting.delete(event.id);
     memo.set(event.id, allowed);

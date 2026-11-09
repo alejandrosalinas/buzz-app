@@ -95,8 +95,9 @@ export function messageLinkParts(
 ): LinkPart[] {
   const parts: LinkPart[] = [];
   let offset = 0;
+  // CJK punctuation ends a bare URL, except 。．｡ before a host label (URLs read them as dots).
   for (const match of content.matchAll(
-    /(?<!\\)\[((?:\\[^\r\n]|[^[\]\\\r\n])+)\]\\?\(|<(?:https?|buzz):\/\/[^\s<>"`]+>|(?:https?|buzz):\/\/[^\s<>"`]+/gi,
+    /(?<!\\)\[((?:\\[^\r\n]|[^[\]\\\r\n])+)\]\\?\(|<(?:https?|buzz):\/\/[^\s<>"`]+>|(?:https?|buzz):\/\/(?:[^\s<>"`:/?#，。、．！？；：＂＇（）［］｛｝「」『』《》【】〈〉〔〕〖〗〝〞〟｡｢｣､“”‘’…～〜]|[。．｡](?=[a-z\d-]+(?![a-z\d-]|:\/\/)))*(?:[:/?#][^\s<>"`，。、．！？；：＂＇（）［］｛｝「」『』《》【】〈〉〔〕〖〗〝〞〟｡｢｣､“”‘’…～〜]*)?/gi,
   )) {
     if (match.index < offset) continue;
     if (match[1] !== undefined) {

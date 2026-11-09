@@ -95,10 +95,10 @@ export function reauthorizedOnce(
 export const RECOVERY_DELAYS_MS = Object.freeze([
   1_000, 2_000, 4_000, 8_000, 16_000, 30_000,
 ]);
-/** Recovery shows its notice only once it lasts this long, so a socket blip
- * or a failure that the first retries fix stays quiet. Its own timer, not a
- * retry, starts it: a retry that hangs still shows the notice. */
-export const RECOVERY_NOTICE_DELAY_MS = 3_000;
+/** Recovery shows its notice only once it lasts this long, so a socket blip,
+ * a wake from sleep or a failure that the first retries fix stays quiet. Its
+ * own timer, not a retry, starts it: a retry that hangs still shows the notice. */
+export const RECOVERY_NOTICE_DELAY_MS = 30_000;
 
 export function createRecovery(
   sources: readonly RecoverySource[],

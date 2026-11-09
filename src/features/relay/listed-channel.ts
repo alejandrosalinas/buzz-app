@@ -30,3 +30,17 @@ export function useListedChannel<T>(
     snapshot,
   );
 }
+
+/** `useListedChannel` that, like the store, falls back to `get` for a channel
+ * the list does not hold (a preview or a starting Solo chat). `select` must
+ * return stable values; for the fallback that relies on `get` keeping `members`
+ * referentially stable. */
+export function useHeaderChannel<T>(
+  queries: Pick<ChannelQueries, "list" | "get" | "subscribeList">,
+  channelId: string,
+  select: (channel: ChannelSummary | undefined) => T,
+): T {
+  return useListedChannel(queries, channelId, (listed) =>
+    select(listed ?? queries.get?.(channelId)),
+  );
+}

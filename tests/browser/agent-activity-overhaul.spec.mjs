@@ -167,7 +167,9 @@ test("message activity opens a grouped preview and the agent's profile without l
       },
     });
   });
-  const region = thread.getByRole("region", {
+  const requestRow = thread.locator(`[data-message-id="${root.id}"]`);
+  // Expired outcomes can follow public replies; inspect this request's activity.
+  const region = requestRow.getByRole("region", {
     name: "Agent activity on this message",
     exact: true,
   });
@@ -210,7 +212,6 @@ test("message activity opens a grouped preview and the agent's profile without l
     ["h", "alpha"],
     ["e", root.id],
   ]);
-  const requestRow = thread.locator(`[data-message-id="${root.id}"]`);
   const messageActions = requestRow.getByRole("group", {
     name: "Message actions",
     includeHidden: true,
@@ -241,9 +242,18 @@ test("message activity opens a grouped preview and the agent's profile without l
   // The shared summary represents these requests once, alongside participants.
   await expect(threadIndicator).toHaveCount(1);
   await reply.fill("Keep this draft while inspecting activity");
+  let livenessSeq = 3;
+  const renew = () => {
+    telemetryTime = new Date().toISOString();
+    keys.forEach((_, index) => {
+      send(index, "turn_liveness", ++livenessSeq);
+    });
+  };
   for (const colorScheme of ["light", "dark"]) {
     await page.emulateMedia({ colorScheme });
     for (const width of [1440, 800, 390]) {
+      // Geometry checks inspect live tool details, not telemetry expiry.
+      renew();
       // Resize with the channel toolbar revealed: the overlay thread pane
       // must cover it, even if the pointer has not moved off its old row.
       await page.setViewportSize({ width: 1440, height: 950 });
@@ -341,6 +351,7 @@ test("message activity opens a grouped preview and the agent's profile without l
         .toBe(true);
     }
   }
+  renew();
   await page.emulateMedia({ reducedMotion: "reduce" });
   expect(
     await bubble
@@ -410,6 +421,9 @@ test("message activity opens a grouped preview and the agent's profile without l
   const resumedAt = await page.evaluate(() => Math.floor(Date.now() / 1000));
   publish(keys[0], 20002, "", typingTags, resumedAt);
   publish(keys[1], 20002, "", typingTags, resumedAt);
+  // Typing does not renew exact request work; observer liveness does.
+  telemetryTime = await page.evaluate(() => new Date().toISOString());
+  send(0, "turn_liveness", ++livenessSeq);
   await expect(threadIndicator).toHaveCount(1);
   // The tab title may be the loaded message preview, not literally "Thread".
   await page
@@ -421,11 +435,11 @@ test("message activity opens a grouped preview and the agent's profile without l
     .click();
   publish(human, 9, "Unread reply while agents work", typingTags, resumedAt);
   await expect(summary).toHaveAccessibleName(/Observed unread replies/);
-  // Mixed freshness is shown in activity, separate from reply navigation. Control expiry explicitly
-  // so narrow-layout coverage does not depend on the runner crossing 30s.
+  // Passive uncertainty stays quiet while the other agent keeps working.
+  // Control expiry so this transition does not depend on runner speed.
   await page.clock.fastForward(31_000);
   telemetryTime = await page.evaluate(() => new Date().toISOString());
-  send(1, "turn_liveness", 4);
+  send(1, "turn_liveness", ++livenessSeq);
   const channelActivity = row.getByRole("region", {
     name: "Agent activity on this message",
   });
@@ -434,18 +448,29 @@ test("message activity opens a grouped preview and the agent's profile without l
     name: "Agent activity",
     exact: true,
   });
-  await expect(
-    mixedActivity.getByRole("button", {
-      name: "View activity for Agent 1",
-      exact: true,
-    }),
-  ).toContainText("Activity interrupted or out of date");
-  await expect(
-    mixedActivity.getByRole("button", {
-      name: "View activity for Agent 2",
-      exact: true,
-    }),
-  ).not.toContainText("Activity interrupted or out of date");
+  const firstActivity = mixedActivity.getByRole("button", {
+    name: "View activity for Agent 1",
+    exact: true,
+  });
+  const secondActivity = mixedActivity.getByRole("button", {
+    name: "View activity for Agent 2",
+    exact: true,
+  });
+  await expect(secondActivity).toBeVisible();
+  await expect(secondActivity).not.toContainText(
+    "Activity interrupted or out of date",
+  );
+  await expect(firstActivity).toHaveCount(0);
+  await expect(channelActivity.locator(".buzz-avatar")).toHaveCount(1);
+  await expect(channelActivity).not.toContainText("Couldn’t finish");
+  // Uncertainty is retained internally: fresh evidence restores the same agent.
+  telemetryTime = await page.evaluate(() => new Date().toISOString());
+  send(0, "turn_liveness", ++livenessSeq);
+  await expect(firstActivity).toBeVisible();
+  await expect(firstActivity).not.toContainText(
+    "Activity interrupted or out of date",
+  );
+  await expect(channelActivity.locator(".buzz-avatar")).toHaveCount(2);
   await page.keyboard.press("Escape");
   for (const colorScheme of ["light", "dark"]) {
     await page.emulateMedia({ colorScheme });
@@ -499,13 +524,13 @@ test("message activity opens a grouped preview and the agent's profile without l
   await page.setViewportSize({ width: 1440, height: 950 });
   await row.getByRole("button", { name: /^View thread:/ }).click();
   telemetryTime = await page.evaluate(() => new Date().toISOString());
-  send(0, "turn_completed", 4);
-  // Published replies replace the thread's root placeholder; the channel
-  // retains request activity until the remaining agent finishes.
-  await expect(region).toHaveCount(0);
+  send(0, "turn_completed", ++livenessSeq);
+  // Public replies do not complete work: both the thread and channel retain
+  // the remaining agent's request activity until its lifecycle finishes.
+  await expect(region.locator(".buzz-avatar")).toHaveCount(1);
   await expect(channelActivity.locator(".buzz-avatar")).toHaveCount(1);
   await expect(threadIndicator).toHaveCount(1);
-  send(1, "turn_completed", 5);
+  send(1, "turn_completed", ++livenessSeq);
   await expect(channelActivity).toHaveCount(0);
   await expect(region).toHaveCount(0);
   await expect(threadIndicator).toHaveCount(0);

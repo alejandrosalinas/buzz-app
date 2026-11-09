@@ -125,77 +125,22 @@ fn clear_with<E>(delete: impl FnMut(&str) -> Result<(), E>) -> Result<(), E> {
         .try_for_each(delete)
 }
 
-#[cfg(all(target_os = "macos", not(test)))]
-mod platform {
-    use super::*;
-    use buzz_credential_store as credentials;
-    use security_framework::os::macos::keychain::SecKeychain;
-    const NOT_FOUND: i32 = -25300;
-    fn error(error: security_framework::base::Error) -> String {
-        match error.code() {
-            -128 | -25293 | -25308 => "Keychain access was denied. Allow access and retry",
-            _ => "The Keychain is unavailable",
-        }
-        .into()
-    }
-    fn find(service: &str) -> Result<Option<Zeroizing<Vec<u8>>>, String> {
-        // Only "item not found" means no key; a locked or refused Keychain
-        // is an error, so it neither hides nor removes a saved key.
-        match SecKeychain::default()
-            .map_err(error)?
-            .find_generic_password(service, KEY_ACCOUNT)
-        {
-            Ok((password, _)) => Ok(Some(Zeroizing::new(password.to_vec()))),
-            Err(e) if e.code() == NOT_FOUND => Ok(None),
-            Err(e) => Err(error(e)),
-        }
-    }
-    fn stored(error: credentials::Error) -> String {
-        match error {
-            credentials::Error::Denied => "Keychain access was denied. Allow access and retry",
-            credentials::Error::Busy => "Another Buzz app is using secure storage. Retry shortly",
-            _ => "The Keychain is unavailable",
-        }
-        .into()
-    }
-    impl KeyStore for OsKeyStore {
-        fn read(&self) -> Result<Option<Zeroizing<String>>, String> {
-            credentials::read_or_copy(
-                || find(KEY_SERVICE),
-                || {
-                    credentials::copy(PREVIOUS_KEY_SERVICE, KEY_SERVICE, KEY_ACCOUNT)
-                        .map_err(stored)
-                },
-            )?
-            .map_or(Ok(None), decode)
-        }
-        fn replace(&self, key: &str) -> Result<(), String> {
-            // A saved item is updated in place, so a failed write leaves the
-            // key as it was. A new item's access list trusts only this binary.
-            SecKeychain::default()
-                .map_err(error)?
-                .set_generic_password(KEY_SERVICE, KEY_ACCOUNT, key.as_bytes())
-                .map_err(error)
-        }
-        fn clear(&self) -> Result<(), String> {
-            // Each delete confirms the item is gone.
-            clear_with(|service| match credentials::delete(service, KEY_ACCOUNT) {
-                Ok(()) | Err(credentials::Error::Absent) => Ok(()),
-                Err(error) => Err(stored(error)),
-            })
-        }
-    }
-}
-
-#[cfg(all(any(target_os = "windows", target_os = "linux"), not(test)))]
+#[cfg(all(
+    any(target_os = "macos", target_os = "windows", target_os = "linux"),
+    not(test)
+))]
 mod platform {
     use super::*;
     use buzz_credential_store::{self as credentials, Error};
     fn error(error: Error) -> String {
         match error {
+            Error::Denied if cfg!(target_os = "macos") => {
+                "Keychain access was denied. Allow access and retry"
+            }
             Error::Denied => "Secure storage access was denied. Allow access and retry",
             Error::Busy => "Another Buzz app is using secure storage. Retry shortly",
             Error::Corrupt => "The saved key is damaged",
+            _ if cfg!(target_os = "macos") => "The Keychain is unavailable",
             _ => "Secure storage is unavailable. Unlock it and retry",
         }
         .into()

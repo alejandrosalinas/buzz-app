@@ -13,7 +13,7 @@ use serde::Deserialize;
 use sha2::{Digest, Sha256};
 use std::sync::{
     atomic::{AtomicU64, Ordering},
-    Arc,
+    Arc, Weak,
 };
 use tokio::sync::{Mutex, OnceCell};
 use tokio::time::Instant;
@@ -65,7 +65,12 @@ pub(crate) struct Assertion {
     pub(crate) viewer: String,
     pub(crate) relay: String,
     refresh_at: Instant,
+    /// The server that issued it; every later check asks that server.
+    server: Weak<super::Inner>,
 }
+/// The sign-in reason a request carries when this device has no sign-in for a
+/// community that needs one; relay.rs reports it as that community's refusal.
+pub(crate) const SIGNED_OUT: &str = "Federated sign-in is required";
 #[derive(Clone)]
 pub(crate) struct Authorization {
     pub(crate) assertion: Option<Assertion>,
@@ -76,6 +81,8 @@ pub(crate) struct Authorization {
     relay: String,
     discovery: Arc<Discovery>,
     socket: bool,
+    /// The server the relay's host routed to, whose discovery this is.
+    server: Weak<super::Inner>,
 }
 impl Authorization {
     pub(crate) fn header(&self) -> Option<&str> {
@@ -125,15 +132,30 @@ pub(crate) async fn test_live_authorization(
             viewer: identity.viewer().await.unwrap(),
             relay: relay.into(),
             refresh_at: Instant::now(),
+            server: Arc::downgrade(&host.0),
         }),
         unsigned: None,
         relay: relay.into(),
         discovery,
         socket: false,
+        server: Arc::downgrade(&host.0),
     };
     (host, authorization)
 }
 impl Assertion {
+    fn server(&self) -> Option<FederatedIdentity> {
+        self.server.upgrade().map(FederatedIdentity)
+    }
+    /// Whether its session is still the issuing server's current one.
+    fn current(&self) -> bool {
+        self.server()
+            .is_some_and(|server| server.current(&self.revision))
+    }
+    pub(crate) fn cancellation(&self) -> Result<CancellationToken, String> {
+        self.server()
+            .ok_or("Federated session changed")?
+            .cancellation_for(&self.revision)
+    }
     pub(crate) fn remaining(&self) -> std::time::Duration {
         self.expires_at.saturating_duration_since(Instant::now())
     }
@@ -182,13 +204,21 @@ fn evaluate_discovery(document: &serde_json::Value) -> Result<bool, &'static str
     if !document.is_object() {
         return Err("Invalid federated community discovery");
     }
-    let requires = match document.get("limitation") {
+    let supports = match document.get("limitation") {
         Some(value) if !value.is_object() => return Err("Invalid federated community discovery"),
         value => match value.and_then(|v| v.get("federated_identity")) {
             None | Some(serde_json::Value::Bool(false)) => false,
             Some(serde_json::Value::Bool(true)) => true,
             _ => return Err("Invalid federated community discovery"),
         },
+    };
+    // `limitation.federated_identity` says a host supports NIP-FI, as a
+    // shadow-mode host does too; `requires_nip_fi` says this community
+    // requires it. A relay without the flag requires what it supports.
+    let requires = match document.get("requires_nip_fi") {
+        None => supports,
+        Some(serde_json::Value::Bool(requires)) => *requires,
+        Some(_) => return Err("Invalid federated community discovery"),
     };
     if !requires {
         return Ok(false);
@@ -251,6 +281,9 @@ impl FederatedIdentity {
             .is_some_and(|current| Arc::ptr_eq(current, generation))
     }
     pub(crate) fn close_discovery(&self, id: &str) {
+        for peer in self.peers() {
+            peer.close_discovery(id);
+        }
         for generation in self
             .0
             .discoveries
@@ -270,6 +303,9 @@ impl FederatedIdentity {
         generation.result.set(Ok(requires)).unwrap();
     }
     pub(crate) fn clear_discoveries(&self) {
+        for peer in self.peers() {
+            peer.clear_discoveries();
+        }
         for (_, generation) in self
             .0
             .discoveries
@@ -279,6 +315,30 @@ impl FederatedIdentity {
         {
             generation.stop.cancel();
         }
+    }
+    /// Whether a canonical relay requires NIP-FI, from the discovery shared
+    /// with people's requests. A failure is reported and not kept.
+    pub(crate) async fn requires_federated_identity(&self, relay: &str) -> Result<bool, String> {
+        let generation = self.discovery_generation(relay, None)?;
+        let result = generation
+            .result
+            .get_or_init(|| discovery(relay))
+            .await
+            .clone();
+        if result.is_err() {
+            let mut cache = self
+                .0
+                .discoveries
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            if cache
+                .get(relay)
+                .is_some_and(|current| Arc::ptr_eq(current, &generation))
+            {
+                cache.remove(relay);
+            }
+        }
+        result
     }
     pub(crate) async fn assertion_for_socket(
         &self,
@@ -297,6 +357,7 @@ impl FederatedIdentity {
     ) -> Result<Authorization, String> {
         self.acquire_for_relay(identity, url, None).await
     }
+    /// Routes the community to its sign-in server by host, never by what the relay says.
     async fn acquire_for_relay(
         &self,
         identity: &IdentityHost,
@@ -304,6 +365,16 @@ impl FederatedIdentity {
         connection: Option<(String, CancellationToken)>,
     ) -> Result<Authorization, String> {
         let relay = canonical_relay(&url.origin().ascii_serialization())?;
+        self.server_for(&relay)?
+            .acquire(identity, relay, connection)
+            .await
+    }
+    async fn acquire(
+        &self,
+        identity: &IdentityHost,
+        relay: String,
+        connection: Option<(String, CancellationToken)>,
+    ) -> Result<Authorization, String> {
         let socket = connection.is_some();
         let mut generation = self.discovery_generation(&relay, connection)?;
         let mut reacquired = false;
@@ -333,6 +404,7 @@ impl FederatedIdentity {
             relay: relay.clone(),
             discovery: generation.clone(),
             socket,
+            server: Arc::downgrade(&self.0),
         };
         let requires = match requires {
             Ok(requires) => requires,
@@ -357,7 +429,6 @@ impl FederatedIdentity {
         // Advertising NIP-FI is support, not a requirement (NIP-FI Discovery):
         // without a token the request goes plainly and the relay decides.
         const UNCONFIGURED: &str = "Federated identity is not configured for this community";
-        const SIGNED_OUT: &str = "Federated sign-in is required";
         let Some(config) = self.0.config.as_ref() else {
             authorization.unsigned = Some(UNCONFIGURED);
             return Ok(authorization);
@@ -475,9 +546,7 @@ impl FederatedIdentity {
                     }
                 };
                 if let Some((session, revision)) = retired {
-                    if let Err(error) = self.remove(session).await {
-                        self.change_current(&revision, Status::Unavailable, Some(error.code));
-                    }
+                    self.remove_retired(session, &revision).await;
                 }
                 Err(failure.code.into())
             }
@@ -489,10 +558,7 @@ impl FederatedIdentity {
         assertion: &Assertion,
     ) -> Result<(), String> {
         let viewer = identity.viewer().await?;
-        if viewer != assertion.viewer
-            || assertion.remaining().is_zero()
-            || !self.current(&assertion.revision)
-        {
+        if viewer != assertion.viewer || assertion.remaining().is_zero() || !assertion.current() {
             return Err("Federated authorization changed".into());
         }
         Ok(())
@@ -502,19 +568,22 @@ impl FederatedIdentity {
         authorization
             .assertion
             .as_ref()
-            .is_none_or(|assertion| self.current(&assertion.revision))
+            .is_none_or(Assertion::current)
     }
     fn discovery_current(&self, authorization: &Authorization) -> bool {
         !authorization.discovery.stop.is_cancelled()
             && (authorization.socket
-                || self.current_discovery(&authorization.relay, &authorization.discovery))
+                || authorization.server.upgrade().is_some_and(|server| {
+                    FederatedIdentity(server)
+                        .current_discovery(&authorization.relay, &authorization.discovery)
+                }))
     }
     pub(crate) fn authorization_cancellation(
         &self,
         authorization: &Authorization,
     ) -> Result<CancellationToken, String> {
         match &authorization.assertion {
-            Some(assertion) => self.cancellation_for(&assertion.revision),
+            Some(assertion) => assertion.cancellation(),
             None => Ok(CancellationToken::new()),
         }
     }
@@ -584,8 +653,7 @@ impl FederatedIdentity {
             return Ok(());
         };
         let viewer = identity.viewer().await.ok();
-        if self.current(&assertion.revision) && viewer.as_deref() == Some(assertion.viewer.as_str())
-        {
+        if assertion.current() && viewer.as_deref() == Some(assertion.viewer.as_str()) {
             return Ok(());
         }
         Err(admission_retired(mutation).into())
@@ -595,7 +663,10 @@ impl FederatedIdentity {
             "{}:{}:{}",
             assertion.revision, assertion.viewer, assertion.relay
         );
-        let entry = self
+        let Some(server) = assertion.server() else {
+            return;
+        };
+        let entry = server
             .0
             .assertions
             .lock()
@@ -620,7 +691,7 @@ impl FederatedIdentity {
         operation: impl std::future::Future<Output = T>,
     ) -> Result<T, String> {
         self.admit_assertion(identity, assertion).await?;
-        let cancel = self.cancellation_for(&assertion.revision)?;
+        let cancel = assertion.cancellation()?;
         let remaining = assertion.remaining();
         let result = tokio::select! {
             _ = cancel.cancelled() => return Err("Federated authorization changed".into()),
@@ -741,6 +812,7 @@ impl FederatedIdentity {
             viewer: viewer.into(),
             relay: relay.into(),
             refresh_at: expires_at - refresh_margin(lifetime),
+            server: Arc::downgrade(&self.0),
         })
     }
 }
@@ -866,10 +938,12 @@ mod tests {
                 viewer: identity.viewer().await.unwrap(),
                 relay: relay.into(),
                 refresh_at: Instant::now(),
+                server: Arc::downgrade(&host.0),
             }),
             relay: relay.into(),
             discovery,
             socket: false,
+            server: Arc::downgrade(&host.0),
         }
     }
 
@@ -892,10 +966,12 @@ mod tests {
                 viewer: identity.viewer().await.unwrap(),
                 relay: relay.into(),
                 refresh_at: Instant::now(),
+                server: Arc::downgrade(&host.0),
             }),
             relay: relay.into(),
             discovery: old,
             socket: false,
+            server: Arc::downgrade(&host.0),
         };
         let (start, started) = tokio::sync::oneshot::channel();
         let (release, held) = std::sync::mpsc::channel();
@@ -1080,6 +1156,65 @@ mod tests {
             assert!(evaluate_discovery(&doc).is_err());
         }
     }
+    #[test]
+    fn requires_nip_fi_decides_when_present_and_capability_otherwise() {
+        let supported = serde_json::json!({"limitation":{"federated_identity":true},"federated_identity":{"core":"client-attached","assertion_freshness":{"class":"offline-jwt"}}});
+        let with = |flag: serde_json::Value| {
+            let mut doc = supported.clone();
+            doc["requires_nip_fi"] = flag;
+            doc
+        };
+        // Required: the descriptor checks still apply.
+        assert!(evaluate_discovery(&with(serde_json::json!(true))).unwrap());
+        let mut bare = with(serde_json::json!(true));
+        bare.as_object_mut().unwrap().remove("federated_identity");
+        assert!(evaluate_discovery(&bare).is_err());
+        // Supported but not required, as a shadow-mode host says.
+        assert!(!evaluate_discovery(&with(serde_json::json!(false))).unwrap());
+        // Absent: the capability decides, as before the flag.
+        assert!(evaluate_discovery(&supported).unwrap());
+        for flag in [
+            serde_json::json!("true"),
+            serde_json::json!(1),
+            serde_json::Value::Null,
+        ] {
+            assert!(evaluate_discovery(&with(flag)).is_err());
+        }
+    }
+    #[tokio::test]
+    async fn a_community_is_authorized_by_the_server_its_host_routes_to() {
+        use super::super::{config::Config, tests::Memory};
+        let peer = FederatedIdentity::with_store(
+            Some(Config::parse(r#"{"version":1,"id":"peer","identityOrigin":"https://peer-identity.example","adapterBase":"https://peer-identity.example","apiBasePath":"/api/","communityHosts":["peer.example"]}"#).unwrap()),
+            String::new(),
+            String::new(),
+            Arc::new(Memory::default()),
+        );
+        let first = FederatedIdentity::build(
+            Some(Config::parse(r#"{"version":1,"id":"test","identityOrigin":"https://identity.example","adapterBase":"https://identity.example","apiBasePath":"/api/","communityHosts":["relay.example"]}"#).unwrap()),
+            String::new(),
+            String::new(),
+            Arc::new(Memory::default()),
+            vec![peer.clone()],
+            None,
+        );
+        let identity = IdentityHost::fixture();
+        peer.discovered("wss://peer.example", true);
+        let url = Url::parse("https://peer.example/events").unwrap();
+        // The peer, not the first server, decides: it is signed out.
+        let unsigned = first.assertion_for_relay(&identity, &url).await.unwrap();
+        assert_eq!(unsigned.refusal(401), Some("Federated sign-in is required"));
+        first
+            .admit_authorization(&identity, &unsigned)
+            .await
+            .unwrap();
+        // Clearing the app's discoveries clears every server's.
+        first.clear_discoveries();
+        assert!(first
+            .admit_authorization(&identity, &unsigned)
+            .await
+            .is_err());
+    }
     #[tokio::test]
     async fn an_independent_socket_generation_does_not_retire_an_existing_socket() {
         use super::super::tests::{host, Memory};
@@ -1097,6 +1232,7 @@ mod tests {
             viewer: identity.viewer().await.unwrap(),
             relay: relay.into(),
             refresh_at: Instant::now(),
+            server: Arc::downgrade(&host.0),
         };
         let authorization = Authorization {
             unsigned: None,
@@ -1104,6 +1240,7 @@ mod tests {
             relay: relay.into(),
             discovery: old,
             socket: true,
+            server: Arc::downgrade(&host.0),
         };
         host.admit_authorization(&identity, &authorization)
             .await
@@ -1407,6 +1544,7 @@ mod tests {
             viewer: identity.viewer().await.unwrap(),
             relay: "wss://relay.example".into(),
             refresh_at: Instant::now(),
+            server: Arc::downgrade(&host.0),
         };
         {
             let mut state = host.state();
@@ -1423,6 +1561,7 @@ mod tests {
                 .discovery_generation("wss://relay.example", None)
                 .unwrap(),
             socket: false,
+            server: Arc::downgrade(&host.0),
         };
         host.retire(Status::SignedOut, None);
         assert_eq!(host.admit_response(&identity, &authorization, true).await.unwrap_err(),
@@ -1789,6 +1928,7 @@ mod tests {
             viewer,
             relay: "wss://relay.example".into(),
             refresh_at: Instant::now(),
+            server: Arc::downgrade(&host.0),
         };
         let (started, observed) = tokio::sync::oneshot::channel();
         let (late, held) = tokio::sync::oneshot::channel::<()>();

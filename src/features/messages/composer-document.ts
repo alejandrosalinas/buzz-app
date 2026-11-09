@@ -378,6 +378,16 @@ export function composerResource(
 /** Document positions, editable text offsets, and serialized Markdown offsets
  * are distinct. No generated Markdown delimiter enters this map. */
 export function projectComposerDocument(doc: EditorNode) {
+  // A node is immutable, so one keystroke's several readers share a projection.
+  const cached = projections.get(doc);
+  if (cached) return cached;
+  const projection = project(doc);
+  projections.set(doc, projection);
+  return projection;
+}
+const projections = new WeakMap<EditorNode, ReturnType<typeof project>>();
+
+function project(doc: EditorNode) {
   let text = "";
   const positions = new Array<number>(doc.content.size + 1).fill(0);
   const recipients: DraftRecipient[] = [];
@@ -518,6 +528,14 @@ export function composerMarkdownContext(
 
 /** Local persistence envelope. The schema, not parallel mark ranges, owns shape. */
 export function readComposerSnapshot(value: unknown): EditorNode | undefined {
+  // Snapshots are never mutated, and validation plus parsing is O(draft).
+  if (typeof value !== "object" || !value) return read(value);
+  if (!snapshots.has(value)) snapshots.set(value, read(value));
+  return snapshots.get(value);
+}
+const snapshots = new WeakMap<object, EditorNode | undefined>();
+
+function read(value: unknown): EditorNode | undefined {
   if (
     !value ||
     typeof value !== "object" ||

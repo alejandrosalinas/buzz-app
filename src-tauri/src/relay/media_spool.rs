@@ -50,7 +50,8 @@ const IDLE: Duration = Duration::from_secs(1);
 enum Progress {
     Writing(u64),
     Done(u64),
-    Failed(u16),
+    /// The status, and how many bytes were written before the copy failed.
+    Failed(u16, u64),
 }
 
 struct SpoolFile {
@@ -105,7 +106,7 @@ static SPOOLS: Mutex<VecDeque<(Url, Arc<Spool>)>> = Mutex::new(VecDeque::new());
 fn lookup(spools: &mut VecDeque<(Url, Arc<Spool>)>, url: &Url) -> Option<Arc<Spool>> {
     let position = spools.iter().position(|(cached, _)| cached == url)?;
     let entry = spools.remove(position)?;
-    if matches!(*entry.1.progress.borrow(), Progress::Failed(_)) {
+    if matches!(*entry.1.progress.borrow(), Progress::Failed(..)) {
         return None;
     }
     let spool = entry.1.clone();
@@ -236,6 +237,11 @@ async fn download(
         () = idle(&usage) => Err(503),
     };
     drop((file, upstream));
+    // The last count the copy reported is on disk, however it ended.
+    let written = match *progress.borrow() {
+        Progress::Writing(written) => written,
+        Progress::Done(_) | Progress::Failed(..) => 0,
+    };
     match copied {
         Ok(length) if total.is_none_or(|total| total == length) => {
             progress.send_replace(Progress::Done(length));
@@ -245,10 +251,10 @@ async fn download(
             }
         }
         Ok(_) => {
-            progress.send_replace(Progress::Failed(502));
+            progress.send_replace(Progress::Failed(502, written));
         }
         Err(status) => {
-            progress.send_replace(Progress::Failed(status));
+            progress.send_replace(Progress::Failed(status, written));
         }
     }
     forget(&usage);
@@ -300,21 +306,26 @@ pub(super) async fn read(
     }
     // Dropped with this read, such as when its player's connection closes.
     let _hold = spool.hold();
+    let arrived = |written: u64| {
+        spool
+            .total
+            .is_some_and(|total| written > end.min(total - 1))
+    };
     let state = *spool
         .progress
         .clone()
         .wait_for(|progress| match *progress {
-            Progress::Writing(written) => spool
-                .total
-                .is_some_and(|total| written > end.min(total - 1)),
-            Progress::Done(_) | Progress::Failed(_) => true,
+            Progress::Writing(written) => arrived(written),
+            Progress::Done(_) | Progress::Failed(..) => true,
         })
         .await
         .map_err(|_| 503u16)?;
     let total = match state {
-        Progress::Failed(status) => return Err(status),
         Progress::Done(total) => total,
-        Progress::Writing(_) => spool.total.ok_or(502u16)?,
+        // Bytes written before a failure are answered, whether or not this
+        // read saw them arrive.
+        Progress::Failed(status, written) if !arrived(written) => return Err(status),
+        Progress::Writing(_) | Progress::Failed(..) => spool.total.ok_or(502u16)?,
     };
     if start >= total {
         return Err(416);

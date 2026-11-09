@@ -49,7 +49,7 @@ test("general access starts the member list and footer actions stay reachable wi
     .getByRole("button", { name: "Lifecycle channel", exact: true })
     .click();
   await page
-    .getByRole("button", { name: "Manage members", exact: true })
+    .getByRole("button", { name: /^Manage members of /, exact: true })
     .click();
   const dialog = page.getByRole("dialog", {
     name: "Manage members",
@@ -312,7 +312,7 @@ for (const outcome of ["rejected", "uncertain"]) {
       .getByRole("button", { name: "Lifecycle channel", exact: true })
       .click();
     const manage = page.getByRole("button", {
-      name: "Manage members",
+      name: /^Manage members of /,
       exact: true,
     });
     await manage.click();

@@ -2,7 +2,8 @@ import { assert, describe, expect, it, vi } from "vitest";
 import { ReadError } from "./errors";
 import { createRelaySession } from "./session";
 import type { LiveCallbacks } from "./live";
-import type { HeadPersistence } from "./persistence";
+import type { HeadPersistence, SavedStartup } from "./persistence";
+import type { RelayEvent } from "./events";
 import {
   bounds,
   flush,
@@ -662,17 +663,76 @@ it("keeps a cached denial and never reads for a channel it does not authorize", 
     owner.dispose();
   }
 });
+it("writes one startup snapshot with the final content after a burst of discovery batches", () => {
+  vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+  const wire = scriptedTransport(viewer.pubkey, relay.pubkey);
+  const writeStartup = vi.fn(async (_patch: SavedStartup) => {});
+  let live!: LiveCallbacks;
+  const owner = createRelaySession(
+    {
+      ...wire.transport,
+      subscribe(callbacks) {
+        live = callbacks;
+        return { update() {}, retry() {}, dispose() {} };
+      },
+    },
+    {
+      persistence: {
+        read: async () => [],
+        readStartup: async () => undefined,
+        writeStartup,
+        write: async () => {},
+        remove: async () => {},
+        retain: async () => {},
+        clear: async () => {},
+        close: () => {},
+      },
+      prepared: true,
+    },
+  );
+  try {
+    const ids = ["a", "b", "c", "d"];
+    for (const channel of ids)
+      live.receive([roster(relay, channel, [viewer.pubkey])]);
+    live.receive([metadata(relay, "a", "Alpha")]);
+    vi.advanceTimersByTime(499);
+    expect(writeStartup).not.toHaveBeenCalled();
+    vi.advanceTimersByTime(1);
+    expect(writeStartup).toHaveBeenCalledTimes(1);
+    const [patch] = writeStartup.mock.calls[0] ?? [];
+    assert(patch);
+    const saved = (patch.discovery?.events ?? []) as RelayEvent[];
+    expect(
+      saved.map((event) => [event.kind, event.tags[0]?.[1]]).sort(),
+    ).toEqual([
+      [39000, "a"],
+      [39002, "a"],
+      [39002, "b"],
+      [39002, "c"],
+      [39002, "d"],
+    ]);
+    vi.advanceTimersByTime(5_000);
+    expect(writeStartup).toHaveBeenCalledTimes(1);
+  } finally {
+    vi.useRealTimers();
+    owner.dispose();
+  }
+});
 it.each([
   ["saves once after", false],
   ["drops the pending save when the cache is purged during", true],
 ] as const)("%s a burst of profile changes", async (_, purge) => {
   const scripted = scriptedTransport(viewer.pubkey, relay.pubkey);
-  const writeStartup = vi.fn(async () => {});
+  const writeProfiles = vi.fn(async (_: readonly unknown[]) => {});
+  // Fake from the start: a save armed on the real clock would hold the burst.
+  vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
   const owner = createRelaySession(scripted.transport, {
     persistence: {
       read: async () => [],
       readStartup: async () => undefined,
-      writeStartup,
+      writeStartup: async () => {},
+      readProfiles: async () => [],
+      writeProfiles,
       write: async () => {},
       remove: async () => {},
       retain: async () => {},
@@ -695,22 +755,8 @@ it.each([
         metadata(relay, "dm", "Direct", undefined, [["t", "dm"]]),
       ]);
     await vi.waitFor(() => expect(queries.list().status).toBe("ready"));
-    await vi.waitFor(() => expect(writeStartup).toHaveBeenCalled());
-    writeStartup.mockClear();
-    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
-    // The snapshot saves only DM participants' profiles; others change nothing.
-    const stranger = keypair();
-    const ensuring = owner.session.profiles.ensure(
-      [stranger.pubkey],
-      "foreground",
-    );
-    await vi.waitFor(() => expect(scripted.pending).not.toHaveLength(0), {
-      interval: 1,
-    });
-    scripted.next().respond([profile(stranger, { name: "Stranger" })]);
-    await ensuring;
-    await vi.advanceTimersByTimeAsync(500);
-    expect(writeStartup).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(1000);
+    writeProfiles.mockClear();
     for (const person of [alice, keypair()]) {
       const ensuring = owner.session.profiles.ensure(
         [person.pubkey],
@@ -726,16 +772,63 @@ it.each([
         "Person",
       );
     }
-    expect(writeStartup).not.toHaveBeenCalled();
+    expect(writeProfiles).not.toHaveBeenCalled();
     if (purge) {
       const clearing = owner.clearCache();
-      await vi.advanceTimersByTimeAsync(500);
+      await vi.advanceTimersByTimeAsync(1000);
       await clearing;
-      expect(writeStartup).not.toHaveBeenCalled();
+      expect(writeProfiles).not.toHaveBeenCalled();
     } else {
-      await vi.advanceTimersByTimeAsync(500);
-      expect(writeStartup).toHaveBeenCalledTimes(1);
+      await vi.advanceTimersByTimeAsync(1000);
+      expect(writeProfiles).toHaveBeenCalledTimes(1);
+      expect(writeProfiles.mock.calls[0]?.[0]).toHaveLength(2);
     }
+  } finally {
+    vi.useRealTimers();
+    owner.dispose();
+  }
+});
+it("does not rewrite the profile mirror when only cache hits reorder it", async () => {
+  const scripted = scriptedTransport(viewer.pubkey, relay.pubkey);
+  const writeProfiles = vi.fn(async (_: readonly unknown[]) => {});
+  const bob = keypair();
+  vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+  const owner = createRelaySession(scripted.transport, {
+    persistence: {
+      read: async () => [],
+      readStartup: async () => undefined,
+      writeStartup: async () => {},
+      readProfiles: async () => [],
+      writeProfiles,
+      write: async () => {},
+      remove: async () => {},
+      retain: async () => {},
+      clear: async () => {},
+      close: () => {},
+    },
+    prepared: true,
+  });
+  const profiles = owner.session.profiles;
+  const load = async (ids: string[], events: RelayEvent[]) => {
+    const ensuring = profiles.ensure(ids, "foreground");
+    await vi.waitFor(() => expect(scripted.pending).not.toHaveLength(0), {
+      interval: 1,
+    });
+    scripted.next().respond(events);
+    await ensuring;
+    await vi.advanceTimersByTimeAsync(1000);
+  };
+  try {
+    await owner.restore();
+    await load([alice.pubkey], [profile(alice, { name: "Alice" })]);
+    await load([bob.pubkey], [profile(bob, { name: "Bob" })]);
+    expect(writeProfiles).toHaveBeenLastCalledWith(
+      expect.arrayContaining([expect.anything(), expect.anything()]),
+    );
+    writeProfiles.mockClear();
+    // A hit reorders the cache; an unanswered name notifies without a new profile.
+    await load([alice.pubkey, keypair().pubkey], []);
+    expect(writeProfiles).not.toHaveBeenCalled();
   } finally {
     vi.useRealTimers();
     owner.dispose();

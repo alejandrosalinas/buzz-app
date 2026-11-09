@@ -6,11 +6,7 @@ import { FederatedIdentityService } from "../../../features/federated-identity/s
 import { federatedFixture } from "../../../features/federated-identity/testing";
 import type { StorageResult } from "../../../plugins/types";
 import manifest from "../manifest.json";
-import {
-  bundledFederatedIdentity,
-  bundledHost,
-  firstRunCredential,
-} from "./first-run";
+import { bundledFederatedIdentity, firstRunCredential } from "./first-run";
 vi.mock("@tauri-apps/api/core", () => ({
   invoke: vi.fn(),
   isTauri: vi.fn(() => true),
@@ -40,45 +36,7 @@ const catalog = (enabled: boolean): StorageResult => ({
   externalPluginsPaused: false,
 });
 
-it("requests under the bundled Builderlab grant without a plugin owner", async () => {
-  vi.mocked(invoke).mockResolvedValueOnce({
-    status: 200,
-    headers: {},
-    body: "{}",
-  });
-  const request = { url: "https://app.builderlab.xyz/api/goose/v1/auth/me" };
-  await bundledHost.request(request);
-  expect(invoke).toHaveBeenCalledWith("plugin_host_request", {
-    id: "block.builderlab",
-    revision: "bundled",
-    request,
-  });
-  expect(await bundledHost.runCommand("any")).toBeNull();
-});
-
-it("starts the native browser handoff at the configured build URL", async () => {
-  vi.stubEnv("VITE_BUZZ_BUILDERLAB_URL", "https://builderlab.example");
-  vi.mocked(invoke).mockResolvedValueOnce(catalog(true));
-  // A refused listener ends the attempt before any exchange request.
-  vi.mocked(invoke).mockRejectedValueOnce("listener unavailable");
-  await expect(
-    firstRunCredential(new AbortController().signal),
-  ).rejects.toThrow("Could not complete");
-  expect(invoke).toHaveBeenCalledTimes(2);
-  expect(invoke).toHaveBeenNthCalledWith(1, "plugin_catalog");
-  expect(invoke).toHaveBeenNthCalledWith(
-    2,
-    "oauth_callback_begin",
-    expect.objectContaining({
-      authorizationUrl: expect.stringMatching(
-        /^https:\/\/builderlab\.example\/api\/goose\/v1\/auth\/login\?/,
-      ),
-      useState: true,
-    }),
-  );
-});
-
-// A disabled bundled plugin has no native grant, so its code exchange fails.
+// A disabled bundled plugin has no native grant, so its account read fails.
 it.each([
   [
     "Builderlab is turned off",
@@ -93,16 +51,17 @@ it.each([
 ])(
   "refuses before opening the browser when %s",
   async (_label, answer, message) => {
-    vi.stubEnv("VITE_BUZZ_BUILDERLAB_URL", "https://builderlab.example");
     answer();
+    const fi = federatedFixture();
     await expect(
-      firstRunCredential(new AbortController().signal),
+      firstRunCredential(new AbortController().signal, fi.service),
     ).rejects.toThrow(new Error(message));
     expect(vi.mocked(invoke).mock.calls).toEqual([["plugin_catalog"]]);
+    expect(fi.service.signIn).not.toHaveBeenCalled();
   },
 );
 
-describe("an FI build", () => {
+describe("the NIP-FI sign-in", () => {
   const me = {
     subject: "user",
     email: " a@example.com ",
@@ -140,7 +99,114 @@ describe("an FI build", () => {
     await root.fiber.dispose();
   });
 
-  it("signs in through the native session and reads its account, never opening the plugin's own browser handoff", async () => {
+  it("reads the account as the session sign-in answered with, when its event arrives after the answer", async () => {
+    let emit!: (payload: unknown) => void;
+    vi.mocked(listen).mockImplementation(async (name, handler) => {
+      if (name === "federated-identity")
+        emit = (payload) => handler({ payload } as never);
+      return () => {};
+    });
+    const base = federatedFixture().service.snapshot();
+    vi.mocked(invoke).mockImplementation(async (command, args) => {
+      if (command === "plugin_catalog") return catalog(true);
+      if (command === "federated_identity_snapshot") return base;
+      if (command === "federated_identity_register") return undefined;
+      if (command === "federated_identity_sign_in") {
+        // The browser step's event, then native answers before its final event.
+        emit({ ...base, status: "signing-in", revision: "login" });
+        setTimeout(() =>
+          emit({ ...base, status: "signed-in", revision: "chosen" }),
+        );
+        return { ...base, status: "signed-in", revision: "chosen" };
+      }
+      if (command === "federated_identity_request") {
+        if ((args as { session: string }).session !== "chosen")
+          throw new Error("stale-session");
+        return { status: 200, headers: {}, body: JSON.stringify(me) };
+      }
+      throw new Error(`Unexpected ${command}`);
+    });
+    const root = new Context();
+    new FederatedIdentityService(root);
+    await vi.waitFor(() =>
+      expect(invoke).toHaveBeenCalledWith("federated_identity_snapshot"),
+    );
+    const credential = await firstRunCredential(
+      new AbortController().signal,
+      bundledFederatedIdentity(root),
+    );
+    expect(credential.revision).toBe("chosen");
+    await root.fiber.dispose();
+  });
+
+  it.each([
+    ["continues as the renewal", "renewed"],
+    ["yields to a newer session", "newer"],
+    ["stops on Cancel", "cancel"],
+  ] as const)(
+    "after adopting a session and renewing it with delayed events, %s",
+    async (_, ending) => {
+      let emit!: (payload: unknown) => void;
+      vi.mocked(listen).mockImplementation(async (name, handler) => {
+        if (name === "federated-identity")
+          emit = (payload) => handler({ payload } as never);
+        return () => {};
+      });
+      const base = federatedFixture().service.snapshot();
+      const at = (revision: string) => ({
+        ...base,
+        status: "signed-in",
+        revision,
+      });
+      const requests: string[] = [];
+      let signIns = 0;
+      let renewed!: () => void;
+      const answered = new Promise<void>((resolve) => {
+        renewed = resolve;
+      });
+      vi.mocked(invoke).mockImplementation(async (command, args) => {
+        if (command === "plugin_catalog") return catalog(true);
+        if (command === "federated_identity_snapshot") return base;
+        if (command === "federated_identity_register") return undefined;
+        if (command === "federated_identity_cancel_sign_in") return undefined;
+        if (command === "federated_identity_sign_in") {
+          // Adoption answers before B's event; that event lands mid-renewal,
+          // and the renewal answers C before C's event.
+          if (++signIns === 1) return at("B");
+          emit(at("B"));
+          renewed();
+          return at("C");
+        }
+        if (command === "federated_identity_request") {
+          requests.push((args as { session: string }).session);
+          return { status: 200, headers: {}, body: JSON.stringify(me) };
+        }
+        throw new Error(`Unexpected ${command}`);
+      });
+      const root = new Context();
+      new FederatedIdentityService(root);
+      await vi.waitFor(() =>
+        expect(invoke).toHaveBeenCalledWith("federated_identity_snapshot"),
+      );
+      const abort = new AbortController();
+      const result = firstRunCredential(
+        abort.signal,
+        bundledFederatedIdentity(root),
+      );
+      await answered;
+      await new Promise((resolve) => setTimeout(resolve));
+      expect(requests).toEqual([]);
+      if (ending === "renewed") emit(at("C"));
+      if (ending === "newer") emit(at("D"));
+      if (ending === "cancel") abort.abort();
+      if (ending === "renewed") expect((await result).revision).toBe("C");
+      else await expect(result).rejects.toThrow();
+      expect(requests).toEqual(ending === "renewed" ? ["C"] : []);
+      await root.fiber.dispose();
+    },
+  );
+
+  it("signs in through the native session and reads its account", async () => {
     vi.mocked(invoke).mockResolvedValueOnce(catalog(true));
     const fi = federatedFixture();
     fi.request.mockResolvedValueOnce({
@@ -153,7 +219,7 @@ describe("an FI build", () => {
       fi.service,
     );
     expect(credential).toEqual({
-      value: fi.service.snapshot().revision,
+      revision: fi.service.snapshot().revision,
       account: {
         subject: "user",
         email: "a@example.com",
@@ -203,6 +269,14 @@ describe("an FI build", () => {
       "Secure storage is busy. Close another Buzz instance and try again.",
     ],
     [
+      "the browser step outlasts native's wait",
+      (fi: ReturnType<typeof federatedFixture>) =>
+        vi
+          .mocked(fi.service.signIn)
+          .mockRejectedValueOnce(new Error("sign-in-timed-out")),
+      "Sign-in timed out. Try again.",
+    ],
+    [
       "the account read is not JSON",
       (fi: ReturnType<typeof federatedFixture>) =>
         fi.request.mockResolvedValueOnce({
@@ -240,6 +314,30 @@ describe("an FI build", () => {
     ).rejects.toThrow(new Error(message));
   });
 
+  it.each([
+    {},
+    { signup: true },
+    { forceLogin: true },
+    { signup: true, forceLogin: true },
+  ])(
+    "asks the native sign-in for the sign-up screen and a forced login only as Welcome chose (%o)",
+    async (options) => {
+      vi.mocked(invoke).mockResolvedValueOnce(catalog(true));
+      const fi = federatedFixture();
+      fi.request.mockResolvedValueOnce({
+        status: 200,
+        headers: {},
+        body: JSON.stringify(me),
+      });
+      await firstRunCredential(
+        new AbortController().signal,
+        fi.service,
+        options,
+      );
+      expect(vi.mocked(fi.service.signIn).mock.calls).toEqual([[options]]);
+    },
+  );
+
   it("continues as the account the browser chose again for a session that already exists", async () => {
     vi.mocked(invoke).mockResolvedValueOnce(catalog(true));
     const fi = federatedFixture();
@@ -253,7 +351,7 @@ describe("an FI build", () => {
       new AbortController().signal,
       fi.service,
     );
-    expect(credential.value).toBe("user:1");
+    expect(credential.revision).toBe("user:1");
     expect(fi.service.signIn).toHaveBeenCalledOnce();
   });
 
@@ -294,6 +392,47 @@ describe("an FI build", () => {
     expect(fi.service.signIn).not.toHaveBeenCalled();
   });
 
+  describe("from signed out, when another copy saved a session", () => {
+    const adopt = (fi: ReturnType<typeof federatedFixture>) =>
+      vi.mocked(fi.service.signIn).mockImplementationOnce(async () => {
+        // Native adopts the shared session: no browser step.
+        fi.publish({ status: "signed-in", revision: "other-copy" });
+        return fi.service.snapshot();
+      });
+
+    it("renews the adopted session so the browser chooses the account", async () => {
+      vi.mocked(invoke).mockResolvedValueOnce(catalog(true));
+      const fi = federatedFixture();
+      adopt(fi);
+      fi.request.mockResolvedValueOnce({
+        status: 200,
+        headers: {},
+        body: JSON.stringify(me),
+      });
+      const credential = await firstRunCredential(
+        new AbortController().signal,
+        fi.service,
+      );
+      expect(credential.revision).toBe("user:1");
+      expect(fi.service.signIn).toHaveBeenCalledTimes(2);
+    });
+
+    it("never continues as the adopted account when its renewal is canceled", async () => {
+      vi.mocked(invoke).mockResolvedValueOnce(catalog(true));
+      const fi = federatedFixture();
+      adopt(fi);
+      // A canceled renewal answers with the session it would have replaced.
+      vi.mocked(fi.service.signIn).mockImplementationOnce(async () =>
+        fi.service.snapshot(),
+      );
+      await expect(
+        firstRunCredential(new AbortController().signal, fi.service),
+      ).rejects.toThrow();
+      expect(fi.service.signIn).toHaveBeenCalledTimes(2);
+      expect(fi.request).not.toHaveBeenCalled();
+    });
+  });
+
   describe("after a failed restore", () => {
     const account = (fi: ReturnType<typeof federatedFixture>) =>
       fi.request.mockResolvedValueOnce({
@@ -311,12 +450,18 @@ describe("an FI build", () => {
         fi.publish({ status: "signed-in", revision: "stored", failure: null });
         return fi.service.snapshot();
       });
+      const options = { signup: true, forceLogin: true };
       const credential = await firstRunCredential(
         new AbortController().signal,
         fi.service,
+        options,
       );
-      expect(credential.value).toBe("user:1");
-      expect(fi.service.signIn).toHaveBeenCalledTimes(2);
+      expect(credential.revision).toBe("user:1");
+      // The renewal is the one that opens the browser: it keeps the choices.
+      expect(vi.mocked(fi.service.signIn).mock.calls).toEqual([
+        [options],
+        [options],
+      ]);
     });
 
     it("continues after a browser sign-in, without renewing it", async () => {
@@ -333,7 +478,7 @@ describe("an FI build", () => {
         new AbortController().signal,
         fi.service,
       );
-      expect(credential.value).toBe("chosen");
+      expect(credential.revision).toBe("chosen");
       expect(fi.service.signIn).toHaveBeenCalledOnce();
     });
 

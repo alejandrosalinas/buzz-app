@@ -1,0 +1,101 @@
+.rowAvatar {
+  display: grid;
+  flex: none;
+  width: var(--space-8);
+  height: var(--space-8);
+}
+
+.unreadSlot {
+  display: grid;
+  place-items: center;
+  width: var(--space-2);
+  height: var(--space-2);
+}
+
+.unreadDot {
+  width: var(--space-2);
+  height: var(--space-2);
+  border-radius: var(--radius-pill);
+  background: var(--text-navigation-unread);
+}
+
+.rowDate {
+  display: flex;
+  align-items: center;
+  flex: 0 0 auto;
+  min-inline-size: var(--size-control-sm);
+  justify-content: flex-end;
+}
+
+.content {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  min-width: 0;
+  white-space: normal;
+  padding-block: var(--space-row-gap);
+}
+
+.heading {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--space-1) var(--space-control-inset);
+}
+
+.sender {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.identity {
+  display: flex;
+  flex: 1;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: var(--space-1) var(--space-2);
+  min-width: 0;
+}
+
+.source {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text-subtle);
+}
+
+.preview {
+  max-inline-size: 64ch;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  overflow-wrap: anywhere;
+}
+
+/* Drafts & sent combines delivery status with the time. */
+@container drafts-sent (max-width: 30rem) {
+  .heading {
+    flex-wrap: wrap;
+  }
+
+  .identity {
+    flex-basis: 100%;
+  }
+
+  .rowDate {
+    max-inline-size: 100%;
+    margin-inline-start: auto;
+  }
+}
+
+/* Use the containing list width, including a narrow Activity side pane. */
+@container (max-width: 30rem) {
+  .rowAvatar {
+    width: var(--space-6);
+    height: var(--space-6);
+  }
+}

@@ -1,5 +1,6 @@
 import { expect, it } from "vitest";
 import { messageActivity } from "./message-activity";
+import { requestWork } from "../../features/agents/request-work";
 import type { RelaySession } from "../../features/relay/session";
 const request = "a".repeat(64),
   sibling = "b".repeat(64);
@@ -51,16 +52,16 @@ it("associates activity only with the exact triggering message and channel", () 
     messageActivity({ ...source, records: [] }, "channel", request),
   ).toEqual([]);
 });
-it("stops animation on interrupted or stale evidence and removes settled work", () => {
+it("stops animation on interrupted or stale evidence, retires success and retains failure", () => {
   const source = fixture();
   expect(messageActivity(source, "channel", request)[0]?.working).toBe(true);
   expect(
     messageActivity({ ...source, status: "interrupted" }, "channel", request)[0]
       ?.working,
   ).toBe(false);
-  expect(
-    messageActivity({ ...source, turns: [] }, "channel", request)[0]?.working,
-  ).toBe(false);
+  const uncertain = { ...source, turns: [] };
+  expect(requestWork(uncertain, "channel", request)[0]?.state).toBe("unknown");
+  expect(messageActivity(uncertain, "channel", request)).toEqual([]);
   const start = source.records[0];
   if (!start) throw new Error("Missing start fixture");
   for (const kind of ["turn_completed", "turn_error", "agent_panic"]) {
@@ -83,7 +84,12 @@ it("stops animation on interrupted or stale evidence and removes settled work", 
         },
       ],
     };
-    expect(messageActivity(ended, "channel", request)).toEqual([]);
+    if (kind === "turn_completed")
+      expect(messageActivity(ended, "channel", request)).toEqual([]);
+    else
+      expect(messageActivity(ended, "channel", request)[0]?.state).toBe(
+        "error",
+      );
   }
 });
 it("never uses typing as message association or resurrects an ended request", () => {

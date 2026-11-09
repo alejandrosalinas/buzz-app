@@ -29,7 +29,10 @@ import { defaults as codexDefaults } from "../../src/bundled/codex/config";
 import "../../src/shared/styles/globals.css";
 
 const harness = new URLSearchParams(location.search).get("harness");
-const thinkingHarness = new URLSearchParams(location.search).get("thinking");
+const settingsSync = new URLSearchParams(location.search).has("settingsSync");
+const thinkingHarness = settingsSync
+  ? "claude"
+  : new URLSearchParams(location.search).get("thinking");
 const importing = new URLSearchParams(location.search).has("import");
 const teamImport = new URLSearchParams(location.search).has("teamImport");
 if (importing || teamImport) createAppearance();
@@ -144,6 +147,15 @@ if (thinkingHarness === "claude") {
     running: undefined,
     checking: false,
     models: [
+      ...(settingsSync
+        ? [
+            {
+              value: "claude-fixture-other",
+              displayName: "Other Claude model",
+              supportedEffortLevels: ["low", "high"],
+            },
+          ]
+        : []),
       {
         value: "default",
         resolvedModel: "claude-fixture-model",
@@ -163,7 +175,7 @@ if (thinkingHarness === "claude") {
   const tabs = createClaudeTabs({
     setup: setup as never,
     defaults: defaults as never,
-    runtime: {} as never,
+    runtime: { isRemote: async () => false } as never,
   });
   thinkingTypes.claude = {
     ...type,
@@ -173,6 +185,19 @@ if (thinkingHarness === "claude") {
     defaults: () => ({ config: { ...claudeDefaults } }),
     CreateModel: tabs.CreateModel,
     CreateThinking: tabs.CreateThinking,
+    ...(settingsSync
+      ? {
+          tabs: [
+            {
+              id: "settings",
+              title: "Settings",
+              role: "settings" as const,
+              splitSettings: true,
+              component: tabs.SettingsTab,
+            },
+          ],
+        }
+      : {}),
   };
 } else if (thinkingHarness === "codex") {
   const model = {
@@ -220,7 +245,7 @@ if (thinkingHarness === "claude") {
     CreateThinking: tabs.CreateThinking,
   };
 }
-const snapshot = {
+let snapshot = {
   status: "ready" as const,
   running: [] as Agent[],
   teams: teamImport
@@ -257,6 +282,15 @@ if (fixtureThinkingType) {
   snapshot.agents = snapshot.agents.map((agent) => ({
     ...agent,
     type: fixtureThinkingType.key,
+  }));
+}
+if (settingsSync) {
+  const saved = JSON.parse(
+    localStorage.getItem("fixture-agent-settings") ?? "{}",
+  );
+  snapshot.agents = snapshot.agents.map((agent) => ({
+    ...agent,
+    config: saved[agent.key] ?? agent.config,
   }));
 }
 const joining = [4, 5].map(
@@ -408,6 +442,8 @@ const agents = {
         ]
       : [],
   configHistory: () => undefined,
+  agentSync: () => undefined,
+  teamSync: () => ({ local: undefined }),
   addedTabs: () => [],
   registerTab: () => {},
   controlAttention: () => {},
@@ -435,19 +471,44 @@ const agents = {
   },
   relay: () => undefined,
   save: async (key: string, change: { config?: unknown }) => {
-    if (!saveFooter) return;
+    if (!saveFooter && !settingsSync) return;
     snapshot.agents = snapshot.agents.map((agent) =>
       agent.key === key
         ? { ...agent, config: change.config ?? agent.config }
         : agent,
     );
+    if (settingsSync) {
+      snapshot = { ...snapshot };
+      localStorage.setItem(
+        "fixture-agent-settings",
+        JSON.stringify(
+          Object.fromEntries(
+            snapshot.agents.map((agent) => [agent.key, agent.config]),
+          ),
+        ),
+      );
+    }
     for (const listener of listeners) listener();
   },
   classifier: () => "unavailable",
 } as unknown as Agents;
+if (settingsSync) {
+  Object.assign(window, {
+    updateFixtureInstructions: (instructions: string) => {
+      const agent = snapshot.agents[0];
+      if (!agent) throw new Error("Missing fixture agent");
+      return agents.save(agent.key, {
+        config: { ...(agent.config as Record<string, unknown>), instructions },
+      });
+    },
+  });
+}
 const disconnected = {
   status: "disconnected",
   generation: 0,
+  ...(new URLSearchParams(location.search).has("reorder")
+    ? { scope: "https://relay.example:fixture-owner" }
+    : {}),
   ...(teamImport
     ? {
         viewer: "owner",

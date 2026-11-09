@@ -113,20 +113,52 @@ test("all-platform releases preserve candidate isolation and read-only installer
   assert.deepEqual(
     downloads.map((step) => step.with.path),
     [
-      "build-assets/macos",
+      "build-assets/macos-aarch64",
+      "build-assets/macos-x64",
       "build-assets/windows",
       "build-assets/linux",
       "build-assets/signatures",
     ],
   );
-  for (const [index, job] of [
-    jobs.build,
-    jobs.windows,
-    jobs.linux,
-    jobs.updater_signatures,
-  ].entries()) {
-    assert.equal(downloads[index].with.name, job.steps.at(-1).with.name);
-  }
+  assert.deepEqual(jobs.build.strategy.matrix.include, [
+    { target: "aarch64-apple-darwin", arch: "aarch64", lipo: "arm64" },
+    { target: "x86_64-apple-darwin", arch: "x64", lipo: "x86_64" },
+  ]);
+  const build = jobs.build.steps.find(
+    (step) => step.name === "Build unsigned app and DMG",
+  ).run;
+  assert.match(build, /target-libdir --target "\$TARGET"/);
+  assert.match(build, /pnpm tauri build .*--target "\$TARGET"/);
+  // Each leg checks the app and every bundled helper against its own architecture.
+  const verification = jobs.build.steps.find(
+    (step) => step.name === "Verify release DMG",
+  );
+  assert.match(verification.env.LIPO_ARCH, /^\$\{\{ matrix\.lipo \}\}$/);
+  for (const binary of [
+    "$app/Contents/MacOS/Buzz",
+    "$goose",
+    "$command",
+    "$cli",
+  ])
+    assert.ok(
+      verification.run.includes(
+        `test "$(lipo -archs "${binary}")" = "$LIPO_ARCH"`,
+      ),
+      binary,
+    );
+  assert.doesNotMatch(verification.run, /arm64|x86_64/);
+  const macos = jobs.build.steps.at(-1).with.name;
+  assert.deepEqual(
+    downloads.map((step) => step.with.name),
+    [
+      ...jobs.build.strategy.matrix.include.map(({ arch }) =>
+        macos.replace(/\$\{\{ matrix\.arch \}\}/, arch),
+      ),
+      ...[jobs.windows, jobs.linux, jobs.updater_signatures].map(
+        (job) => job.steps.at(-1).with.name,
+      ),
+    ],
+  );
   const publication = jobs.publish.steps.at(-1).run;
   assert.match(
     publication,

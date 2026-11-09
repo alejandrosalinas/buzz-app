@@ -146,12 +146,8 @@ for (const kind of ["image", "video"]) {
     await expect(heading).toHaveCSS("font-size", "14px");
     const header = heading.locator("xpath=ancestor::header");
     await expect(header.locator(".panel-header-title svg")).toHaveCount(0);
-    expect(
-      await header.evaluate((el) => {
-        const divider = getComputedStyle(el, "::after");
-        return { content: divider.content, height: divider.height };
-      }),
-    ).toEqual({ content: '""', height: "1px" });
+    await expect(header).toHaveCSS("border-bottom-width", "1px");
+    await expect(header).toHaveCSS("border-bottom-style", "solid");
     await expect(
       dialog.getByRole("heading", { name: "Comments" }),
     ).toBeVisible();

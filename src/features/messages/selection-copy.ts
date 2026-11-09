@@ -78,6 +78,11 @@ function serialize(
   if (node.hasAttribute("data-spoiler-delimiter")) return "";
   // SVG tag names keep their case.
   const tag = node.tagName.toUpperCase();
+  const tokenSource = tag === "SPAN" ? node.getAttribute("data-source") : null;
+  if (tokenSource !== null && whole(node, range))
+    return format === "html"
+      ? sourceTokenHtml(tokenSource)
+      : text(tokenSource, format);
   if (tag === "BR") return format === "html" ? "<br>" : "\n";
   if (tag === "IMG")
     return text(node.getAttribute("data-copy-emoji") ?? "", format);
@@ -199,11 +204,17 @@ export function unselectable(element: Element): boolean {
 }
 
 function anchor(node: Element, inner: string, format: CopyFormat): string {
-  const href = safeHref(node.getAttribute("href") ?? "");
+  const target = node.getAttribute("href") ?? "";
+  const panel = node.getAttribute("data-panel-target") === target;
+  const href = panel ? target : safeHref(target);
   if (!href) return inner;
   // Message links state their label (empty for a raw destination). Other HTML,
   // including this module's own output, is raw when its text is the URL.
   const label = node.getAttribute("data-link-label") ?? visibleText(node);
+  // Unknown schemes stay source text in HTML; the editor's existing token
+  // parser preserves them without adding an active clipboard destination.
+  if (panel && format === "html")
+    return sourceTokenHtml(link("markdown", href, label || href));
   if (!label || label === href || label === node.getAttribute("href"))
     return format === "html" ? link(format, href, href) : href;
   // Identity and channel locators read as their sigil-prefixed name alone.
@@ -213,6 +224,10 @@ function anchor(node: Element, inner: string, format: CopyFormat): string {
       ? label
       : `${label} (${href})`;
   return link(format, href, label, plain);
+}
+
+function sourceTokenHtml(source: string): string {
+  return `<span data-source="${escapeHtml(source)}">${escapeHtml(source)}</span>`;
 }
 
 /** An element's text without this module's spoiler delimiters. */

@@ -1,10 +1,12 @@
 import type { ChannelKit } from "../channel-templates/capability";
 import {
+  emptyLineup,
   kitRecordFits,
   soloCapacityMessage,
   type Groups,
   type KitEntry,
 } from "../channel-templates/model";
+import { projectTemplateId, templateEntry } from "../solo/workspace";
 import { createSidebarPreferencesStore } from "./sidebar-preferences-store";
 import type {
   SidebarAssignmentIntent,
@@ -147,21 +149,43 @@ export function createSoloPreferences(kit: ChannelKit, lifetime: AbortSignal) {
     removeSection: (id, signal) =>
       serialize(async () => {
         const { value, entry, active } = await current(signal);
-        if (!value.groups.some((group) => group.id === id))
-          return project(value);
-        return save(
-          {
-            ...value,
-            groups: value.groups.filter((group) => group.id !== id),
-            assignments: Object.fromEntries(
-              Object.entries(value.assignments).filter(
-                ([, group]) => group !== id,
-              ),
+        const groups = {
+          ...value,
+          groups: value.groups.filter((group) => group.id !== id),
+          assignments: Object.fromEntries(
+            Object.entries(value.assignments).filter(
+              ([, group]) => group !== id,
             ),
-          },
-          entry,
-          active,
-        );
+          ),
+        };
+        const saved = value.groups.some((group) => group.id === id)
+          ? await save(groups, entry, active)
+          : project(value);
+        // Best effort, once the workspace is gone: delete its settings (name,
+        // instructions, folders, agents). A record left behind is unreachable.
+        // An already-absent workspace gets this too: a groups write can land
+        // after failing to confirm, and its retry finds the workspace gone.
+        void serialize(async () => {
+          const cleanup = AbortSignal.any([lifetime, generation.signal]);
+          const settings = templateEntry(
+            kit.snapshot().entries,
+            await projectTemplateId(id),
+          );
+          if (settings?.record.value.type === "template")
+            await kit.save(
+              {
+                ...settings.record.value,
+                ...emptyLineup(),
+                name: "Deleted workspace",
+              },
+              settings.eventId,
+              true,
+              cleanup,
+            );
+        }).catch((error: unknown) => {
+          console.warn("The deleted workspace's settings were kept", error);
+        });
+        return saved;
       }),
     groupsOnly: true,
     createSection: (section, signal) =>

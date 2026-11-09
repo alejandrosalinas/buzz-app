@@ -265,7 +265,7 @@ it("loads public agent names, avatars and bios without a local agent", async () 
     // relay thumbnail the message row already loaded, not the original blob.
     expect(avatar.querySelector("img")).toHaveAttribute(
       "src",
-      `https://relay.example.test/media/${sha}.thumb.jpg`,
+      `https://relay.example.test/media/${sha}.thumb.webp`,
     );
   } finally {
     f.dispose();

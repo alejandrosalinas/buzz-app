@@ -4,6 +4,7 @@ import { Button } from "../../shared/design-system/ui/Button";
 import { Field } from "../../shared/design-system/ui/Field";
 import { Input } from "../../shared/design-system/ui/Input";
 import { Select } from "../../shared/design-system/ui/Select";
+import { typedPublicKey } from "../../shared/identity/public-key";
 import type {
   OperatorDto,
   StaffRequest,
@@ -12,12 +13,7 @@ import type {
 } from "../../features/relay-staff/contract";
 import { describe, useRead, useSession, useWrite } from "./session";
 import { NamesSource, Person, PeopleScope, usePeople } from "./people";
-import {
-  containsSecretKey,
-  Loaded,
-  publicKeyInput,
-  SECRET_KEY_WARNING,
-} from "./ui";
+import { containsSecretKey, Loaded, SECRET_KEY_WARNING } from "./ui";
 
 type OperatorWrite = Extract<
   StaffRequest,
@@ -60,7 +56,7 @@ export function Operators() {
   /** Every operator change shares one write, so all controls wait for it. */
   const busy = write.busy;
   const [removing, setRemoving] = useState<OperatorDto | null>(null);
-  const pubkey = publicKeyInput(input);
+  const pubkey = typedPublicKey(input);
   const secret = containsSecretKey(input);
   const keys = list.state === "ok" ? list.value.map((o) => o.pubkey) : [];
   const names = usePeople(keys);

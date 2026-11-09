@@ -1,21 +1,32 @@
 // @vitest-environment jsdom
 import "@testing-library/jest-dom/vitest";
-import { act, cleanup, render, screen } from "@testing-library/react";
+import {
+  act,
+  cleanup,
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+} from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { StrictMode, useState } from "react";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import type { Host, HostResponse } from "../../../features/host/service";
 import { createAgentClient } from "../agents/client";
-import { createOAuthSession } from "../oauth/session";
-import type { Credential } from "../oauth/browser";
-import { deferred } from "../test-helpers";
-import { createCreationFields, EMPTY_CREATION } from "./Create";
+import type { Credential } from "../session";
+import { deferred, createTestSession } from "../test-helpers";
+import {
+  createCreationAction,
+  createCreationFields,
+  EMPTY_CREATION,
+} from "./Create";
 
 beforeEach(() =>
   vi.stubEnv("VITE_BUZZ_BUILDERLAB_URL", "https://builderlab.example"),
 );
 afterEach(() => {
   cleanup();
+  vi.useRealTimers();
   vi.unstubAllEnvs();
   delete document.documentElement.dataset.keyboardNavigation;
 });
@@ -31,9 +42,9 @@ const catalog = [
     supported_reasoning_efforts: ["none"],
   },
 ];
-async function fixture(signedIn = true) {
+async function fixture(signedIn = true, recommended?: unknown) {
   const acquire = vi.fn(async () => ({
-    value: "credential",
+    revision: "credential",
     account: {
       subject: "account",
       email: "a@example.com",
@@ -41,7 +52,7 @@ async function fixture(signedIn = true) {
       canUseBuilderlabDecisions: false,
     },
   }));
-  const session = createOAuthSession(acquire, undefined, {
+  const session = createTestSession(acquire, undefined, {
     request: (input) => request(input),
   });
   if (signedIn) await session.signIn();
@@ -53,13 +64,17 @@ async function fixture(signedIn = true) {
     return {
       status: 200,
       headers: {},
-      body: JSON.stringify({ models: catalog }),
+      body: JSON.stringify({
+        models: catalog,
+        recommended_selection: recommended,
+      }),
     };
   });
   const client = createAgentClient(session, null);
   const { Create, CreateConfiguration } = createCreationFields(client, session);
   const submit = vi.fn();
   const ready = vi.fn();
+  const Action = createCreationAction(session);
   let draft = { ...EMPTY_CREATION };
   function Form() {
     const [config, setConfig] = useState(draft);
@@ -72,6 +87,7 @@ async function fixture(signedIn = true) {
           submit();
         }}
       >
+        <Action disabled={false} />
         <CreateConfiguration
           config={config}
           onChange={setConfig}
@@ -196,6 +212,126 @@ it("loads the catalog and keeps instructions alongside explicit model and effort
   ).toBe(true);
 });
 
+it("preselects Builderlab's recommendation and keeps the person's later choice", async () => {
+  const h = await fixture(true, { model_id: "one", reasoning_effort: "high" });
+  await act(async () => h.pending.resolve());
+  await screen.findByRole("button", { name: "Model: Sol 6.1" });
+  expect(screen.getByRole("combobox", { name: "Thinking" })).toHaveTextContent(
+    "High",
+  );
+  expect(h.draft()).toEqual({
+    instructions: "",
+    modelId: "one",
+    reasoningEffort: "high",
+    subject: "account",
+  });
+  // Untouched recommended choices are complete, so creation is ready.
+  expect(h.ready).toHaveBeenLastCalledWith(true);
+  await choose("Model", "Model Two");
+  await choose("Thinking", "None");
+  // A reloaded catalog recommends again, but only into untouched choices.
+  act(() => h.session.signOut());
+  await userEvent
+    .setup()
+    .click(screen.getByRole("button", { name: "Sign in to Builderlab" }));
+  await screen.findByRole("button", { name: "Model: Model Two" });
+  expect(h.draft()).toEqual({
+    instructions: "",
+    modelId: "two",
+    reasoningEffort: "none",
+    subject: "account",
+  });
+});
+
+it("moves an untouched recommendation to a newly signed-in account", async () => {
+  const h = await fixture(true, { model_id: "one", reasoning_effort: "high" });
+  await act(async () => h.pending.resolve());
+  await screen.findByRole("button", { name: "Model: Sol 6.1" });
+  act(() => h.session.signOut());
+  h.acquire.mockResolvedValue({
+    revision: "other-credential",
+    account: {
+      subject: "other",
+      email: "b@example.com",
+      canUseRemoteAgents: true,
+      canUseBuilderlabDecisions: false,
+    },
+  });
+  await userEvent
+    .setup()
+    .click(screen.getByRole("button", { name: "Sign in to Builderlab" }));
+  await screen.findByRole("button", { name: "Model: Sol 6.1" });
+  expect(h.draft()).toEqual({
+    instructions: "",
+    modelId: "one",
+    reasoningEffort: "high",
+    subject: "other",
+  });
+  expect(screen.queryByText(/another Builderlab account/)).toBeNull();
+  expect(h.ready).toHaveBeenLastCalledWith(true);
+  expect(screen.getByRole("combobox", { name: "Thinking" })).toBeEnabled();
+});
+
+it.each([
+  { field: "Thinking", recommendation: "changed" },
+  { field: "Thinking", recommendation: "missing" },
+  { field: "Model", recommendation: "changed" },
+  { field: "Model", recommendation: "missing" },
+])(
+  "preserves an explicit $field choice that returns to the suggestion before an account switch with a $recommendation recommendation",
+  async ({ field, recommendation }) => {
+    const h = await fixture(true, {
+      model_id: "one",
+      reasoning_effort: "high",
+    });
+    await act(async () => h.pending.resolve());
+    await screen.findByRole("button", { name: "Model: Sol 6.1" });
+    if (field === "Model") {
+      await choose("Model", "Model Two");
+      await choose("Thinking", "None");
+      await choose("Model", "Sol 6.1");
+    } else {
+      await choose("Thinking", "Low");
+    }
+    await choose("Thinking", "High");
+    const explicit = { ...h.draft() };
+    expect(explicit).toMatchObject({
+      modelId: "one",
+      reasoningEffort: "high",
+      subject: "account",
+    });
+    act(() => h.session.signOut());
+    h.acquire.mockResolvedValue({
+      revision: "other-credential",
+      account: {
+        subject: "other",
+        email: "b@example.com",
+        canUseRemoteAgents: true,
+        canUseBuilderlabDecisions: false,
+      },
+    });
+    h.request.mockResolvedValue({
+      status: 200,
+      headers: {},
+      body: JSON.stringify({
+        models: catalog,
+        recommended_selection:
+          recommendation === "changed"
+            ? { model_id: "two", reasoning_effort: "none" }
+            : undefined,
+      }),
+    });
+    await userEvent
+      .setup()
+      .click(screen.getByRole("button", { name: "Sign in to Builderlab" }));
+    const thinking = await screen.findByRole("combobox", { name: "Thinking" });
+    expect(h.draft()).toEqual(explicit);
+    expect(screen.getByText(/another Builderlab account/)).toBeVisible();
+    expect(thinking).toBeDisabled();
+    expect(h.ready).toHaveBeenLastCalledWith(false);
+  },
+);
+
 it("retains instructions when catalog loading fails and is retried", async () => {
   const h = await fixture();
   h.fail(true);
@@ -244,7 +380,7 @@ it("requires new account choices while retaining the draft instructions", async 
   act(() => h.session.signOut());
   expect(h.ready).toHaveBeenLastCalledWith(false);
   h.acquire.mockResolvedValue({
-    value: "other-credential",
+    revision: "other-credential",
     account: {
       subject: "other",
       email: "b@example.com",
@@ -254,7 +390,7 @@ it("requires new account choices while retaining the draft instructions", async 
   });
   await userEvent
     .setup()
-    .click(screen.getByRole("button", { name: "Sign in with Builderlab" }));
+    .click(screen.getByRole("button", { name: "Sign in to Builderlab" }));
   await screen.findByRole("button", { name: "Model: Sol 6.1" });
   expect(screen.getByRole("status")).toHaveTextContent(
     "another Builderlab account",
@@ -337,18 +473,40 @@ it("waits for explicit sign-in before loading the creation catalog", async () =>
   const h = await fixture(false);
   expect(h.acquire).not.toHaveBeenCalled();
   expect(h.request).not.toHaveBeenCalled();
+  expect(h.ready).toHaveBeenLastCalledWith(false);
+  expect(
+    screen.getByRole("button", { name: "Model: Choose a model" }),
+  ).toBeDisabled();
+  expect(screen.getByRole("combobox", { name: "Thinking" })).toBeDisabled();
+  expect(screen.queryByRole("status")).not.toBeInTheDocument();
+  const signIn = screen.getByRole("button", { name: "Sign in to Builderlab" });
+  expect(signIn).toHaveAttribute("data-size", "sm");
   await act(async () => h.pending.resolve());
-  await userEvent
-    .setup()
-    .click(screen.getByRole("button", { name: "Sign in with Builderlab" }));
-  await screen.findByRole("button", { name: "Model: Choose a model" });
+  await userEvent.setup().click(signIn);
+  await waitFor(() =>
+    expect(
+      screen.getByRole("button", { name: "Model: Choose a model" }),
+    ).toBeEnabled(),
+  );
   expect(h.acquire).toHaveBeenCalledTimes(1);
+  // Sign-in enables choices; creation still waits for a model and thinking level.
+  expect(h.ready).toHaveBeenLastCalledWith(false);
+  expect(
+    screen.queryByRole("button", { name: "Sign in to Builderlab" }),
+  ).not.toBeInTheDocument();
+  await act(async () => h.session.signOut());
+  expect(h.ready).toHaveBeenLastCalledWith(false);
+  expect(
+    screen.getByRole("button", { name: "Model: Choose a model" }),
+  ).toBeDisabled();
+  expect(screen.getByRole("combobox", { name: "Thinking" })).toBeDisabled();
 });
 
-it("can cancel a pending shared sign-in even while the creation form is disabled", async () => {
+it("shares the cancellable spinner without browser-return guidance", async () => {
+  vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
   const login = deferred<Credential>();
   let aborted = false;
-  const session = createOAuthSession(
+  const session = createTestSession(
     (signal) => {
       signal.addEventListener("abort", () => (aborted = true));
       return login.promise;
@@ -359,34 +517,102 @@ it("can cancel a pending shared sign-in even while the creation form is disabled
   const request = vi.fn<Host["request"]>();
   const client = createAgentClient(session, null);
   const { CreateConfiguration } = createCreationFields(client, session);
+  const Action = createCreationAction(session);
   render(
-    <CreateConfiguration
-      config={{ ...EMPTY_CREATION }}
-      disabled
-      onChange={() => {}}
-      harnessControl={null}
-    />,
+    <>
+      <Action disabled />
+      <CreateConfiguration
+        config={{ ...EMPTY_CREATION }}
+        disabled
+        onChange={() => {}}
+        harnessControl={null}
+      />
+    </>,
     { wrapper: StrictMode },
   );
   expect(
     screen.queryByRole("button", { name: "Cancel sign-in" }),
   ).not.toBeInTheDocument();
+  let signingIn = Promise.resolve();
   await act(async () => {
-    void session.signIn();
+    signingIn = session.signIn();
   });
-  expect(screen.getByRole("status")).toHaveTextContent(
-    "Finish sign-in in your browser",
-  );
+  const progress = screen.getByRole("button", {
+    name: "Cancel sign-in",
+  });
+  expect(progress).toHaveAttribute("aria-busy", "true");
+  expect(progress).toHaveAttribute("data-button-shape", "icon");
+  expect(
+    progress.querySelector('[class~="motion-safe:animate-spin"]'),
+  ).toBeInTheDocument();
+  expect(
+    screen.queryByRole("button", { name: "Cancel sign-in" }),
+  ).toBeInTheDocument();
+  expect(progress).toBeEnabled();
+  expect(aborted).toBe(false);
+  expect(session.snapshot().status).toBe("pending");
+  expect(
+    screen.getByRole("button", { name: "Model: Choose a model" }),
+  ).toBeDisabled();
+  expect(screen.getByRole("combobox", { name: "Thinking" })).toBeDisabled();
+  await act(() => vi.advanceTimersByTimeAsync(2999));
+  expect(progress).toHaveAttribute("aria-busy", "true");
+  expect(
+    screen.queryByRole("button", { name: "Cancel sign-in" }),
+  ).toBeInTheDocument();
+  expect(screen.queryByText(/Finish signing in/)).not.toBeInTheDocument();
+  await act(() => vi.advanceTimersByTimeAsync(1));
+  expect(screen.queryByText(/Finish signing in/)).not.toBeInTheDocument();
   const cancel = screen.getByRole("button", { name: "Cancel sign-in" });
   expect(cancel).toBeEnabled();
-  await userEvent.setup().click(cancel);
+  expect(
+    cancel.querySelector('[class~="motion-safe:animate-spin"]'),
+  ).toBeInTheDocument();
+  fireEvent.click(cancel);
   expect(aborted).toBe(true);
   expect(session.snapshot().status).toBe("signed-out");
   expect(
     screen.queryByRole("button", { name: "Cancel sign-in" }),
   ).not.toBeInTheDocument();
-  expect(screen.getByRole("status")).toHaveTextContent(
-    "Sign in to choose a model",
-  );
+  expect(
+    screen.getByRole("button", { name: "Sign in to Builderlab" }),
+  ).toBeDisabled();
   expect(request).not.toHaveBeenCalled();
+  expect(screen.queryByText(/Finish signing in/)).not.toBeInTheDocument();
+  await act(async () => {
+    login.resolve({
+      revision: "late",
+      account: {
+        subject: "late",
+        email: "late@example.com",
+        canUseRemoteAgents: true,
+        canUseBuilderlabDecisions: false,
+      },
+    });
+    await signingIn;
+  });
+  expect(session.snapshot().status).toBe("signed-out");
+});
+
+it("keeps account verification non-cancellable beyond the browser deadline", async () => {
+  vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+  const session = createTestSession(vi.fn());
+  const checking = { status: "pending" as const, checking: true };
+  const cancel = vi.fn();
+  const Action = createCreationAction({
+    ...session,
+    snapshot: () => checking,
+    cancel,
+  });
+  render(<Action disabled={false} />);
+  await act(() => vi.advanceTimersByTimeAsync(30_000));
+  const progress = screen.getByRole("button", {
+    name: "Sign in to Builderlab",
+  });
+  expect(progress).toHaveAttribute("aria-busy", "true");
+  expect(
+    screen.queryByRole("button", { name: "Cancel sign-in" }),
+  ).not.toBeInTheDocument();
+  fireEvent.click(progress);
+  expect(cancel).not.toHaveBeenCalled();
 });

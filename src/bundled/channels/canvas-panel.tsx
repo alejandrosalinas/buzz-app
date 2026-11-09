@@ -8,6 +8,7 @@ import type { ChannelSummary } from "../../features/relay/contracts";
 import type { RelaySession } from "../../features/relay/session";
 import { buzzLinkTarget } from "../../features/navigation/buzz-links";
 import { CanvasEditor } from "./CanvasEditor";
+import { canvasReadOnly } from "../../features/channel-templates/capability";
 
 function eligible(channel: ChannelSummary, session: RelaySession) {
   return (
@@ -27,11 +28,7 @@ export function registerCanvas(ctx: Context) {
     const readOnly = useListedChannel(
       state.status === "ready" ? state.session.channels : undefined,
       channelContext?.channelId,
-      (channel) =>
-        !channel ||
-        !!channel.archived ||
-        !!channel.readOnly ||
-        !!channel.cached,
+      canvasReadOnly,
     );
     if (
       !channelContext ||

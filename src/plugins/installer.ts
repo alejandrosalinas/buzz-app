@@ -2,21 +2,46 @@ import { Service, type Context } from "@deepseek-ai/cordis";
 import type { PluginManager } from "./manager";
 import { providePluginReviewHold } from "./review-access";
 
-export type PluginInstallSource = Readonly<{
+export type GitPluginInstallSource = Readonly<{
   repository: string;
   reference: string;
   path?: string;
   /** Install exactly this commit; the import is refused if the fetched head differs. */
   commit?: string;
 }>;
+/**
+ * One plugin artifact (`buzzodz plugin pack`) over HTTPS, for people without access
+ * to the Git host. Buzz installs it only if it hashes to `sha256` and its manifest ID is `id`.
+ */
+export type UrlPluginInstallSource = Readonly<{
+  id: string;
+  url: string;
+  sha256: string;
+}>;
+export type PluginInstallSource =
+  | GitPluginInstallSource
+  | UrlPluginInstallSource;
 export type PluginInstallOutcome =
   | "installed"
   | "updated"
   | "cancelled"
   | "unavailable";
+type PluginInstallationStatus = "installed" | "absent" | "unavailable";
 export type PluginInstaller = Readonly<{
+  /** The source kinds `requestInstall` accepts. Missing on hosts that accept only Git. */
+  sources?: readonly ("git" | "url")[];
   /** Opens Settings → Plugins for the user to review; it never installs silently. */
   requestInstall(source: PluginInstallSource): Promise<PluginInstallOutcome>;
+  /**
+   * Checks stable manifest-ID membership in the ready catalog, regardless of
+   * enabled state or install source. Returns unavailable until the catalog is ready.
+   */
+  getInstallationStatus(id: string): PluginInstallationStatus;
+  /** Listen for status changes; call getInstallationStatus after subscribing for the current status. */
+  subscribeInstallationStatus(
+    id: string,
+    listener: (status: PluginInstallationStatus) => void,
+  ): () => void;
 }>;
 
 declare module "@deepseek-ai/cordis" {
@@ -100,11 +125,58 @@ function relativePath(value: unknown) {
     : null;
 }
 
+const pluginId = /^[a-z][a-z0-9.-]{0,127}$/;
+const sha256 = /^[0-9a-f]{64}$/;
+
+export function pluginArtifactUrl(value: unknown) {
+  if (typeof value !== "string" || value.length > 2048) return null;
+  if (/[\s\p{Cc}\p{Cf}\P{ASCII}]/u.test(value)) return null;
+  try {
+    const url = new URL(value);
+    return url.protocol === "https:" &&
+      url.hostname &&
+      !url.hostname.startsWith("-") &&
+      !url.username &&
+      !url.password &&
+      !url.search &&
+      !url.hash &&
+      url.pathname.replaceAll("/", "") !== ""
+      ? value
+      : null;
+  } catch {
+    return null;
+  }
+}
+
+function urlInstallSource(
+  input: Record<string, unknown>,
+): UrlPluginInstallSource | null {
+  const { id, url, sha256: digest, ...rest } = input;
+  if (Object.keys(rest).length) return null;
+  const normalizedUrl = pluginArtifactUrl(url);
+  if (
+    !normalizedUrl ||
+    typeof id !== "string" ||
+    !pluginId.test(id) ||
+    typeof digest !== "string" ||
+    !sha256.test(digest.toLowerCase())
+  )
+    return null;
+  return { id, url: normalizedUrl, sha256: digest.toLowerCase() };
+}
+
+export function isUrlInstallSource(
+  source: PluginInstallSource,
+): source is UrlPluginInstallSource {
+  return "url" in source;
+}
+
 /** The normalized request, or null when any field is outside the accepted grammar. */
 export function parsePluginInstallSource(
   input: unknown,
 ): PluginInstallSource | null {
   if (!input || typeof input !== "object") return null;
+  if ("url" in input) return urlInstallSource(input as Record<string, unknown>);
   const {
     repository,
     reference: ref,
@@ -136,6 +208,10 @@ export type PluginInstallRequest = Readonly<{
   source: PluginInstallSource;
   origin: PluginInstallOrigin;
 }>;
+export type GitPluginInstallRequest = PluginInstallRequest &
+  Readonly<{ source: GitPluginInstallSource }>;
+export type UrlPluginInstallRequest = PluginInstallRequest &
+  Readonly<{ source: UrlPluginInstallSource }>;
 
 export function createPluginInstallRequests({
   ttlMs = 60_000,
@@ -250,21 +326,44 @@ function displayName(name: string, fallback: string) {
 }
 
 type InstallHost = Readonly<{
-  plugins: Pick<PluginManager, "snapshot" | "imports">;
+  plugins: Pick<PluginManager, "snapshot" | "subscribe" | "imports">;
   requests: PluginInstallRequests;
   openPlugins(): Promise<{ status: string }>;
 }>;
 
 const invalidSource =
-  "A plugin install request needs an HTTPS, SSH or scp-style Git repository, a branch or tag, and optionally a relative folder and a commit";
+  "A plugin install request needs either an HTTPS, SSH or scp-style Git repository, a branch or tag, and optionally a relative folder and a commit; or a plugin id, an HTTPS artifact url and its sha256";
 
 export function createPluginInstallCore({
   plugins,
   requests,
   openPlugins,
 }: InstallHost) {
+  const getInstallationStatus = (id: string): PluginInstallationStatus => {
+    const { configuration } = plugins.snapshot();
+    if (configuration.status !== "ready") return "unavailable";
+    return configuration.catalog.plugins.some(
+      (plugin) => plugin.manifest.id === id,
+    )
+      ? "installed"
+      : "absent";
+  };
+
   return {
     holdReview: requests.holdReview,
+    getInstallationStatus,
+    subscribeInstallationStatus(
+      id: string,
+      listener: (status: PluginInstallationStatus) => void,
+    ) {
+      let current = getInstallationStatus(id);
+      return plugins.subscribe(() => {
+        const next = getInstallationStatus(id);
+        if (next === current) return;
+        current = next;
+        listener(next);
+      });
+    },
     async submit(
       source: PluginInstallSource,
       caller: Readonly<{
@@ -325,12 +424,13 @@ export function createPluginInstallerService(
   host: Readonly<{ core: PluginInstallCore }>,
 ): PluginInstaller {
   class PluginInstallerService extends Service implements PluginInstaller {
+    readonly sources = Object.freeze(["git", "url"] as const);
+
     constructor() {
       super(ctx, "pluginInstaller");
     }
 
-    // A method, not an arrow property: Cordis gives it the calling plugin's
-    // context, which is how a request is attributed and tied to its lifetime.
+    // Keep these as methods so Cordis supplies the caller's context for origin and lifetime.
     requestInstall(source: PluginInstallSource): Promise<PluginInstallOutcome> {
       const owner = this.ctx.pluginOwner;
       if (!owner)
@@ -345,6 +445,29 @@ export function createPluginInstallerService(
           return () => void stop();
         },
       });
+    }
+
+    getInstallationStatus(id: string): PluginInstallationStatus {
+      return host.core.getInstallationStatus(id);
+    }
+
+    subscribeInstallationStatus(
+      id: string,
+      listener: (status: PluginInstallationStatus) => void,
+    ): () => void {
+      const caller = this.ctx;
+      const stop = caller.effect(() =>
+        host.core.subscribeInstallationStatus(id, (status) => {
+          try {
+            listener(status);
+          } catch (error) {
+            caller
+              .logger("pluginInstaller")
+              .warn("Installed-plugin status listener failed", error);
+          }
+        }),
+      );
+      return () => void stop();
     }
   }
 

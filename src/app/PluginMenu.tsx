@@ -34,6 +34,7 @@ export function PluginMenu({
 }) {
   const deleteTrigger = useRef<HTMLButtonElement>(null);
   const cancelDelete = useRef<HTMLButtonElement>(null);
+  const rollBack = useRef<HTMLButtonElement>(null);
   const updateChoice = useRef<HTMLDivElement>(null);
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [deleting, setDeleting] = useState(false);
@@ -135,6 +136,7 @@ export function PluginMenu({
           title={`Roll back ${plugin.manifest.name}?`}
           description="Restore the previous installed version. You can update again from the source folder or repository."
           pending={busy || rollingBack}
+          initialFocus={rollBack}
           finalFocus={deleteTrigger}
           onClose={() => setConfirmRollback(false)}
           actions={
@@ -146,6 +148,7 @@ export function PluginMenu({
                 Cancel
               </Button>
               <Button
+                ref={rollBack}
                 variant="prominent"
                 disabled={
                   busy ||

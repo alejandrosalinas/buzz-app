@@ -158,3 +158,33 @@ it("reopens on the same rows when their order changed while closed", () => {
   fireEvent.keyDown(screen.getByRole("combobox"), { key: "Enter" });
   expect(run).not.toHaveBeenCalled();
 });
+
+it("keeps a footer below the results, outside their scrollport, so it stays in view", () => {
+  render(
+    <SearchChoices
+      query="beta"
+      onQueryChange={() => {}}
+      input={createRef<HTMLElement>()}
+      groups={[{ label: "Channels", destinations }]}
+      footer={<p>Only saved conversations are searched.</p>}
+    >
+      <p>Loading joined conversations…</p>
+    </SearchChoices>,
+  );
+  const footer = screen.getByText("Only saved conversations are searched.");
+  const scroll = document.querySelector<HTMLElement>(".search-palette-scroll");
+  if (!scroll) throw new Error("no results scrollport");
+  // Status that belongs with the rows still scrolls with them.
+  expect(scroll).toContainElement(
+    screen.getByText("Loading joined conversations…"),
+  );
+  expect(scroll).not.toContainElement(footer);
+  expect(screen.getByRole("listbox")).not.toContainElement(footer);
+  // It follows the results in reading order, never as a row.
+  expect(
+    scroll.compareDocumentPosition(footer) & Node.DOCUMENT_POSITION_FOLLOWING,
+  ).toBeTruthy();
+  expect(footer.closest("[data-search-palette]")).toHaveAttribute(
+    "data-search-footer",
+  );
+});

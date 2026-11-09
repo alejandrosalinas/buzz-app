@@ -80,7 +80,7 @@ Master/detail layouts preserve list selection, scroll, and drafts while inspecti
 an item. Follow the existing host's narrow overlay/navigation behavior rather than
 squeezing two unusable columns into a small viewport. Selection, hover, and focus
 remain distinct. Shared tabs connect related views of one object; route destinations
-retain navigation semantics except for the wide shell topbar described in
+retain navigation semantics except for the shell dock described in
 [Chrome route navigation](#chrome-route-navigation). When replacing a focused page heading with shared
 chrome, preserve a meaningful destination focus target, such as a named content
 region. Do not add a duplicate title or discard the focus handoff just because the
@@ -172,6 +172,10 @@ Ordinary flow Dialogs use sticky header and footer bars over the scrolling body.
 Their full backgrounds combine a surface-color gradient and progressive blur;
 labels and actions remain sharp. Reduced transparency uses an opaque surface.
 `ScrollEdgeMaterial` owns this treatment, shared with the agent Save footer.
+Only the sticky footer's gradient gutter passes pointer input to the body.
+Its content row owns pointer input and horizontal overflow, including text,
+controls, gaps, and the bottom inset. When reduced transparency or forced colors
+make the gutter opaque, it also blocks input to the body beneath it.
 Its host supplies overlap and isolation; `--scroll-edge-surface` selects the
 host surface when it differs from the default popover surface.
 `--scroll-edge-fill` can supply a stronger backing behind text within that fade.
@@ -252,6 +256,15 @@ until focus enters. This preserves body-field or first-action focus; Base UI
 retains ownership of touch behavior. Explicit `initialFocus` overrides remain
 authoritative. Close then participates in the normal Tab cycle.
 
+For a simple confirmation, generally pass an explicit `initialFocus` ref to
+Cancel (or its equivalent safe dismissal action), so the focused footer action
+makes it clear that Enter cancels. Preserve intentional primary-action defaults.
+When a confirmation requires a field or checkbox gate, start at the relevant
+body control instead; the gate prevents accidental submission. Keep existing
+form-field focus targets. Do not let header Close become an accidental
+alternative default when Cancel is the intended starting point. A dialog
+without a separate cancellation action can retain Close as its starting point.
+
 Preserve initial focus, return focus, Escape, outside-click, dirty-draft, and pending
 behavior explicitly. An asynchronous operation must not gain a dismissal path that
 loses work. Keep failure and recovery in the modal with entered values intact.
@@ -314,7 +327,8 @@ appropriate surviving trigger unless the person has moved elsewhere. See
 ### Hover timing
 
 Hover content opens only once the pointer rests on its trigger, never while it
-crosses on the way to something else; any movement restarts the wait. Keyboard
+crosses on the way to something else; any movement restarts the wait. The one
+exception is the dock label bucket below. Keyboard
 focus is deliberate, so it opens hints and previews at once, and anything that
 opens on hover also opens with Enter; Escape dismisses them all. Every hover
 surface belongs to exactly one bucket, and the timings live in
@@ -329,6 +343,7 @@ each disabled choice keyboard reachable and connected to the shared description.
 | --- | --- | --- | --- |
 | Familiar hint | Naming an icon whose meaning is already obvious: back/forward, close, window controls, sidebar and pane toggles, new (+), more (…), send, attach, copy, download, refresh, delete, mute, reply, add reaction, bold/italic. An obvious icon stays familiar when its hint also shows a shortcut; a disabled one switches to helpful | Rests 0.5s | `Tooltip hint="familiar"`; `Button`/`IconButton` `title` with `hint="familiar"` |
 | Helpful hint | Naming an icon people may not recognize, or adding information the control does not show: an unfamiliar control’s shortcut, why it is disabled (use Hover control for side explanations of grouped unavailable choices in an open menu), an error, a truncated value | Rests 0.25s | `Tooltip`, or `title` on `Button`/`IconButton` (the default) |
+| Dock label | Naming an app on the icon-only app dock, where the label is the tile's only visible name | Opens at once, without an entrance animation | `Tooltip hint="dock"`; `Tabs variant="dock"` applies it |
 | Preview | Rich content about an object: a profile, link, channel, activity, typing participants, who reacted | Rests 0.3s | `PreviewCard`; `PopoverTrigger openOnHover="preview"` |
 | Hover control | A control that expands in place under the pointer: video volume, playback speed; side explanations for grouped unavailable choices in an open menu | Rests 0.05s | `PopoverTrigger` or `MenuTrigger` with `openOnHover="control"` |
 | No hover | A control whose visible text already says what it does | None | Omit `title` |
@@ -438,7 +453,7 @@ force every plugin into one universal page component. Read the
 
 ## Direction
 
-Buzz adopts Block UI's visual language and semantic color grammar. Base UI
+Buzz has its own visual language and semantic color grammar. Base UI
 remains the behavior layer; Buzz owns styles, composition and product semantics.
 Use Inter and JetBrains Mono, public dependencies and generic examples. Do not
 copy private packages, proprietary fonts, internal product data or private source.
@@ -482,8 +497,32 @@ framing and scrolling. `wrapSections` lets Settings groups wrap in one shared
 responsive layout when their host becomes narrow; do not reproduce that grid or
 its margin reset in the modal or feature stylesheet. Shared selector rules live globally in the design system,
 never nested inside feature CSS Modules via `@apply` (which renames their targets).
-Features keep unread cues, branded headers, collapsible groups, drag targets and
-composite row/scrollbar geometry; their existing layout rules remain in charge.
+Features keep unread cues, branded headers, drag targets and composite
+row/scrollbar geometry; their existing layout rules remain in charge.
+
+A scrolling list under sticky chrome with no material behind it, such as the
+sidebar below its tabs or message history below its header, feathers its edges
+with the scroll fade instead of cutting rows at a hard line. Set
+`data-scroll-fade` on the scroller. `always` feathers both edges, as message
+history does. `scrolled` feathers only an edge with content past it, marked by
+`useScrollEdges("block")`, so a list at rest keeps its first row crisp; the
+sidebar uses it. A host whose scroller cannot carry the attribute applies
+`--scroll-fade-always`. Reduced transparency and forced colors remove the fade.
+Tab strips keep their own wider horizontal fade.
+
+Every sidebar heading row, including collapsible channel groups and Solo
+workspaces, is a `NavigationSectionHeading`. It is auto layout: the label fills
+and truncates, actions hug the trailing edge, and the row fills its list. Never
+position heading actions absolutely or reserve trailing padding for them; a
+row that must work at every sidebar width cannot depend on a fixed gap. Use
+`disclosure` when the label is the feature's own collapse trigger, and
+`revealActions` or `data-navigation-reveal` for quiet parts such as the chevron.
+Revealed parts show on hover, keyboard focus, an open heading menu or while
+one of them has focus, and always show on touch; a focused control is never
+invisible. Hidden actions take no width, like a hidden auto layout
+child, so a long label keeps its words at large text sizes and narrow widths. When a host already names a list, as
+the sidebar's Team and Solo tabs do, omit its heading rather than hiding or
+overlaying it; any actions it still needs take a headingless heading row.
 Top-bar pills and picker options are not sidebar rows and keep their own recipes.
 
 Omit NavigationSection’s `label` for a headingless reference group: it keeps
@@ -609,9 +648,9 @@ in identity, guidance, transitions, and ceremony. Use color to convey meaning.
 
 Use the surface that matches the content and its position in the interface.
 
-- **Panels:** the shell uses an independent `Panel` for sidebar navigation and one `Panel joined` around the main content workspace, separated by `space-panel-gap` (8px at default scale). The sidebar resize grip stays centered in that gutter. Both retain opaque surfaces when navigation overlays at narrow widths. Nested Panels keep their opaque fill and clipping but lose independent borders, corners, and shadows. The layout owner separates adjacent regions with `border-standard` hairlines. Standalone Panels use `radius-container` (24px) corners and `shadow-panel` for a translucent contour and subtle lift, rather than an opaque depth border.
+- **Panels:** the shell joins sidebar navigation and the main content workspace into one surface beside the app dock. The sidebar resize grip sits on their shared `border-standard` seam. Both retain opaque surfaces when navigation overlays at narrow widths. Nested Panels keep their opaque fill and clipping but lose independent borders, corners, and shadows. The layout owner separates adjacent regions with `border-standard` hairlines. Standalone Panels use `radius-container` (24px) corners and `shadow-panel` for a translucent contour and subtle lift, rather than an opaque depth border.
 - **Recessed regions:** use `bg-inset` for a region pushed into its surrounding surface. Use quiet fills where they communicate separation; reserve outlines for boundaries that need to be identified.
-- **Shell:** `bg-app` is a solid color, neutral-quiet-hover in light mode and neutral 2 in dark. The shell owns one continuous `texture-dots` grid beneath its header, rail and panes. Dots derive from this background: darker in light mode, lighter in dark mode, never an unrelated gray. The app root owns the background and its texture together. Do not override a descendant background and expect inherited texture colors to recompute. The pattern is decorative; do not increase its contrast to communicate state. The one exception to the solid shell is a backdrop a plugin explicitly registers ([shell backdrops](../../../docs/plugin-architecture.md#shell-backdrops)); the default shell has none. A backdrop may cover the dots and gutters only. Panes stay opaque, and the host keeps solid `bg-app` beneath each header control group and the sidebar grip so their ink, fills and focus rings keep this background's contrast. The host shows no backdrop under reduced motion, reduced transparency or forced colors.
+- **Shell:** `bg-app` is a solid color, neutral-quiet-hover in light mode and neutral 2 in dark. The shell owns one continuous `texture-dots` grid beneath its header, rail and panes. Dots derive from this background: darker in light mode, lighter in dark mode, never an unrelated gray. The app root owns the background and its texture together. Do not override a descendant background and expect inherited texture colors to recompute. The pattern is decorative; do not increase its contrast to communicate state. The one exception to the solid shell is a backdrop a plugin explicitly registers ([shell backdrops](../../../docs/plugin-architecture.md#shell-backdrops)); the default shell has none. A backdrop may cover the dots and gutters only. Panes stay opaque, and the host keeps solid `bg-app` beneath each header control group and the app dock so their ink, fills and focus rings keep this background's contrast. The host shows no backdrop under reduced motion, reduced transparency or forced colors.
 - **Reading surfaces:** documentation and dense prose sit on opaque `bg-panel`. Keep the dot grid outside reading panes. Do not add gradient backgrounds to the app shell.
 - **Borders:** use `border-standard` for quiet separators, `border-prominent` for controls, and `border-focus` for keyboard-focus recipes. Errors and warnings have their own boundary roles. Measure the actual pairing in both themes.
 - **Shadows:** use the shared elevation roles and keep them subtle. Light mode relies on shadow; dark mode also raises the fill’s lightness. Do not strengthen a shadow to separate a dark floating surface.
@@ -697,12 +736,22 @@ state. It retains shared focus, loading, and disabled behavior. Reduced
 transparency, forced colors, and missing backdrop-filter support use an opaque
 panel fill. Use it over artwork, not on ordinary neutral profile headers.
 
+Proposed for bright brand surfaces: `Button variant="glass-clear"` uses the
+most translucent glass fill with the primary blur and rim, so the backdrop stays
+visible. Hover and press step up to the primary glass fills. Use it for a
+secondary action beside a `prominent` one, such as the onboarding welcome.
+Reduced transparency, forced colors, and missing backdrop-filter support use an
+opaque panel fill with a boundary.
+
 ### Match controls to their surface
 
-The shell groups page tabs in one `chrome-navigation` track, with Search as a
-separate adjacent button. Creation sits beside the sidebar scope filters.
-Nested chrome tabs retain their selected fill without a second track.
-Layout and overflow remain shell-owned.
+The shell uses a vertical `Tabs variant="dock"` rail on the left, ordered
+Bestie, Inbox, then the normal app order. Wide search stays centered in the top
+bar and fills the available space between controls at compact widths. Creation
+sits beside the sidebar scope filters; Cmd/Ctrl+N opens it only where the app
+has a creation sidebar. The sidebar and detail pane share one joined surface; the
+resize seam is a persistent `border-standard` hairline. Layout and overflow
+remain shell-owned.
 
 Use `Tabs variant="segmented"` for grouped filters on an opaque surface, with
 a capsule track and raised capsule selection (for example, sidebar scope).
@@ -737,10 +786,17 @@ panel grid must have a shrinkable column so tabs do not widen other content.
 ## Focus appearance
 
 Keyboard focus is visible, and the component recipes in this guide own the ring.
-Every recipe is gated on the app-root modality fact `html[data-keyboard-navigation]`,
-so a pointer press leaves nothing behind. Keep focusability, Tab order, input
-modality, selection, and focus restoration intact, and do not add a local
-replacement ring where a component recipe already exists.
+Buttons use a 2px `border-focus` outline with a 2px offset, fitting the existing
+4px focus allowance in scrolling dialog footers. In Dialog and AlertDialog,
+the focused button always shows this ring, including automatic focus after pointer
+entry: it identifies what Enter will activate without changing the primary and
+secondary action styling. This applies to focused body and header buttons as well
+as footer actions. A focused split-button half paints its ring above its neighbour.
+Other button contexts and control recipes are gated on
+the app-root modality fact `html[data-keyboard-navigation]`, so ordinary pointer
+use leaves no keyboard ring. Keep focusability, Tab order, input modality, selection,
+and focus restoration intact, and do not add a local replacement ring where a
+component recipe already exists.
 
 Shared text fields are the one deliberate exception, and they replace the ring
 rather than removing it. `styles/forms.css` drops the outline for editable
@@ -901,7 +957,9 @@ same time and removes it without fading.
 
 The horizontal message hover toolbar sits above the bubble, with reaction,
 reply, copy-link and overflow icon actions. It uses `popover-surface` with
-a 12px control radius and 2px inset. Its icon actions use `text-subtle` at rest
+a 12px control radius and 2px inset. While closed it is invisible and drops the
+recipe's backdrop blur, so long timelines do not composite one blur per row;
+the open toolbar has the complete material. Its icon actions use `text-subtle` at rest
 and retain the shared hover, focus and disabled states and 10px corners.
 
 Message-author artwork uses Avatar `default` (32px) in channel/DM timelines,
@@ -1168,12 +1226,22 @@ components, not a screenshot's measured offsets.
 
 - **Leading identity:** static destinations use `PanelHeaderLabel`, including its
   icon slot and title typography. Omit the icon when there is no meaningful one.
-  Existing channel/workspace tabs retain `Tabs variant="navigation"`; the channel's
-  single non-closable tab uses `showSelection={false}`. Do not invent tab semantics
-  for a static page just to reproduce its appearance.
+  Additional channel/workspace tabs retain `Tabs variant="navigation"`; the lone
+  conversation uses its membership identity. Do not invent tab semantics for a
+  static page just to reproduce its appearance.
+- **Conversation membership identity (proposed):** channels and DMs combine the
+  compact member avatar stack before the name in one left-aligned
+  `SurfaceButton`. It uses 24px avatars and sidebar-row body-sm labels, while
+  trailing actions retain the standard panel-header alignment. Solo chats
+  preview their participating agents.
+  It shares the header bottom hairline; message history fades at its top and bottom edges. It opens the existing
+  membership manager. `PanelWorkspace` uses this identity
+  instead of a lone permanent tab; when extra tabs exist, it retains their strip
+  beside the identity. Other header actions stay at the trailing edge.
 - **Trailing actions:** use `IconButton size="sm" variant="ghost"` with 1rem
-  artwork, an action-specific `aria-label`, and a matching `title` hint. Use the
-  shared Menu with an icon-only trigger for overflow. Keep permission, pending,
+  artwork, an action-specific `aria-label`, and a matching `title` hint. Ordinary
+  trailing actions use metadata ink; disabled, pressed, and expanded controls
+  retain their shared state treatment. Use the shared Menu with an icon-only trigger for overflow. Keep permission, pending,
   disabled, expanded, and focus behavior with the action's current owner.
 - **Text actions:** a labelled action such as “Add agent” belongs in the content
   or empty state. If it is available in panel chrome, render it as an icon action
@@ -1225,8 +1293,7 @@ this height. Headers use 0.25rem inline padding (matching the centered 2rem cont
 block inset), 1rem identity icons, and
 0.25rem gaps between action buttons without reducing their hit areas. Navigation
 tabs use 1rem icons or fill avatars and 0.5rem leading padding.
-Header spacing, icons, and controls scale with rem; separators remain
-1px hairlines. Titles and actions may wrap when their content needs more room.
+Header spacing, icons, and controls scale with rem. Panel headers use a `border-standard` bottom hairline. Titles and actions may wrap when their content needs more room.
 Static identities use PanelHeaderLabel to share navigation tabs’ icon slot,
 regular title weight, and leading inset without adding a tab stop. Terminal context
 can follow the label; Inbox and Bestie use the same composition.
@@ -1309,9 +1376,9 @@ or `1rem` at viewport widths up to `30rem`. Do not add an outer flex gap
 on top of that body padding. Footers following body content also reserve a fixed
 `--space-4` (`1rem`) top gutter outside the scrollport, so scrolling content never
 meets the buttons directly. Header-only confirmations retain their header-to-action
-gap. Create/Edit channel forms opt into
+gap. Create/Edit channel forms and plugin update reviews opt into
 `headerGap="compact"` for a 12px heading-to-body gap at every breakpoint;
-other dialog compositions retain their default spacing. Their privacy confirmation
+other dialog compositions retain their default spacing. Channel privacy confirmation
 steps also opt into `footerGap="compact"` for `0.5rem` of body-bottom padding
 before the fixed footer gutter; returning to the form restores the normal
 body-bottom padding.
@@ -1415,10 +1482,16 @@ Sonner is the toast behavior owner; other matching controls use Base UI. ToastNo
 owns its state and recovery: unmounting the source removes its notification,
 without reporting user dismissal. Gate notices from hidden Settings sections
 explicitly; portals do not inherit a hidden ancestor. Keep form errors and
-blocked-page recovery inline. Channel LiveStatus is lasting, feature-owned recovery:
-keep it in the conversation flow immediately above the composer, with bounded
-overflow, so Send and companion-panel controls remain usable. Its retry policy
-and diagnostics belong to Channels; it does not enter the floating toast stack.
+blocked-page recovery inline. Relay connection recovery is the exception: it
+retries on its own, so after a 30-second quiet delay it shows one buttonless
+notice in the toast stack on every page, and other surfaces do not repeat it.
+A community's refusal of the account is the other exception: it affects every
+page, so its one notice stays in the toast stack with the actions that
+fixes it, and pages it leaves empty only say why.
+Channel LiveStatus keeps failures that recovery does not retry in the
+conversation flow immediately above the composer, with bounded overflow, so Send
+and companion-panel controls remain usable. Its retry policy and diagnostics
+belong to Channels; it does not enter the floating toast stack.
 
 A notice can make its body open a related destination with `navigation`. The
 body has a hover state and a keyboard action. Its explicit buttons and Dismiss
@@ -1432,19 +1505,21 @@ Use a finite timeout for transient feedback. Recovery defaults to no expiry and
 no dismissal unless the source supplies onDismiss; preserve all recovery actions.
 The expanded, bounded, scrollable stack keeps every recovery action available.
 It sits at the bottom right with safe-area insets, including narrow windows; do
-not add feature-specific top offsets. F6 enters notifications, Tab reaches actions. Modals
-remain above the stack. Content updates do not restart expiry; timeout changes do.
+not add feature-specific top offsets. Surfaces docked at the bottom of the
+window (the composer, the preview's Join notice) call `useToastClearance` with
+their element, and the stack rises above them so a notice never covers Send.
+F6 enters notifications, Tab reaches actions. Modals remain above the stack. Content updates do not restart expiry; timeout changes do.
 
 Tabs with content use renderPanel, which lets Base UI connect each tab and panel.
 Route navigation uses NavigationItem with aria-current instead, except for the
-wide shell topbar described below. Tabs can also
+shell dock described below. Tabs can also
 compose NavigationItem through the `navigation` variant: these retain tab
 semantics, hug their contents up to a 12rem maximum with ellipsis, use 18px corners matching adjacent icon
 actions, and a subtle selected fill, accept avatars/icons, and place a sibling close
 button over reserved trailing space. Tab close icons use 1rem artwork to match
 container header actions while retaining their compact hit areas. Close buttons stay visible on the active tab; inactive tabs reveal them on hover or keyboard focus. Touch devices keep close buttons visible. Navigation tab strips scroll only horizontally. Their rounded thumb uses the sidebar’s quiet scrollbar role, with a 3px visible thumb in the header’s 4px bottom inset. The tab row keeps its vertical position as overflow starts or stops. It appears only while the strip is hovered; touch devices retain the thumb without requiring hover. The main
-channel header uses the same control with a single non-closable tab with `showSelection={false}` (no selection or hover fill); that
-title tab fills the header's title slot instead of stopping at 12rem, truncating only when the header runs out of room; channel
+channel header uses its membership identity instead of a lone permanent tab.
+Additional content tabs retain the shared tab strip beside that identity; channel
 actions remain in the header action slot. The settings launcher uses
 `data-highlight-expanded="false"` to preserve disclosure semantics without a
 sticky pressed treatment; the selected tab owns the open-state indicator.
@@ -1464,6 +1539,8 @@ preloading and product shortcuts remain with the caller.
 controls: the primary NavigationItem owns focus and `aria-current`, while the
 card owns the shared hover and selected surface. Put details in its `footer`,
 not inside the primary button. Nested destinations keep their own selection.
+Default cards use sidebar selection for `aria-current="page"` and neutral
+collection selection for `aria-current="true"`; selection persists during hover.
 Use `tone="tonal"` for task trees: the shared card uses neutral selected and hover
 surfaces. Use `tone="inset"` for a lead destination whose own hover, focus, menu,
 and selection use `surface-inset`. Both tones rest transparent, including open
@@ -1614,10 +1691,8 @@ Values scale with the host interface-size preference.
 - Preserve text preferences and browser zoom. Author values in scaled rem and
   keep layout geometry independent of text scaling.
 
-Typography provenance: the ramp and role settings derive from the pinned
-[Block UI typography
-specification](https://github.com/squareup/design-blockinterface/blob/eff766161ba8aaee3258ca107f0d904dd542c708/blockUI/docs/type.resolution.draft.json).
-The values documented above define this system, including the 12px xsmall role.
+The values documented above define this system's typography, including the
+12px xsmall role.
 
 ## Both modes
 
@@ -1653,8 +1728,10 @@ Saved low or retired quiet contrast maps to Chillin’; high remains Buzzin’.
 
 Keep appearance decisions with the existing owners. `SidebarNavigation` scopes
 `surface-sidebar-selected`, `text-sidebar-selected`, `affordance-sidebar-hover`,
-and `text-sidebar-hover` to its row states. General navigation and tabs keep the
-neutral `surface-navigation-selected` / `text-navigation-selected` pair.
+and `text-sidebar-hover` to its row states. The shell app dock also uses the
+accent `surface-sidebar-selected` / `text-sidebar-selected` pair for its active
+app. Other navigation and tabs keep the neutral
+`surface-navigation-selected` / `text-navigation-selected` pair.
 The message renderer uses standard text on received bubbles, with
 `text-message-link` for their links and
 `text-message-link-own` for outgoing bubbles. Neutral code/table insets retain
@@ -1846,7 +1923,14 @@ Reactions sit on `affordance-reaction`, a softer overlay than a chip: black 6%
 or white 10%, in the same direction as the chips. Hovering the add control lays
 the same overlay again on top of the strip. Inside your bubble reactions take
 its ink and `affordance-reaction-own`; outside it, under an emoji-only message,
-they keep the standard ink and overlay of the panel they sit on.
+they keep the standard ink and overlay of the panel they sit on. A reaction you
+made swaps bubble fills, with no ring: on a received bubble or the panel it
+takes `affordance-reaction-self`, your own bubble's fill, with its ink
+`text-reaction-self`; inside your bubble it takes `affordance-reaction-self-own`,
+the received bubble's fill, with `text-reaction-self-own`. A highlight on a
+highlight would barely show. At Chillin’ the tinted bubble is too faint for
+that, so a reaction you made takes the solid `accent-9` with the accent ink, as
+at Buzzin’, and inside your bubble the panel white (`neutral-7` in dark mode).
 
 When message actions show, both received and own bubbles use their
 `surface-message-hover` or `surface-message-own-hover` fill: 5% toward black in
@@ -1949,7 +2033,7 @@ Reuse and compose existing components before adding another.
 - **Variants:** add a missing visual variant for a real use and mark it proposed. Do not cancel several existing states to force an unsuitable variant to fit.
 - **Props:** use named variants for visual differences, never a new boolean appearance prop. Keep data and behavior props distinct from appearance choices.
 - **Ownership:** keep a component with its first feature. A second real use can justify proposing it as shared.
-- **Focus recipes:** require `html[data-keyboard-navigation]` and `:focus-visible` on the control. Do not rely on a base-layer reset to override component-layer styles, and do not add a `:focus-within` ring around a container that already has a control recipe. Where a scrolling list would clip an offset ring, inset it with `outline-offset: -2px` instead of shrinking it. Shared fields and the composer follow the exceptions documented above.
+- **Focus recipes:** require `html[data-keyboard-navigation]` and `:focus-visible` on the control, except the always-visible focused dialog Button ring documented above. Do not rely on a base-layer reset to override component-layer styles, and do not add a `:focus-within` ring around a container that already has a control recipe. Where a scrolling list would clip an offset ring, inset it with `outline-offset: -2px` instead of shrinking it. Shared fields and the composer follow the exceptions documented above.
 
 ## Using the system
 
@@ -2028,22 +2112,25 @@ For full-page destinations, compose native-button `NavigationItem variant="pill"
 inside `nav.chrome-navigation`. It shares the chrome tab material and selected fill
 but keeps normal Tab/Enter and `aria-current="page"` semantics. Do not give route
 buttons a tablist/tabpanel relationship when selection moves focus to main content.
-The wide shell topbar is the deliberate exception: global destinations use
-`Tabs variant="chrome"` linked to the retained, labelled page panel. Arrow keys
-move focus without selecting; Enter, Space or pointer selection changes the page
-while focus stays on its tab. The host passes per-opening focus intent so page
+The wide shell dock is the deliberate exception: global destinations use
+`Tabs variant="dock"` linked to the retained, labelled page panel.
+The dock uses independent 40px icon tiles with 12px corners, a transparent resting
+state, and an inactive hover fill. The active tile uses the theme-accent
+`surface-sidebar-selected` / `text-sidebar-selected` pair and retains its
+accessible selected state.
+Dock artwork stays still on hover and press. Bestie uses its configured avatar
+from the shared page presentation, at the standard avatar size.
+Dock labels remain accessible and use the dock label hover bucket to the right of each vertical dock
+button (beneath horizontal docks); badges overlay the tile. A tile with a page
+preview shows its label on keyboard focus and while its preview is closed.
+Up/Down arrow keys move focus in the side dock without selecting; Enter, Space or
+pointer selection changes the page while focus stays on its tab. Horizontal dock
+compositions use Left/Right. The host passes per-opening focus intent so page
 autofocus does not override that handoff. Explicit content openings, including
-New conversation, retain their destination focus. This is not a general route-tab
-recipe: toolbar destinations and More pages overflow retain button semantics.
-Messages represents the containing area for registered sidebar/default-placement
-pages, while their sidebar selection and route remain exact. Its tab stays linked
-to the active child panel. The shell opts into Tabs' `onReselect` to return from a
-child to Messages without changing ordinary active-tab behavior elsewhere. More
-pages marks that containing area with `aria-current="true"`, reserving `page` for
-an exact destination. Settings and independent header pages stay separate.
-
-The shell owns responsive overflow. Full-page `IconButton variant="chrome"` uses
-`aria-current="page"` for selection; companion toggles continue to use `aria-expanded`.
+New conversation, retain their destination focus.
+Public plugin placements remain compatible: primary topbar and toolbar contributions
+appear in the dock; sidebar contributions retain their sidebar links and exact route.
+Settings remains available from the profile menu.
 
 ### Artwork actions (proposed)
 

@@ -19,7 +19,7 @@ full path of the file and must be absolute. Buzz reads the file on every Git imp
 so an edited file applies to the next Add, check or Update.
 
 Write UTF-8 JSON, at most 64 KiB, as a regular file, the same way as the managed plugin
-file. A missing file means only the built-in rules apply.
+file. A missing file means only the build's default rules apply.
 
 ## Schema (version 1)
 
@@ -48,7 +48,7 @@ file. A missing file means only the built-in rules apply.
 | Field | Required | Meaning |
 | --- | --- | --- |
 | `version` | yes | Must be `1`. |
-| `builtInRules` | no, default `true` | `false` turns off the rules built into Buzz. |
+| `builtInRules` | no, default `true` | `false` turns off the build's [default rules](#default-rules). |
 | `rules` | no | At most 32 rules; later ones are ignored with a problem. |
 | `host` | yes | Lowercase host name, no port. |
 | `pathPrefix` | yes | Starts and ends with `/`; no `%`, `..` segment or whitespace. |
@@ -60,11 +60,11 @@ file. A missing file means only the built-in rules apply.
 Unknown fields are ignored. A rule with an invalid field is ignored and reported; the
 other rules still apply. A file that cannot be read as UTF-8 JSON of this shape, such
 as one that is too large, has another or no `version`, or has a `rules` or
-`builtInRules` value of the wrong type, is unusable, and only the built-in rules apply.
+`builtInRules` value of the wrong type, is unusable, and only the default rules apply.
 
 ## Matching
 
-Rules from the file are tried in order, then the built-in rules; the first that applies
+Rules from the file are tried in order, then the default rules; the first that applies
 wins. A rule applies to a source when the platform matches, the host is equal, the path
 starts with `pathPrefix` and contains no `%`, and either:
 
@@ -82,12 +82,15 @@ rule's read fails, the error names the rule and agent socket.
 When a rule applies to an HTTPS prefix, every repository under it, public ones too, is
 read over SSH and needs a working agent. Set `rewriteHttps` to `false` to use a rule
 only for SSH sources. HTTPS sources it matches are then read as entered, even when a
-later rule, including a built-in one, would read them over SSH.
+later rule, including a default one, would read them over SSH.
 
-## Built-in rules
+## Default rules
 
-On macOS, `github.com/squareup/` is read as `org-49461806` with the agent at
-`~/Library/Application Support/block-ssh-agent/agent.sock`, when that socket exists.
+Buzz has no rules of its own. A distributor can compile default rules into its
+build with `BUZZ_BUILD_REPOSITORY_ACCESS`, which holds JSON in the schema above;
+`builtInRules` has no effect there. The native build fails when the value is not
+valid JSON of that shape, has no rules, or has a rule with an invalid field.
+`buzzodz plugin access` marks these rules `(built in)`.
 
 ## Inspecting rules
 

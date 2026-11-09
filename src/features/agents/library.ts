@@ -48,6 +48,8 @@ export function createAgentLibrary(
   const demands = new Set<object>();
   let controller: AbortController | undefined;
   let pending: Promise<void> | undefined;
+  /** Counts clears, so a read joined before a disconnect stays its own. */
+  let generation = 0;
   let snapshot: AgentLibrarySnapshot = {
     ...empty,
     status: read ? "idle" : "unavailable",
@@ -98,6 +100,7 @@ export function createAgentLibrary(
     return pending;
   }
   function clear() {
+    generation++;
     controller?.abort();
     controller = undefined;
     pending = undefined;
@@ -126,8 +129,20 @@ export function createAgentLibrary(
     clear,
     reconnect() {
       // Initial establishment can follow a completed activation read. A real
-      // disconnect clears this snapshot; only then is fresh inventory needed.
-      if (demands.size && snapshot.status !== "ready") void refresh();
+      // disconnect clears this snapshot; only then is fresh inventory needed,
+      // unless a source failed: a partial result is ready but not current.
+      if (!demands.size) return;
+      const failed = () =>
+        snapshot.status === "error" ||
+        (snapshot.status === "ready" && !!snapshot.error);
+      // A read in flight began before this connection: reuse it, and reread
+      // once if it fails.
+      const joined = generation;
+      if (pending)
+        void pending.then(() => {
+          if (joined === generation && demands.size && failed()) void refresh();
+        });
+      else if (snapshot.status !== "ready" || snapshot.error) void refresh();
     },
     dispose() {
       closed = true;

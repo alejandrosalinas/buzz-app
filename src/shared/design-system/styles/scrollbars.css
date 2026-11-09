@@ -32,10 +32,12 @@
   }
 }
 .buzz-tabs[data-variant="navigation"] .buzz-tabs-list::-webkit-scrollbar {
-  height: var(--space-1);
+  /* The header separator occupies the formerly transparent track pixel.
+     Keep the same painted thumb without vertically overflowing in WebKit. */
+  height: calc(var(--space-1) - 1px);
 }
 .buzz-tabs[data-variant="navigation"] .buzz-tabs-list::-webkit-scrollbar-thumb {
-  border-top: 1px solid transparent;
+  border: 0;
   background: var(--tab-scrollbar-thumb);
   background-clip: padding-box;
   border-radius: var(--radius-pill);

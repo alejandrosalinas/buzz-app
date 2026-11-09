@@ -8,6 +8,10 @@ export type LocalAgent = Readonly<{
   owner: string;
   /** Its profile picture, an HTTPS image URL. */
   picture?: string;
+  /** A managed native harness can run on a saved remote execution target. */
+  execution?: "remote" | "local";
+  /** Hosted runtime identity for display; it grants no local control. */
+  runtime?: string;
 }>;
 export type LocalAgentsSnapshot = Readonly<{
   status: "unavailable" | "loading" | "ready" | "error";

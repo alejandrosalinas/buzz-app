@@ -201,6 +201,8 @@ const PAIRS = [
   ["--text-standard", "--affordance-floating-hover"],
   ["--text-danger", "--affordance-floating-hover"],
   ["--text-inverse", "--surface-inverse"],
+  ["--text-on-status-success", "--surface-status-success"],
+  ["--text-on-status", "--surface-status-danger"],
   ["--text-link", "--affordance-link-hover"],
   // Mentions: ink on the highlight, and the own-bubble pairing, at rest and hover.
   ...["", "-hover"].flatMap((state) => [
@@ -212,6 +214,8 @@ const PAIRS = [
   // quieter overlay under the pointer.
   ["--text-standard", "--affordance-reaction"],
   ["--text-message-own", "--affordance-reaction-own"],
+  ["--text-reaction-self", "--affordance-reaction-self"],
+  ["--text-reaction-self-own", "--affordance-reaction-self-own"],
   ["--text-message-own", "--affordance-message-own-hover"],
   // An arrival cue lays the regular step across the whole bubble.
   ["--text-standard", "--affordance-message-highlight"],

@@ -23,14 +23,17 @@ import { bindDeepLinks } from "../features/navigation/deep-links";
 import { matchesEvent } from "../features/relay/projection";
 import { bounds, message, metadata, roster } from "../features/relay/testing";
 import type { ReadFilter } from "../features/relay/events";
+import type { StorageResult } from "../plugins/types";
 
 /** Any variant of the App-owned "page couldn't open" card. */
 const pageFailure =
   /^(This page isn’t available|Can’t connect|You don’t have access to this|This link doesn’t work)$/;
 
-// Holds the plugin catalog read, so a test can settle the client first.
+// Holds the plugin catalog read, so a test can settle the client first, and
+// lets a test change what the read returns.
 const catalogGate = vi.hoisted(() => ({
   value: undefined as Promise<void> | undefined,
+  edit: undefined as ((result: StorageResult) => StorageResult) | undefined,
 }));
 vi.mock("../plugins/storage", async (original) => {
   const actual = await original<typeof import("../plugins/storage")>();
@@ -44,7 +47,8 @@ vi.mock("../plugins/storage", async (original) => {
         ...storage,
         async getCatalog() {
           await catalogGate.value;
-          return storage.getCatalog();
+          const result = await storage.getCatalog();
+          return catalogGate.edit?.(result) ?? result;
         },
       };
     },
@@ -91,7 +95,7 @@ vi.mock("../bundled", async () => ({
       enabledByDefault: true,
     },
     {
-      manifest: { id: "buzz.inbox", name: "Inbox", apiVersion: 1 },
+      manifest: { id: "buzz.inbox", name: "Activity", apiVersion: 1 },
       module: await import("../bundled/inbox"),
     },
     {
@@ -149,6 +153,7 @@ afterEach(async () => {
   vi.unstubAllGlobals();
   vi.unstubAllEnvs();
   catalogGate.value = undefined;
+  catalogGate.edit = undefined;
   inboxGate.value = undefined;
   Reflect.deleteProperty(HTMLElement.prototype, "scrollIntoView");
   localStorage.clear();
@@ -231,7 +236,7 @@ it("keeps an OS entity intent through real community selection and Retry in App"
   // page in place: no visit, and history is unchanged.
   const before = current.navigation.snapshot();
   await act(async () => {
-    queue.push("buzz://");
+    queue.push("buzz://unknown");
     ping();
   });
   await screen.findByRole("dialog", { name: "This link doesn’t work" });
@@ -276,7 +281,7 @@ it.each([
     const identity = new Promise<void>((resolve) => (release = resolve));
     const { current } = bindCommunityLinks(
       origin,
-      async () => ["buzz://"],
+      async () => ["buzz://unknown"],
       identity,
     );
     await waitFor(() => expect(current.plugins.startup()).not.toBe("loading"));
@@ -311,7 +316,9 @@ it.each([
 it("opens Inbox for a malformed launch link when the catalog settles after the client", async () => {
   let release = () => {};
   catalogGate.value = new Promise<void>((resolve) => (release = resolve));
-  const { current } = bindCommunityLinks(origin, async () => ["buzz://"]);
+  const { current } = bindCommunityLinks(origin, async () => [
+    "buzz://unknown",
+  ]);
   await waitFor(() =>
     expect(current.communities.snapshot()).toMatchObject({
       status: "ready",
@@ -339,7 +346,9 @@ it("opens Inbox for a malformed launch link when the catalog settles after the c
 it("opens Inbox for a malformed launch link when Inbox activates last", async () => {
   let release = () => {};
   inboxGate.value = new Promise<void>((resolve) => (release = resolve));
-  const { current } = bindCommunityLinks(origin, async () => ["buzz://"]);
+  const { current } = bindCommunityLinks(origin, async () => [
+    "buzz://unknown",
+  ]);
   await waitFor(() => {
     expect(current.communities.snapshot()).toMatchObject({
       status: "ready",
@@ -375,7 +384,9 @@ it("keeps a malformed launch link on the start page when the catalog turning Inb
     "buzzodz.plugins.v1",
     JSON.stringify({ version: 3, enabled: { "buzz.inbox": false } }),
   );
-  const { current } = bindCommunityLinks(origin, async () => ["buzz://"]);
+  const { current } = bindCommunityLinks(origin, async () => [
+    "buzz://unknown",
+  ]);
   await waitFor(() =>
     expect(current.communities.snapshot()).toMatchObject({
       status: "ready",
@@ -420,7 +431,7 @@ it("a malformed link in a running app retires an earlier link's Try again", asyn
   });
   await screen.findByRole("button", { name: "Try again" });
   await act(async () => {
-    queue.push("buzz://");
+    queue.push("buzz://unknown");
     ping();
   });
   await screen.findByRole("dialog", { name: "This link doesn’t work" });
@@ -854,7 +865,7 @@ it("keeps a link read while a code-less link switches communities", async () => 
   );
 });
 
-it("lists active primary pages in their sidebar and header placements", async () => {
+it("lists active primary pages in the app dock", async () => {
   vi.stubGlobal(
     "ResizeObserver",
     class {
@@ -889,14 +900,8 @@ it("lists active primary pages in their sidebar and header placements", async ()
   services = createServices();
   const current = services;
   render(<App services={current} />);
-  const pages = await screen.findByRole("navigation", { name: "Pages" });
-  await waitFor(() =>
-    expect(
-      within(pages)
-        .getAllByRole("button")
-        .map((row) => row.textContent),
-    ).toEqual(["Inbox", "Bestie"]),
-  );
+  await screen.findByRole("tab", { name: "Activity" });
+  expect(screen.getByRole("tab", { name: "Bestie" })).toBeInTheDocument();
 
   expect(
     screen.queryByRole("tab", { name: "Repository" }),
@@ -939,13 +944,8 @@ it("lists active primary pages in their sidebar and header placements", async ()
   );
 
   await act(() => current.plugins.change("disable", "buzz.agents"));
-  await waitFor(() =>
-    expect(
-      within(screen.getByRole("navigation", { name: "Pages" }))
-        .getAllByRole("button")
-        .map((row) => row.textContent),
-    ).toEqual(["Inbox", "Bestie"]),
-  );
+  expect(screen.getByRole("tab", { name: "Activity" })).toBeInTheDocument();
+  expect(screen.getByRole("tab", { name: "Bestie" })).toBeInTheDocument();
 
   expect(screen.queryByRole("tab", { name: "Agents" })).not.toBeInTheDocument();
   await userEvent.click(screen.getByRole("button", { name: "Search Buzz" }));
@@ -965,14 +965,14 @@ it("lists active primary pages in their sidebar and header placements", async ()
   ).not.toBeInTheDocument();
   await userEvent.keyboard("{Escape}");
 
-  // Every primary page is optional; with none active the landmark goes too.
+  // Disabling optional pages removes their dock entries without hiding Messages.
   for (const id of ["buzz.inbox", "buzz.bestie", "buzz.repos"])
     await act(() => current.plugins.change("disable", id));
-  await waitFor(() =>
-    expect(
-      screen.queryByRole("navigation", { name: "Pages" }),
-    ).not.toBeInTheDocument(),
-  );
+  expect(
+    screen.queryByRole("tab", { name: "Activity" }),
+  ).not.toBeInTheDocument();
+  expect(screen.queryByRole("tab", { name: "Bestie" })).not.toBeInTheDocument();
+  expect(screen.getByRole("tab", { name: "Messages" })).toBeInTheDocument();
   expect(
     screen.getByRole("complementary", { name: "Sidebar" }),
   ).toBeInTheDocument();
@@ -1025,7 +1025,7 @@ it.each(
   "normalizes old $name links in the same visit and caller, retaining $scope scope",
   async ({ name, scope }) => {
     const current = legacyPageFixture();
-    await screen.findByRole("navigation", { name: "Pages" });
+    await screen.findByRole("tab", { name: "Activity" });
     const pageId = name.toLowerCase();
 
     act(() => {
@@ -1101,7 +1101,7 @@ it("opens a community-scoped page from another community, but not after leaving 
     ],
     other,
   );
-  await screen.findByRole("navigation", { name: "Pages" });
+  await screen.findByRole("tab", { name: "Activity" });
   let result!: ReturnType<typeof member.navigation.open>;
   act(() => {
     result = member.navigation.open(target);
@@ -1117,7 +1117,7 @@ it("opens a community-scoped page from another community, but not after leaving 
     [{ id: other, name: "Other community" }],
     other,
   );
-  await screen.findByRole("navigation", { name: "Pages" });
+  await screen.findByRole("tab", { name: "Activity" });
   act(() => {
     result = left.navigation.open(target);
   });
@@ -1203,7 +1203,7 @@ it("cold Settings Close uses required Messages when Inbox is disabled", async ()
 
 it("Close returns to the immediately preceding failed destination, not an older retained workspace", async () => {
   const current = legacyPageFixture();
-  await screen.findByRole("navigation", { name: "Pages" });
+  await screen.findByRole("tab", { name: "Activity" });
   await act(async () => {
     void current.navigation.open({
       version: 1,
@@ -1243,4 +1243,178 @@ it("Close returns to the immediately preceding failed destination, not an older 
       target: failed,
     }),
   );
+});
+
+/** The card for Activity turned off, with its copy and actions. */
+async function activityTurnedOff() {
+  const card = (
+    await screen.findByRole("heading", { name: "Activity is turned off" })
+  ).closest<HTMLElement>('[role="alert"]');
+  if (!card) throw new Error("Expected the failure alert");
+  expect(
+    within(card).getByText("Turn it on in Manage plugins to open this page."),
+  ).toBeVisible();
+  expect(
+    within(card)
+      .getAllByRole("button")
+      .map((button) => button.textContent),
+  ).toEqual(["Manage plugins", "Go to Messages"]);
+  return card;
+}
+
+/** Turns Activity off while it's open, then goes to Messages and Back. */
+async function backOntoTurnedOffActivity() {
+  const current = legacyPageFixture();
+  await userEvent.click(await screen.findByRole("tab", { name: "Activity" }));
+  await waitFor(() =>
+    expect(current.navigation.snapshot()).toMatchObject({
+      status: "opened",
+      entry: { target: { kind: "page", pluginId: "buzz.inbox" } },
+    }),
+  );
+  const visit = current.navigation.snapshot().entry.id;
+  await act(() => current.plugins.change("disable", "buzz.inbox"));
+  await userEvent.click(
+    within(await activityTurnedOff()).getByRole("button", {
+      name: "Go to Messages",
+    }),
+  );
+  await waitFor(() =>
+    expect(current.navigation.snapshot()).toMatchObject({
+      status: "opened",
+      entry: { target: { kind: "page", pluginId: "buzz.channels" } },
+    }),
+  );
+  act(() => current.navigation.back());
+  const card = await activityTurnedOff();
+  expect(current.navigation.snapshot()).toMatchObject({
+    status: "failed",
+    reason: "unavailable",
+    entry: { id: visit },
+  });
+  return { current, visit, card };
+}
+
+it("says when the open page's plugin is turned off, again after Back, and its Manage plugins opens that plugin and returns to the page", async () => {
+  const { current, visit, card } = await backOntoTurnedOffActivity();
+
+  await userEvent.click(
+    within(card).getByRole("button", { name: "Manage plugins" }),
+  );
+  await waitFor(() =>
+    expect(current.navigation.snapshot().entry.target).toEqual({
+      version: 1,
+      kind: "settings",
+      section: "plugins",
+      pluginId: "buzz.inbox",
+      scope: { viewer, communityOrigin: origin },
+    }),
+  );
+  const settings = await screen.findByRole("dialog", { name: "Settings" });
+  await userEvent.click(
+    await within(settings).findByRole("button", { name: "Enable" }),
+  );
+  await waitFor(() =>
+    expect(
+      current.pages.snapshot().some((page) => page.key === "buzz.inbox/inbox"),
+    ).toBe(true),
+  );
+  await userEvent.click(
+    within(settings).getByRole("button", { name: "Close Settings" }),
+  );
+  await waitFor(() =>
+    expect(current.navigation.snapshot()).toMatchObject({
+      status: "opened",
+      entry: { id: visit, target: { kind: "page", pluginId: "buzz.inbox" } },
+    }),
+  );
+  expect(current.navigation.snapshot().reason).toBeUndefined();
+  expect(screen.queryByText(pageFailure)).not.toBeInTheDocument();
+  expect(
+    screen.queryByRole("heading", { name: "Activity is turned off" }),
+  ).not.toBeInTheDocument();
+});
+
+// The failed visit doesn't retry by itself; Try again opens it.
+it("turning a plugin back on over its failed page offers Try again, which opens the page", async () => {
+  const { current, visit } = await backOntoTurnedOffActivity();
+
+  // As ⌘K's switch does.
+  await act(() => current.plugins.change("enable", "buzz.inbox"));
+  const card = (
+    await screen.findByRole("heading", { name: "This page isn’t available" })
+  ).closest<HTMLElement>('[role="alert"]');
+  if (!card) throw new Error("Expected the failure alert");
+  expect(
+    within(card).getByText("It didn’t load this time. Try again in a moment."),
+  ).toBeVisible();
+  expect(
+    within(card)
+      .getAllByRole("button")
+      .map((button) => button.textContent),
+  ).toEqual(["Try again", "Go to Messages"]);
+  expect(
+    screen.queryByRole("heading", { name: "Activity is turned off" }),
+  ).not.toBeInTheDocument();
+
+  await userEvent.click(
+    within(card).getByRole("button", { name: "Try again" }),
+  );
+  await waitFor(() =>
+    expect(current.navigation.snapshot()).toMatchObject({
+      status: "opened",
+      entry: { id: visit, target: { kind: "page", pluginId: "buzz.inbox" } },
+    }),
+  );
+  expect(current.navigation.snapshot().reason).toBeUndefined();
+  expect(screen.queryByText(pageFailure)).not.toBeInTheDocument();
+});
+
+// Paused external plugins can't start this launch, so Enable wouldn't help.
+it("keeps the unavailable card for a turned-off external plugin while external plugins are paused", async () => {
+  catalogGate.edit = (result) =>
+    result.status === "ready"
+      ? {
+          ...result,
+          externalPluginsPaused: true,
+          catalog: {
+            ...result.catalog,
+            plugins: result.catalog.plugins.map((plugin) =>
+              plugin.manifest.id === "fixture.notes"
+                ? { ...plugin, source: "external", enabled: false }
+                : plugin,
+            ),
+          },
+        }
+      : result;
+  const current = legacyPageFixture();
+  await screen.findByRole("tab", { name: "Activity" });
+  expect(current.plugins.snapshot().configuration).toMatchObject({
+    status: "ready",
+    externalPluginsPaused: true,
+  });
+  act(() => {
+    void current.navigation.open({
+      version: 1,
+      kind: "page",
+      pluginId: "fixture.notes",
+      pageId: "notes",
+    });
+  });
+  const card = (
+    await screen.findByRole("heading", { name: "This page isn’t available" })
+  ).closest<HTMLElement>('[role="alert"]');
+  if (!card) throw new Error("Expected the failure alert");
+  expect(
+    within(card).getByText(
+      "It may have been removed, or you may need to update Buzz.",
+    ),
+  ).toBeVisible();
+  expect(
+    screen.queryByRole("heading", { name: "Notes is turned off" }),
+  ).not.toBeInTheDocument();
+  expect(current.navigation.snapshot()).toMatchObject({
+    status: "failed",
+    reason: "unavailable",
+  });
 });

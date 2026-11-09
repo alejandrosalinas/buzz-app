@@ -28,10 +28,10 @@ export function conversationRows(root: ParentNode = document) {
 
 /**
  * The nearest conversation before or after the open one, optionally only those
- * showing unread. Does not wrap. The open conversation is the row marked
- * `aria-current`; when it is not among the rendered rows, "next" starts from the
- * top and "previous" from the bottom. A conversation listed in two sections is
- * stepped over once.
+ * showing unread. Only unread stepping wraps around to the other end. The open
+ * conversation is the row marked `aria-current`; when it is not among the
+ * rendered rows, "next" starts from the top and "previous" from the bottom. A
+ * conversation listed in two sections is stepped over once.
  */
 export function adjacentConversation(
   direction: "previous" | "next",
@@ -51,12 +51,15 @@ export function adjacentConversation(
         ? rows.slice(rows.indexOf(last) + 1)
         : rows.slice(0, rows.indexOf(first))
       : rows;
-  const eligible = candidates.filter(
-    (row) =>
-      rowId(row) !== currentId &&
-      (!unreadOnly || !!row.querySelector(UNREAD_MARKERS)),
-  );
-  return direction === "next" ? eligible[0] : eligible[eligible.length - 1];
+  const nearest = (from: HTMLButtonElement[]) => {
+    const eligible = from.filter(
+      (row) =>
+        rowId(row) !== currentId &&
+        (!unreadOnly || !!row.querySelector(UNREAD_MARKERS)),
+    );
+    return direction === "next" ? eligible[0] : eligible[eligible.length - 1];
+  };
+  return nearest(candidates) ?? (unreadOnly ? nearest(rows) : undefined);
 }
 
 /**

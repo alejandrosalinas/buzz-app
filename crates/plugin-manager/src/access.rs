@@ -4,24 +4,22 @@
 //! A rule can change only the scheme, the SSH user and the agent socket; the host, port and
 //! path stay as the user entered them.
 use crate::{managed::read_file, Result};
-use serde_json::{Map, Value};
+pub use schema::Platform;
+use schema::{parse, Rule};
 use std::{
     ffi::OsString,
     path::{Path, PathBuf},
 };
 
+mod schema;
+
 pub const FILE_NAME: &str = "repository-access.json";
 pub const PATH_ENV: &str = "BUZZ_REPOSITORY_ACCESS";
+/// Rules a distributor compiles in as the defaults, in the file's schema; `build.rs`
+/// validates it, and empty means no default rules.
+const BUILD_RULES: &str = env!("BUZZ_BUILD_REPOSITORY_ACCESS");
 const MAX_BYTES: u64 = 64 * 1024;
-const MAX_RULES: usize = 32;
-const MAX_PROBLEMS: usize = 16;
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Platform {
-    Macos,
-    Linux,
-    Windows,
-}
 impl Platform {
     pub fn current() -> Option<Self> {
         if cfg!(target_os = "macos") {
@@ -34,26 +32,6 @@ impl Platform {
             None
         }
     }
-    fn parse(name: &str) -> Option<Self> {
-        match name {
-            "macos" => Some(Self::Macos),
-            "linux" => Some(Self::Linux),
-            "windows" => Some(Self::Windows),
-            _ => None,
-        }
-    }
-}
-
-#[derive(Clone, Debug, PartialEq, Eq)]
-struct Rule {
-    host: String,
-    path_prefix: String,
-    ssh_user: String,
-    ssh_agent_socket: Option<String>,
-    rewrite_https: bool,
-    /// `None` applies on every platform.
-    platforms: Option<Vec<Platform>>,
-    built_in: bool,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -74,18 +52,23 @@ pub struct AccessRules {
     pub status: Status,
 }
 
-/// Square's macOS SSH setup selects this agent through SSH config, which imports do not
-/// read, so the rule ships with Buzz.
+/// The build's default rules, tried after the file's.
 fn built_in_rules() -> Vec<Rule> {
-    vec![Rule {
-        host: "github.com".into(),
-        path_prefix: "/squareup/".into(),
-        ssh_user: "org-49461806".into(),
-        ssh_agent_socket: Some("~/Library/Application Support/block-ssh-agent/agent.sock".into()),
-        rewrite_https: true,
-        platforms: Some(vec![Platform::Macos]),
-        built_in: true,
-    }]
+    rules_from_build(BUILD_RULES)
+}
+
+fn rules_from_build(raw: &str) -> Vec<Rule> {
+    if raw.is_empty() {
+        return vec![];
+    }
+    let file = parse(raw).expect("build.rs validates BUZZ_BUILD_REPOSITORY_ACCESS");
+    file.rules
+        .into_iter()
+        .map(|rule| Rule {
+            built_in: true,
+            ..rule
+        })
+        .collect()
 }
 
 pub fn built_in() -> AccessRules {
@@ -98,9 +81,18 @@ pub fn built_in() -> AccessRules {
 }
 
 /// `BUZZ_REPOSITORY_ACCESS` when set, otherwise the file beside the profile folders. Never
-/// fails: an unusable file leaves the built-in rules in place and reports why.
+/// fails: an unusable file leaves the build's default rules in place and reports why.
 pub fn load(root: &Path, env: Option<OsString>) -> AccessRules {
-    let mut access = built_in();
+    load_with(root, env, built_in_rules())
+}
+
+fn load_with(root: &Path, env: Option<OsString>, defaults: Vec<Rule>) -> AccessRules {
+    let mut access = AccessRules {
+        rules: defaults.clone(),
+        problems: vec![],
+        path: None,
+        status: Status::Absent,
+    };
     let path = match env.filter(|value| !value.is_empty()) {
         Some(value) if Path::new(&value).is_absolute() => PathBuf::from(value),
         Some(_) => {
@@ -121,7 +113,7 @@ pub fn load(root: &Path, env: Option<OsString>) -> AccessRules {
         Ok(file) => {
             access.rules = file.rules;
             if file.built_in_rules {
-                access.rules.extend(built_in_rules());
+                access.rules.extend(defaults);
             }
             access.problems = file.problems;
             access.status = Status::Ready;
@@ -329,146 +321,26 @@ impl AccessRules {
     }
 }
 
-struct File {
-    rules: Vec<Rule>,
-    built_in_rules: bool,
-    problems: Vec<String>,
-}
-
-fn parse(text: &str) -> Result<File> {
-    let value: Value = serde_json::from_str(text).map_err(|e| format!("Invalid JSON: {e}"))?;
-    let Value::Object(mut root) = value else {
-        return Err("Expected a JSON object".into());
-    };
-    match root.remove("version") {
-        Some(Value::Number(version)) if version.as_u64() == Some(1) => {}
-        Some(_) => return Err("Unsupported version; this Buzz reads version 1".into()),
-        None => return Err("Missing version".into()),
-    }
-    let built_in_rules = match root.remove("builtInRules") {
-        None => true,
-        Some(Value::Bool(value)) => value,
-        Some(_) => return Err("builtInRules must be true or false".into()),
-    };
-    let entries = match root.remove("rules") {
-        None => vec![],
-        Some(Value::Array(entries)) => entries,
-        Some(_) => return Err("rules must be an array".into()),
-    };
-    let mut problems = vec![];
-    let mut report = |message: String| {
-        if problems.len() < MAX_PROBLEMS {
-            problems.push(message);
-        }
-    };
-    if entries.len() > MAX_RULES {
-        report(format!(
-            "Only the first {MAX_RULES} of {} rules are used",
-            entries.len()
-        ));
-    }
-    let mut rules = vec![];
-    for (index, entry) in entries.into_iter().take(MAX_RULES).enumerate() {
-        match parse_rule(entry) {
-            Ok(rule) => rules.push(rule),
-            Err(reason) => report(format!("Rule {}: {reason}", index + 1)),
-        }
-    }
-    Ok(File {
-        rules,
-        built_in_rules,
-        problems,
-    })
-}
-
-fn parse_rule(entry: Value) -> Result<Rule> {
-    let Value::Object(mut entry) = entry else {
-        return Err("expected an object".into());
-    };
-    let host = required(&mut entry, "host")?;
-    if host.len() > 253
-        || host.starts_with('-')
-        || !host
-            .bytes()
-            .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'.' || b == b'-')
-    {
-        return Err("host must be a lowercase host name without a port".into());
-    }
-    let path_prefix = required(&mut entry, "pathPrefix")?;
-    if path_prefix.len() > 256
-        || !path_prefix.starts_with('/')
-        || !path_prefix.ends_with('/')
-        || path_prefix.contains('%')
-        || path_prefix.split('/').any(|segment| segment == "..")
-        || path_prefix
-            .chars()
-            .any(|c| c.is_whitespace() || c.is_control())
-    {
-        return Err(
-            "pathPrefix must start and end with / and contain no %, .. segment or whitespace"
-                .into(),
-        );
-    }
-    let ssh_user = required(&mut entry, "sshUser")?;
-    if ssh_user.len() > 64
-        || ssh_user.starts_with('-')
-        || !ssh_user
-            .bytes()
-            .all(|b| b.is_ascii_alphanumeric() || b".-_".contains(&b))
-    {
-        return Err("sshUser must be 1 to 64 letters, digits, dots, underscores or hyphens, not starting with a hyphen".into());
-    }
-    let ssh_agent_socket = match entry.remove("sshAgentSocket") {
-        None => None,
-        Some(Value::String(socket))
-            if (Path::new(&socket).is_absolute() || socket.starts_with("~/"))
-                && !socket.chars().any(char::is_control) =>
-        {
-            Some(socket)
-        }
-        Some(_) => return Err("sshAgentSocket must be an absolute path or start with ~/".into()),
-    };
-    if ssh_agent_socket.is_some() && cfg!(windows) {
-        return Err("sshAgentSocket is not supported on Windows".into());
-    }
-    let rewrite_https = match entry.remove("rewriteHttps") {
-        None => true,
-        Some(Value::Bool(value)) => value,
-        Some(_) => return Err("rewriteHttps must be true or false".into()),
-    };
-    let platforms = match entry.remove("platforms") {
-        None => None,
-        Some(Value::Array(names)) if !names.is_empty() => Some(
-            names
-                .iter()
-                .map(|name| name.as_str().and_then(Platform::parse))
-                .collect::<Option<Vec<_>>>()
-                .ok_or("platforms must list only macos, linux or windows")?,
-        ),
-        Some(_) => return Err("platforms must list macos, linux or windows".into()),
-    };
-    Ok(Rule {
-        host,
-        path_prefix,
-        ssh_user,
-        ssh_agent_socket,
-        rewrite_https,
-        platforms,
-        built_in: false,
-    })
-}
-
-fn required(entry: &mut Map<String, Value>, key: &str) -> Result<String> {
-    match entry.remove(key) {
-        Some(Value::String(value)) if !value.is_empty() => Ok(value),
-        _ => Err(format!("{key} is required and must be a string")),
-    }
-}
-
 #[cfg(test)]
 mod tests {
+    use super::schema::*;
     use super::*;
     use std::fs;
+
+    /// A distributor's `BUZZ_BUILD_REPOSITORY_ACCESS`.
+    const BUILD: &str = r#"{"version": 1, "rules": [{"host": "github.com", "pathPrefix": "/example-org/", "sshUser": "org-1", "sshAgentSocket": "~/Library/Application Support/example-ssh-agent/agent.sock", "platforms": ["macos"]}]}"#;
+    fn built_in_rules() -> Vec<Rule> {
+        rules_from_build(BUILD)
+    }
+    fn built_in() -> AccessRules {
+        AccessRules {
+            rules: built_in_rules(),
+            ..super::built_in()
+        }
+    }
+    fn load(root: &Path, env: Option<OsString>) -> AccessRules {
+        load_with(root, env, built_in_rules())
+    }
 
     fn rule(host: &str, prefix: &str, user: &str) -> Rule {
         Rule {
@@ -497,7 +369,7 @@ mod tests {
             rule: None,
         }
     }
-    const SQUARE_SOCKET: &str = "Library/Application Support/block-ssh-agent/agent.sock";
+    const ORG_SOCKET: &str = "Library/Application Support/example-ssh-agent/agent.sock";
     #[cfg(unix)]
     fn agent(path: &Path) -> std::os::unix::net::UnixListener {
         fs::create_dir_all(path.parent().unwrap()).unwrap();
@@ -509,19 +381,19 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
-    fn built_in_selection_is_limited_to_squareup_github() {
+    fn built_in_selection_is_limited_to_its_prefix() {
         let home = tempfile::tempdir_in("/tmp").unwrap();
-        let _agent = agent(&home.path().join(SQUARE_SOCKET));
+        let _agent = agent(&home.path().join(ORG_SOCKET));
         for repository in [
-            "https://github.com/other/plugin.git",
-            "https://github.com:8443/squareup/plugin.git",
-            "https://github.com.example/squareup/plugin.git",
-            "https://github.com/squareup/plugin%2F..%2F..%2Fother",
-            "ssh://org-49461806@github.com/squareup/plugin%2F..%2F..%2Fother",
-            "ssh://git@github.com/squareup/plugin.git",
-            "ssh://org-49461806@github.com/other/plugin.git",
-            "ssh://org-49461806@github.com.example/squareup/plugin.git",
-            "ssh://org-49461806@github.com:2222/squareup/plugin.git",
+            "https://github.com/other-org/plugin.git",
+            "https://github.com:8443/example-org/plugin.git",
+            "https://github.com.example/example-org/plugin.git",
+            "https://github.com/example-org/plugin%2F..%2F..%2Fother",
+            "ssh://org-1@github.com/example-org/plugin%2F..%2F..%2Fother",
+            "ssh://git@github.com/example-org/plugin.git",
+            "ssh://org-1@github.com/other-org/plugin.git",
+            "ssh://org-1@github.com.example/example-org/plugin.git",
+            "ssh://org-1@github.com:2222/example-org/plugin.git",
         ] {
             assert_eq!(
                 macos(&built_in(), repository, home.path()).unwrap(),
@@ -533,28 +405,28 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
-    fn built_in_reads_squareup_https_over_ssh() {
+    fn built_in_reads_https_over_ssh() {
         let home = tempfile::tempdir_in("/tmp").unwrap();
-        let repository = "https://github.com/squareup/plugin.git";
+        let repository = "https://github.com/example-org/plugin.git";
         assert_eq!(
             macos(&built_in(), repository, home.path()).unwrap(),
             direct(repository)
         );
 
-        let socket = home.path().join(SQUARE_SOCKET);
+        let socket = home.path().join(ORG_SOCKET);
         let _agent = agent(&socket);
         let expected = Transport {
-            clone_url: "ssh://org-49461806@github.com/squareup/plugin.git".into(),
+            clone_url: "ssh://org-1@github.com/example-org/plugin.git".into(),
             ssh_auth_sock: Some(socket.clone()),
-            rule: Some("github.com/squareup/".into()),
+            rule: Some("github.com/example-org/".into()),
         };
         assert_eq!(
             macos(&built_in(), repository, home.path()).unwrap(),
             expected
         );
-        let ssh = "ssh://org-49461806@github.com/squareup/plugin.git";
+        let ssh = "ssh://org-1@github.com/example-org/plugin.git";
         assert_eq!(macos(&built_in(), ssh, home.path()).unwrap(), expected);
-        let port_22 = "ssh://org-49461806@github.com:22/squareup/plugin.git";
+        let port_22 = "ssh://org-1@github.com:22/example-org/plugin.git";
         assert_eq!(
             macos(&built_in(), port_22, home.path()).unwrap(),
             Transport {
@@ -584,12 +456,12 @@ mod tests {
     #[test]
     fn agent_may_be_absent_but_must_be_a_socket_when_present() {
         let home = tempfile::tempdir_in("/tmp").unwrap();
-        let repository = "ssh://org-49461806@github.com/squareup/plugin.git";
+        let repository = "ssh://org-1@github.com/example-org/plugin.git";
         assert_eq!(
             macos(&built_in(), repository, home.path()).unwrap(),
             direct(repository)
         );
-        let socket = home.path().join(SQUARE_SOCKET);
+        let socket = home.path().join(ORG_SOCKET);
         fs::create_dir_all(socket.parent().unwrap()).unwrap();
         fs::write(&socket, "").unwrap();
         assert_eq!(
@@ -604,11 +476,11 @@ mod tests {
         let home = tempfile::tempdir_in("/tmp").unwrap();
         let team_socket = home.path().join("team.sock");
         let _team = agent(&team_socket);
-        let _square = agent(&home.path().join(SQUARE_SOCKET));
+        let _org = agent(&home.path().join(ORG_SOCKET));
         let access = access(&format!(
             r#"{{"version": 1, "rules": [
                 {{"host": "git.example.com", "pathPrefix": "/team/", "sshUser": "git", "sshAgentSocket": "{}"}},
-                {{"host": "github.com", "pathPrefix": "/squareup/", "sshUser": "org-49461806", "sshAgentSocket": "~/team.sock"}},
+                {{"host": "github.com", "pathPrefix": "/example-org/", "sshUser": "org-1", "sshAgentSocket": "~/team.sock"}},
                 {{"host": "github.com", "pathPrefix": "/ssh-only/", "sshUser": "git", "sshAgentSocket": "~/team.sock", "rewriteHttps": false}},
                 {{"host": "github.com", "pathPrefix": "/linux/", "sshUser": "git", "sshAgentSocket": "~/team.sock", "platforms": ["linux"]}},
                 {{"host": "github.com", "pathPrefix": "/missing/", "sshUser": "git", "sshAgentSocket": "~/missing.sock"}}
@@ -635,13 +507,13 @@ mod tests {
         assert_eq!(
             macos(
                 &access,
-                "https://github.com/squareup/plugin.git",
+                "https://github.com/example-org/plugin.git",
                 home.path()
             )
             .unwrap(),
             team(
-                "ssh://org-49461806@github.com/squareup/plugin.git",
-                "github.com/squareup/"
+                "ssh://org-1@github.com/example-org/plugin.git",
+                "github.com/example-org/"
             )
         );
         assert_eq!(
@@ -719,19 +591,19 @@ mod tests {
         let home = tempfile::tempdir_in("/tmp").unwrap();
         let team_socket = home.path().join("team.sock");
         let _team = agent(&team_socket);
-        let _square = agent(&home.path().join(SQUARE_SOCKET));
+        let _org = agent(&home.path().join(ORG_SOCKET));
         let access = access(
-            r#"{"version": 1, "rules": [{"host": "github.com", "pathPrefix": "/squareup/", "sshUser": "org-49461806", "sshAgentSocket": "~/team.sock", "rewriteHttps": false}]}"#,
+            r#"{"version": 1, "rules": [{"host": "github.com", "pathPrefix": "/example-org/", "sshUser": "org-1", "sshAgentSocket": "~/team.sock", "rewriteHttps": false}]}"#,
         );
-        let https = "https://github.com/squareup/plugin.git";
+        let https = "https://github.com/example-org/plugin.git";
         assert_eq!(macos(&access, https, home.path()).unwrap(), direct(https));
-        let ssh = "ssh://org-49461806@github.com/squareup/plugin.git";
+        let ssh = "ssh://org-1@github.com/example-org/plugin.git";
         assert_eq!(
             macos(&access, ssh, home.path()).unwrap(),
             Transport {
                 clone_url: ssh.into(),
                 ssh_auth_sock: Some(team_socket),
-                rule: Some("github.com/squareup/".into()),
+                rule: Some("github.com/example-org/".into()),
             }
         );
     }
@@ -764,7 +636,7 @@ mod tests {
         let home = tempfile::tempdir().unwrap();
         let root = tempfile::tempdir().unwrap();
         let path = root.path().join(FILE_NAME);
-        let built_in_line = "  github.com/squareup/ as org-49461806, agent ~/Library/Application Support/block-ssh-agent/agent.sock, HTTPS read over SSH, macos (built in)";
+        let built_in_line = "  github.com/example-org/ as org-1, agent ~/Library/Application Support/example-ssh-agent/agent.sock, HTTPS read over SSH, macos (built in)";
         assert_eq!(
             load(root.path(), None).describe(None, home.path()).unwrap(),
             format!(
@@ -847,17 +719,22 @@ mod tests {
     }
 
     #[test]
-    fn built_in_rule_is_the_square_macos_agent() {
+    fn empty_build_input_has_no_default_rules() {
+        assert!(rules_from_build("").is_empty());
+    }
+
+    #[test]
+    fn build_rules_are_marked_built_in() {
         let access = built_in();
         assert_eq!(access.status, Status::Absent);
         assert_eq!(
             access.rules,
             vec![Rule {
                 host: "github.com".into(),
-                path_prefix: "/squareup/".into(),
-                ssh_user: "org-49461806".into(),
+                path_prefix: "/example-org/".into(),
+                ssh_user: "org-1".into(),
                 ssh_agent_socket: Some(
-                    "~/Library/Application Support/block-ssh-agent/agent.sock".into()
+                    "~/Library/Application Support/example-ssh-agent/agent.sock".into()
                 ),
                 rewrite_https: true,
                 platforms: Some(vec![Platform::Macos]),

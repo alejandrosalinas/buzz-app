@@ -22,7 +22,10 @@ export type DraftAttachment = Readonly<{
 export type AttachmentDraft = {
   snapshot(): readonly DraftAttachment[];
   subscribe(listener: () => void): () => void;
-  add(files: readonly File[], recording?: VoiceRecording): void;
+  /** Admits the files that fit, in order. A lone file that does not fit throws
+   * why; otherwise one sentence per reason names the first files left out
+   * and counts the rest. */
+  add(files: readonly File[], recording?: VoiceRecording): readonly string[];
   addUploaded(attachment: UploadedAttachment): void;
   adopt(files: readonly DraftAttachment[]): boolean;
   prepareForSend(signal: AbortSignal): Promise<readonly UploadedAttachment[]>;
@@ -95,6 +98,8 @@ export function subscribeAttachmentDraftCounts(
 
 export const MAX_ATTACHMENT_FILES = 10;
 const MAX_RETAINED_BYTES = 2 * UPLOAD_MAX_BYTES;
+/** A refusal names this many files, then counts the rest. */
+const NAMED_REFUSALS = 3;
 
 /** Tab-local files survive navigation, not reload. Delivery remains outbox-owned.
  * A new chat's draft uploads before its channel exists. */
@@ -297,26 +302,48 @@ export function attachmentDraft(
           throw new Error("Invalid voice note attachment");
       }
       if (!session.attachments) throw new UploadError("unavailable");
-      if (items.length + files.length > MAX_ATTACHMENT_FILES)
-        throw new Error(
-          `Attach at most ${MAX_ATTACHMENT_FILES} files per message.`,
-        );
-      for (const file of files)
-        if (!file.size || file.size > UPLOAD_MAX_BYTES)
-          throw new UploadError("size");
-      const retained = [...owners.values()]
+      let retained = [...owners.values()]
         .flatMap((owner) => owner.snapshot())
         .reduce((sum, item) => sum + item.file.size, 0);
-      if (
-        retained + files.reduce((sum, file) => sum + file.size, 0) >
-        MAX_RETAINED_BYTES
-      )
-        throw new Error(
-          "Attachment drafts are full (1,000 MiB). Send or remove some files first.",
-        );
+      const admitted: File[] = [];
+      // Reason → the files it left out. Empty files share the "" reason.
+      const refused = new Map<string, string[]>();
+      for (const file of files) {
+        const reason = !file.size
+          ? new Error(`${file.name} is empty.`)
+          : items.length + admitted.length >= MAX_ATTACHMENT_FILES
+            ? new Error(
+                `Attach at most ${MAX_ATTACHMENT_FILES} files per message.`,
+              )
+            : file.size > UPLOAD_MAX_BYTES
+              ? new UploadError("size")
+              : retained + file.size > MAX_RETAINED_BYTES
+                ? new Error(
+                    "Attachment drafts are full (1,000 MiB). Send or remove some files first.",
+                  )
+                : undefined;
+        if (!reason) {
+          admitted.push(file);
+          retained += file.size;
+        } else if (files.length === 1) throw reason;
+        else {
+          const key = file.size ? reason.message : "";
+          refused.set(key, [...(refused.get(key) ?? []), file.name]);
+        }
+      }
+      const left = Array.from(refused, ([reason, names]) => {
+        const listed =
+          names.length > NAMED_REFUSALS
+            ? `${names.slice(0, NAMED_REFUSALS).join(", ")} and ${names.length - NAMED_REFUSALS} more`
+            : names.join(", ");
+        return reason
+          ? `${listed}: ${reason}`
+          : `${listed} ${names.length === 1 ? "is" : "are"} empty.`;
+      });
+      if (!admitted.length) return left;
       items = [
         ...items,
-        ...files.map(
+        ...admitted.map(
           (file): DraftAttachment => ({
             id: crypto.randomUUID(),
             file,
@@ -338,6 +365,7 @@ export function attachmentDraft(
       emit();
       paused = false;
       pump();
+      return left;
     },
     addUploaded(attachment: UploadedAttachment) {
       if (!session.attachments) throw new UploadError("unavailable");

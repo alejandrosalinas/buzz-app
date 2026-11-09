@@ -315,3 +315,8 @@ html[data-keyboard-input] :is(.subviewBase, .subview) {
   border-inline-start: 1px solid var(--border-standard);
   padding-inline-start: var(--space-1);
 }
+
+.workspaceIdentity {
+  min-width: 0;
+  max-width: 100%;
+}

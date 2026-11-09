@@ -8,8 +8,10 @@ import {
   useSyncExternalStore,
   type RefObject,
 } from "react";
+import { Button } from "../../shared/design-system/ui/Button";
+import { useToastNotification } from "../../shared/design-system/ui/Toast";
 import { IconButton } from "../../shared/design-system/ui/IconButton";
-import { InfoIcon, StopIcon } from "../../shared/design-system/icons";
+import { InfoIcon, StopIcon, XIcon } from "../../shared/design-system/icons";
 import { AgentsContext, useAgentsSnapshot } from "../agents/react";
 import { requestWork } from "../agents/request-work";
 import { workStop } from "../agents/work-stop";
@@ -89,6 +91,7 @@ export function ActivityGroupActions({
         choices.identities.find((row) => row.pubkey === agent)?.name ??
         agent.slice(0, 10),
     );
+  const notify = useToastNotification();
   const agents = useContext(AgentsContext);
   useAgentsSnapshot(tracking ? agents : undefined);
   const { requestId, latest, participants } = group;
@@ -97,7 +100,7 @@ export function ActivityGroupActions({
       ? requestWork(snapshot, latest.channelId, requestId)
       : [];
   const controls = work.flatMap((entry) => {
-    if (!requestId || !participants.includes(entry.agent)) return [];
+    if (!requestId || !group.liveParticipants.includes(entry.agent)) return [];
     const control = workStop(
       entry,
       {
@@ -142,6 +145,58 @@ export function ActivityGroupActions({
           />
         ) : null;
       })}
+      {work
+        .filter(
+          (entry) =>
+            entry.lifecycle &&
+            entry.state === "error" &&
+            !entry.dismissed &&
+            group.liveParticipants.includes(entry.agent),
+        )
+        .map((entry) => (
+          <span key={entry.agent} className="inline-flex items-center gap-1">
+            {entry.retryable && (
+              <Button
+                size="sm"
+                variant="subtle"
+                aria-label={`Retry ${named(entry.agent)}`}
+                onClick={() => {
+                  if (!requestId) return;
+                  try {
+                    session.agentActivity.retry(
+                      entry.agent,
+                      channelId,
+                      requestId,
+                    );
+                    returnFocus.current?.focus({ preventScroll: true });
+                  } catch (error) {
+                    notify(
+                      `Couldn’t retry ${named(entry.agent)}. ${error instanceof Error ? error.message : String(error)}`,
+                      "error",
+                    );
+                  }
+                }}
+              >
+                Retry
+              </Button>
+            )}
+            <IconButton
+              size="sm"
+              variant="ghost"
+              aria-label={`Dismiss error from ${named(entry.agent)}`}
+              icon={<XIcon aria-hidden="true" />}
+              onClick={() => {
+                if (requestId)
+                  session.agentActivity.dismissError?.(
+                    entry.agent,
+                    channelId,
+                    requestId,
+                  );
+                returnFocus.current?.focus({ preventScroll: true });
+              }}
+            />
+          </span>
+        ))}
       {controls.map(({ control, agent }) => {
         const name = named(agent);
         return (

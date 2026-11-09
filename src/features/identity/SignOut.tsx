@@ -23,7 +23,7 @@ export function signOutReady(state: {
 }
 
 /** Native refusals carry `{ message }`; anything else is a plain error. */
-function signOutFailure(reason: unknown) {
+export function signOutFailure(reason: unknown) {
   if (
     typeof reason === "object" &&
     reason !== null &&

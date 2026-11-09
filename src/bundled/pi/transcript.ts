@@ -94,13 +94,14 @@ function prompt(
   // An older steer wraps a whole turn.
   if (steer && !readEventBody(steer.body))
     sections = promptSections(steer.body);
-  const { text, author } = promptMessage(sections, name);
+  const { text, author, authorPubkey } = promptMessage(sections, name);
   return {
     id,
     at,
     type: "prompt",
     text: text || raw,
     ...(author ? { author } : {}),
+    ...(authorPubkey ? { authorPubkey } : {}),
     sections,
     steer: !!steer,
   };
@@ -290,6 +291,18 @@ export function piTurns(
   return turns;
 }
 
+/** `work`, or a rejection as soon as `signal` aborts. */
+function released<T>(work: Promise<T>, signal: AbortSignal) {
+  return new Promise<T>((resolve, reject) => {
+    const abort = () => reject(signal.reason);
+    if (signal.aborted) return abort();
+    signal.addEventListener("abort", abort, { once: true });
+    work
+      .then(resolve, reject)
+      .finally(() => signal.removeEventListener("abort", abort));
+  });
+}
+
 /** The conversation's latest turns, read newest first until there are
  * enough of them. */
 export async function readTranscript(
@@ -305,16 +318,19 @@ export async function readTranscript(
   let cursor: unknown;
   let session: number | undefined;
   do {
-    const page = await pi.request<{
-      entries: PiEntry[];
-      next?: unknown;
-      session?: number;
-    }>("entries", {
-      agent,
-      conversation: conversation.conversation,
-      ...(cursor ? { cursor } : {}),
-    });
-    signal.throwIfAborted();
+    // The shared worker still answers; this read stops waiting for it.
+    const page = await released(
+      pi.request<{
+        entries: PiEntry[];
+        next?: unknown;
+        session?: number;
+      }>("entries", {
+        agent,
+        conversation: conversation.conversation,
+        ...(cursor ? { cursor } : {}),
+      }),
+      signal,
+    );
     entries.push(...page.entries);
     // The oldest page read says where the shown entries begin.
     session = page.session ?? session;

@@ -294,6 +294,16 @@ mod macos {
         Ok(())
     }
 
+    /// Also holds Web Audio, and blocks the page from playing again until resumed.
+    pub fn set_media_suspended(guest: &WebView, suspended: bool) -> Result<(), String> {
+        unsafe {
+            guest
+                .webview()
+                .setAllMediaPlaybackSuspended_completionHandler(suspended, None);
+        }
+        Ok(())
+    }
+
     pub fn forward(guest: &WebView) -> Result<(), String> {
         unsafe {
             guest.webview().goForward();
@@ -452,7 +462,7 @@ pub(super) fn resize_guest(
 #[cfg(target_os = "macos")]
 pub(super) use macos::{
     back, current_url, deny_permissions, focused, forward, install_builderlab_cookie, load,
-    loading, observe_navigation,
+    loading, observe_navigation, set_media_suspended,
 };
 #[cfg(target_os = "macos")]
 pub(super) type Permissions = objc2::rc::Retained<macos::PermissionDelegate>;
@@ -481,6 +491,11 @@ pub(super) fn load(
     guest
         .load_url(url.as_str())
         .map_err(|error| error.to_string())
+}
+
+#[cfg(not(target_os = "macos"))]
+pub(super) fn set_media_suspended(_guest: &WebView, _suspended: bool) -> Result<(), String> {
+    Err("Suspending a page's media is supported only on macOS".into())
 }
 
 #[cfg(not(target_os = "macos"))]

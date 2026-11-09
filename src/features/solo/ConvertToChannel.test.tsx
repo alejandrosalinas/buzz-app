@@ -171,6 +171,18 @@ async function selectAccess(label: string) {
 async function ready() {
   await waitFor(() => expect(confirm()).toBeEnabled());
 }
+it("starts on Cancel so Enter does not convert or publish", async () => {
+  const h = setup();
+  await ready();
+  await waitFor(() =>
+    expect(screen.getByRole("button", { name: "Cancel" })).toHaveFocus(),
+  );
+  await userEvent.setup().keyboard("{Enter}");
+  await waitFor(() => expect(h.close).toHaveBeenCalledOnce());
+  expect(h.publish).not.toHaveBeenCalled();
+  expect(h.unfile).not.toHaveBeenCalled();
+});
+
 it("preselects View only and preserves Guest admission when converting a view-only Solo chat", async () => {
   const h = setup(true, "public", "guest");
   await ready();

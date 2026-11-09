@@ -56,7 +56,10 @@ async function harness(
     relayUrl: fixtureRelayUrl,
     communityAliases: fixtureAliases,
     identity: () => key,
-    authority: async () => ({ relayAuthor: getPublicKey(key) }),
+    authority: async () => ({
+      relayAuthor: getPublicKey(key),
+      artifactSupport: true,
+    }),
     upstreamFetch: async (url, init) => {
       upstream.push(String(url));
       const filters = JSON.parse(init?.body ?? "[]");
@@ -1139,6 +1142,52 @@ test("lost publication receipt stays unknown; reconnect never automatically repu
     expect(h.publications).toHaveLength(1);
     expect(h.upstream.some((url) => url.endsWith("/events"))).toBe(false);
   } finally {
+    traffic?.dispose();
+    vi.unstubAllGlobals();
+    await h.close();
+  }
+});
+
+test("a reconnect's continuous channel replays cross the real HTTP boundary", async () => {
+  const h = await harness(0, undefined, { holdAuth: true });
+  let traffic;
+  const clock = vi.spyOn(Date, "now");
+  try {
+    const now = Date.now();
+    clock.mockReturnValue(now - 20 * 60_000);
+    browserFetch(h.base);
+    const transport = await connectBrokerTransport(h.base);
+    const established = vi.fn();
+    traffic = transport.subscribe({ ...callbacks, established });
+    traffic.update(["a", "b", "c"], ["a", "b"]);
+    await until(() => h.frames.some((frame) => frame.kind === "AUTH"));
+    // Start the session before the floor, then authenticate at the current
+    // time so the connection cursor has the full resume lag behind it.
+    clock.mockRestore();
+    const auth = h.frames.find((frame) => frame.kind === "AUTH");
+    await h.sockets[0].receive(["OK", auth.id.id, true]);
+    const channels = () =>
+      established.mock.calls.filter(([ids]) => ids !== undefined);
+    await until(() => channels().length === 2);
+    // A first connection has no cursor: no channel reports continuity.
+    expect(channels()).toEqual(expect.arrayContaining([[["a", "b"]], ["c"]]));
+    established.mockClear();
+    h.sockets[0].close();
+    await until(
+      () => h.frames.filter((frame) => frame.kind === "AUTH").length === 2,
+    );
+    const nextAuth = h.frames.filter((frame) => frame.kind === "AUTH")[1];
+    await h.sockets[1].receive(["OK", nextAuth.id.id, true]);
+    await until(() => channels().length === 2);
+    // The quiet replays resumed from their cursors, below the limit.
+    expect(channels()).toEqual(
+      expect.arrayContaining([
+        [["a", "b"], undefined, ["a", "b"]],
+        ["c", undefined, ["c"]],
+      ]),
+    );
+  } finally {
+    clock.mockRestore();
     traffic?.dispose();
     vi.unstubAllGlobals();
     await h.close();

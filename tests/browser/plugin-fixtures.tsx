@@ -295,6 +295,13 @@ export const fixturePlugins: readonly BundledPlugin[] = [
             primary: true,
             component: () => <h1>{title}</h1>,
           });
+        // Listed in the Messages sidebar, with no sidebar of its own.
+        ctx.pages.register({
+          id: "listed",
+          title: "Listed destination",
+          primary: true,
+          component: () => <h1>Listed destination</h1>,
+        });
         ctx.pages.register({
           id: "sidebar",
           title: "Sidebar playground",
@@ -313,7 +320,9 @@ export const fixturePlugins: readonly BundledPlugin[] = [
                     Target:{" "}
                     {target.kind === "page" ? target.pageId : target.kind}
                   </p>
-                  <button type="button">Fixture sidebar action</button>
+                  <button type="button" tabIndex={0}>
+                    Fixture sidebar action
+                  </button>
                   {children}
                 </aside>
               </div>

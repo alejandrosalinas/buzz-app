@@ -36,7 +36,7 @@ export function avatarMediaFixture() {
     },
     // img requests cannot be intercepted by window.fetch. Serve tab-local previews.
     display(url: string) {
-      return files.get(url.replace(/\.thumb\.jpg$/, ""));
+      return files.get(url.replace(/\.thumb\.webp$/, ""));
     },
   };
 }

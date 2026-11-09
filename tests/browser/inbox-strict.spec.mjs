@@ -20,11 +20,11 @@ test("reveals an exact thread target after effect cleanup and setup replay", asy
   app,
 }) => {
   await open(page, app);
-  await openPage(page, "Inbox");
-  const inbox = page.getByRole("region", { name: "Inbox", exact: true });
+  await openPage(page, "Activity");
+  const inbox = page.getByRole("region", { name: "Activity", exact: true });
   await expect(inbox.getByText("Checking recent activity…")).toHaveCount(0);
   const opener = inbox
-    .getByRole("list", { name: "Inbox conversations" })
+    .getByRole("list", { name: "Activity", exact: true })
     .getByRole("listitem")
     .filter({ hasText: "Unread reply 1" })
     .getByRole("button", { name: /^Open / });

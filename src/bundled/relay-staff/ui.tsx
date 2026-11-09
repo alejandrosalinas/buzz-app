@@ -274,18 +274,6 @@ export const containsSecretKey = (text: string) =>
 export const SECRET_KEY_WARNING =
   "That looks like a private key. Never paste it here.";
 
-/** Hex, or an npub, as a lowercase hex public key. */
-export function publicKeyInput(text: string): string | null {
-  const value = text.trim();
-  if (/^[0-9a-f]{64}$/i.test(value)) return value.toLowerCase();
-  try {
-    const decoded = nip19.decode(value);
-    return decoded.type === "npub" ? decoded.data : null;
-  } catch {
-    return null;
-  }
-}
-
 /** Hex, `note1…` or `nevent1…` (optionally `nostr:`-prefixed) as a hex event ID. */
 export function eventIdInput(text: string): string | null {
   const value = text.trim().replace(/^nostr:/i, "");

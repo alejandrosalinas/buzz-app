@@ -107,9 +107,9 @@ it("creates hosted Bestie through Agents, then instructs, homes and introduces i
       h.publish.mock.calls.findIndex(([event]) => event.kind === 9)
     ];
   const instructed =
-    native.invoke.mock.invocationCallOrder[
-      native.invoke.mock.calls.findIndex(([, input]) =>
-        String(input?.request?.url).endsWith("/update-agent"),
+    h.forwarded.mock.invocationCallOrder[
+      h.forwarded.mock.calls.findIndex(([input]) =>
+        input.path.endsWith("/update-agent"),
       )
     ];
   expect(instructed).toBeLessThan(order ?? 0);
@@ -155,8 +155,7 @@ it("offers to update a set-up Bestie whose instructions changed, and changes not
   expect(h.bestie.snapshot().instructionsChanged).toBeFalsy();
   const updates = h.requests("update-agent");
   expect(updates).toHaveLength(2);
-  const last = updates.at(-1)?.[1] as { request: { body: string } };
-  expect(JSON.parse(last.request.body).agent_instructions).toBe(
+  expect(JSON.parse(updates.at(-1) ?? "").agent_instructions).toBe(
     bestieInstructions(h.viewer, HOME),
   );
   expect(h.requests("register-agent")).toHaveLength(1);
@@ -436,10 +435,7 @@ it("asks for a model again when Builderlab says Bestie's choice is no longer val
     model_selection_status: 1,
     reasoning_effort: "low",
   });
-  const last = h.requests("update-agent").at(-1)?.[1] as {
-    request: { body: string };
-  };
-  expect(JSON.parse(last.request.body)).toEqual({
+  expect(JSON.parse(h.requests("update-agent").at(-1) ?? "")).toEqual({
     agent_pubkey: h.agent,
     model_id: "model-a",
     reasoning_effort: "low",

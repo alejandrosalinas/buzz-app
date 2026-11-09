@@ -435,6 +435,7 @@ it("installs a selected preview through the management boundary, rejecting overl
     folder: vi.fn(async () => null),
     files: vi.fn(async () => null),
     git: vi.fn(async () => null),
+    url: vi.fn(async () => null),
     checkGit: vi.fn(async () => null),
     discard: vi.fn(async () => {}),
     install: vi.fn(() => install.promise),

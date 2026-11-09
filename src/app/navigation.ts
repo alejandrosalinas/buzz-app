@@ -118,13 +118,7 @@ export function useAppNavigation(
     (client.selected === null || client.selected === departure.communityId);
   let failure: OpenFailure | undefined;
   const legacyHome = target.kind === "home";
-  const legacyPage =
-    target.kind === "page" &&
-    pageKey === channelsKey &&
-    target.route?.version === 1 &&
-    (target.route.params === "Inbox" || target.route.params === "Bestie")
-      ? target.route.params.toLowerCase()
-      : undefined;
+  const legacyPage = useMemo(() => legacyPageTarget(target), [target]);
   const legacyMessagesSettings =
     settings && target.section === "buzz.channels/messages";
   let waiting =
@@ -162,7 +156,7 @@ export function useAppNavigation(
       }
     }
   }
-  if (pluginLink && !failure && !linked) {
+  if (pluginLink && !failure && !linked && !legacyPage) {
     if (
       startup !== "loading" &&
       plugins.activation[pluginLink.pluginId]?.status !== "starting"
@@ -199,6 +193,23 @@ export function useAppNavigation(
       waiting = true;
     else if (!providerAvailable) failure = "unavailable";
   }
+  // An installed plugin that is turned off has no pages: say so, not "removed".
+  // Paused external plugins can't start this launch, so Enable wouldn't help.
+  const configuration = plugins.configuration;
+  const turnedOff =
+    failure === "unavailable" &&
+    (target.kind === "page" || target.kind === "plugin") &&
+    configuration.status === "ready"
+      ? configuration.catalog.plugins.find(
+          (plugin) =>
+            plugin.manifest.id === target.pluginId &&
+            !plugin.enabled &&
+            !(
+              configuration.externalPluginsPaused &&
+              plugin.source === "external"
+            ),
+        )?.manifest
+      : undefined;
   // Legacy Home resolves to Messages; version-1 placeholder routes resolve to
   // their standalone plugins. Preserve scope so normalization never grants access.
   // Resolve in place before paint: links and history share one policy.
@@ -212,13 +223,7 @@ export function useAppNavigation(
         pageId: "channels",
       });
     else if (legacyPage)
-      services.navigationHost.resolve(state.attempt, {
-        version: 1,
-        kind: "page",
-        pluginId: `buzz.${legacyPage}`,
-        pageId: legacyPage,
-        ...(scope !== undefined ? { scope } : {}),
-      });
+      services.navigationHost.resolve(state.attempt, legacyPage);
     else if (legacyMessagesSettings && target.kind === "settings")
       services.navigationHost.resolve(state.attempt, {
         ...target,
@@ -236,7 +241,6 @@ export function useAppNavigation(
     legacyPage,
     legacyMessagesSettings,
     target,
-    scope,
     pluginLink,
     linked,
     failure,
@@ -435,6 +439,8 @@ export function useAppNavigation(
     select,
     waiting,
     failure,
+    /** The installed, turned-off plugin whose page or link failed. */
+    turnedOff,
     selected: pageKey ?? target.kind,
     /** The connection is down, including a settled refusal. */
     offline: !failure && offline,
@@ -552,4 +558,49 @@ export function useAppNavigation(
       void navigation.retry();
     },
   };
+}
+
+/** Retired page addresses resolve in place, retaining their account/community scope. */
+function legacyPageTarget(
+  target: OpenTarget,
+): Extract<OpenTarget, { kind: "page" }> | undefined {
+  const scope =
+    "scope" in target && target.scope !== undefined
+      ? { scope: target.scope }
+      : {};
+  if (
+    target.kind === "page" &&
+    target.pluginId === "buzz.channels" &&
+    target.pageId === "channels" &&
+    target.route?.version === 1 &&
+    (target.route.params === "Inbox" || target.route.params === "Bestie")
+  ) {
+    const page = target.route.params.toLowerCase();
+    return {
+      version: 1,
+      kind: "page",
+      pluginId: `buzz.${page}`,
+      pageId: page,
+      ...scope,
+    };
+  }
+  // Drafts & sent was briefly a Messages route, before that its own plugin.
+  if (
+    (target.kind === "page" &&
+      target.pluginId === "buzz.channels" &&
+      target.pageId === "channels" &&
+      target.route?.version === 1 &&
+      target.route.params === "drafts-sent") ||
+    ((target.kind === "page" || target.kind === "plugin") &&
+      target.pluginId === "buzz.drafts-sent" &&
+      (target.pageId === undefined || target.pageId === "drafts-sent"))
+  ) {
+    return {
+      version: 1,
+      kind: "page",
+      pluginId: "buzz.drafts-and-sent",
+      pageId: "drafts-sent",
+      ...scope,
+    };
+  }
 }

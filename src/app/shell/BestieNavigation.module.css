@@ -1,13 +1,4 @@
-.label[data-bestie-unread] {
-  color: var(--text-navigation-unread);
-  font-weight: var(--type-weight-semibold);
-}
-[data-selected] .label[data-bestie-unread] {
-  color: var(--text-row-selected);
-}
-
-/* A block grid avoids an inline baseline below the row's center. Match the
- * ordinary unread badge's trailing inset inside the shared navigation row. */
+/* A block grid avoids an inline baseline below the dock tile's center. */
 .badge {
   display: grid;
   place-items: center;

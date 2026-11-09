@@ -3,9 +3,10 @@ import { createNavigationController } from "../navigation/controller";
 import { createMemoryHistory, homeTarget } from "../navigation/history";
 import type { OpenTarget } from "../navigation/targets";
 import {
-  agentHistoryRoute,
-  agentHistoryTarget,
+  agentRoute,
   agentTarget,
+  historyRoute,
+  historyTarget,
 } from "../../bundled/agents/routes";
 import {
   profileHistoryRoute,
@@ -35,7 +36,7 @@ for (const hostKind of ["page", "profile"] as const) {
   it(`${hostKind}: preserves Back/Forward, retires explicit Close and permits a fresh opening`, async () => {
     const base: OpenTarget =
       hostKind === "page"
-        ? agentHistoryTarget({ ...agentTarget(pubkey), scope }, pubkey)
+        ? historyTarget({ ...agentTarget(pubkey), scope }, { agent: pubkey })
         : {
             version: 1,
             kind: "conversation",
@@ -47,7 +48,7 @@ for (const hostKind of ["page", "profile"] as const) {
           };
     const target = (selected?: HistorySelection): OpenTarget =>
       base.kind === "page"
-        ? agentHistoryTarget(base, pubkey, selected)
+        ? historyTarget(base, { agent: pubkey }, selected)
         : ({
             ...base,
             detail: {
@@ -74,7 +75,7 @@ for (const hostKind of ["page", "profile"] as const) {
       const address = nav.snapshot().entry.target;
       const selected =
         address.kind === "page"
-          ? agentHistoryRoute(address.route?.params)
+          ? historyRoute(address.route?.params, agentRoute)
           : address.kind === "conversation" && address.detail
             ? profileHistoryRoute(address.detail.target)
             : undefined;
@@ -129,15 +130,15 @@ it("gives a locally selected agent a reconstructible underlying visit without ad
   finish();
   await nav.open(inventory);
   historyPresentation(nav, undefined, (selected) =>
-    agentHistoryTarget(inventory, pubkey, selected),
+    historyTarget(inventory, { agent: pubkey }, selected),
   ).select(selection);
   await Promise.resolve();
   expect(nav.snapshot().entry.target).toEqual(
-    agentHistoryTarget(inventory, pubkey, selection),
+    historyTarget(inventory, { agent: pubkey }, selection),
   );
   nav.back();
   expect(nav.snapshot().entry.target).toEqual(
-    agentHistoryTarget(inventory, pubkey),
+    historyTarget(inventory, { agent: pubkey }),
   );
   nav.back();
   expect(nav.snapshot().entry.target).toEqual(homeTarget);

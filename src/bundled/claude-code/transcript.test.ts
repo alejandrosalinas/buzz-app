@@ -14,10 +14,16 @@ import type { HostProcessOptions } from "../../features/host/service";
 import { manifestProcesses } from "./claude-testing";
 import manifest from "./manifest.json";
 import type { EventData } from "../../features/relay/events";
+import { localStore } from "../../features/agents/state";
+import type { TranscriptTurn } from "../../features/agents/activity-transcript";
+import { sessionPrompts } from "../../features/agents/session-prompts";
 import { steerPrompt, turnPrompt } from "./prompt";
+import { ClaudeRuntime } from "./runtime";
 import {
   claudeTurns,
   projectName,
+  OVERSIZED_READ_MS,
+  readLatestTurns,
   readTranscript,
   TURN_LIMIT,
 } from "./transcript";
@@ -300,7 +306,7 @@ function host(files: Record<string, string>) {
       if (content === undefined) {
         options.onStderr?.(`base64: ${path}: No such file or directory\n`);
         code = 1;
-      } else options.onStdout?.(btoa(content));
+      } else options.onStdout?.(Buffer.from(content).toString("base64"));
     }
     return {
       write: async () => undefined,
@@ -855,4 +861,122 @@ it("passes this platform's base64 a session path it reads as a file", async () =
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
+});
+
+it("reads a session's latest whole turns from its end", async () => {
+  clock = 0;
+  const { spawn } = host({
+    "./-Users-me--buzz/session-1.jsonl": [
+      line("user", prompt("older")),
+      line("assistant", [{ type: "text", text: "x".repeat(3 << 20) }]),
+      line("assistant", [{ type: "text", text: "older reply" }]),
+      line("user", prompt("latest")),
+      line("assistant", [{ type: "text", text: "re: latest" }]),
+    ].join("\n"),
+  });
+  const turns = await readLatestTurns(
+    spawn,
+    "~/.buzz",
+    conversation,
+    true,
+    new AbortController().signal,
+  );
+  // The chunk starts partway through the long reply: that line and the rest
+  // of its turn are left, not read as a turn.
+  expect(turns?.map((turn) => turn.items)).toEqual([
+    [
+      expect.objectContaining({ text: "latest" }),
+      expect.objectContaining({ text: "re: latest" }),
+    ],
+  ]);
+  expect(turns?.[0]).toMatchObject({ newSession: false, partial: false });
+  expect(
+    spawn.mock.calls
+      .filter(([id]) => id === "read-page")
+      .map(([, options]) => options?.args?.slice(1)),
+  ).toEqual([["2", "2"]]);
+});
+
+it("reads a turn larger than the chunk in full only every 30 s, keeping what is shown between", async () => {
+  clock = 0;
+  const { spawn } = host({
+    "./-Users-me--buzz/session-1.jsonl": [
+      line("user", prompt("only")),
+      line("assistant", [{ type: "text", text: "x".repeat(3 << 20) }]),
+      line("assistant", [{ type: "text", text: "done" }]),
+    ].join("\n"),
+  });
+  const now = vi.spyOn(Date, "now").mockReturnValue(1_000_000);
+  const latest = () =>
+    readLatestTurns(
+      spawn,
+      "~/.buzz",
+      conversation,
+      true,
+      new AbortController().signal,
+    );
+  // Undefined reads it in full; none keeps what is shown.
+  await expect(latest()).resolves.toBeUndefined();
+  now.mockReturnValue(1_000_000 + OVERSIZED_READ_MS - 1);
+  await expect(latest()).resolves.toEqual([]);
+  now.mockReturnValue(1_000_000 + OVERSIZED_READ_MS);
+  await expect(latest()).resolves.toBeUndefined();
+  await expect(latest()).resolves.toEqual([]);
+  now.mockRestore();
+});
+
+it("shows a session's prompt once over the latest turns it swaps in", async () => {
+  clock = 0;
+  const { spawn } = host({
+    "./-Users-me--buzz/session-1.jsonl": [
+      line("user", prompt("latest")),
+      line("assistant", [{ type: "text", text: "re: latest" }]),
+    ].join("\n"),
+  });
+  const items = new Map<string, string>();
+  const storage = localStore({
+    get length() {
+      return items.size;
+    },
+    key: (index: number) => [...items.keys()][index] ?? null,
+    getItem: (key: string) => items.get(key) ?? null,
+    setItem: (key: string, value: string) => void items.set(key, value),
+    removeItem: (key: string) => void items.delete(key),
+    clear: () => items.clear(),
+  });
+  const prompts = sessionPrompts(storage, "claude-code", agent);
+  await prompts.save("session-1", [{ label: "", text: "be brief" }]);
+  // The runtime's own method, with only what it reads.
+  const latest = (held: readonly TranscriptTurn[]) =>
+    ClaudeRuntime.prototype.latestTurns.call(
+      { spawn, reads: () => undefined, prompts: () => prompts } as never,
+      conversation,
+      "~/.buzz",
+      false,
+      new AbortController().signal,
+      held,
+    );
+  const shown = (turns: readonly TranscriptTurn[] | undefined) =>
+    turns?.map((turn) => ({
+      prompts: turn.items.filter((item) => item.type === "system").length,
+      continued: Boolean(turn.continued),
+    }));
+  const earlier = (sessionId: string) =>
+    ({
+      turnId: "earlier",
+      sessionId,
+      startedAt: 0,
+      items: [],
+    }) as unknown as TranscriptTurn;
+  const [first] = (await latest([])) ?? [];
+  // It replaces the session's first shown turn: one prompt.
+  expect(shown(await latest([]))).toEqual([{ prompts: 1, continued: false }]);
+  // Earlier turns of that session stay shown: no second prompt or marker.
+  expect(
+    shown(await latest([earlier("session-1"), ...(first ? [first] : [])])),
+  ).toEqual([{ prompts: 0, continued: false }]);
+  // Only another session's turns stay: this one shows its own prompt.
+  expect(
+    shown(await latest([earlier("other"), ...(first ? [first] : [])])),
+  ).toEqual([{ prompts: 1, continued: false }]);
 });

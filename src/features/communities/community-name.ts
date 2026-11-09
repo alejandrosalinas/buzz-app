@@ -1,4 +1,7 @@
-/** Match the web invite: preserve custom names, shorten only hosted suffixes. */
+/**
+ * Match the web invite: preserve custom names, and show an unnamed
+ * `<name>.communities.<domain>` host as `<name>`. Any other host shows in full.
+ */
 export function communityName(name: unknown, host: string): string {
   if (
     typeof name === "string" &&
@@ -7,13 +10,6 @@ export function communityName(name: unknown, host: string): string {
     name !== host
   )
     return name;
-  for (const suffix of [
-    ".communities.buzz.xyz",
-    ".communities.block.xyz",
-    ".communities.public.builderlabstaging.xyz",
-  ]) {
-    if (host.endsWith(suffix) && host.length > suffix.length)
-      return host.slice(0, -suffix.length);
-  }
-  return host;
+  const [label, second, ...domain] = host.split(".");
+  return label && second === "communities" && domain.length ? label : host;
 }

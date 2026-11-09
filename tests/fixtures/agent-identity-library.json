@@ -113,7 +113,7 @@
           "name": "Ada",
           "picture": "https://images.example/ada.png",
           "protection": {
-            "provider": "com.squareup.buzz-security",
+            "provider": "com.example.buzz-security",
             "policy": {
               "version": 2,
               "privateReviewPolicy": "must not appear in public library"
@@ -130,7 +130,7 @@
           "name": "Ada",
           "home": "wss://relay.example",
           "protection": {
-            "provider": "com.squareup.buzz-security",
+            "provider": "com.example.buzz-security",
             "policy": {
               "version": 2,
               "privateReviewPolicy": "must not appear in public library"
@@ -148,7 +148,7 @@
           "home": "wss://third-home.example",
           "joining": true,
           "protection": {
-            "provider": "com.squareup.buzz-security",
+            "provider": "com.example.buzz-security",
             "policy": {
               "version": 2,
               "privateReviewPolicy": "must not appear in public library"
@@ -272,7 +272,7 @@
           "name": "Ada",
           "picture": "https://images.example/ada.png",
           "protection": {
-            "provider": "com.squareup.buzz-security",
+            "provider": "com.example.buzz-security",
             "policy": {
               "version": 2,
               "privateReviewPolicy": "must not appear in public library"
@@ -289,7 +289,7 @@
           "name": "Ada",
           "home": "wss://relay.example",
           "protection": {
-            "provider": "com.squareup.buzz-security",
+            "provider": "com.example.buzz-security",
             "policy": {
               "version": 2,
               "privateReviewPolicy": "must not appear in public library"
@@ -307,7 +307,7 @@
           "home": "wss://third-home.example",
           "joining": true,
           "protection": {
-            "provider": "com.squareup.buzz-security",
+            "provider": "com.example.buzz-security",
             "policy": {
               "version": 2,
               "privateReviewPolicy": "must not appear in public library"

@@ -396,3 +396,43 @@ fn copy_holds_the_previous_items_lock_so_deleting_it_waits() {
         Err(Error::Denied)
     );
 }
+
+#[test]
+fn a_me_build_reads_the_release_key_and_falls_back_only_when_it_is_absent() {
+    fn run(release: bool, current: Result<&[u8]>, previous: Result<&[u8]>) -> Result<Vec<u8>> {
+        let read = |service: &str| {
+            match service {
+                "xyz.block.buzz.desktop.identity" => current,
+                "dev.local.buzz.foundation.identity" => previous,
+                _ => panic!("only release services are read: {service}"),
+            }
+            .map(|value| Zeroizing::new(value.to_vec()))
+        };
+        release_or_own(release, read, || Ok(Zeroizing::new(b"own".to_vec())))
+            .map(|value| value.to_vec())
+    }
+    let absent = Err(Error::Absent);
+    // Not a me build: a release read would panic.
+    let never = |_: &str| -> Result<Zeroizing<Vec<u8>>> { panic!("read a release item") };
+    assert_eq!(
+        release_or_own(false, never, || Ok(Zeroizing::new(b"own".to_vec())))
+            .map(|value| value.to_vec()),
+        Ok(b"own".to_vec())
+    );
+    assert_eq!(
+        run(true, Ok(b"release"), Ok(b"old")),
+        Ok(b"release".to_vec())
+    );
+    assert_eq!(run(true, absent, Ok(b"old")), Ok(b"old".to_vec()));
+    assert_eq!(run(true, absent, absent), Ok(b"own".to_vec()));
+    // A denied or broken release read never substitutes this build's key.
+    for error in [
+        Error::Denied,
+        Error::Corrupt,
+        Error::Busy,
+        Error::Unavailable,
+    ] {
+        assert_eq!(run(true, Err(error), Ok(b"old")), Err(error));
+        assert_eq!(run(true, absent, Err(error)), Err(error));
+    }
+}

@@ -114,6 +114,26 @@ it("keeps the state object, and tells no one, when a poll reads the same state",
   expect(changed).toHaveBeenCalledTimes(2);
 });
 
+it("keeps one reader that throws from failing the read, or keeping it from the rest", async () => {
+  vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
+  vi.spyOn(console, "warn").mockImplementation(() => {});
+  const gh = mockGh(async () => ({
+    r0: rollup("OPEN", {}, "SUCCESS"),
+    r1: rollup("OPEN", {}, "SUCCESS"),
+  }));
+  const states = createPullStates(gh);
+  const broken = vi.fn(() => {
+    throw new DOMException("The quota has been exceeded.");
+  });
+  const changed = vi.fn();
+  states.watch(pull, broken);
+  states.watch(second, changed);
+  await vi.waitFor(() => expect(broken).toHaveBeenCalledOnce());
+  expect(changed).toHaveBeenCalledOnce();
+  expect(states.readAt(pull)?.error).toBeUndefined();
+  expect(states.readAt(second)?.error).toBeUndefined();
+});
+
 it("reads the title with the state, so a poll renames a renamed pull request in the read it already makes", async () => {
   vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
   let title = "Fix the lab";

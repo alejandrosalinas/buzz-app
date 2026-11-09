@@ -23,14 +23,9 @@ import {
 import { Avatar } from "../../shared/design-system/ui/Avatar";
 import { Button } from "../../shared/design-system/ui/Button";
 import { EmptyState } from "../../shared/design-system/ui/EmptyState";
-import { FullPageSurface } from "../../shared/design-system/ui/FullPageSurface";
-import { InlineHeader } from "../../shared/design-system/ui/Header";
+import { Header, InlineHeader } from "../../shared/design-system/ui/Header";
 import { IconButton } from "../../shared/design-system/ui/IconButton";
 import { NavigationItem } from "../../shared/design-system/ui/NavigationItem";
-import {
-  PanelHeader,
-  PanelHeaderLabel,
-} from "../../shared/design-system/ui/PanelHeader";
 import { Select } from "../../shared/design-system/ui/Select";
 import styles from "./Usage.module.css";
 import { DailyCostChart, type Series } from "./DailyCostChart";
@@ -469,38 +464,28 @@ export function UsagePage({
     );
 
   return (
-    <div className="h-full min-h-0">
-      <FullPageSurface aria-label="Usage">
-        <div className="flex h-full min-h-0 flex-col">
-          <PanelHeader
-            title={
-              <PanelHeaderLabel
-                title="Usage"
-                icon={<ChartBarIcon size="1rem" />}
-              />
-            }
-            actions={
-              targets.length > 0 && (
-                <IconButton
-                  hint="familiar"
-                  ref={refresh}
-                  size="sm"
-                  variant="ghost"
-                  icon={<ArrowsClockwiseIcon size="1rem" aria-hidden="true" />}
-                  aria-label="Refresh usage"
-                  title="Refresh usage"
-                  loading={loading}
-                  onClick={() => setReload((value) => value + 1)}
-                />
-              )
-            }
-          />
-          <div className={styles.scroll} aria-busy={loading}>
-            {body}
-          </div>
-        </div>
-      </FullPageSurface>
-    </div>
+    <section aria-label="Usage">
+      <Header
+        title="Usage"
+        subtitle="Estimated cost of your agents’ sessions on this computer."
+        actions={
+          targets.length > 0 && (
+            <IconButton
+              hint="familiar"
+              ref={refresh}
+              size="sm"
+              variant="ghost"
+              icon={<ArrowsClockwiseIcon size="1rem" aria-hidden="true" />}
+              aria-label="Refresh usage"
+              title="Refresh usage"
+              loading={loading}
+              onClick={() => setReload((value) => value + 1)}
+            />
+          )
+        }
+      />
+      <div aria-busy={loading}>{body}</div>
+    </section>
   );
 }
 

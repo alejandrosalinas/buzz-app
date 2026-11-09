@@ -374,7 +374,9 @@ test("relay-backed GIF tab searches KLIPY and inserts URL-only media", async ({
   await gifTab.click();
   await expect(search).toBeFocused();
   await expect(search).toHaveValue("celebrate");
-  await page.locator("main").click({ position: { x: 24, y: 4 } });
+  await page
+    .getByRole("textbox", { name: "Message #Alpha", exact: true })
+    .click();
   await expect(picker).toHaveCount(0);
   await emojiTrigger.click();
   await gifTab.click();

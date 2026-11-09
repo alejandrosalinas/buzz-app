@@ -708,7 +708,7 @@ it("opens removed Messages settings links at Appearance without adding a navigat
   expect(screen.queryByRole("button", { name: "Messages" })).toBeNull();
 });
 
-it("keeps a return path for addressed plugin settings and retires it on Close", async () => {
+it("keeps a return path for addressed plugin settings through Back and Forward", async () => {
   vi.stubGlobal(
     "ResizeObserver",
     class {
@@ -759,6 +759,45 @@ it("keeps a return path for addressed plugin settings and retires it on Close", 
   expect(
     await screen.findByRole("complementary", { name: "Pair mobile details" }),
   ).toBeVisible();
+});
+
+it("retires every visit to addressed plugin settings on Close", async () => {
+  vi.stubGlobal(
+    "ResizeObserver",
+    class {
+      observe() {}
+      unobserve() {}
+      disconnect() {}
+    },
+  );
+  activation.release();
+  const current = createServices();
+  services = current;
+  render(<App services={current} />);
+  await waitFor(() =>
+    expect(current.navigation.snapshot().status).not.toBe("pending"),
+  );
+  const target = {
+    version: 1,
+    kind: "settings",
+    section: "plugins",
+    pluginId: "buzz.pairing",
+    scope: null,
+  } as const;
+  const list = {
+    version: 1,
+    kind: "settings",
+    section: "plugins",
+    scope: null,
+  } as const;
+  void current.navigation.open(list);
+  await screen.findByRole("dialog", { name: "Settings" });
+  await waitFor(() =>
+    expect(current.navigation.snapshot().status).toBe("opened"),
+  );
+  // An earlier details visit stays behind Appearance; Close must retire it too.
+  void current.navigation.open(target);
+  await screen.findByRole("complementary", { name: "Pair mobile details" });
   const appearance = { ...list, section: "appearance" };
   void current.navigation.open(appearance);
   await waitFor(() =>

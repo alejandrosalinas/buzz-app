@@ -93,10 +93,33 @@ pub(crate) struct Fixture {
     pub(crate) agent: AppAgent,
     pub(crate) key: Secret,
 }
+/// Tokens over `identity`, whose fixture community advertises NIP-FI.
+pub(crate) fn requiring(identity: FederatedIdentity, grants: Arc<MemoryGrants>) -> AgentTokens {
+    let advertised = identity
+        .0
+        .discoveries
+        .lock()
+        .unwrap()
+        .contains_key("wss://relay.example");
+    if !advertised {
+        identity.discovered("wss://relay.example", true);
+    }
+    AgentTokens::with_store(identity, grants)
+}
 /// An owner signed in as `a@example.com` at `base`, and one agent.
 pub(crate) fn fixture(base: String) -> Fixture {
+    fixture_at(base, "relay.example")
+}
+/// `fixture`, with the organization's community, and the agent, at `community`.
+pub(crate) fn fixture_at(base: String, community: &str) -> Fixture {
     let session_store = Arc::new(Memory::default());
-    let identity = at_adapter(session_store.clone(), base);
+    let mut identity = at_adapter(session_store.clone(), base);
+    Arc::get_mut(&mut identity.0)
+        .unwrap()
+        .config
+        .as_mut()
+        .unwrap()
+        .community_hosts = vec![community.into()];
     let mut session = record();
     Arc::get_mut(&mut session).unwrap().record.email = Some("a@example.com".into());
     {
@@ -105,11 +128,12 @@ pub(crate) fn fixture(base: String) -> Fixture {
         state.session = Some(session);
         state.account = Some(Some("a@example.com".into()));
     }
+    identity.discovered(&format!("wss://{community}"), true);
     let grants = Arc::new(MemoryGrants::default());
     let key = Secret::generate().unwrap();
     let agent = AppAgent {
         pubkey: key.pubkey().into(),
-        relay: "wss://relay.example".into(),
+        relay: format!("wss://{community}"),
         owner: "b".repeat(64),
         auth: r#"["auth","owner","conditions","sig"]"#.into(),
         agent_type: "p/t".into(),
@@ -125,7 +149,7 @@ pub(crate) fn fixture(base: String) -> Fixture {
         protection_revision: 0,
     };
     Fixture {
-        tokens: AgentTokens::with_store(identity, grants.clone()),
+        tokens: requiring(identity, grants.clone()),
         grants,
         session_store,
         agent,
@@ -607,7 +631,7 @@ async fn sign_out_then_sign_in_before_the_watcher_runs_retires_cached_and_stored
         .is_some());
 
     // The watcher would only see `Refreshed`: the sign-out was overwritten.
-    f.tokens.0.identity.sign_out().await;
+    f.tokens.0.identity.sign_out(None).await;
     signed_in_again(&f, "a@example.com");
     assert_eq!(
         f.tokens.0.identity.account_changes().borrow().clone(),
@@ -716,7 +740,7 @@ async fn a_mint_in_flight_across_sign_out_is_neither_returned_nor_cached() {
         tokio::spawn(async move { f.tokens.evidence(&f.agent, &f.key, 0).await })
     };
     bounded(held).await.unwrap();
-    f.tokens.0.identity.sign_out().await;
+    f.tokens.0.identity.sign_out(None).await;
     release.send(()).unwrap();
     assert_eq!(call.await.unwrap().err().as_deref(), Some(CHANGED));
     assert!(f
@@ -740,7 +764,7 @@ async fn an_enrollment_committing_after_sign_out_stores_nothing() {
     let f = fixture("http://unused".into());
     listing(&f);
     let retirements = f.tokens.admit().await.unwrap();
-    f.tokens.0.identity.sign_out().await;
+    f.tokens.0.identity.sign_out(None).await;
     let grant = Grant::new(
         f.agent.owner.clone(),
         f.agent.pubkey.clone(),
@@ -951,7 +975,7 @@ fn restarted(f: &Fixture, base: String) -> AgentTokens {
         state.session = None;
         state.account = None;
     }
-    let tokens = AgentTokens::with_store(fresh.tokens.0.identity.clone(), f.grants.clone());
+    let tokens = requiring(fresh.tokens.0.identity.clone(), f.grants.clone());
     let listed = (f.agent.owner.clone(), f.agent.pubkey.clone());
     let _ = tokens
         .0
@@ -961,13 +985,30 @@ fn restarted(f: &Fixture, base: String) -> AgentTokens {
 }
 
 #[tokio::test]
+async fn an_organization_sign_out_revokes_its_session_at_the_server() {
+    use crate::federated_identity::tests::{logout_request, revoked};
+    let logout = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let identity = crate::federated_identity::testing::signed_in_at(format!(
+        "http://{}",
+        logout.local_addr().unwrap()
+    ));
+    let tokens = AgentTokens::with_store(identity.clone(), Arc::new(MemoryGrants::default()));
+    let _ = tokens.0.agents.set(Arc::new(|| Ok(Vec::new())));
+    let snapshot = tokens.sign_out(None).await.unwrap();
+    assert!(snapshot.status == crate::federated_identity::Status::SignedOut);
+    let (credential, _) = logout_request(&logout).await;
+    assert_eq!(credential, "fixture-session-token");
+    assert_eq!(bounded(revoked(&identity)).await, 1);
+}
+
+#[tokio::test]
 async fn an_organization_sign_out_whose_grant_deletion_fails_resumes_it_after_restart() {
     let (base, served) = issuer(vec![]).await;
     let f = fixture(base.clone());
     listing(&f);
     stored(&f, "a@example.com");
     f.grants.failing(true);
-    assert!(f.tokens.sign_out().await.is_err());
+    assert!(f.tokens.sign_out(None).await.is_err());
 
     // Restarted before the cleanup finished: the grant is neither used nor
     // restored while it cannot be deleted.
@@ -1026,7 +1067,7 @@ async fn a_grant_write_past_its_check_does_not_survive_a_concurrent_sign_out() {
     *f.tokens.0.contended.lock().unwrap() = Some(contended_tx);
     let sign_out = {
         let f = f.clone();
-        tokio::spawn(async move { f.tokens.sign_out().await })
+        tokio::spawn(async move { f.tokens.sign_out(None).await })
     };
     // Sign-out drops the sender unsignalled if it never waits.
     let waited = bounded(tokio::task::spawn_blocking(move || {
@@ -1237,7 +1278,7 @@ async fn retirement_survives_a_crash_after_session_persistence_before_the_watche
             *raw = Some(Zeroizing::new(serde_json::to_vec(&record).unwrap()));
         }
         let identity = at_adapter(f.session_store.clone(), base);
-        let tokens = AgentTokens::with_store(identity.clone(), f.grants.clone());
+        let tokens = requiring(identity.clone(), f.grants.clone());
         let fresh = Fixture { tokens, ..f };
         listing(&fresh);
         identity.restore().await;
@@ -1292,15 +1333,18 @@ async fn an_abandoned_switch_withdraws_only_its_own_retirement() {
         let identity = &f.tokens.0.identity;
         let revision = identity.snapshot().revision;
         let cancel = identity.state().cancellation.child_token();
-        // A is live but its record isn't the stored one, so B's save fails
-        // after preparation marked A's grants for retirement.
+        // Storage refuses B's save after preparation marked A's grants for
+        // retirement.
+        f.session_store
+            .denied
+            .store(true, std::sync::atomic::Ordering::SeqCst);
         assert_eq!(
             identity
                 .finish_login("code", "secret", &revision, &cancel)
                 .await
                 .unwrap_err()
                 .code,
-            "session-changed"
+            "storage-denied"
         );
         assert!(f.session_store.raw.lock().unwrap().is_none());
         assert_eq!(f.grants.pending(&f.tokens.retiring_key()).unwrap(), already);
@@ -1387,7 +1431,7 @@ async fn an_interrupted_account_wipe_records_retirement_before_its_first_delete(
     *f.grants.4.lock().unwrap() = None;
     // A fresh process sees the marker even before restoring B's session.
     let identity = at_adapter(Arc::new(Memory::default()), base);
-    let tokens = AgentTokens::with_store(identity, f.grants.clone());
+    let tokens = requiring(identity, f.grants.clone());
     tokens
         .0
         .agents
@@ -1411,7 +1455,7 @@ async fn sign_out_does_not_hold_the_wipe_lock_while_waiting_for_session_persiste
     let mut changes = identity.account_changes();
     let operation = identity.0.operation.lock().await;
     let tokens = f.tokens.clone();
-    let signing_out = tokio::spawn(async move { tokens.sign_out().await });
+    let signing_out = tokio::spawn(async move { tokens.sign_out(None).await });
     bounded(changes.changed()).await.unwrap();
     let wipe_available = f.tokens.0.wiping.try_lock().is_ok();
     drop(operation);
@@ -1459,7 +1503,7 @@ async fn terminal_refusals_survive_a_reload_of_the_same_persisted_session() {
         assert!(f.tokens.evidence(&f.agent, &f.key, 0).await.is_err());
         // Recreate both native owners and reload the actual serialized session.
         let identity = at_adapter(f.session_store.clone(), base);
-        let tokens = AgentTokens::with_store(identity.clone(), f.grants.clone());
+        let tokens = requiring(identity.clone(), f.grants.clone());
         let fresh = Fixture { tokens, ..f };
         listing(&fresh);
         identity.restore().await;
@@ -1490,7 +1534,7 @@ async fn an_agent_request_is_not_sent_without_a_durable_reservation() {
         .await
         .unwrap_err()
         .contains("storage"));
-    let tokens = AgentTokens::with_store(f.tokens.0.identity.clone(), f.grants.clone());
+    let tokens = requiring(f.tokens.0.identity.clone(), f.grants.clone());
     assert!(tokens
         .evidence(&f.agent, &f.key, 0)
         .await
@@ -1539,7 +1583,7 @@ async fn failure_to_release_a_transient_reservation_keeps_the_agent_stopped_afte
     let (result, ()) = tokio::join!(f.tokens.evidence(&f.agent, &f.key, 0), failing_storage);
     assert!(result.unwrap_err().contains("storage"));
     let identity = at_adapter(f.session_store.clone(), base);
-    let tokens = AgentTokens::with_store(identity.clone(), f.grants.clone());
+    let tokens = requiring(identity.clone(), f.grants.clone());
     let fresh = Fixture { tokens, ..f };
     listing(&fresh);
     identity.restore().await;
@@ -1626,7 +1670,7 @@ async fn an_empty_account_scan_cannot_turn_a_late_reservation_into_an_old_accoun
         *raw = Some(Zeroizing::new(serde_json::to_vec(&record).unwrap()));
     }
     let identity = at_adapter(f.session_store.clone(), base);
-    let tokens = AgentTokens::with_store(identity.clone(), f.grants.clone());
+    let tokens = requiring(identity.clone(), f.grants.clone());
     let fresh = Fixture { tokens, ..f };
     listing(&fresh);
     identity.restore().await;
@@ -1658,7 +1702,7 @@ pub(crate) async fn response_fixture() -> Fixture {
         state.session = f.tokens.0.identity.state().session.clone();
         state.account = Some(Some("a@example.com".into()));
     }
-    f.tokens = AgentTokens::with_store(identity, f.grants.clone());
+    f.tokens = requiring(identity, f.grants.clone());
     listing(&f);
     f.tokens
         .authorize(&f.agent, &f.key, Stamp::default())
@@ -1688,7 +1732,7 @@ async fn response_admission_fences_explicit_retirement_but_not_elapsed_ttl_or_se
             reached.await.unwrap();
             match change {
                 "sign-out" => {
-                    f.tokens.sign_out().await.unwrap();
+                    f.tokens.sign_out(None).await.unwrap();
                 }
                 "account" => signed_in_again(&f, "b@example.com"),
                 "delete" => {
@@ -1747,7 +1791,7 @@ async fn a_transmitted_agent_write_is_uncertain_after_retirement_and_never_repla
     });
     let retire = async {
         reached.await.unwrap();
-        f.tokens.sign_out().await.unwrap();
+        f.tokens.sign_out(None).await.unwrap();
         release.send(()).unwrap();
     };
     let (result, ()) = tokio::join!(write, retire);
@@ -1779,7 +1823,7 @@ async fn local_commit_keeps_its_retirement_guard_until_the_write_finishes() {
         .await
         .unwrap();
     let tokens = f.tokens.clone();
-    let signing_out = tokio::spawn(async move { tokens.sign_out().await });
+    let signing_out = tokio::spawn(async move { tokens.sign_out(None).await });
     // This existing fixture signal proves sign-out reached the held lock;
     // it cannot record retirement in the middle of the local write.
     bounded(tokio::task::spawn_blocking(move || waiting.recv().unwrap()))
@@ -1836,4 +1880,276 @@ async fn removing_one_row_keeps_another_rows_admission_and_the_shared_durable_gr
         .await
         .unwrap();
     assert!(survivor.commit(false, || Ok(())).is_err());
+}
+
+#[tokio::test]
+async fn a_covered_community_without_nip_fi_runs_agent_operations_tokenless_while_signed_out() {
+    let f = fixture("http://unused".into());
+    let identity = at_adapter(Arc::new(Memory::default()), "http://unused".into());
+    identity.discovered("wss://relay.example", false);
+    let tokens = AgentTokens::with_store(identity, f.grants.clone());
+    let admission = tokens
+        .authorize(&f.agent, &f.key, Stamp::default())
+        .await
+        .unwrap();
+    assert!(admission.header().is_none());
+    assert_eq!(admission.run(true, async { Ok(7) }).await.unwrap(), 7);
+    // Undiscoverable: nothing is sent, not even without a token.
+    let identity = at_adapter(Arc::new(Memory::default()), "http://unused".into());
+    let tokens = AgentTokens::with_store(identity, f.grants.clone());
+    assert!(tokens
+        .authorize(&f.agent, &f.key, Stamp::default())
+        .await
+        .is_err());
+}
+
+#[tokio::test]
+async fn each_agent_enrolls_with_the_server_its_community_routes_to() {
+    let template = fixture("http://unused".into());
+    let home = template.agent.clone();
+    let peer_key = Secret::generate().unwrap();
+    let peer_agent = AppAgent {
+        pubkey: peer_key.pubkey().into(),
+        relay: "wss://peer.example".into(),
+        ..home.clone()
+    };
+    // Each server has its own session token, account, grant and issuer.
+    let peer_enrolled = {
+        let mut reply = enrolled(&home.owner);
+        reply["access_token"] = "peer-grant".into();
+        reply["nip_fi_issuer"] = "https://peer-issuer.example".into();
+        reply
+    };
+    let (base, served) = issuer(vec![
+        (200, enrolled(&home.owner)),
+        (200, issued(&home, serde_json::json!({}))),
+    ])
+    .await;
+    let (peer_base, peer_served) = issuer(vec![
+        (200, peer_enrolled),
+        (
+            200,
+            issued(
+                &peer_agent,
+                serde_json::json!({ "aud": "https://peer.example", "iss": "https://peer-issuer.example" }),
+            ),
+        ),
+    ])
+    .await;
+    let signed_in = |identity: &FederatedIdentity, token: &str, email: &str| {
+        let mut session = record();
+        let record = &mut Arc::get_mut(&mut session).unwrap().record;
+        record.email = Some(email.into());
+        record.session_token = token.into();
+        let mut state = identity.state();
+        state.session = Some(session);
+        state.account = Some(Some(email.into()));
+    };
+    let mut config = super::super::config::Config::parse(r#"{"version":1,"id":"peer","identityOrigin":"https://peer-identity.example","adapterBase":"https://peer-identity.example","apiBasePath":"/api/","communityHosts":["peer.example"]}"#).unwrap();
+    config.adapter_base = peer_base;
+    let peer = FederatedIdentity::with_store(
+        Some(config),
+        "fingerprint".into(),
+        "peer-account".into(),
+        Arc::new(Memory::default()),
+    );
+    let mut first = at_adapter(Arc::new(Memory::default()), base);
+    Arc::get_mut(&mut first.0).unwrap().peers = vec![peer.clone()];
+    signed_in(&first, "first-session", "a@example.com");
+    signed_in(&peer, "peer-session", "p@example.com");
+    first.discovered(&home.relay, true);
+    peer.discovered(&peer_agent.relay, true);
+    let tokens = AgentTokens::with_store(first.clone(), template.grants.clone());
+    tokens.watch({
+        let listed = vec![
+            (home.owner.clone(), home.pubkey.clone()),
+            (home.owner.clone(), peer_agent.pubkey.clone()),
+        ];
+        move || Ok(listed.clone())
+    });
+    for (agent, key) in [(&home, &template.key), (&peer_agent, &peer_key)] {
+        let evidence = tokens.evidence(agent, key, 0).await.unwrap().unwrap();
+        assert!(evidence.starts_with("Bearer "));
+    }
+    // Each enrollment spends its own server's session; each mint its own grant.
+    for (seen, session, grant) in [
+        (settled(served).await, "first-session", "grant-1"),
+        (settled(peer_served).await, "peer-session", "peer-grant"),
+    ] {
+        assert_eq!(seen.len(), 2);
+        let form: HashMap<String, String> = url::form_urlencoded::parse(&seen[0].body)
+            .into_owned()
+            .collect();
+        assert_eq!(form["subject_token"], session);
+        assert!(seen[1]
+            .headers
+            .iter()
+            .any(|(name, value)| name == "authorization" && *value == format!("Bearer {grant}")));
+    }
+    // The first server's grants keep the key they had as the only server.
+    let first_key = super::super::store::agent_grant_key("account", &home.owner, &home.pubkey);
+    assert_eq!(first_key, first.agent_grant_key(&home.owner, &home.pubkey));
+    let peer_grant_key = peer.agent_grant_key(&home.owner, &peer_agent.pubkey);
+    let stored = |key: &str| template.grants.read(key).unwrap();
+    assert_eq!(stored(&first_key).unwrap().token, "grant-1");
+    assert_eq!(stored(&peer_grant_key).unwrap().token, "peer-grant");
+    assert!(stored(&first.agent_grant_key(&home.owner, &peer_agent.pubkey)).is_none());
+    assert!(stored(&peer.agent_grant_key(&home.owner, &home.pubkey)).is_none());
+
+    // Signing out of the peer retires only its grant.
+    tokens
+        .for_server(&peer)
+        .unwrap()
+        .sign_out(None)
+        .await
+        .unwrap();
+    assert!(stored(&peer_grant_key).is_none());
+    assert!(stored(&first_key).is_some());
+    // Deleting an agent removes its grant from every server.
+    let peer_home_key = peer.agent_grant_key(&home.owner, &home.pubkey);
+    template
+        .grants
+        .write(&peer_home_key, &stored(&first_key).unwrap())
+        .unwrap();
+    tokens.forget(&home.owner, &home.pubkey).await.unwrap();
+    assert!(stored(&first_key).is_none());
+    assert!(stored(&peer_home_key).is_none());
+}
+
+#[tokio::test]
+async fn a_revision_fenced_sign_out_leaves_a_newer_session_and_its_grants() {
+    let (base, _served) = issuer(vec![]).await;
+    let f = fixture(base);
+    listing(&f);
+    stored(&f, "b@example.com");
+    let rejected = f.tokens.0.identity.snapshot().revision;
+    // A renewal installs B before the fenced sign-out retires anything.
+    signed_in_again(&f, "b@example.com");
+    {
+        let mut state = f.tokens.0.identity.state();
+        state.snapshot.status = crate::federated_identity::Status::SignedIn;
+        state.snapshot.revision = uuid::Uuid::new_v4().to_string();
+    }
+    let newer = f.tokens.0.identity.snapshot();
+    assert_ne!(newer.revision, rejected);
+    // With the retirement marker unwritable, the stale sign-out still never
+    // touches it: no retirement is left for recovery or a restart to act on.
+    f.grants.fail_pending(true);
+    let snapshot = f.tokens.sign_out(Some(&rejected)).await.unwrap();
+    f.grants.fail_pending(false);
+    assert!(snapshot.status == crate::federated_identity::Status::SignedIn);
+    assert_eq!(snapshot.revision, newer.revision);
+    assert!(!f.grants.pending(&f.tokens.retiring_key()).unwrap());
+    assert!(f
+        .grants
+        .read(&f.tokens.grant_key(&f.agent))
+        .unwrap()
+        .is_some());
+    // The matching revision still signs out.
+    let snapshot = f.tokens.sign_out(Some(&newer.revision)).await.unwrap();
+    assert!(snapshot.status == crate::federated_identity::Status::SignedOut);
+}
+
+#[tokio::test]
+async fn a_builderlab_customer_server_added_later_gets_its_own_tokens() {
+    let first = crate::federated_identity::tests::with_customers(
+        crate::federated_identity::config::Config::parse(
+            crate::federated_identity::config::BUILT_IN,
+        )
+        .unwrap(),
+        Vec::new(),
+        true,
+    );
+    // Added before the tokens exist, and after.
+    let early = first.server_for("wss://buzz.early.builderlab.xyz").unwrap();
+    let tokens = AgentTokens::in_memory(first.clone());
+    tokens.watch(|| Ok(Vec::new()));
+    let late = first.server_for("wss://buzz.late.builderlab.xyz").unwrap();
+    for (server, relay) in [
+        (&early, "wss://buzz.early.builderlab.xyz"),
+        (&late, "wss://buzz.late.builderlab.xyz"),
+    ] {
+        let own = tokens.for_server(server).unwrap();
+        assert!(own.0.identity.is(server));
+        // It follows the owner's account, as compiled servers' tokens do.
+        assert!(own.0.agents.get().is_some());
+        assert!(tokens.server_for(relay).unwrap().0.identity.is(server));
+    }
+    // A community routed by its host alone reaches it too.
+    assert!(tokens
+        .server_for("wss://buzz.third.builderlab.xyz")
+        .unwrap()
+        .0
+        .identity
+        .is(&first.server_for("wss://buzz.third.builderlab.xyz").unwrap()));
+    assert_eq!(tokens.servers().len(), 4);
+}
+
+#[tokio::test]
+async fn deleting_an_agent_retires_its_grant_with_a_customer_no_longer_joined() {
+    use crate::federated_identity::{config, tests::customers_listed_in};
+    let root = tempfile::tempdir().unwrap();
+    let record = root.path().join("first.customers");
+    let launch = || {
+        customers_listed_in(
+            config::Config::parse(config::BUILT_IN).unwrap(),
+            Vec::new(),
+            Some(Some(record.clone())),
+        )
+    };
+    let grants = Arc::new(MemoryGrants::default());
+    let (owner, agent) = ("owner", "agent");
+    // The agent enrolled with a customer whose community was then removed.
+    let customer = launch()
+        .server_for("wss://buzz.gone.builderlab.xyz")
+        .unwrap();
+    let at = customer.agent_grant_key(owner, agent);
+    grants
+        .write(
+            &at,
+            &Grant::new(
+                owner.into(),
+                agent.into(),
+                "a@example.com".into(),
+                "https://gone.builderlab.xyz".into(),
+                "grant".into(),
+            ),
+        )
+        .unwrap();
+    // After a restart, no community routes to it, yet deleting the agent
+    // retires that grant, so importing its key again cannot reuse it.
+    let tokens = AgentTokens::with_store(launch(), grants.clone());
+    tokens.forget(owner, agent).await.unwrap();
+    assert!(grants.read(&at).unwrap().is_none());
+    let again = AgentTokens::with_store(launch(), grants.clone());
+    let server = again
+        .for_server(
+            &again
+                .0
+                .identity
+                .server_for("wss://buzz.gone.builderlab.xyz")
+                .unwrap(),
+        )
+        .unwrap();
+    assert_eq!(server.0.identity.agent_grant_key(owner, agent), at);
+    assert!(grants.read(&at).unwrap().is_none());
+}
+
+#[tokio::test]
+async fn a_server_added_once_the_first_has_a_supplier_follows_the_account() {
+    let first = crate::federated_identity::tests::with_customers(
+        crate::federated_identity::config::Config::parse(
+            crate::federated_identity::config::BUILT_IN,
+        )
+        .unwrap(),
+        Vec::new(),
+        true,
+    );
+    let tokens = AgentTokens::in_memory(first.clone());
+    // `watch` sets the first server's supplier before listing servers, so one
+    // added in between gets it from `with_stores`; `watch` then offers it again.
+    tokens.follow_account(Arc::new(|| Ok(Vec::new())));
+    let added = first.server_for("wss://buzz.race.builderlab.xyz").unwrap();
+    tokens.watch(|| Ok(Vec::new()));
+    assert!(tokens.for_server(&added).unwrap().0.agents.get().is_some());
 }

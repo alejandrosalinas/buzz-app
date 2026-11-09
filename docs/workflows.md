@@ -31,8 +31,16 @@ See the [capability contract](../src/features/workflows/types.ts).
   the active naming policy. Fallbacks lengthen their suffix to stay distinct across
   visible owners. Visible owners hydrate together in background profile
   batches of up to 500 identities. Narrow rows reflow their artwork, text, and
-  independent controls as text grows. Ownership and management
-  permissions remain tied to the signing identity, including agent-owned workflows.
+  independent controls as text grows. Editing, enabling and running remain tied
+  to the workflow author. A verified owner of an agent can also delete that
+  agent's workflows, signing as themselves;
+  select All channel workflows to find them. This ownership-authorized deletion
+  also works with a Guest channel role. Ownership claims in display metadata
+  do not grant permission, and the relay authorizes every deletion. Losing the
+  verified ownership proof disables deletion in the app; it does not clear the
+  relay's separately recorded agent owner.
+  If permission changes during confirmation, an error explains why deletion
+  could not start; the editor retains its draft.
   Clearing the owner filter or Clear all shows all channel workflows.
   Enabled and Disabled match saved configuration (omitted means enabled), not
   confirmed runtime activity; unreadable configurations are excluded from both.
@@ -246,6 +254,16 @@ and the rendered output. Legacy `p` tags route mentions but do not authorize the
 Workflows created and maintained under an owned agent's own key remain owned by
 that agent and can wake agents with the same proven human owner. This does not
 grant an agent permission to edit a workflow owned by a different signing identity.
+
+Builds can withhold this delegation per community. In communities listed by
+`BUZZ_WORKFLOW_RESTRICTED_COMMUNITIES`, no message carrying a `buzz:workflow` tag
+authorizes a local agent request, whatever its signer, owner or mention tags, in
+bundled or plugin harnesses. Workflow messages there stay visible but do not start
+or steer local Claude, Codex, Goose or Pi agents, including for owner-created
+static templates and scheduled workflows. Each build lists its own restricted
+communities; communities it does not list keep the delegation above. The restriction
+does not prevent workflow output from influencing a later authorized turn. See
+[configuration](configuration.md#workflow-restriction-community-flag).
 
 Cached-only startup intentionally shows the actual signer until a live connection
 establishes explicit relay authority. Saved operator-contact `relayAuthor` is not

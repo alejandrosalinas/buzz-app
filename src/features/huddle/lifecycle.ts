@@ -8,6 +8,8 @@ export function huddleParent(description: string | undefined) {
   const parent = description.slice(prefix.length);
   return uuid.test(parent) ? parent : undefined;
 }
+export const isHuddleRoom = (description: string | undefined) =>
+  huddleParent(description) !== undefined;
 export function huddleRoom(event: Pick<EventData, "content">) {
   try {
     const id = JSON.parse(event.content)?.ephemeral_channel_id;

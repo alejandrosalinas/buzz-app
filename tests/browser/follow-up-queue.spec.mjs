@@ -60,26 +60,27 @@ test("Solo queues follow-ups, keeps typing intact, and offers Send now", async (
             (Math.min(foreground, background) + 0.05)
           );
         });
-      // Approved queue-only design exception: resting text uses the quiet
-      // control token (about 3.62:1 in light mode), not WCAG AA text contrast.
-      // Keep that exact treatment covered; interactive states must meet 4.5:1.
       await editor.focus();
       await page.mouse.move(0, 0);
-      const quietColor = await button.evaluate((element) => {
-        const probe = document.createElement("span");
-        probe.style.color = "var(--text-quiet-control)";
-        element.append(probe);
-        const color = getComputedStyle(probe).color;
-        probe.remove();
-        return color;
-      });
-      await expect(button).toHaveCSS("color", quietColor);
+      await expect(
+        queue.getByRole("button", { name: "Remove queued message" }),
+      ).toHaveCSS("opacity", "1");
+      await expect(
+        queue.getByRole("button", { name: "Remove queued message" }),
+      ).toHaveCSS("pointer-events", "auto");
+      await expect(button.locator("svg")).toBeVisible();
+      await expect(button).toHaveAttribute("data-icon-shape", "round");
+      await expect.poll(contrast).toBeGreaterThanOrEqual(4.5);
       await button.hover();
       await expect.poll(contrast).toBeGreaterThanOrEqual(4.5);
       await page.mouse.move(0, 0);
       await queue
         .getByRole("button", { name: "Remove queued message" })
         .focus();
+      await page.keyboard.press("Tab");
+      await expect(
+        queue.getByRole("button", { name: "Edit queued message" }),
+      ).toBeFocused();
       await page.keyboard.press("Tab");
       await expect(button).toBeFocused();
       await expect.poll(contrast).toBeGreaterThanOrEqual(4.5);
@@ -99,6 +100,37 @@ test("Solo queues follow-ups, keeps typing intact, and offers Send now", async (
         .boundingBox();
       expect(trashBox.x + trashBox.width).toBeLessThan(box.x);
       expect(trashBox.height).toBe(box.height);
+      expect(trashBox.width).toBe(box.width);
+      await expect(button).toHaveAttribute("data-icon-size", "xs");
+      const rowBox = await queue.getByRole("listitem").boundingBox();
+      const menuBox = await queue
+        .getByRole("button", { name: "Edit queued message" })
+        .boundingBox();
+      expect(menuBox.x + menuBox.width).toBeLessThan(box.x);
+      const endBox = box;
+      const composerSend = page.getByRole("button", {
+        name: "Send message",
+        exact: true,
+      });
+      const composerSendBox = await composerSend.boundingBox();
+      expect(composerSendBox.width).toBe(composerSendBox.height);
+      const radius = await queue
+        .getByRole("listitem")
+        .evaluate((row) =>
+          Number.parseFloat(getComputedStyle(row).borderTopRightRadius),
+        );
+      expect(
+        Math.abs(
+          rowBox.x + rowBox.width - radius - endBox.x - endBox.width / 2,
+        ),
+      ).toBeLessThan(0.5);
+      expect(
+        Math.abs(rowBox.y + radius - endBox.y - endBox.height / 2),
+      ).toBeLessThan(0.5);
+      expect(rowBox.x).toBeGreaterThan(queueBox.x);
+      expect(
+        Math.abs(rowBox.x + rowBox.width - queueBox.x - queueBox.width),
+      ).toBeLessThan(1);
       await page.screenshot({
         path: testInfo.outputPath(`queue-${colorScheme}-${width}.png`),
       });
@@ -200,6 +232,49 @@ async function startWorkingAgent(page, app) {
   );
   return { editor, first };
 }
+
+// Browser-only: native button-to-editor focus and persisted edits through the real composer.
+test("queued message actions edit text without changing the current draft", async ({
+  page,
+  app,
+}, testInfo) => {
+  const { editor } = await startWorkingAgent(page, app);
+  await page.keyboard.insertText("Original queued text");
+  await editor.press("Enter");
+  const queue = page.getByRole("region", { name: "Queued follow-ups" });
+  await expect(queue).toContainText("Original queued text");
+  await editor.fill("Keep my current draft");
+  await queue.getByRole("button", { name: "Edit queued message" }).click();
+  await page.screenshot({ path: testInfo.outputPath("queue-actions.png") });
+  const edit = page.getByRole("textbox", {
+    name: "Edit message",
+    exact: true,
+  });
+  await expect(edit).toBeFocused();
+  await expect(page.getByRole("textbox")).toHaveCount(1);
+  await expect(
+    page.getByText("Editing message", { exact: true }),
+  ).toBeVisible();
+  await edit.fill("");
+  await page.getByRole("button", { name: "Save changes", exact: true }).click();
+  await expect(page.getByRole("alert")).toContainText("Enter a message");
+  await edit.fill("Updated queued text");
+  await page.screenshot({ path: testInfo.outputPath("queue-editor.png") });
+  await page.getByRole("button", { name: "Save changes", exact: true }).click();
+  await expect(edit).toHaveCount(0);
+  await expect(queue).toContainText("Updated queued text");
+  await expect(editor).toContainText("Keep my current draft");
+  await queue.getByRole("button", { name: "Edit queued message" }).click();
+  await edit.fill("Discard this edit");
+  await page.getByRole("button", { name: "Cancel edit", exact: true }).click();
+  await expect(queue).toContainText("Updated queued text");
+  await queue.getByRole("button", { name: "Send", exact: true }).click();
+  await expect(queue).toHaveCount(0);
+  await expect(
+    page.getByText("Updated queued text", { exact: true }),
+  ).toBeVisible();
+  await expect(editor).toContainText("Keep my current draft");
+});
 
 // Browser-only: pointer modality, computed visibility and native focus handoff.
 test("queue focus survives preview release and pointer removal", async ({

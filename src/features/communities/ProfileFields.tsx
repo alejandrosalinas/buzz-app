@@ -50,7 +50,12 @@ export function ProfileFields({
   nameRef?: Ref<HTMLInputElement>;
   /** A relay-verified name replaces the editable display name. */
   verifiedName?:
-    | { name: string; issuerLabel: string; status: VerifiedProfile["status"] }
+    | {
+        name: string;
+        username?: string;
+        issuerLabel: string;
+        status: VerifiedProfile["status"];
+      }
     | undefined;
 }) {
   // A simplified form must still let people repair an invalid saved description.
@@ -74,15 +79,23 @@ export function ProfileFields({
         label="Display name"
         description={
           verifiedName
-            ? verifiedName.status === "checked"
-              ? `Name verified by ${verifiedName.issuerLabel}`
-              : `Cached verification from ${verifiedName.issuerLabel}`
+            ? `${
+                verifiedName.status === "checked"
+                  ? `Name verified by ${verifiedName.issuerLabel}`
+                  : `Cached verification from ${verifiedName.issuerLabel}`
+              }${
+                verifiedName.username &&
+                verifiedName.username !== verifiedName.name
+                  ? ` · @${verifiedName.username}`
+                  : ""
+              }`
             : undefined
         }
       >
         <Input
           ref={nameRef}
           autoComplete="nickname"
+          spellCheck={false}
           autoFocus={autoFocus}
           required
           disabled={disabled}

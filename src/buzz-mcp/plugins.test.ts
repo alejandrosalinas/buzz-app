@@ -11,7 +11,7 @@ const call = (
   args = {},
   context: Context = {},
 ) => callSessionTool(client, context, name, args);
-const BROWSER = "https://github.com/squareup/buzz-plugin-browser";
+const BROWSER = "https://github.com/example-org/buzz-plugin-browser";
 
 describe("plugin tools", () => {
   it("load on search", () => {

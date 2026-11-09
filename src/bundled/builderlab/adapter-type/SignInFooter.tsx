@@ -1,11 +1,9 @@
 import {
   useContext,
-  useEffect,
   useLayoutEffect,
   useMemo,
   useRef,
   useId,
-  useState,
   useSyncExternalStore,
   type CSSProperties,
   type ReactNode,
@@ -19,19 +17,24 @@ import {
 import { AgentSaveFooter } from "../../../features/agents/AgentSaveButton";
 import { Button } from "../../../shared/design-system/ui/Button";
 import { Header } from "../../../shared/design-system/ui/Header";
-import { browserLoginAvailable, oauthTarget } from "../oauth/browser";
-import { nativeBuilderlab, type BuilderlabSession } from "../session";
+import { oauthTarget } from "../oauth/browser";
+import { brokerBuilderlab } from "../dev-session";
+import type { BuilderlabSession } from "../session";
 
-/** Account status replaces profile actions; the pane footer owns sign-in. */
+/** Profile edits need an account; messaging uses the owner's relay connection. */
 export function createProfileActions(session: BuilderlabSession) {
-  return function ProfileActions({ children }: { children: ReactNode }) {
+  return function ProfileActions({
+    children,
+    onUnavailable,
+  }: {
+    children: ReactNode;
+    onUnavailable?: () => void;
+  }) {
     const login = useSyncExternalStore(session.subscribe, session.snapshot);
-    if (login.status === "signed-in") return children;
-    return (
-      <span className="inline-flex items-center rounded-full bg-panel px-3 py-1 text-body-sm text-secondary">
-        Signed out of Builderlab
-      </span>
-    );
+    useLayoutEffect(() => {
+      if (login.status !== "signed-in") onUnavailable?.();
+    }, [login.status, onUnavailable]);
+    return login.status === "signed-in" ? children : null;
   };
 }
 
@@ -98,11 +101,13 @@ export function SettingsErrorSheet({
   message,
   action,
   accessRequired = false,
+  announce = "alert",
 }: {
   active: boolean;
   title: string;
   message: string;
   accessRequired?: boolean;
+  announce?: "alert" | "status";
   action: {
     label: string;
     disabled?: boolean;
@@ -120,7 +125,7 @@ export function SettingsErrorSheet({
         key={title}
         title={title}
         accessRequired={accessRequired}
-        description={<span role="alert">{message}</span>}
+        description={<span role={announce}>{message}</span>}
       >
         <Button
           variant="prominent"
@@ -143,7 +148,7 @@ export function SettingsErrorSheet({
         </Button>
       </AccountSheet>
     ),
-    [title, message, label, disabled, href, accessRequired],
+    [title, message, label, disabled, href, accessRequired, announce],
   );
   useLayoutEffect(() => {
     if (!report || !active) return;
@@ -159,12 +164,16 @@ export function AccountRecoverySheet({
   active,
   email,
   mismatch,
+  detail,
+  onSwitchAccount,
   openIdentity,
 }: {
   session: BuilderlabSession;
   active: boolean;
   email?: string | undefined;
   mismatch: boolean;
+  detail?: string | undefined;
+  onSwitchAccount?: () => void;
   openIdentity?: (() => void) | undefined;
 }) {
   return (
@@ -172,87 +181,31 @@ export function AccountRecoverySheet({
       active={active}
       accessRequired
       title={
-        mismatch ? "Different account needed" : "Builderlab access unavailable"
+        mismatch ? "Different account needed" : "Try another Builderlab account"
       }
       message={
         mismatch
           ? email
             ? `Sign in as ${email} to edit this agent.`
             : "Sign in with another Builderlab account to edit this agent."
-          : "This account can’t access Builderlab agents."
+          : (detail ?? "This account can’t access Builderlab agents.")
       }
       action={{
-        label: nativeBuilderlab()
-          ? "Identity → Organization sign-in"
-          : "Use another account",
-        disabled: nativeBuilderlab() && !openIdentity,
+        label: brokerBuilderlab()
+          ? "Use another account"
+          : "Identity → Organization sign-in",
+        disabled: !brokerBuilderlab() && !openIdentity,
         href:
-          active && !nativeBuilderlab()
+          active && brokerBuilderlab()
             ? new URL("/logout", oauthTarget()).href
             : undefined,
-        run: () => (nativeBuilderlab() ? openIdentity?.() : session.signOut()),
+        run: () => {
+          if (brokerBuilderlab()) {
+            onSwitchAccount?.();
+            session.signOut();
+          } else openIdentity?.();
+        },
       }}
     />
   );
-}
-
-/** One account prompt for the whole hosted agent, independent of its active tab. */
-export function createSignInFooter(session: BuilderlabSession) {
-  return function SignInFooter() {
-    const login = useSyncExternalStore(session.subscribe, session.snapshot);
-    const [slow, setSlow] = useState(false);
-    useEffect(() => {
-      setSlow(false);
-      if (login.status !== "pending" || login.checking) return;
-      const timer = setTimeout(() => setSlow(true), 3000);
-      return () => clearTimeout(timer);
-    }, [login.status, login.checking]);
-    const pending = login.status === "pending";
-    const waiting = pending && !login.checking && slow;
-    const available = browserLoginAvailable();
-    return (
-      <AnimatePresence>
-        {login.status !== "signed-in" && (
-          <AccountSheet
-            key="sign-in"
-            title="Sign in to Builderlab"
-            description={
-              <span role="status">
-                {login.checking
-                  ? "Checking your Builderlab sign-in…"
-                  : waiting
-                    ? "Finish signing in to Builderlab in your browser, then return to Buzz."
-                    : "Use your Builderlab account to access this agent."}
-              </span>
-            }
-          >
-            {!available && (
-              <p role="status" className="m-0 text-body-sm text-secondary">
-                Open the Buzz desktop app to sign in with Builderlab.
-              </p>
-            )}
-            {login.error && (
-              <p role="alert" className="m-0 text-body-sm text-danger">
-                {login.error}
-              </p>
-            )}
-            <Button
-              variant={waiting ? "outline" : "prominent"}
-              size="lg"
-              loading={pending && !waiting}
-              disabled={(!available && !pending) || (pending && !waiting)}
-              focusableWhenDisabled={pending && !waiting}
-              style={{ width: "100%" }}
-              onClick={() => {
-                if (waiting) session.cancel();
-                else if (!pending) void session.signIn();
-              }}
-            >
-              {waiting ? "Cancel sign-in" : "Sign in to Builderlab"}
-            </Button>
-          </AccountSheet>
-        )}
-      </AnimatePresence>
-    );
-  };
 }

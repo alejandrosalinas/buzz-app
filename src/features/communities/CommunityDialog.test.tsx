@@ -415,9 +415,18 @@ it("keeps join unavailable after native identity hydration, but still saves a lo
   }
 });
 
-it.each(["", "not-a-relay"])(
+const unreadable = "Enter a community address or invite link.";
+const bareCode = "Paste the whole invite link, not only its code.";
+
+it.each([
+  ["", unreadable],
+  ["not a relay", unreadable],
+  ["v2.acTJgVMn-cEaz84r5g7Az40Vz_JB5nAURtFFSq1oUIo", bareCode],
+  // A sentence-ending dot copied with the code still normalizes to it.
+  ["v2.acTJgVMn-cEaz84r5g7Az40Vz_JB5nAURtFFSq1oUIo.", bareCode],
+])(
   "shows inline relay validation for %j without contacting a relay",
-  async (value) => {
+  async (value, message) => {
     const user = userEvent.setup();
     const fetch = vi.fn();
     vi.stubGlobal("fetch", fetch);
@@ -436,18 +445,68 @@ it.each(["", "not-a-relay"])(
       />,
     );
     const input = screen.getByLabelText("Community URL");
-    if (value) await user.type(input, value);
+    if (value) {
+      await user.click(input);
+      await user.paste(value);
+    }
     await user.click(screen.getByRole("button", { name: "Continue" }));
-    expect(await screen.findByRole("alert")).toHaveTextContent(
-      "Enter a wss:// or https:// relay URL",
-    );
+    expect(await screen.findByRole("alert")).toHaveTextContent(message);
     expect(input).toHaveAttribute("aria-invalid", "true");
-    expect(input).toHaveAccessibleDescription(
-      /Enter a wss:\/\/ or https:\/\/ relay URL/,
-    );
+    expect(input).toHaveAccessibleDescription(expect.stringContaining(message));
     expect(fetch).not.toHaveBeenCalled();
     await user.clear(input);
     await user.type(input, "wss://relay.example");
+    expect(screen.queryByRole("alert")).toBeNull();
+  },
+);
+
+it.each([
+  [
+    "an invite link",
+    "https://Relay.Example/invite/v2.abc",
+    "https://relay.example",
+    "v2.abc",
+  ],
+  ["a bare host", "relay.example", "https://relay.example", undefined],
+  // Only a code-length label after `v2.` is refused as a bare invite code.
+  ["a short v2 host", "v2.dev", "https://v2.dev", undefined],
+])(
+  "looks up the community for %s and prefills only an invite link's code",
+  async (_, value, origin, code) => {
+    const user = userEvent.setup();
+    const requests = vi.fn(async (url: string) => {
+      const route = String(url).split("/").at(-1);
+      if (route === "register") return Response.json({ id: "x" });
+      if (route === "info")
+        return Response.json({ name: "Fixture", membershipRequired: false });
+      throw new Error(`Unexpected request: ${url}`);
+    });
+    vi.stubGlobal("fetch", requests);
+    const communities = {
+      snapshot: () => ({
+        status: "ready",
+        relayAvailable: true,
+        profile: { name: "", picture: "" },
+      }),
+    } as unknown as Communities;
+    render(
+      <CommunityDialog
+        communities={communities}
+        mode="join"
+        close={() => {}}
+      />,
+    );
+    await user.click(screen.getByLabelText("Community URL"));
+    await user.paste(value);
+    await user.click(screen.getByRole("button", { name: "Continue" }));
+    // The access step names the canonical origin the lookup went to.
+    expect(await screen.findByText(origin)).toBeVisible();
+    expect(requests).toHaveBeenCalledWith(
+      `/api/relay/${encodeURIComponent(origin)}/info`,
+      expect.anything(),
+    );
+    if (code) expect(screen.getByLabelText("Invite code")).toHaveValue(code);
+    else expect(screen.queryByLabelText("Invite code")).toBeNull();
     expect(screen.queryByRole("alert")).toBeNull();
   },
 );
@@ -501,6 +560,183 @@ it("prefills an invite but requires explicit discovery and claim before membersh
     "This invite code has expired — ask for a new one.",
   );
   expect(communities.joined).not.toHaveBeenCalled();
+});
+
+/** A signed-in account whose server hosts relay.example (`federatedFixture`). */
+async function signedInAccount() {
+  const h = federatedFixture();
+  await h.service.signIn();
+  return h.service;
+}
+
+const pastedInvite = "https://relay.example/invite/v2.abc";
+const openedInvite = { community: "https://relay.example", code: "v2.abc" };
+
+it.each([
+  ["an opened invite", "denied", undefined],
+  // The link's code is claimed on the submission that parses it, before any
+  // render shows it in Invite code.
+  ["a pasted invite link", "denied", pastedInvite],
+  ["a pasted invite link", "new-profile", pastedInvite],
+])(
+  "a signed-in account's consent skips the access step for %s after a %s read: the invite claim confirms the holder's age, with no boxes to tick",
+  async (_, read, pasted) => {
+    const found = {
+      exists: false,
+      existing: {},
+      profile: { name: "", picture: "" },
+    };
+    (read === "denied"
+      ? api.inspectProfile.mockRejectedValueOnce(
+          new Error("Relay read failed (403)"),
+        )
+      : api.inspectProfile.mockResolvedValueOnce(found)
+    ).mockResolvedValueOnce(found);
+    const user = userEvent.setup();
+    const accepted: unknown[] = [];
+    const claimed: unknown[] = [];
+    const requests = vi.fn(async (url: string, init?: RequestInit) => {
+      const route = String(url).split("/").at(-1);
+      if (route === "register") return Response.json({ id: "x" });
+      if (route === "info")
+        return Response.json({
+          name: "Fixture",
+          membershipRequired: true,
+          policy: {
+            version: "v1",
+            terms_markdown: "Terms",
+            age_attestation_required: true,
+          },
+        });
+      if (route === "accept-policy") {
+        accepted.push(JSON.parse(String(init?.body)));
+        return Response.json({ receipt: "receipt-1" });
+      }
+      if (route === "claim") {
+        claimed.push(JSON.parse(String(init?.body)));
+        return Response.json({ status: "joined" });
+      }
+      throw new Error(`Unexpected request: ${url}`);
+    });
+    vi.stubGlobal("fetch", requests);
+    const communities = {
+      snapshot: () => ({
+        status: "ready",
+        relayAvailable: true,
+        profile: { name: "", picture: "" },
+      }),
+    } as unknown as Communities;
+    render(
+      <CommunityDialog
+        communities={communities}
+        federatedIdentity={await signedInAccount()}
+        mode="join"
+        close={() => {}}
+        {...(pasted ? {} : { invite: openedInvite })}
+      />,
+    );
+    if (pasted) {
+      await user.click(screen.getByLabelText("Community URL"));
+      await user.paste(pasted);
+    }
+    await user.click(screen.getByRole("button", { name: "Continue" }));
+    expect(await screen.findByLabelText("Display name")).toBeVisible();
+    expect(screen.queryByRole("checkbox")).toBeNull();
+    expect(screen.queryByLabelText("Invite code")).toBeNull();
+    expect(accepted).toEqual([
+      { code: "v2.abc", policy_version: "v1", age_confirmed: true },
+    ]);
+    expect(claimed).toEqual([{ code: "v2.abc", policy_receipt: "receipt-1" }]);
+  },
+);
+
+it.each([
+  ["an opened invite", undefined],
+  ["a pasted invite link", pastedInvite],
+])(
+  "a signed-in account's refused claim for %s lands on the access step, where another code can be entered",
+  async (_, pasted) => {
+    const user = userEvent.setup();
+    const requests = vi.fn(async (url: string) => {
+      const route = String(url).split("/").at(-1);
+      if (route === "register") return Response.json({ id: "x" });
+      if (route === "info")
+        return Response.json({ name: "Fixture", membershipRequired: true });
+      if (route === "claim")
+        return Response.json({ error: "invite_expired" }, { status: 403 });
+      throw new Error(`Unexpected request: ${url}`);
+    });
+    vi.stubGlobal("fetch", requests);
+    const communities = {
+      snapshot: () => ({
+        status: "ready",
+        relayAvailable: true,
+        profile: { name: "", picture: "" },
+      }),
+    } as unknown as Communities;
+    render(
+      <CommunityDialog
+        communities={communities}
+        federatedIdentity={await signedInAccount()}
+        mode="join"
+        close={() => {}}
+        {...(pasted ? {} : { invite: openedInvite })}
+      />,
+    );
+    if (pasted) {
+      await user.click(screen.getByLabelText("Community URL"));
+      await user.paste(pasted);
+    }
+    await user.click(screen.getByRole("button", { name: "Continue" }));
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      "This invite code has expired — ask for a new one.",
+    );
+    expect(screen.getByLabelText("Invite code")).toHaveValue("v2.abc");
+  },
+);
+
+it("without a signed-in account a relay's policy is still asked on the access step", async () => {
+  const user = userEvent.setup();
+  vi.stubGlobal(
+    "fetch",
+    vi.fn(async (url: string) => {
+      const route = String(url).split("/").at(-1);
+      if (route === "register") return Response.json({ id: "x" });
+      if (route === "info")
+        return Response.json({
+          name: "Fixture",
+          policy: {
+            version: "v1",
+            terms_markdown: "Terms",
+            age_attestation_required: true,
+          },
+        });
+      throw new Error(`Unexpected request: ${url}`);
+    }),
+  );
+  const communities = {
+    snapshot: () => ({
+      status: "ready",
+      relayAvailable: true,
+      profile: { name: "", picture: "" },
+    }),
+  } as unknown as Communities;
+  render(
+    <CommunityDialog
+      communities={communities}
+      federatedIdentity={federatedFixture().service}
+      mode="join"
+      close={() => {}}
+      invite={{ community: "https://relay.example", code: "v2.abc" }}
+    />,
+  );
+  await user.click(screen.getByRole("button", { name: "Continue" }));
+  expect(
+    await screen.findByRole("checkbox", {
+      name: "I confirm that I am at least 18 years old.",
+    }),
+  ).toBeVisible();
+  expect(screen.getByRole("button", { name: "Continue" })).toBeDisabled();
 });
 
 it("renews policy acceptance after an expired receipt instead of replaying it", async () => {
@@ -680,13 +916,22 @@ it("offers federated sign-in when joining refuses for it, then lets Continue run
     "wss://relay.example",
   );
   await user.click(screen.getByRole("button", { name: "Continue" }));
-  const signIn = await screen.findByRole("button", { name: "Sign in" });
+  expect(
+    await screen.findByText(
+      "This community requires builderlab.example sign-in.",
+    ),
+  ).toBeVisible();
+  const signIn = await screen.findByRole("button", {
+    name: "Sign in with builderlab.example",
+  });
   refuse = false;
   const requests = vi.mocked(fetch).mock.calls.length;
   await user.click(signIn);
   expect(h.service.signIn).toHaveBeenCalledOnce();
   await waitFor(() =>
-    expect(screen.queryByRole("button", { name: "Sign in" })).toBeNull(),
+    expect(
+      screen.queryByRole("button", { name: "Sign in with builderlab.example" }),
+    ).toBeNull(),
   );
   // Completing login replays nothing captured before it.
   expect(vi.mocked(fetch).mock.calls.length).toBe(requests);
@@ -748,7 +993,11 @@ it.each(["edit", "close"])(
     const field = screen.getByLabelText("Community URL");
     await user.type(field, "wss://old.example");
     await user.click(screen.getByRole("button", { name: "Continue" }));
-    await user.click(await screen.findByRole("button", { name: "Sign in" }));
+    await user.click(
+      await screen.findByRole("button", {
+        name: "Sign in with builderlab.example",
+      }),
+    );
     if (change === "close") view.unmount();
     else {
       await user.clear(field);
@@ -766,5 +1015,267 @@ it.each(["edit", "close"])(
         ),
       );
     }
+  },
+);
+
+const lookupCommunities = {
+  snapshot: () => ({
+    status: "ready",
+    relayAvailable: true,
+    profile: { name: "Local", picture: "" },
+  }),
+} as unknown as Communities;
+
+/** A host that accepts the request and never answers, until it is abandoned. */
+function silentHost() {
+  const lookups: AbortSignal[] = [];
+  vi.stubGlobal(
+    "fetch",
+    vi.fn(async (url: string, init?: RequestInit) => {
+      const route = String(url).split("/").at(-1);
+      if (route === "register") return Response.json({ id: "x" });
+      if (route === "info")
+        return new Promise<Response>((_, reject) => {
+          const signal = init?.signal as AbortSignal;
+          lookups.push(signal);
+          signal.addEventListener("abort", () => reject(signal.reason));
+        });
+      throw new Error(`Unexpected request: ${url}`);
+    }),
+  );
+  return lookups;
+}
+
+it("lets Cancel, Close and Escape leave a lookup the host never answers", async () => {
+  const lookups = silentHost();
+  const close = vi.fn();
+  const user = userEvent.setup();
+  const view = render(
+    <CommunityDialog
+      communities={lookupCommunities}
+      mode="join"
+      close={close}
+    />,
+  );
+  const field = screen.getByLabelText("Community URL");
+  await user.type(field, "wss://quiet.example");
+  await user.click(screen.getByRole("button", { name: "Continue" }));
+  await waitFor(() => expect(lookups).toHaveLength(1));
+  expect(screen.getByRole("button", { name: "Connecting…" })).toBeDisabled();
+  expect(field).toBeDisabled();
+  expect(screen.getByRole("button", { name: "Close" })).toBeEnabled();
+  await user.click(screen.getByRole("button", { name: "Cancel" }));
+  expect(lookups[0]?.aborted).toBe(true);
+  expect(field).toHaveValue("wss://quiet.example");
+  expect(field).toHaveFocus();
+  expect(field).not.toHaveAttribute("aria-invalid", "true");
+  expect(screen.getByRole("button", { name: "Back" })).toBeEnabled();
+  expect(screen.getByRole("button", { name: "Continue" })).toBeEnabled();
+  expect(close).not.toHaveBeenCalled();
+
+  await user.click(screen.getByRole("button", { name: "Continue" }));
+  await waitFor(() => expect(lookups).toHaveLength(2));
+  await user.keyboard("{Escape}");
+  expect(close).toHaveBeenCalledOnce();
+  expect(lookups[1]?.aborted).toBe(true);
+
+  view.unmount();
+  close.mockClear();
+  render(
+    <CommunityDialog
+      communities={lookupCommunities}
+      mode="join"
+      close={close}
+    />,
+  );
+  await user.type(
+    screen.getByLabelText("Community URL"),
+    "wss://quiet.example",
+  );
+  await user.click(screen.getByRole("button", { name: "Continue" }));
+  await waitFor(() => expect(lookups).toHaveLength(3));
+  await user.click(screen.getByRole("button", { name: "Close" }));
+  expect(close).toHaveBeenCalledOnce();
+  expect(lookups[2]?.aborted).toBe(true);
+});
+
+// jsdom's DOMException is not an Error, so each engine's rejection is built
+// with the name and message the engine gives it.
+it.each([
+  ["Chromium’s timeout", "TimeoutError", "signal timed out"],
+  ["WebKit’s timeout", "AbortError", "Fetch is aborted"],
+  ["an unreachable network", "TypeError", "Failed to fetch"],
+])(
+  "names a host that never answered instead of %s text",
+  async (_, name, message) => {
+    let fail = true;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string) => {
+        const route = String(url).split("/").at(-1);
+        if (route === "register") return Response.json({ id: "x" });
+        if (route === "info" && fail)
+          throw name === "TypeError"
+            ? new TypeError(message)
+            : Object.assign(new Error(message), { name });
+        if (route === "info")
+          return Response.json({ name: "Fixture", membershipRequired: true });
+        throw new Error(`Unexpected request: ${url}`);
+      }),
+    );
+    const user = userEvent.setup();
+    render(
+      <CommunityDialog
+        communities={lookupCommunities}
+        mode="join"
+        close={() => {}}
+      />,
+    );
+    const field = screen.getByLabelText("Community URL");
+    await user.type(field, "wss://quiet.example");
+    await user.click(screen.getByRole("button", { name: "Continue" }));
+    await waitFor(() =>
+      expect(field).toHaveAccessibleDescription(
+        "Couldn’t reach quiet.example. Check the address, or try again.",
+      ),
+    );
+    expect(screen.queryByText(message)).not.toBeInTheDocument();
+    expect(field).toHaveAttribute("aria-invalid", "true");
+    expect(field).toHaveValue("wss://quiet.example");
+    // Continue is the retry.
+    fail = false;
+    await user.click(screen.getByRole("button", { name: "Continue" }));
+    expect(await screen.findByLabelText("Invite code")).toBeVisible();
+  },
+);
+
+it("reads no profile from a host whose late answer arrives after Cancel", async () => {
+  let answer: (() => void) | undefined;
+  vi.stubGlobal(
+    "fetch",
+    vi.fn(async (url: string) => {
+      const route = String(url).split("/").at(-1);
+      if (route === "register") return Response.json({ id: "x" });
+      // A transport that ignores the abort and answers anyway.
+      if (route === "info")
+        return new Promise<Response>((resolve) => {
+          answer = () => resolve(Response.json({ name: "Late" }));
+        });
+      throw new Error(`Unexpected request: ${url}`);
+    }),
+  );
+  const user = userEvent.setup();
+  render(
+    <CommunityDialog
+      communities={lookupCommunities}
+      mode="join"
+      close={() => {}}
+    />,
+  );
+  await user.type(
+    screen.getByLabelText("Community URL"),
+    "wss://quiet.example",
+  );
+  await user.click(screen.getByRole("button", { name: "Continue" }));
+  await waitFor(() => expect(answer).toBeDefined());
+  await user.click(screen.getByRole("button", { name: "Cancel" }));
+  await act(async () => answer?.());
+  expect(api.inspectProfile).not.toHaveBeenCalled();
+  expect(screen.getByRole("button", { name: "Back" })).toBeEnabled();
+});
+
+it("keeps a cancelled lookup's late profile refusal off the corrected address", async () => {
+  vi.stubGlobal(
+    "fetch",
+    vi.fn(async (url: string) => {
+      const route = String(url).split("/").at(-1);
+      if (route === "register") return Response.json({ id: "x" });
+      if (route === "info")
+        return Response.json(
+          String(url).includes("closed.example")
+            ? { name: "Closed", membershipRequired: true }
+            : { name: "Open" },
+        );
+      throw new Error(`Unexpected request: ${url}`);
+    }),
+  );
+  const refusals: Array<(reason: unknown) => void> = [];
+  const held = () =>
+    new Promise<never>((_, reject) => {
+      refusals.push(reject);
+    });
+  api.inspectProfile.mockImplementationOnce(held).mockImplementationOnce(held);
+  const user = userEvent.setup();
+  render(
+    <CommunityDialog
+      communities={lookupCommunities}
+      mode="join"
+      close={() => {}}
+    />,
+  );
+  const field = screen.getByLabelText("Community URL");
+  await user.type(field, "wss://closed.example");
+  await user.click(screen.getByRole("button", { name: "Continue" }));
+  await waitFor(() => expect(refusals).toHaveLength(1));
+  await user.click(screen.getByRole("button", { name: "Cancel" }));
+  await user.clear(field);
+  await user.type(field, "wss://open.example");
+  await user.click(screen.getByRole("button", { name: "Continue" }));
+  await waitFor(() => expect(refusals).toHaveLength(2));
+  // The closed community refuses the abandoned profile read only now.
+  await act(async () => refusals[0]?.(new Error("Relay read failed (403)")));
+  expect(screen.getByRole("button", { name: "Connecting…" })).toBeDisabled();
+  expect(screen.getByRole("button", { name: "Cancel" })).toBeEnabled();
+  await act(async () => refusals[1]?.(new Error("Relay read failed (403)")));
+  expect(await screen.findByText("https://open.example")).toBeVisible();
+  expect(screen.queryByLabelText("Invite code")).not.toBeInTheDocument();
+});
+
+it.each([
+  [502, "Relay unreachable", true],
+  [500, "Local relay broker failed", true],
+  [503, "Community discovery failed", true],
+  [400, "Destination rejected", false],
+  [401, "Sign in required", false],
+  [403, "Membership required", false],
+])(
+  "preserves broker HTTP %s classification through the destination lookup",
+  async (status, message, transient) => {
+    let failed = true;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string) => {
+        const route = String(url).split("/").at(-1);
+        if (route === "register") return Response.json({});
+        if (route === "info")
+          return failed
+            ? Response.json({ error: message }, { status })
+            : Response.json({ name: "Fixture", membershipRequired: true });
+        throw new Error(`Unexpected request: ${url}`);
+      }),
+    );
+    const user = userEvent.setup();
+    render(
+      <CommunityDialog
+        communities={lookupCommunities}
+        mode="join"
+        close={() => {}}
+      />,
+    );
+    const field = screen.getByLabelText("Community URL");
+    await user.type(field, "wss://quiet.example");
+    await user.click(screen.getByRole("button", { name: "Continue" }));
+    await waitFor(() =>
+      expect(field).toHaveAccessibleDescription(
+        transient
+          ? "Couldn’t reach quiet.example. Check the address, or try again."
+          : message,
+      ),
+    );
+    expect(field).toHaveValue("wss://quiet.example");
+    expect(api.inspectProfile).not.toHaveBeenCalled();
+    failed = false;
+    await user.click(screen.getByRole("button", { name: "Continue" }));
+    expect(await screen.findByLabelText("Invite code")).toBeVisible();
   },
 );

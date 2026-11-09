@@ -18,8 +18,8 @@ import { PluginRequestCard } from "./PluginRequestCard";
 
 afterEach(cleanup);
 
-// https://github.com/squareup/buzz-plugin-browser, whose manifest is this.
-const BROWSER = "https://github.com/squareup/buzz-plugin-browser";
+// https://github.com/example-org/buzz-plugin-browser, whose manifest is this.
+const BROWSER = "https://github.com/example-org/buzz-plugin-browser";
 const commit = "6de3f81448ba218b67939b9ca240898f46aecfd7";
 const manifest = {
   id: "example.browser",
@@ -126,7 +126,7 @@ it("reviews in place at the pinned commit, then shows the outcome and tells the 
   show(requestId);
   fireEvent.click(screen.getByRole("button", { name: "Review Browser" }));
   const dialog = await screen.findByRole("dialog", {
-    name: "Review plugin access",
+    name: "Review Browser Plugin access",
   });
   await within(dialog).findByText(`Commit: ${commit}`);
   expect(

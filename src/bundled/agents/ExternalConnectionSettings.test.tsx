@@ -32,7 +32,7 @@ it("shows an authorized app after settings reopen and lets the owner revoke it",
       client: "Test client",
       callback: "http://127.0.0.1:1234/buzz/authorize",
       state: "A".repeat(43),
-      scope: ["read"],
+      scope: ["agent"],
       code_challenge: "A".repeat(43),
       code_challenge_method: "S256",
     },
@@ -51,4 +51,30 @@ it("shows an authorized app after settings reopen and lets the owner revoke it",
     "No external app has access.",
   );
   await act(async () => closed);
+});
+
+it("asks for new setup when a saved approval has only older, limited access", async () => {
+  const connection = createExternalApps();
+  connection.bind({
+    connect: async () => {
+      throw new Error("not used");
+    },
+    deny: async () => {},
+    pairing: async () => ({
+      id: "C".repeat(43),
+      approval: {
+        client: "Old client",
+        viewer: "viewer",
+        agent: "test-agent",
+        community: "https://example.test",
+        scopes: ["read", "post"],
+      },
+      expires_at: 2_000_000_000,
+    }),
+  });
+  render(<ExternalConnectionSettings connection={connection} />);
+  expect(
+    await screen.findByText(/older approval gives limited access/),
+  ).toBeVisible();
+  expect(screen.getByRole("button", { name: "Revoke access" })).toBeVisible();
 });

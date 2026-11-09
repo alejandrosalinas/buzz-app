@@ -4,6 +4,25 @@ export const ACTIVITY_HISTORY_AGE_MS = 90 * 24 * 60 * 60 * 1000;
 /** Host-projected telemetry. Never a signed RelayEvent or a general decrypt API. */
 export const OBSERVER_KIND = 24200;
 export const OBSERVER_PLAINTEXT_BYTES = 65535;
+
+/** Terminal wire outcomes shared by the live lifecycle and transcript. Missing
+ * outcome is the original local-agent completion contract. */
+export function terminalOutcome(kind: string, outcome: unknown) {
+  if (kind === "turn_error" || kind === "agent_panic") return "error";
+  if (kind !== "turn_completed") return undefined;
+  switch (outcome) {
+    case undefined:
+    case "completed":
+      return "ended";
+    case "failed":
+    case "terminated":
+      return "error";
+    case "cancelled":
+      return "stopped";
+    default:
+      return "unknown";
+  }
+}
 export type ObserverFrame = Readonly<{
   id: string;
   agent: string;

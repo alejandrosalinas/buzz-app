@@ -1,5 +1,6 @@
 import { nativeIdentityEnabled } from "../identity/service";
 import { retryRead } from "../relay/read-retry";
+import { ReadError, transientStatus } from "../relay/errors";
 import { nativeCommunityRequest } from "./native-api";
 import { connectCommunityTransport, registerCommunity } from "./connection";
 import { settledRefusal, type SettledRefusal } from "./leave-protocol";
@@ -43,10 +44,15 @@ export async function communityRequest<T>(
     },
   );
   const result = await response.json();
-  if (!response.ok)
-    throw new Error(
-      result.error ?? `Community request failed (${response.status})`,
-    );
+  if (!response.ok) {
+    const message =
+      result.error ?? `Community request failed (${response.status})`;
+    // Preserve retryable HTTP failures across the broker boundary without
+    // reclassifying validation or admission refusals as network outages.
+    if (transientStatus(response.status))
+      throw new ReadError("unavailable", message, response.status);
+    throw new Error(message);
+  }
   return result as T;
 }
 export async function inspectProfile(id: string, session?: RelaySession) {

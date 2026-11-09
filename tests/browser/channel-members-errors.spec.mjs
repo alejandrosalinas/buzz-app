@@ -59,9 +59,7 @@ test("member action errors stay in view above a long roster", async ({
     .getByRole("navigation", { name: "Subscribed channels" })
     .getByRole("button", { name: "Lifecycle channel", exact: true })
     .click();
-  await page
-    .getByRole("button", { name: "Manage members", exact: true })
-    .click();
+  await page.getByRole("button", { name: /^Manage members of / }).click();
   const dialog = page.getByRole("dialog", {
     name: "Manage members",
     exact: true,

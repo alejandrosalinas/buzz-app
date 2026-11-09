@@ -623,17 +623,20 @@ export class GooseSetup {
 }
 
 /** Runs `run` against a `goose-acp` started for it in the home folder, and
- * stops it after. It serves no Buzz tools. */
+ * stops it after. It serves no Buzz tools; `signal` stops its startup. */
 export async function briefly<T>(
   host: GooseHost | undefined,
   run: (goose: GooseProcess, cwd: string) => Promise<T>,
   env: Readonly<Record<string, string>> = {},
+  signal?: AbortSignal,
 ): Promise<T> {
   if (!host) throw new Error("goose runs only in the desktop app");
   const cwd = await host.resolveDirectory("~");
+  signal?.throwIfAborted();
   const goose = await GooseProcess.start(host.spawn, {
     cwd,
     env,
+    ...(signal && { signal }),
   });
   try {
     return await run(goose, cwd);

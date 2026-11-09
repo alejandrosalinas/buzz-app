@@ -21,7 +21,10 @@ import { useEffect, useId, useRef, useState } from "react";
 import { useTeamMentions } from "./use-team-mentions";
 import { useMentionChoices } from "./use-mention-choices";
 import type { ComposerSession } from "../../features/messages/composer-session";
-import { outsideMentionDetail } from "./mention-candidates";
+import {
+  outsideMentionDetail,
+  remoteMentionDetail,
+} from "./mention-candidates";
 import { matchPerson } from "../../features/search/person-match";
 import { MatchedLabel } from "../../features/search/MatchedLabel";
 import { useSearchHighlight } from "../../features/search/use-search-highlight";
@@ -389,9 +392,11 @@ export function MentionPicker({
                   agent,
                   elsewhere,
                   disabled: reason,
-                  fullName,
+                  otherName,
+                  execution,
                 }) => {
                   const managedBy = model.managedBy.get(recipient.pubkey);
+                  const remoteDetail = remoteMentionDetail(execution);
                   // Each addressed agent's row shows a check; fill is only
                   // the keyboard and pointer highlight.
                   const addressed = !!audience?.recipients.some(
@@ -433,13 +438,15 @@ export function MentionPicker({
                             {agent && <span className="sr-only"> Agent</span>}
                           </span>
                           {reason && <small>{reason}</small>}
-                          {((fullName && fullName !== label) ||
+                          {(remoteDetail ||
+                            otherName ||
                             managedBy ||
                             !members?.includes(recipient.pubkey)) && (
                             <small className="text-caption text-subtle">
-                              {/* A verified full name sits beside the detail. */}
+                              {/* The other verified name sits beside the detail. */}
                               {[
-                                fullName !== label ? fullName : undefined,
+                                otherName,
+                                remoteDetail,
                                 managedBy,
                                 members?.includes(recipient.pubkey)
                                   ? undefined

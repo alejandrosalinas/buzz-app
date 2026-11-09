@@ -55,7 +55,7 @@ test("Settings keeps the channel sidebar width across navigation and reload", as
     await page.reload();
     await expect(settingsDialog(page)).toBeVisible();
     await expect(channels).toHaveCount(0);
-    await expect.poll(() => sidebarWidth(retained)).toBe(width);
+    await expect(retained).toBeHidden();
     await closeSettings(page);
     await expect.poll(() => sidebarWidth(channels)).toBe(width);
   }
@@ -207,7 +207,9 @@ test("sidebar width updates across open windows without losing a draft", async (
     await expect.poll(() => sidebarWidth(retained)).toBe(236);
     await other.reload();
     await expect(settingsDialog(other)).toBeVisible();
-    await expect.poll(() => sidebarWidth(retained)).toBe(236);
+    await expect(retained).toBeHidden();
+    await closeSettings(other);
+    await expect.poll(() => sidebarWidth(retainedChannels(other))).toBe(236);
   } finally {
     await stopRoutes(context);
     await other.close();

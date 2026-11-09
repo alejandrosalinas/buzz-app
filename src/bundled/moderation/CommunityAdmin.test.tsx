@@ -8,6 +8,7 @@ import {
   within,
 } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import { npubEncode } from "nostr-tools/nip19";
 import { afterEach, expect, it, vi } from "vitest";
 import type { RelayData } from "../../features/relay/service";
 import { mediaUrl } from "../../features/relay/transport";
@@ -189,6 +190,8 @@ it("mints a bounded invite and surfaces relay refusals", async () => {
   expect(calls.filter((c) => c.route === "invite")).toEqual([
     { route: "invite", body: { ttl_secs: 3 * 24 * 60 * 60, max_uses: null } },
   ]);
+  // QR codes come from the native renderer; the browser host has none.
+  expect(screen.queryByRole("img")).toBeNull();
   // Admins cannot grant admin, so direct addition has no role choice.
   await user.type(
     screen.getByRole("textbox", { name: "Public identity" }),
@@ -476,7 +479,7 @@ it.each([
     // the raw URL would be an unsigned request the relay refuses.
     expect(actionsA.closest("li")?.querySelector("img")).toHaveAttribute(
       "src",
-      `https://primary.example/media/${bobA}.thumb.jpg`,
+      `https://primary.example/media/${bobA}.thumb.webp`,
     );
     await user.click(
       screen.getByRole("button", { name: `Actions for ${labelB}` }),
@@ -545,4 +548,41 @@ it("accepts only an exact identity and never searches the people directory", asy
     }),
   );
   expect(people).not.toHaveBeenCalled();
+});
+
+it("adds a member by a nostr: npub and refuses an npub that is not a 32-byte key", async () => {
+  const user = userEvent.setup();
+  const calls = broker({
+    member: () => Response.json({ accepted: true, message: "" }),
+  });
+  render(<CommunityAdmin relay={relay(owner).relay} active={() => true} />);
+  await user.click(
+    await screen.findByRole("button", { name: "Invite members" }),
+  );
+  const dialog = await screen.findByRole("dialog", {
+    name: "Add or invite people",
+  });
+  const identity = within(dialog).getByRole("textbox", {
+    name: "Public identity",
+  });
+  const add = within(dialog).getByRole("button", { name: "Add member" });
+  // A valid checksum over a 20-byte payload, which nip19 decodes to 40 hex.
+  await user.click(identity);
+  await user.paste("npub1qurswpc8qurswpc8qurswpc8qurswpc86nz8sw");
+  const refusal = "Enter an npub or 64-character hex public key.";
+  expect(within(dialog).getByText(refusal)).toBeVisible();
+  expect(add).toBeDisabled();
+  await user.keyboard("{Enter}");
+  expect(calls.some((call) => call.route === "member")).toBe(false);
+  await user.clear(identity);
+  await user.paste(`nostr:${npubEncode("3".repeat(64))}`);
+  expect(within(dialog).queryByText(refusal)).toBeNull();
+  await user.click(add);
+  await waitFor(() =>
+    expect(calls.find((call) => call.route === "member")?.body).toEqual({
+      action: "add",
+      pubkey: "3".repeat(64),
+      role: "member",
+    }),
+  );
 });

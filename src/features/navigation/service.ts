@@ -33,6 +33,10 @@ export type PageNavigation = Readonly<{
   forSession(relay: RelayData, connection: RelaySnapshot): PageNavigation;
   /** Resolve the pending visit's default destination without replacing its caller. */
   resolve(target: OpenTarget): boolean;
+  /** While registered, `passes` says whether this visit holds nothing to come
+   * back to; then the next page opened from it takes its place in history.
+   * Returns the unregister function. */
+  passThrough(passes: () => boolean): () => void;
   complete(
     result: Extract<OpenResult, { status: "opened" | "failed" }>,
   ): boolean;
@@ -105,6 +109,8 @@ export function provideNavigation(
           },
           position: (key) => position(visit(key)),
           savePosition: (key, value) => savePosition(visit(key), value),
+          passThrough: (passes) =>
+            controller.passThrough(attempt.entry.id, passes),
           resolve: (target) => {
             if (
               retainUnderSettings &&
@@ -224,6 +230,7 @@ function bindPresentation(
     savePosition: parent.savePosition,
     resolve: (target) => valid() && parent.resolve(target),
     complete: (result) => valid() && parent.complete(result),
+    passThrough: (passes) => parent.passThrough(passes),
     forSession(relay, connection) {
       let connections = sessions.get(relay);
       if (!connections) {

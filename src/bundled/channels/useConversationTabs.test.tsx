@@ -893,7 +893,10 @@ it.each(["member", "guest"] as const)(
   },
 );
 
-function launcherHarness(mainPane = false) {
+function launcherHarness(
+  mainPane = false,
+  placement: RegisteredPanel["channelPlacement"] = "tab",
+) {
   const channels = [{ id: "alpha", name: "Alpha" }];
   const session = {
     viewer: "viewer",
@@ -906,7 +909,7 @@ function launcherHarness(mainPane = false) {
     pluginId: "fixture",
     revision: "1",
     title: "Work",
-    channelPlacement: "tab",
+    channelPlacement: placement,
     matches: (target) => target.startsWith("work:"),
     channelLauncher: (props) => {
       launcher = props;
@@ -951,8 +954,76 @@ function launcherHarness(mainPane = false) {
     pressed: () => launcher.pressed,
     entries: () => state.entries,
     workspace: () => workspace,
+    // As the page shows it: the side panel is visible only in the open pane.
+    sideShown: () => state.paneOpen && !!workspace.drawer.side,
+    tabs: () => state.tabs,
   };
 }
+
+it.each([
+  ["open", true],
+  ["closed", false],
+])(
+  "Close all tabs leaves a launcher's side panel as the %s pane showed it, since it isn't a tab",
+  (_, open) => {
+    const h = launcherHarness(false, "side");
+    act(() => {
+      h.workspace().openConversationThread("alpha", "root", "root");
+    });
+    h.toggle("alpha");
+    expect(h.tabs()).toHaveLength(1);
+    expect(h.sideShown()).toBe(true);
+    if (!open) act(() => h.workspace().closePane());
+    act(() => {
+      expect(h.workspace().closeAllTabs()).toBe(true);
+    });
+    expect(h.tabs()).toHaveLength(0);
+    expect(h.sideShown()).toBe(open);
+    expect(h.pressed()).toBe(open);
+  },
+);
+
+it("a side panel's launcher reads unpressed while the closed pane hides it, and one press shows it", () => {
+  const h = launcherHarness(false, "side");
+  act(() => {
+    h.workspace().openConversationThread("alpha", "root", "root");
+  });
+  h.toggle("alpha");
+  expect(h.pressed()).toBe(true);
+  act(() => h.workspace().closePane());
+  expect(h.sideShown()).toBe(false);
+  expect(h.pressed()).toBe(false);
+  h.toggle("alpha");
+  expect(h.sideShown()).toBe(true);
+  expect(h.pressed()).toBe(true);
+  // The pane returns with its tab, and the next press hides the panel.
+  expect(h.tabs()).toHaveLength(1);
+  h.toggle("alpha");
+  expect(h.workspace().drawer.side).toBeFalsy();
+  expect(h.pressed()).toBe(false);
+});
+
+it("Close other tabs on a main-pane tab keeps a launcher's side panel open beside it", () => {
+  setThreadPlacementPreference("main");
+  onTestFinished(() => setThreadPlacementPreference("side"));
+  const h = launcherHarness(true, "side");
+  h.toggle("alpha");
+  act(() => {
+    h.workspace().openConversationThread("alpha", "first", "first");
+  });
+  act(() => {
+    h.workspace().openConversationThread("alpha", "second", "second");
+  });
+  expect(h.workspace().selectedMain).toBe("thread:alpha:second");
+  expect(h.sideShown()).toBe(true);
+  act(() => {
+    expect(h.workspace().closeOtherTabs("thread:alpha:first")).toBe(true);
+  });
+  expect(h.tabs().map((tab) => tab.id)).toEqual(["thread:alpha:first"]);
+  expect(h.workspace().selectedMain).toBe("thread:alpha:first");
+  expect(h.sideShown()).toBe(true);
+  expect(h.pressed()).toBe(true);
+});
 
 it("a launcher takes over a tab a link already opened for its target", () => {
   const h = launcherHarness();

@@ -1,0 +1,44 @@
+.identity {
+  display: inline-flex;
+  align-items: center;
+  max-width: 100%;
+  min-width: 0;
+  gap: var(--space-2);
+  padding: 0 var(--space-2);
+  border: 0;
+  border-radius: var(--radius-row);
+  background: transparent;
+  color: var(--text-standard);
+  cursor: pointer;
+}
+.avatars {
+  position: relative;
+  z-index: 1;
+  display: flex;
+  align-items: center;
+  pointer-events: none;
+}
+.label {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+  max-width: 100%;
+  min-width: 0;
+  min-height: var(--size-control-sm);
+  color: var(--text-standard);
+}
+.name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.identity:hover {
+  background: var(--affordance-subtle-hover);
+}
+.identity:active {
+  background: var(--affordance-subtle-pressed);
+}
+
+.soloHeader {
+  flex: none;
+}

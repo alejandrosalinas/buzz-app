@@ -20,9 +20,7 @@ and acceptance gaps here; keep chronological results in the [archive](#historica
 The checkpoint is recorded at `deb1d310`, typed relay URLs at `a85fda6`, and the
 browser gate at `95eeacc`. Those are implementation checkpoints, not release tags.
 The recorded validation used Apple Silicon macOS and synthetic isolated transports.
-Wes confirmed the reported native interaction freeze fixed; that does not close
-all native workflows. See the archive for exact-state results and known warnings,
-and [contributing](contributing.md) for maintained commands and test organization.
+See [contributing](contributing.md) for maintained commands and test organization.
 
 ## Decisions to preserve
 
@@ -94,10 +92,6 @@ consent. Owner review decides expansion; this checklist does not authorize it.
 
 - [Query and delivery review, 2026-09-07](archive/foundation-review.md): reproduced
   delivery/hydration defects, local measurements and library/API recommendations.
-- [Hardening plan and execution journal, 2026-09-08–09](archive/hardening-plan.md):
-  authorizations, sequencing and successive checkpoint handoffs.
-- [Validation journal, 2026-09-08–09](archive/hardening-validation.md): exact-state
-  checks, regressions, browser acceptance, owner confirmation and evidence paths.
 
 The journals are historical evidence, not parallel current task lists. Later
 entries supersede earlier status within them; their local artifact paths may not

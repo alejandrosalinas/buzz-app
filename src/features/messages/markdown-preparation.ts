@@ -86,10 +86,46 @@ function spoilerDelimiters(content: string): readonly number[] {
   return Object.freeze(positions);
 }
 
+/** Prose that no Markdown, GFM or message syntax acts on: no syntax characters,
+ * `:` (shortcodes, URL schemes), `@`, `www.`, private-use placeholders, tabs or
+ * other controls, line-start list or indent markers, or a space before a line
+ * ending. Its tree is paragraphs of text, which `plainProseTree` builds. */
+export const isPlainProse = (content: string) =>
+  !/(?![\n\r])\p{Cc}|[*_`~[\]<>|#\\&!=:@\p{Co}\p{Zl}\p{Zp}\ufeff\ufffc]|www\.| [\n\r]|^ *(?:[-+]|\d+[.)])|^ {4}/imu.test(
+    content,
+  );
+
+/** The tree micromark builds for `isPlainProse` content. */
+export const plainProseTree = (content: string) => ({
+  type: "root",
+  children: content
+    .split(/(?:\r\n|\r(?!\n)|\n){2,}/)
+    .map((block) =>
+      block
+        .replace(/^ +/gm, "")
+        // The lookbehind starts the tail match only at a run's start, so a long
+        // mid-line space run is scanned once, not once per space.
+        .replace(/^(?:\r\n?|\n)+|(?<![\r\n ])[\r\n ]+$/g, ""),
+    )
+    .filter(Boolean)
+    .map((value) => ({
+      type: "paragraph",
+      children: [{ type: "text", value }],
+    })),
+});
+
 /** Pure, immutable Markdown work; MessageMarkdown keeps recent results. */
 export function prepareMarkdown(content: string): PreparedMarkdown {
   if (content.length > MAX_MARKDOWN_LENGTH)
     return Object.freeze({ kind: "plain", content });
+  // Nothing in plain prose is literal, a wrapped link or a spoiler.
+  if (isPlainProse(content))
+    return Object.freeze({
+      kind: "markdown",
+      content,
+      literalRanges: Object.freeze([]),
+      spoilerDelimiters: Object.freeze([]),
+    });
 
   let scan = scanMarkdown(content);
   if (scan.tooDeep) return Object.freeze({ kind: "plain", content });

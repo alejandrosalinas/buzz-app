@@ -90,7 +90,7 @@ function useReactionAction({ row, session, disabled }: Props) {
       return false;
     }
   };
-  return { toggle, disabled: disabled || busy, error };
+  return { toggle, disabled: disabled || busy, busy, error };
 }
 
 const catalogIndexes = new WeakMap<
@@ -294,7 +294,7 @@ function ReactionEmoji({
   session,
   profiles,
   disabled,
-  unavailable,
+  busy,
   toggle,
   onFocusedRemoval,
   previewWarm,
@@ -308,7 +308,7 @@ function ReactionEmoji({
   session: RelaySession;
   profiles?: ReadonlyMap<string, Profile> | undefined;
   disabled: boolean;
-  unavailable: boolean;
+  busy: boolean;
   toggle(content: string, emoji?: CustomEmoji): boolean;
   onFocusedRemoval?: (() => void) | undefined;
   previewWarm: boolean;
@@ -324,7 +324,9 @@ function ReactionEmoji({
   const emojiAnchor = useRef<HTMLSpanElement>(null);
   const peopleList = useRef<HTMLElement>(null);
   const [overflowing, setOverflowing] = useState(false);
-  const shown = previewOpen && !previewDismissed && !unavailable;
+  const unavailable = disabled || busy;
+  // Who reacted stays readable to people who cannot react.
+  const shown = previewOpen && !previewDismissed && !busy;
   const grouped = authorIds.length > 1;
   const labelProfiles = useMemo(
     () => selectProfiles(session.profiles, grouped ? [] : authorIds),
@@ -349,7 +351,10 @@ function ReactionEmoji({
     );
   };
   return (
-    <span className={`${styles.reactionItem} buzz-compact-controls`}>
+    <span
+      className={`${styles.reactionItem} buzz-compact-controls`}
+      data-mine={mine || undefined}
+    >
       <PreviewCard
         side="top"
         align="center"
@@ -379,8 +384,9 @@ function ReactionEmoji({
             data-reaction-url={reaction.emoji?.url}
             aria-label={`${reaction.content}: ${grouped ? `${authorIds.length} people` : user}`}
             aria-pressed={mine}
+            // Not disabled: hover, focus and Tab into the preview stay
+            // available, and keys reach ancestors. onClick rejects activation.
             aria-disabled={unavailable}
-            disabled={disabled}
             onMouseEnter={(event) => {
               setPreviewDismissed(false);
               const tilt = `${Math.random() * 20 - 10}deg`;
@@ -507,7 +513,7 @@ export function MessageReactions(
               session={session}
               profiles={props.profiles}
               disabled={props.disabled}
-              unavailable={action.disabled}
+              busy={action.busy}
               toggle={action.toggle}
               onFocusedRemoval={props.onFocusedRemoval}
               // Who reacted is a preview (DESIGN.md "Hover timing"): once one is

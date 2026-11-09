@@ -5,15 +5,14 @@ import { cleanup, render, screen, act } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { StrictMode } from "react";
 import { Login } from "./Login";
-import { createOAuthSession } from "../oauth/session";
-import type { Credential } from "../oauth/browser";
-import { deferred } from "../test-helpers";
+import type { Credential } from "../session";
+import { deferred, createTestSession } from "../test-helpers";
 import { federatedFixture } from "../../../features/federated-identity/testing";
 import { createNativeSession } from "../session";
 
 afterEach(cleanup);
 const credential: Credential = {
-  value: "private-token",
+  revision: "private-token",
   account: {
     subject: "user",
     email: "a@example.com",
@@ -25,7 +24,7 @@ it("shows a desktop requirement in the browser", () => {
   const acquire = vi.fn();
   render(
     <Login
-      session={createOAuthSession(acquire)}
+      session={createTestSession(acquire)}
       available={false}
       active={() => true}
     />,
@@ -35,7 +34,7 @@ it("shows a desktop requirement in the browser", () => {
   expect(acquire).not.toHaveBeenCalled();
 });
 it("sign-out clears the credential and restores the sign-in action", async () => {
-  const session = createOAuthSession(async () => credential);
+  const session = createTestSession(async () => credential);
   render(
     <StrictMode>
       <Login session={session} available active={() => true} />
@@ -50,7 +49,9 @@ it("sign-out clears the credential and restores the sign-in action", async () =>
   expect(
     screen.queryByText(/Connect your Builderlab account/),
   ).not.toBeInTheDocument();
-  expect(screen.getByText(/stays in memory until you sign out/)).toBeVisible();
+  expect(
+    screen.getByText(/keeps your sign-in in your system keychain/),
+  ).toBeVisible();
   await user.click(screen.getByRole("button", { name: "Sign out" }));
   expect(
     screen.getByRole("button", { name: "Sign in with Builderlab" }),
@@ -59,8 +60,8 @@ it("sign-out clears the credential and restores the sign-in action", async () =>
   expect(() => session.credential()).toThrow("Sign in");
 });
 it("shows a signed-in confirmation when email is unavailable", async () => {
-  const session = createOAuthSession(async () => ({
-    value: "private-token",
+  const session = createTestSession(async () => ({
+    revision: "private-token",
     account: {
       subject: "user",
       email: "",
@@ -86,7 +87,7 @@ it.each(["cancel", "unmount"])(
       signal = current;
       return release.promise;
     });
-    const session = createOAuthSession(acquire);
+    const session = createTestSession(acquire);
     const mounted = render(
       <StrictMode>
         <Login session={session} available active={() => true} />
@@ -127,7 +128,7 @@ it("shows failures and permits retry; inactive contributions cannot start sign-i
     .fn()
     .mockRejectedValueOnce(new Error("Browser could not open."))
     .mockResolvedValueOnce(credential);
-  const session = createOAuthSession(acquire);
+  const session = createTestSession(acquire);
   let active = false;
   render(<Login session={session} available active={() => active} />);
   const user = userEvent.setup();

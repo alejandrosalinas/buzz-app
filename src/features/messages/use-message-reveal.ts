@@ -14,6 +14,7 @@ export function useMessageReveal({
   placed,
   hold,
   focus = true,
+  mark = focus,
 }: {
   scroller: RefObject<HTMLElement | null>;
   settled: RefObject<boolean>;
@@ -26,6 +27,9 @@ export function useMessageReveal({
   placed?(): void;
   /** A covering modal owns focus; the underlying target still verifies/reveals. */
   focus?: boolean;
+  /** Whether the reader sees this arrival; a reveal beside the reader that
+   * owns focus is marked too. Defaults to `focus`. */
+  mark?: boolean;
   /**
    * While this returns true after the reveal, keep the row where the reveal put
    * it. Rows mounted around the target can measure after verification and push
@@ -111,7 +115,12 @@ export function useMessageReveal({
       frame = requestAnimationFrame(() => {
         if (signal?.aborted || !row.isConnected || !container.contains(row))
           return;
-        if (focus && (focusPending || row.closest("[inert]"))) return;
+        // Neither focus nor the arrival cue reaches a row behind a cover.
+        if (
+          (focus && focusPending) ||
+          ((focus || mark) && row.closest("[inert]"))
+        )
+          return;
         holding.current?.();
         holding.current = hold
           ? keep(container, target, signal, hold, position)
@@ -130,7 +139,7 @@ export function useMessageReveal({
         cancel();
         highlight.current();
         // A reveal behind a covering panel is not an arrival the reader sees.
-        if (focus) highlight.current = highlightWhenSettled(container, target);
+        if (mark) highlight.current = highlightWhenSettled(container, target);
         readingPositioned(container);
         complete();
       });
@@ -167,6 +176,7 @@ export function useMessageReveal({
     prepare,
     placed,
     focus,
+    mark,
     hold,
   ]);
   return revealed;

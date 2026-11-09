@@ -4,6 +4,6 @@ Estimates what your agents' Claude Code, Codex and goose sessions on this comput
 
 ## Getting started
 
-1. Open **Usage**.
+1. Open **Settings → Usage**, under Plugins.
 2. Choose **Last 7 days** or **Last 30 days**, and an agent or harness to narrow it down.
 3. Select a session to open its conversation.

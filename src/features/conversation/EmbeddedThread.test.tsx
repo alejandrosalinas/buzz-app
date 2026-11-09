@@ -150,6 +150,7 @@ function fixture(
     attention: () => ({ unread: false }),
     enterChannel: vi.fn(async () => {}),
     leaveChannel: vi.fn(),
+    setChannelActive: vi.fn(),
   };
   const outbox = {
     subscribe: () => () => {},
@@ -346,14 +347,20 @@ it("selecting a channel supplies its readers without remounting the page below",
 it("keeps one channel visit while the thread is retargeted within a channel", () => {
   const h = fixture();
   const view = render(<EmbeddedThread {...h.props} />);
-  expect(h.unread.enterChannel).toHaveBeenCalledExactlyOnceWith("c");
+  expect(h.unread.enterChannel).toHaveBeenCalledExactlyOnceWith(
+    "c",
+    document.hasFocus(),
+  );
   view.rerender(<EmbeddedThread {...h.props} messageId={"c".repeat(64)} />);
   expect(h.unread.enterChannel).toHaveBeenCalledOnce();
   expect(h.unread.leaveChannel).not.toHaveBeenCalled();
   // Leaving the channel is the barrier: the visit does follow the channel.
   view.rerender(<EmbeddedThread {...h.props} channelId="d" />);
   expect(h.unread.leaveChannel).toHaveBeenCalledExactlyOnceWith("c");
-  expect(h.unread.enterChannel).toHaveBeenLastCalledWith("d");
+  expect(h.unread.enterChannel).toHaveBeenLastCalledWith(
+    "d",
+    document.hasFocus(),
+  );
 });
 
 it("offers recovery for a failed edit left in the outbox", () => {

@@ -4,12 +4,32 @@ import type { Context, RelaySnapshot } from "@buzz/author";
 // Test-only external consumer, built into a temporary profile by conversation.spec.mjs.
 // Type-only author contract. The installed artifact has no private paths, React
 // copy, bundled Channels import, or runtime dependencies.
-export const inject = ["react", "pages", "relay", "conversation"];
+export const inject = ["react", "pages", "panels", "relay", "conversation"];
 export function apply(ctx: Context) {
   const React = ctx.react;
   const h = React.createElement;
   const ui = ctx.conversation;
   const relay = ctx.relay;
+  const target = "consumer://message/inspect";
+  ctx.panels.register({
+    id: "inspect",
+    title: "Message inspection",
+    matches: (url) => url === target,
+    component: () => h("p", null, "Consumer message panel"),
+  });
+  ui.registerMessageAction({
+    id: "inspect",
+    title: "Inspect message",
+    placement: "toolbar",
+    matches: () => true,
+    component: function Inspect({ open, close }) {
+      React.useEffect(() => {
+        open(target);
+        close();
+      }, [open, close]);
+      return null;
+    },
+  });
   function Connected({ connection }: { connection: RelaySnapshot }) {
     const session = connection.session;
     const list = React.useSyncExternalStore(

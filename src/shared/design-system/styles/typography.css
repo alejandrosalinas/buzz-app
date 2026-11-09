@@ -1,6 +1,4 @@
-/* Block UI size ramp and resolved role settings, rendered in Inter and JetBrains Mono.
-   Source: https://github.com/squareup/design-blockinterface/blob/eff766161ba8aaee3258ca107f0d904dd542c708/blockUI/docs/type.resolution.draft.json
-   The upstream spec is provisional. Values use rem to preserve host text scaling. */
+/* Buzz size ramp and resolved role settings, rendered in Inter and JetBrains Mono. Values use rem to preserve host text scaling. */
 :root {
   --font-emoji:
     "Apple Color Emoji", "Segoe UI Emoji", "Noto Color Emoji", sans-serif;
@@ -23,7 +21,7 @@
   --type-size-56: calc(var(--type-rem) * 3.5);
   --type-size-72: calc(var(--type-rem) * 4.5);
   --type-size-96: calc(var(--type-rem) * 6);
-  /* Buzz maps Block UI xsmall to 12px while retaining its semantic identity. */
+  /* Buzz maps xsmall to 12px while retaining its semantic identity. */
   --type-xsmall-size: var(--type-size-12);
   --type-weight-normal: 400;
   --type-weight-medium: 500;
@@ -81,7 +79,7 @@
   --text-caption--line-height: 1.3333333333333333;
   --text-caption--letter-spacing: 0.0133em;
   --text-caption--font-weight: var(--type-weight-normal);
-  /* Legacy mono size names share Block UI detail/body-xsmall, mapped to 12/16 in Buzz. */
+  /* Legacy mono size names share detail/body-xsmall, mapped to 12/16 in Buzz. */
   --text-mono-lg: var(--type-xsmall-size);
   --text-mono-lg--line-height: calc(16 / 12);
   --text-mono-lg--letter-spacing: 0.03em;

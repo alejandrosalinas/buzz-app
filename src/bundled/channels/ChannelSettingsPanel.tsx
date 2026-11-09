@@ -96,9 +96,11 @@ export function ChannelSettingsPanel({
       aria-label="Channel settings"
       aria-busy={loading}
       onKeyDown={(event) => {
+        // Shift+Escape is Mark all as read, not a dismissal.
         // Portalled menus and cards bubble here through React but own their Escape.
         if (
           event.key === "Escape" &&
+          !event.shiftKey &&
           !event.defaultPrevented &&
           event.currentTarget.contains(event.target as Node)
         ) {

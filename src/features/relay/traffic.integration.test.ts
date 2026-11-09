@@ -619,6 +619,27 @@ it("restores content when an h-less owner deletion targets a live edit", async (
   expect(h.session.channels.window("c").rows[0]).not.toHaveProperty("edited");
 });
 
+it("keeps a send visible through confirmation when the head page is dated ahead of the clock", async () => {
+  // A peer's fast clock can date a whole page past this one, so the next send
+  // sorts below the loaded history. It showed while sending and must not
+  // vanish when confirmed.
+  const ahead = Math.floor(Date.now() / 1000) + 3600;
+  const h = fixture(
+    Array.from({ length: 120 }, (_, index) =>
+      message(other, "c", `ahead ${index}`, ahead + index),
+    ),
+  );
+  await h.open();
+  expect(h.session.channels.window("c").hasMore).toBe(true);
+  h.session.messages.send("c", "mine");
+  const event = await h.sign();
+  await h.acknowledge(event);
+  expect(
+    h.session.outbox?.snapshot().some((item) => item.event.id === event.id),
+  ).toBe(false);
+  expect(h.session.channels.window("c").rows[0]?.id).toBe(event.id);
+});
+
 it("automatically retires more than 256 confirmed writes and restores confirmed evidence without publishing", async () => {
   const h = fixture();
   const events: RelayEvent[] = [];

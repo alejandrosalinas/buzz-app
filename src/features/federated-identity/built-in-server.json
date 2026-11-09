@@ -1,0 +1,8 @@
+{
+  "version": 1,
+  "id": "bb-public",
+  "identityOrigin": "https://app.builderlab.xyz",
+  "communityHosts": ["*.communities.buzz.xyz", "communities.buzz.xyz"],
+  "adapterBase": "https://app.builderlab.xyz/api/goose",
+  "apiBasePath": "/api/goose/"
+}

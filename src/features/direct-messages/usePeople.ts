@@ -3,6 +3,7 @@ import type { RelaySession } from "../relay/session";
 import type { Profile } from "../relay/contracts";
 import { peopleOrder } from "../profiles/people-order";
 import { matchPerson } from "../search/person-match";
+import { typedPublicKey } from "../../shared/identity/public-key";
 import {
   searchDebounce,
   SEARCH_DEBOUNCE_MS,
@@ -37,11 +38,10 @@ function empty(session: RelaySession, query: string): PeopleState {
   };
 }
 function matching(people: Recipient[], query: string) {
-  const key = query.trim().toLowerCase();
+  const key = typedPublicKey(query);
   return people.filter(
     (person) =>
-      matchPerson(person.name, query) !== undefined ||
-      (/^[0-9a-f]{64}$/.test(key) && person.pubkey === key),
+      matchPerson(person.name, query) !== undefined || person.pubkey === key,
   );
 }
 export function usePeople(session: RelaySession, query: string) {

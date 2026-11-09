@@ -1,6 +1,8 @@
 import { useRef, useState } from "react";
 import { CommunityDialog } from "../features/communities/CommunityDialog";
 import { CommunityRepositoriesSettings } from "./CommunityRepositoriesSettings";
+import { DefaultLifetimeSettings } from "../features/solo/DefaultLifetimeSettings";
+import { relayPartition } from "../features/relay/partition";
 import type { Communities, Membership } from "../features/communities/service";
 import { communityDestination } from "../features/communities/destination";
 import {
@@ -133,6 +135,11 @@ export function CommunityLocalSettings({
           )}
         </SettingsGroup>
       </form>
+      {viewer && (
+        <div className="mt-section-gap">
+          <DefaultLifetimeSettings scope={relayPartition(address, viewer)} />
+        </div>
+      )}
       <CommunityRepositoriesSettings
         communities={communities}
         community={community.id}

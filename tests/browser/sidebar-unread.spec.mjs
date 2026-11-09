@@ -38,7 +38,7 @@ const removeDm = async (page, id) => {
   await dm.click({ button: "right" });
   const menu = page.getByRole("menu", { name: /Actions for / });
   const remove = menu.getByRole("menuitem", {
-    name: "Remove from Team",
+    name: "Close conversation",
     exact: true,
   });
   await expect(remove).toBeVisible();
@@ -210,8 +210,15 @@ test("edge controls follow scroll and reveal the nearest unread without selectio
     app.relay.releaseEose("alpha");
     await opening;
   }
-  const ordinary = row(page, "alpha");
-  await expect(ordinary).toHaveAttribute("aria-current", "page");
+  // The selected channel's row is quiet: opening it saw its unread.
+  const selected = row(page, "alpha");
+  await expect(selected).toHaveAttribute("aria-current", "page");
+  await expect(selected.locator("[data-channel-unread]")).toHaveCount(0);
+  await expect(selected.getByText("Alpha", { exact: true })).not.toHaveCSS(
+    "font-weight",
+    "600",
+  );
+  const ordinary = row(page, "beta");
   const ordinaryState = ordinary.locator("[data-channel-unread]");
   const directed = row(page, "dm-090").locator("[data-channel-priority]");
   await expect(ordinaryState).toHaveAttribute("data-priority", "false");
@@ -220,21 +227,8 @@ test("edge controls follow scroll and reveal the nearest unread without selectio
     /observed unread messages/,
   );
   await expect(ordinary.locator("[data-channel-priority]")).toHaveCount(0);
-  const ordinaryLabel = ordinary.getByText("Alpha", { exact: true });
+  const ordinaryLabel = ordinary.getByText("Beta", { exact: true });
   await expect(ordinaryLabel).toHaveCSS("font-weight", "600");
-  // A selected unread row keeps its weight and takes the selection's ink, so
-  // the label stays readable on the selection fill, hovered or not.
-  const unreadInk = await ordinaryLabel.evaluate((label) => {
-    const probe = document.createElement("span");
-    probe.style.color = "var(--text-row-selected)";
-    label.append(probe);
-    const color = getComputedStyle(probe).color;
-    probe.remove();
-    return color;
-  });
-  await expect(ordinaryLabel).toHaveCSS("color", unreadInk);
-  await ordinary.hover();
-  await expect(ordinaryLabel).toHaveCSS("color", unreadInk);
   await expect(directed).toBeVisible();
   await expect(directed).toHaveCSS("width", "6px");
   await expect(
@@ -265,8 +259,8 @@ test("edge controls follow scroll and reveal the nearest unread without selectio
   await releaseReadingFocus(page);
   // Keep actionable DMs below while moving only ordinary unread above: priority
   // is derived from the destinations on each edge, not from the whole roster.
-  await scrollRowAbove(page, "alpha");
-  await expect.poll(() => inView(page, "alpha")).toBe(false);
+  await scrollRowAbove(page, "beta");
+  await expect.poll(() => inView(page, "beta")).toBe(false);
   await expect(cue(page, "above")).toBeVisible();
   await expect(cue(page, "above")).toHaveText(/\d+ unread$/);
   await expect(cue(page, "above").locator("..")).toHaveCSS("top", "12px");

@@ -227,7 +227,7 @@ export function nodeClient(
       const name = input.trim().startsWith(prefix)
         ? input.trim().slice(prefix.length)
         : input.trim();
-      if (!/^[0-9a-f]{64}(\.[a-z0-9]{1,8}|\.thumb\.jpg)?$/.test(name))
+      if (!/^[0-9a-f]{64}(\.[a-z0-9]{1,8}|\.thumb\.(?:jpg|webp))?$/.test(name))
         throw new Error("Agents fetch only their community's media");
       const blossom = sign({
         kind: 24242,
@@ -291,7 +291,7 @@ export function nodeClient(
           createWriteStream(partial),
         );
         if (
-          !name.endsWith(".thumb.jpg") &&
+          !/\.thumb\.(?:jpg|webp)$/.test(name) &&
           hash.digest("hex") !== name.slice(0, 64)
         )
           throw new Error("Media did not match its SHA-256");

@@ -567,3 +567,50 @@ html[data-keyboard-input] :is(.selfBubble, .cloudBubble, .bubbleName) {
     grid-row: 2;
   }
 }
+
+.thinkingRing {
+  position: absolute;
+  inset: -8px;
+  border-radius: var(--radius-pill);
+  padding: var(--space-1);
+  pointer-events: none;
+  background: conic-gradient(
+    from 0deg,
+    transparent 0deg,
+    var(--text-secondary) 300deg,
+    transparent 360deg
+  );
+  mask:
+    linear-gradient(currentColor 0 0) content-box,
+    linear-gradient(currentColor 0 0);
+  mask-composite: exclude;
+}
+.thinkingDots {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  border-radius: var(--radius-pill);
+  background: var(--surface-panel);
+  color: var(--text-secondary);
+}
+@keyframes huddle-thinking-enter {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+@keyframes huddle-thinking {
+  to {
+    transform: rotate(360deg);
+  }
+}
+@media (prefers-reduced-motion: no-preference) {
+  .thinkingRing {
+    animation:
+      huddle-thinking 1.4s linear infinite,
+      huddle-thinking-enter var(--duration-state) var(--easing-enter) both;
+  }
+}

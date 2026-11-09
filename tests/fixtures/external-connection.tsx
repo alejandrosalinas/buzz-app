@@ -62,7 +62,7 @@ const request = () =>
       client: "Test external app",
       callback: "http://127.0.0.1:1234/buzz/authorize",
       state: "A".repeat(43),
-      scope: ["read", "post"],
+      scope: ["agent"],
       code_challenge: "A".repeat(43),
       code_challenge_method: "S256",
     },

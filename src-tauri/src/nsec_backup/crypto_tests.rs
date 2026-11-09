@@ -14,7 +14,7 @@ struct Fixture {
 }
 
 fn fixture() -> Fixture {
-    // Shared with block/buzz#7849 and cash-server#133899; all private values are synthetic.
+    // Shared with block/buzz#7849; all private values are synthetic.
     serde_json::from_str(include_str!("fixtures/hpke_nsec_backup_v1.json")).unwrap()
 }
 

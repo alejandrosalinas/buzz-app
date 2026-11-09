@@ -22,6 +22,7 @@ import {
   rootOfTab,
   useChannelTabState,
 } from "./useChannelTabState";
+import type { ChannelDrawerOpening } from "./useChannelPanels";
 
 import {
   setThreadPlacementPreference,
@@ -136,7 +137,7 @@ test("closing and reopening settings starts a fresh view while hiding the pane r
   expect(mounted.result.current.settings?.id).not.toBe(opening?.id);
 });
 
-test("channel switches retire each visit's menu opening without copying retained tools", () => {
+test("channel switches keep each channel's menu opening and selection", () => {
   const session = {} as RelaySession;
   const menu = {
     key: "usage",
@@ -153,12 +154,7 @@ test("channel switches retire each visit's menu opening without copying retained
   const alphaUsage = entry("alpha", menu);
   const betaUsage = entry("beta", menu);
   const mounted = renderHook(
-    ({ channel }) => {
-      const state = useChannelTabState(session, channel);
-      // Same lifecycle as ChannelsPage: cleanup closes the departing visit.
-      useEffect(() => state.retireMenuEntries, [state.retireMenuEntries]);
-      return state;
-    },
+    ({ channel }) => useChannelTabState(session, channel),
     { initialProps: { channel: "alpha" } },
   );
   act(() => {
@@ -166,20 +162,17 @@ test("channel switches retire each visit's menu opening without copying retained
     mounted.result.current.select(panelTabId(alphaUsage));
   });
   mounted.rerender({ channel: "beta" });
+  expect(mounted.result.current.entries).toEqual([]);
   act(() => {
     mounted.result.current.setEntries([betaTool, betaUsage]);
-    mounted.result.current.select(panelTabId(betaUsage));
+    mounted.result.current.select(panelTabId(betaTool));
   });
   mounted.rerender({ channel: "alpha" });
-  expect(mounted.result.current.entries).toEqual([alphaTool]);
-  expect(mounted.result.current.selected).toBe("thread");
-  act(() => mounted.result.current.select(panelTabId(alphaTool)));
+  expect(mounted.result.current.entries).toEqual([alphaTool, alphaUsage]);
+  expect(mounted.result.current.selected).toBe(panelTabId(alphaUsage));
   mounted.rerender({ channel: "beta" });
-  expect(mounted.result.current.entries).toEqual([betaTool]);
-  expect(mounted.result.current.selected).toBe("thread");
-  mounted.rerender({ channel: "alpha" });
-  expect(mounted.result.current.entries).toEqual([alphaTool]);
-  expect(mounted.result.current.selected).toBe(panelTabId(alphaTool));
+  expect(mounted.result.current.entries).toEqual([betaTool, betaUsage]);
+  expect(mounted.result.current.selected).toBe(panelTabId(betaTool));
 });
 
 test("Solo and Messages retain independent workspaces for the same conversation", () => {
@@ -201,7 +194,6 @@ test("Solo and Messages retain independent workspaces for the same conversation"
     ]);
     solo.result.current.select("solo-tab");
     solo.result.current.setPaneOpen(false);
-    solo.result.current.retireMenuEntries();
   });
   expect(messages.result.current).toMatchObject({
     selected: "messages-tab",
@@ -482,6 +474,22 @@ test("verified identity takes precedence over a tab's original hint id", () => {
     messageId: "reply-y",
     rootId: "y",
   });
+});
+
+test("Back to a visit whose only side content is a retained drawer shows that drawer", () => {
+  const session = {} as RelaySession;
+  const h = renderHook(() => useChannelTabState(session, "alpha"));
+  const drawer = {
+    panel: { key: "buzz.todos/todos", channelPlacement: "side" },
+    context: { channelId: "alpha" },
+    target: "todos",
+  } as unknown as ChannelDrawerOpening;
+  act(() => h.result.current.enterVisit("first:channel"));
+  act(() => h.result.current.setSideDrawer(drawer));
+  act(() => h.result.current.enterVisit("second:channel"));
+  act(() => h.result.current.enterVisit("first:channel"));
+  expect(h.result.current.sideDrawer).toBe(drawer);
+  expect(h.result.current.paneOpen).toBe(true);
 });
 
 // Back/Forward restore each visit's selected tabs and never close a thread.

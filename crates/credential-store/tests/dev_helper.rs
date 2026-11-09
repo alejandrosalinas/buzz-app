@@ -1,7 +1,8 @@
 #![cfg(all(target_os = "macos", debug_assertions))]
 
 use buzz_credential_store::{
-    compare_session, delete_session, dev_agent_store, read_human, read_session, Error,
+    add, compare_session, delete, delete_session, dev_item, read_human, read_session, replace,
+    Error,
 };
 use std::fs;
 use std::os::unix::fs::PermissionsExt;
@@ -21,18 +22,13 @@ fn human_restore_uses_the_selected_helper_and_fails_closed() {
             format!("printf '{payload}'"),
             Ok(payload.as_bytes().to_vec()),
         ),
+        // Absent under both the current and the pre-1.0 service.
         ("exit 10".into(), Err(Error::Absent)),
         ("exit 11".into(), Err(Error::Denied)),
         ("exit 12".into(), Err(Error::Corrupt)),
+        ("exit 13".into(), Err(Error::Occupied)),
         ("exit 1".into(), Err(Error::Unavailable)),
         ("kill -TERM $$".into(), Err(Error::Unavailable)),
-        ("exit 0".into(), Err(Error::Corrupt)),
-        ("printf short".into(), Err(Error::Corrupt)),
-        (format!("printf '{payload}x'"), Err(Error::Corrupt)),
-        (
-            format!("printf '{}'", "x".repeat(4096)),
-            Err(Error::Corrupt),
-        ),
         (format!("printf '{payload}'; exit 11"), Err(Error::Denied)),
     ] {
         fs::write(&helper, format!("#!/bin/sh\n{body}\n")).unwrap();
@@ -42,7 +38,9 @@ fn human_restore_uses_the_selected_helper_and_fails_closed() {
 
     fs::write(
         &helper,
-        format!("#!/bin/sh\n[ $# = 0 ] || exit 11\nprintf '{payload}'\n"),
+        format!(
+            "#!/bin/sh\n[ \"$*\" = '--item read xyz.block.buzz.desktop.identity.debug human' ] || exit 11\nprintf '{payload}'\n"
+        ),
     )
     .unwrap();
     assert!(read_human().is_ok());
@@ -51,11 +49,32 @@ fn human_restore_uses_the_selected_helper_and_fails_closed() {
     std::env::set_var("BUZZ_DEV_CREDENTIAL_HELPER_AUTHORIZE", "1");
     fs::write(
         &helper,
-        format!("#!/bin/sh\n[ \"$1\" = --authorize ] || exit 11\nprintf '{payload}'\n"),
+        format!(
+            "#!/bin/sh\n[ \"$*\" = '--authorize --item read xyz.block.buzz.desktop.identity.debug human' ] || exit 11\nprintf '{payload}'\n"
+        ),
     )
     .unwrap();
     assert!(read_human().is_ok());
     std::env::remove_var("BUZZ_DEV_CREDENTIAL_HELPER_AUTHORIZE");
+
+    // `just desktop me` reads the release key through the helper too, and a
+    // refused release read never falls back to the debug key.
+    std::env::set_var("BUZZ_DEV_RELEASE_KEY", "1");
+    fs::write(
+        &helper,
+        format!(
+            "#!/bin/sh\n[ \"$*\" = '--item read xyz.block.buzz.desktop.identity human' ] || exit 12\nprintf '{payload}'\n"
+        ),
+    )
+    .unwrap();
+    assert_eq!(&*read_human().unwrap(), payload.as_bytes());
+    fs::write(
+        &helper,
+        format!("#!/bin/sh\ncase \"$4\" in *.debug) printf '{payload}' ;; *) exit 11 ;; esac\n"),
+    )
+    .unwrap();
+    assert_eq!(read_human(), Err(Error::Denied));
+    std::env::remove_var("BUZZ_DEV_RELEASE_KEY");
 
     fs::write(
         &helper,
@@ -86,7 +105,7 @@ fn human_restore_uses_the_selected_helper_and_fails_closed() {
         .success());
 
     let agent = |operation, value: &[u8]| {
-        dev_agent_store(
+        dev_item(
             operation,
             "xyz.block.buzz.desktop.agents",
             "agent-bundle-v1",
@@ -136,15 +155,21 @@ fn human_restore_uses_the_selected_helper_and_fails_closed() {
         );
         assert_eq!(delete_session(service, &account), Err(expected));
     }
-    fs::write(&helper, format!(r##"#!/bin/sh
-[ "$#" = 4 ] && [ "$1" = --session-store ] && [ "$3" = '{service}' ] && [ "$4" = '{account}' ] || exit 12
+    fs::write(
+        &helper,
+        format!(
+            r##"#!/bin/sh
+[ "$#" = 4 ] && [ "$1" = --item ] && [ "$3" = '{service}' ] && [ "$4" = '{account}' ] || exit 12
 case "$2" in
   read) [ -f "$0.record" ] || exit 10; /bin/cat "$0.record" ;;
   replace) /bin/cat <&1 > "$0.record" ;;
   delete) /bin/rm -f "$0.record" ;;
   *) exit 12 ;;
 esac
-"##)).unwrap();
+"##
+        ),
+    )
+    .unwrap();
     assert_eq!(read_session(service, &account), Err(Error::Absent));
     compare_session(service, &account, None, Some(b"saved")).unwrap();
     assert_eq!(&*read_session(service, &account).unwrap(), b"saved");
@@ -165,7 +190,7 @@ esac
     fs::write(
         &helper,
         r##"#!/bin/sh
-[ "$#" = 4 ] && [ "$1" = --session-store ] || exit 12
+[ "$#" = 4 ] && [ "$1" = --item ] || exit 12
 case "$2" in
   read) [ -f "$0.record" ] || exit 10; /bin/cat "$0.record" ;;
   replace) /bin/cat <&1 > "$0.record"; exit 1 ;;
@@ -181,7 +206,7 @@ esac
 
     fs::write(&helper, "#!/bin/sh\nprintf unexpected\n").unwrap();
     assert_eq!(delete_session(service, &account), Err(Error::Corrupt));
-    fs::write(&helper, "#!/bin/sh\n/usr/bin/head -c 1048577 /dev/zero\n").unwrap();
+    fs::write(&helper, "#!/bin/sh\n/usr/bin/head -c 2097153 /dev/zero\n").unwrap();
     assert_eq!(read_session(service, &account), Err(Error::Corrupt));
     fs::write(&helper, "#!/bin/sh\n/bin/cat <&1 > /dev/null\n").unwrap();
     assert_eq!(
@@ -189,29 +214,40 @@ esac
             service,
             &account,
             Some(b""),
-            Some(&vec![b'x'; 1024 * 1024 + 1])
+            Some(&vec![b'x'; 2 * 1024 * 1024 + 1])
         ),
         Err(Error::Unavailable)
     );
-    for (bad_service, bad_account) in [
-        ("xyz.block.buzz.desktop.federated-session", account.as_str()),
-        (
-            "xyz.block.buzz.desktop.federated-session.debug.other",
-            account.as_str(),
-        ),
-        (service, "human"),
-        (service, ""),
-        (service, "1111"),
-        (
-            service,
-            "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
-        ),
-    ] {
-        assert_eq!(
-            read_session(bad_service, bad_account),
-            Err(Error::Unavailable)
-        );
-    }
+    // Plain item writes reach the helper as their own operations, with the value.
+    fs::write(
+        &helper,
+        r##"#!/bin/sh
+[ "$#" = 4 ] && [ "$1" = --item ] && [ "$3" = xyz.block.buzz.desktop.claude-api-key.debug ] && [ "$4" = anthropic ] || exit 12
+case "$2" in
+  add) [ -f "$0.item" ] && exit 13; /bin/cat <&1 > "$0.item" ;;
+  replace) /bin/cat <&1 > "$0.item" ;;
+  read) [ -f "$0.item" ] || exit 10; /bin/cat "$0.item" ;;
+  delete) [ -f "$0.item" ] || exit 10; /bin/rm "$0.item" ;;
+  *) exit 12 ;;
+esac
+"##,
+    )
+    .unwrap();
+    let (claude, key) = ("xyz.block.buzz.desktop.claude-api-key.debug", "anthropic");
+    add(claude, key, b"first").unwrap();
+    assert_eq!(add(claude, key, b"second"), Err(Error::Occupied));
+    assert_eq!(
+        &*buzz_credential_store::read(claude, key).unwrap(),
+        b"first"
+    );
+    replace(claude, key, b"second").unwrap();
+    assert_eq!(
+        &*buzz_credential_store::read(claude, key).unwrap(),
+        b"second"
+    );
+    delete(claude, key).unwrap();
+    assert_eq!(buzz_credential_store::read(claude, key), Err(Error::Absent));
+    assert_eq!(delete(claude, key), Err(Error::Absent));
 
     std::env::set_var("BUZZ_DEV_CREDENTIAL_HELPER", "helper");
     assert_eq!(read_human(), Err(Error::Unavailable));

@@ -147,6 +147,8 @@ export function useBringAgents(
           pending && describe(pending.agents, canAdd, !!pending.reviewed)
         }
         preventClose={!!pending?.busy}
+        // Bringing an agent changes who is in the channel, so Enter starts on
+        // declining while Bring and Send retain their action styling.
         initialFocus={safeAction}
         finalFocus={() => {
           restoreFocus();

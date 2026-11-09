@@ -239,12 +239,26 @@ test("a sent attachment keeps uploading after navigation and publishes to its or
     await general.getByRole("textbox").press("Enter");
     await expect.poll(() => uploadRequests.length).toBe(1);
     await expect(
-      page.getByRole("status").filter({ hasText: /^Uploading$/ }),
+      page.getByRole("status").filter({ hasText: /^Uploading to #General$/ }),
     ).toBeVisible();
     // The broker reports no bytes: an indeterminate bar, never a number.
     await expect(
-      page.getByRole("progressbar", { name: "Uploading", exact: true }),
+      page.getByRole("progressbar", {
+        name: "Uploading to #General",
+        exact: true,
+      }),
     ).not.toHaveAttribute("aria-valuenow");
+    // Browser-only geometry: Cancel ends the row whatever the text's length,
+    // so it stays put as the text changes.
+    const cancel = general.getByRole("button", {
+      name: "Cancel upload to #General",
+      exact: true,
+    });
+    const [row, button] = await Promise.all([
+      cancel.locator("xpath=..").boundingBox(),
+      cancel.boundingBox(),
+    ]);
+    expect(row.x + row.width - (button.x + button.width)).toBeCloseTo(0, 0);
     await expect(general.getByRole("textbox")).toHaveText("");
     await expect(general.getByText("held.txt")).toHaveCount(0);
 
@@ -255,7 +269,7 @@ test("a sent attachment keeps uploading after navigation and publishes to its or
     });
     await expect(general).toHaveCount(0);
     await expect(
-      page.getByRole("status").filter({ hasText: /^Uploading$/ }),
+      page.getByRole("status").filter({ hasText: /^Uploading to #General$/ }),
     ).toBeVisible();
     await random.getByRole("textbox").fill("still composing");
     expect(
@@ -341,7 +355,7 @@ test.describe("background Cancel focus handoff", () => {
         await form.getByRole("textbox").fill("focused send");
         await form.getByRole("textbox").press("Enter");
         const cancel = form.getByRole("button", {
-          name: "Cancel",
+          name: "Cancel upload to #General",
           exact: true,
         });
         await expect(cancel).toBeVisible();

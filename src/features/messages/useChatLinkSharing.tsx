@@ -32,7 +32,7 @@ export function useChatLinkSharing(
     pending?.sources.filter((base) => base.visibility === "private").length ??
     0;
   const running = useRef(false);
-  const cancel = useRef<HTMLButtonElement>(null);
+  const proceed = useRef<HTMLButtonElement>(null);
   async function share() {
     if (!session || !pending || running.current) return;
     const request = pending;
@@ -192,7 +192,7 @@ export function useChatLinkSharing(
         }
         onClose={() => pending.finish(false)}
         pending={pending.busy}
-        initialFocus={cancel}
+        initialFocus={proceed}
         finalFocus={() => {
           restoreFocus();
           return false;
@@ -200,13 +200,13 @@ export function useChatLinkSharing(
         actions={
           <>
             <Button
-              ref={cancel}
               disabled={pending.busy}
               onClick={() => pending.finish(false)}
             >
               Cancel
             </Button>
             <Button
+              ref={proceed}
               variant="prominent"
               loading={pending.busy}
               onClick={() => void share()}

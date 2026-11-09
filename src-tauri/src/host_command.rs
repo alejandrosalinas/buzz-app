@@ -407,8 +407,17 @@ async fn run_command(
     if !(1..=MAX_HOST_COMMAND_OUTPUT_BYTES).contains(&max_output_bytes) {
         return None;
     }
+    let program = match command.artifact.clone() {
+        Some(artifact) => {
+            tokio::task::spawn_blocking(move || crate::host_process::verified_artifact(artifact))
+                .await
+                .ok()?
+                .ok()?
+        }
+        None => resolve_program(&command.program, &path),
+    };
     run(
-        &resolve_program(&command.program, &path),
+        &program,
         &command.args,
         deadline,
         &path,
@@ -638,6 +647,7 @@ mod tests {
             args: vec![path.to_string_lossy().into_owned()],
             max_output_bytes: None,
             max_input_bytes: None,
+            artifact: None,
         };
         assert_eq!(
             super::run_command(&command, None, Duration::from_secs(2)).await,
@@ -660,6 +670,30 @@ mod tests {
                 None
             );
         }
+    }
+
+    #[tokio::test]
+    async fn artifact_commands_run_only_verified_bytes() {
+        use sha2::{Digest, Sha256};
+        let (directory, _) = executable("");
+        let path = directory.path().canonicalize().unwrap().join("status");
+        crate::test_executable::write_executable(&path, "#!/bin/sh\nprintf verified\n");
+        let sha256 = format!("{:x}", Sha256::digest(fs::read(&path).unwrap()));
+        // A PATH-resolved `env` would print "fallback" instead.
+        let command: super::HostCommand = serde_json::from_value(serde_json::json!({
+            "id": "status", "program": "env", "args": ["printf", "fallback"],
+            "artifact": {"path": path, "sha256": sha256},
+        }))
+        .unwrap();
+        assert_eq!(
+            super::run_command(&command, None, Duration::from_secs(2)).await,
+            Some("verified".into())
+        );
+        crate::test_executable::write_executable(&path, "#!/bin/sh\nprintf planted\n");
+        assert_eq!(
+            super::run_command(&command, None, Duration::from_secs(2)).await,
+            None
+        );
     }
 
     #[tokio::test]

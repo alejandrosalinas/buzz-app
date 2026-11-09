@@ -1,7 +1,7 @@
+import { createTestSession } from "../test-helpers";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import type { Host, HostRequest } from "../../../features/host/service";
-import type { Credential } from "../oauth/browser";
-import { createOAuthSession } from "../oauth/session";
+import type { Credential } from "../session";
 import { createNativeBackend } from "./native";
 
 vi.mock("@tauri-apps/api/core", () => ({ invoke: vi.fn() }));
@@ -14,9 +14,9 @@ beforeEach(() =>
 );
 afterEach(() => vi.unstubAllEnvs());
 
-const credential = (value: string): Credential =>
+const credential = (revision: string): Credential =>
   Object.freeze({
-    value,
+    revision,
     account: Object.freeze({
       subject: "user",
       email: "a@example.com",
@@ -59,7 +59,7 @@ function setup(
   );
   let token = "token";
   let link = Promise.resolve();
-  const session = createOAuthSession(
+  const session = createTestSession(
     async () => credential(token),
     undefined,
     host,
@@ -132,7 +132,6 @@ it("forwards only allowlisted fields to the configured Builderlab", async () => 
     method: "POST",
     headers: {
       "Content-Type": "application/json",
-      "X-BB-Session-Credential": "token",
       Origin: "https://app.builderlab.xyz",
     },
     body: JSON.stringify({ community_id: "c" }),
@@ -183,7 +182,7 @@ it("turns a host transport rejection into an error", async () => {
   await expect(backend.send("list")).rejects.toThrow("Host request failed");
 });
 
-it("signs the shared session out when Builderlab rejects it", async () => {
+it("reads no account when Builderlab rejects the session, and keeps it", async () => {
   let me: Reply = signedIn["/v1/auth/me"];
   const { backend, session, signIn } = setup({
     ...signedIn,
@@ -197,10 +196,10 @@ it("signs the shared session out when Builderlab rejects it", async () => {
   expect(session.snapshot().status).toBe("signed-in");
   me = { status: 401, body: {} };
   await expect(backend.auth()).resolves.toBeNull();
-  expect(session.snapshot().status).toBe("signed-out");
+  expect(session.snapshot().status).toBe("signed-in");
 });
 
-it("ends only the current session when a community route returns 401", async () => {
+it("refuses only the call when a community route returns 401", async () => {
   let answer: (reply: Reply) => void = () => {};
   const { backend, session, signIn, requests } = setup({
     "/v1/buzz/communities/list": () =>
@@ -222,7 +221,7 @@ it("ends only the current session when a community route returns 401", async () 
   await expect(current).rejects.toThrow(
     "Your Builderlab session expired. Sign in again.",
   );
-  expect(session.snapshot().status).toBe("signed-out");
+  expect(session.snapshot().status).toBe("signed-in");
 });
 
 it("reads the account only after sign-in's identity link settles", async () => {
@@ -397,16 +396,13 @@ it("verifies a signed binding with the session that requested it", async () => {
   });
   expect(verified()).toHaveLength(1);
   expect(verified()[0]).toMatchObject({
-    headers: { "X-BB-Session-Credential": "token" },
     body: JSON.stringify({
       challenge_id: "x",
       nonce: "n",
       signed_payload: JSON.stringify({ id: "event" }),
     }),
   });
-  expect(invoke).toHaveBeenCalledWith("nsec_backup_retry", {
-    source: "builderlab",
-  });
+  expect(invoke).toHaveBeenCalledWith("nsec_backup_retry");
 });
 
 it.each([
@@ -434,8 +430,5 @@ it.each([
   release();
   await expect(binding).rejects.toThrow("Builderlab session changed");
   expect(native.verified()).toEqual([]);
-  expect(native.invoke).not.toHaveBeenCalledWith(
-    "nsec_backup_retry",
-    expect.anything(),
-  );
+  expect(native.invoke).not.toHaveBeenCalledWith("nsec_backup_retry");
 });

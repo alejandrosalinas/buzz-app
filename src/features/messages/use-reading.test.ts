@@ -168,6 +168,16 @@ function setup({
         rootId,
         enabled,
       }),
+    setLatest: (id: string) =>
+      view.rerender({
+        session,
+        channelId: "room",
+        scroller,
+        settled: position,
+        latestMessageId: id,
+        rootId,
+        enabled,
+      }),
     unmount: view.unmount,
   };
 }
@@ -183,11 +193,29 @@ function row(id: string, top: number, bottom: number) {
 }
 it("reports only fully visible settled evidence after dwell, not mounted overscan", () => {
   const h = setup();
-  expect(h.reading).toHaveBeenCalledExactlyOnceWith("room");
+  expect(h.reading).toHaveBeenCalledExactlyOnceWith("room", undefined);
   vi.advanceTimersByTime(299);
   expect(h.leases[0]?.observe).not.toHaveBeenCalled();
   vi.advanceTimersByTime(1);
   expect(h.leases[0]?.observe).toHaveBeenCalledExactlyOnceWith(["visible"]);
+});
+it("a row within a pixel of the viewport's edge is fully visible; one clipped further is not", () => {
+  const h = setup();
+  // Scroll offsets snap to whole pixels but rows sit at fractional offsets, so
+  // an exact reveal can leave its row a sliver above the scroller's top.
+  h.setRows([
+    row("revealed", -0.047, 40),
+    row("above", -1.5, 40),
+    row("last", 460, 500.5),
+    row("below", 460, 501.5),
+  ]);
+  h.mutation();
+  vi.advanceTimersToNextFrame(); // Row changes are measured in the next frame.
+  vi.advanceTimersByTime(300);
+  expect(h.dwelled()?.observe).toHaveBeenCalledExactlyOnceWith([
+    "revealed",
+    "last",
+  ]);
 });
 it("a burst of scrolls and row changes cancels dwell at once but measures rows once, in the next frame", () => {
   const h = setup();
@@ -544,14 +572,14 @@ it("releases the old channel and session on rerender and only observes the curre
   h.retarget("next-room");
   expect(h.leases[0]?.dispose).toHaveBeenCalledOnce();
   expect(oldValidity("visible", true)).toBe(false);
-  expect(h.reading).toHaveBeenLastCalledWith("next-room");
+  expect(h.reading).toHaveBeenLastCalledWith("next-room", undefined);
   const nextReading = vi.fn((_channelId: string) => h.reading());
   h.retarget("next-room", {
     ...h.session,
     unread: { ...h.session.unread, reading: nextReading },
   });
   expect(h.leases[1]?.dispose).toHaveBeenCalledOnce();
-  expect(nextReading).toHaveBeenCalledExactlyOnceWith("next-room");
+  expect(nextReading).toHaveBeenCalledExactlyOnceWith("next-room", undefined);
   vi.advanceTimersByTime(299);
   for (const lease of h.leases) expect(lease.observe).not.toHaveBeenCalled();
   vi.advanceTimersByTime(1);
@@ -595,6 +623,34 @@ it("bottom dwell catches up through the newest row, including a tall clipped row
   expect(h.dwelled()?.catchUp).toHaveBeenCalledExactlyOnceWith(
     "bottom",
     "thread",
+  );
+  // Its leases name the thread, which bounds what a DM read may cover.
+  for (const call of h.reading.mock.calls)
+    expect(call).toEqual(["room", "thread"]);
+});
+it("a new latest message keeps observation and catches up after its row is measured", async () => {
+  const h = setup({ latestMessageId: "bottom" });
+  h.setRows([row("bottom", 100, 200)]);
+  h.mutation();
+  vi.advanceTimersToNextFrame();
+  await vi.advanceTimersByTimeAsync(300);
+  expect(h.dwelled()?.catchUp).toHaveBeenCalledExactlyOnceWith(
+    "bottom",
+    undefined,
+  );
+  const leases = h.leases.length;
+  h.setLatest("newer");
+  // Changing only the latest id neither restarts nor takes a lease.
+  expect(h.leases).toHaveLength(leases);
+  expect(h.leases.at(-1)?.dispose).not.toHaveBeenCalled();
+  expect(h.disconnected).not.toHaveBeenCalled();
+  h.setRows([row("bottom", 100, 200), row("newer", 200, 300)]);
+  h.mutation();
+  vi.advanceTimersToNextFrame();
+  await vi.advanceTimersByTimeAsync(300);
+  expect(h.dwelled()?.catchUp).toHaveBeenCalledExactlyOnceWith(
+    "newer",
+    undefined,
   );
 });
 it("a historical viewport or a bottom reached only at dwell end cannot catch up", async () => {

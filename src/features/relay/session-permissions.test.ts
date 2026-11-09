@@ -29,6 +29,7 @@ async function setup(
     peer = keypair(),
     agent = keypair();
   let role = initialRole,
+    peerRole = "owner",
     member = true,
     joinRole = "guest",
     time = 1700000000,
@@ -60,7 +61,7 @@ async function setup(
       content: "",
       tags: [
         ["d", id],
-        ["p", peer.pubkey, "owner"],
+        ...(peerRole === "owner" ? [["p", peer.pubkey, "owner"]] : []),
       ],
     }),
     signed(relay, {
@@ -69,7 +70,7 @@ async function setup(
       content: "",
       tags: [
         ["d", id],
-        ["p", peer.pubkey, "", "owner"],
+        ["p", peer.pubkey, "", peerRole],
         ...(member ? [["p", viewer.pubkey, "", role]] : []),
         ...(agentJoined ? [["p", agent.pubkey, "", "bot"]] : []),
       ],
@@ -132,6 +133,11 @@ async function setup(
     agent,
     async role(next: string) {
       role = next;
+      time++;
+      await owner.session.read([{ kinds: [39002], "#d": [id], limit: 1 }]);
+    },
+    async peerRole(next: string) {
+      peerRole = next;
       time++;
       await owner.session.read([{ kinds: [39002], "#d": [id], limit: 1 }]);
     },
@@ -278,6 +284,18 @@ it("rechecks a signed retry after demotion without signing or publishing it agai
   );
   expect(h.sign).toHaveBeenCalledOnce();
   expect(h.publish).toHaveBeenCalledOnce();
+});
+
+it("publishes a roster owner change that leaves the viewer's own role as it was", async () => {
+  const h = await setup("owner");
+  const channel = () =>
+    h.session.channels.list().channels.find((entry) => entry.id === id);
+  expect(channel()?.owners).toEqual([h.peer.pubkey, h.viewer.pubkey].sort());
+  // Only the other owner changes: members and the viewer's role stay put, yet
+  // the viewer becomes the last owner, which decides whether Leave is offered.
+  await h.peerRole("member");
+  await vi.waitFor(() => expect(channel()?.owners).toEqual([h.viewer.pubkey]));
+  expect(channel()?.viewerRole).toBe("owner");
 });
 
 it("retains guest history, details and Leave", async () => {

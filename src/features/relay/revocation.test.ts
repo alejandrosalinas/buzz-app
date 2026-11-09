@@ -287,6 +287,39 @@ it.each([false, true])(
   },
 );
 
+it.each([
+  { kind: 40007, channelBound: true },
+  { kind: 30023, channelBound: false },
+  { kind: 46020, channelBound: false },
+])(
+  "requires a channel-bound target for a scoped reaction (kind $kind)",
+  ({ kind, channelBound }) => {
+    const h = setup();
+    const target = signed(alice, {
+      kind,
+      content: "target",
+      tags: [["h", "a"]],
+    });
+    const reaction = (channel: string) =>
+      signed(bob, {
+        kind: 7,
+        content: "+",
+        tags: [
+          ["h", channel],
+          ["e", target.id],
+        ],
+      });
+    const matching = reaction("a");
+    h.emit([matching, reaction("b"), target]);
+    expect(
+      h.session
+        .observe([{ kinds: [7], limit: 20 }])
+        .snapshot()
+        .events.map((e) => e.id),
+    ).toEqual(channelBound ? [matching.id] : []);
+  },
+);
+
 it("purges retained reference-only evidence with a denied parent but keeps global profiles", () => {
   const h = setup();
   const secret = message(alice, "a", "private", 10);
@@ -425,7 +458,7 @@ it("an explicitly single-channel generic read denial revokes that channel too", 
   ).toEqual(["other"]);
 });
 
-it("a mixed-reference ID view cannot keep an edit after its denied parent is purged", () => {
+it("a reference-only ID view cannot keep an edit after its denied parent is purged", () => {
   const h = setup();
   const a = message(alice, "a", "A", 10),
     b = message(alice, "b", "B", 10);
@@ -433,7 +466,6 @@ it("a mixed-reference ID view cannot keep an edit after its denied parent is pur
     kind: 40003,
     content: "private edit",
     tags: [
-      ["h", "b"],
       ["e", a.id],
       ["e", b.id],
     ],
@@ -447,7 +479,7 @@ it("a mixed-reference ID view cannot keep an edit after its denied parent is pur
   expect(view.snapshot().events).toEqual([]);
 });
 
-it("revoking a reference target removes its edit from an unrelated retained channel window", async () => {
+it("revoking a reference-only edit's target removes it from an unrelated retained channel window", async () => {
   const h = setup();
   const a = message(alice, "a", "A", 10),
     b = message(alice, "b", "B", 10);
@@ -456,7 +488,6 @@ it("revoking a reference target removes its edit from an unrelated retained chan
     created_at: 11,
     content: "private multi-target edit",
     tags: [
-      ["h", "b"],
       ["e", a.id],
       ["e", b.id],
     ],

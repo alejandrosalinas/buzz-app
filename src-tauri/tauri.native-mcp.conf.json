@@ -6,6 +6,7 @@
         "main-window",
         "desktop-window",
         "huddle-window",
+        "compute-widget",
         {
           "identifier": "native-mcp-callbacks",
           "description": "Callbacks for the opt-in native MCP test bridge.",

@@ -14,6 +14,7 @@ export async function buildApp(
   {
     developmentReact,
     builderlabLogin,
+    federatedIdentity,
     pluginFixtures,
     companionFixture,
     localAgentActivity,
@@ -75,6 +76,9 @@ export async function buildApp(
               "import.meta.env.VITE_BUZZ_BUILDERLAB_URL":
                 '"https://app.builderlab.xyz"',
             }
+          : {}),
+        ...(federatedIdentity
+          ? { "import.meta.env.VITE_BUZZ_FEDERATED_IDENTITY": '"1"' }
           : {}),
         ...(developmentReact ? { "import.meta.env.DEV": "true" } : {}),
         "import.meta.env.VITE_BUZZ_LIVE": '"1"',

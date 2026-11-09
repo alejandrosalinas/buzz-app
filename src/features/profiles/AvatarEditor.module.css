@@ -85,7 +85,8 @@
 
 .panelViewport {
   width: 100%;
-  overflow: hidden;
+  /* Clip, not hidden: a scroll container here would hold the sticky footer. */
+  overflow: clip;
   transition: height 220ms cubic-bezier(0.4, 0, 0.2, 1);
 }
 
@@ -124,6 +125,47 @@ html[data-keyboard-navigation] .panelViewport {
 .emojiPanel {
   --picker-search-margin: calc(-1 * var(--space-2));
   --picker-grid-gutter: 0px;
+}
+
+/* In a short popup, the grid takes what the tabs, size slider and footer
+   (12rem) leave, down to the picker's own 230px minimum. Isolation keeps the
+   picker's layered rows beneath the sticky footer. */
+.popup .emojiPanel {
+  isolation: isolate;
+  --emoji-picker-height: max(
+    230px,
+    min(21.75rem, 40vh, calc(var(--available-height) - 12rem))
+  );
+}
+
+.footerActions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  gap: var(--space-2);
+}
+
+/* Done stays in view when the popup scrolls, which reserves the footer's
+   height as end scroll padding. Only the fade above the actions passes input
+   through; the action row owns its gaps and bottom inset. */
+.popup .footer {
+  position: sticky;
+  z-index: 1;
+  bottom: calc(-1 * var(--space-3));
+  margin-block: calc(-1 * var(--space-3));
+  padding-top: var(--space-3);
+  pointer-events: none;
+}
+
+.popup .footerActions {
+  padding-bottom: var(--space-3);
+  pointer-events: auto;
+}
+
+@media (prefers-reduced-transparency: reduce), (forced-colors: active) {
+  .popup .footer {
+    pointer-events: auto;
+  }
 }
 
 .dropzone:disabled {

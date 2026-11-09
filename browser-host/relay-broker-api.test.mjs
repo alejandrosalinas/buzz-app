@@ -1033,6 +1033,26 @@ test("media proxy rejects malformed ranges before upstream I/O", async () => {
   }
 });
 
+test("media proxy falls back to the JPEG thumbnail an older relay has", async () => {
+  const webp = `${fixtureRelayUrl}/media/${blob}.thumb.webp`;
+  const jpeg = `${fixtureRelayUrl}/media/${blob}.thumb.jpg`;
+  const h = await harness((call) =>
+    call.url.endsWith(".thumb.webp")
+      ? new Response("missing", { status: 404 })
+      : new Response("jpeg", { headers: { "Content-Type": "image/jpeg" } }),
+  );
+  try {
+    const response = await fetch(
+      `${h.base}/api/relay/media?url=${encodeURIComponent(webp)}`,
+    );
+    expect(response.status).toBe(200);
+    expect(await response.text()).toBe("jpeg");
+    expect(h.calls.map((call) => call.url)).toEqual([webp, jpeg]);
+  } finally {
+    await h.close();
+  }
+});
+
 test("media proxy accepts only the media URLs the native proxy accepts", async () => {
   const relayHost = new URL(fixtureRelayUrl).host;
   const scheme = new URL(fixtureRelayUrl).protocol;
@@ -1429,6 +1449,63 @@ test("query keeps relay 403 refusals but turns an edge 403 page into a gateway f
   }
 });
 
+test("a queued request's community refusal marks its own response", async () => {
+  // A held sidebar write and five held queries fill the community's six-slot
+  // lane. The next query waits and starts from whichever finishes first, so
+  // its refusal must mark its own response, not that one's.
+  const releases = new Map();
+  let holding = true;
+  const h = await harness(async (call, count, event) => {
+    const filter = call.body?.[0];
+    const sidebar = filter?.kinds?.[0] === 30078;
+    if (filter?.limit === 7)
+      return new Response("authorization denied\n", { status: 403 });
+    if (holding && call.url.endsWith("/query"))
+      await new Promise((resolve) =>
+        releases.set(sidebar ? "sidebar" : filter.limit, resolve),
+      );
+    if (sidebar) return Response.json([]);
+    if (call.url.endsWith("/events"))
+      return Response.json({ accepted: true, event_id: call.body.id });
+    return success(call, count, event);
+  });
+  const releaseAll = () => {
+    holding = false;
+    for (const release of releases.values()) release();
+  };
+  try {
+    const sidebar = h.post("sidebar-sort", {
+      group: "forums",
+      mode: "recent",
+      sectionIds: [],
+    });
+    await vi.waitFor(() => expect(releases.has("sidebar")).toBe(true));
+    const held = [1, 2, 3, 4, 5].map((limit) =>
+      h.post("query", [{ kinds: [0], limit }]),
+    );
+    await vi.waitFor(() => expect(releases.size).toBe(6));
+    const queued = h.post("query", [{ kinds: [0], limit: 7 }]);
+    await delay(20);
+    expect(h.calls).toHaveLength(6);
+    releases.get(1)();
+    const first = await held[0];
+    const refused = await queued;
+    expect(refused.status).toBe(403);
+    expect(refused.headers.get("x-buzz-refusal")).toBe("access");
+    expect(first.headers.get("x-buzz-refusal")).toBeNull();
+    await Promise.all([first.text(), refused.text()]);
+    releaseAll();
+    await Promise.all(
+      [sidebar, ...held.slice(1)].map(async (response) =>
+        (await response).text(),
+      ),
+    );
+  } finally {
+    releaseAll();
+    await h.close();
+  }
+});
+
 test("Canvas sign and publish bound content and the complete signed event", async () => {
   const h = await harness((call) =>
     Response.json({ accepted: true, event_id: call.body.id }),
@@ -1494,6 +1571,7 @@ test("reaction sign and publish preserve kind 7 and reject malformed targets bef
       tags: [
         ["h", "c"],
         ["e", "a".repeat(64)],
+        ["p", "b".repeat(64)],
         ["emoji", "party", "https://a.test/party.png"],
       ],
     };
@@ -4080,6 +4158,7 @@ test("Builderlab HTTP accepts full agent instructions and isolates the fixed nat
   });
   const instructions = "\\".repeat(20_000);
   let received;
+  let accountReads = 0;
   const nativeCalls = [];
   const h = await harness(() => Response.json([]), {}, fixtureRelayUrl, {
     open: async (url) => openLogin(new URL(url)),
@@ -4090,12 +4169,14 @@ test("Builderlab HTTP accepts full agent instructions and isolates the fixed nat
           session_credential: "fixture-only",
           expires_at: "2030",
         });
-      if (path.endsWith("/v1/auth/me"))
+      if (path.endsWith("/v1/auth/me")) {
+        accountReads += 1;
         return Response.json({
           subject: "fixture-account",
           expires_at: "2030",
           capabilities: { can_use_remote_agents: true },
         });
+      }
       if (path.endsWith("/nostr-identities/challenge"))
         return Response.json({
           error: { code: "missing_mapping", setup_needed: true },
@@ -4144,6 +4225,29 @@ test("Builderlab HTTP accepts full agent instructions and isolates the fixed nat
     const { revision } = JSON.parse(
       event.slice("data: ".length).split("\n\n")[0],
     );
+    const capabilityCheck = await fetch(
+      `${h.base}/api/builderlab/capabilities?revision=${encodeURIComponent(revision)}`,
+    );
+    expect(capabilityCheck.status).toBe(200);
+    expect(await capabilityCheck.json()).toEqual({
+      revision,
+      capabilities: {
+        can_use_remote_agents: true,
+        can_use_builderlab_decisions: false,
+        can_delete_buzz_communities: false,
+      },
+    });
+    const reads = accountReads;
+    for (const query of ["", "?revision=previous"]) {
+      const refused = await fetch(
+        `${h.base}/api/builderlab/capabilities${query}`,
+      );
+      expect(refused.status).toBe(502);
+      expect(await refused.json()).toEqual({
+        error: "Builderlab session changed",
+      });
+    }
+    expect(accountReads).toBe(reads);
     const body = JSON.stringify({
       agent_pubkey: "a".repeat(64),
       agent_instructions: instructions,

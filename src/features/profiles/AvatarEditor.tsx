@@ -15,6 +15,7 @@ import { Field } from "../../shared/design-system/ui/Field";
 import { IconButton } from "../../shared/design-system/ui/IconButton";
 import { Input } from "../../shared/design-system/ui/Input";
 import { InputGroup } from "../../shared/design-system/ui/InputGroup";
+import { ScrollEdgeMaterial } from "../../shared/design-system/ui/ScrollEdgeMaterial";
 import { Tabs } from "../../shared/design-system/ui/Tabs";
 import {
   avatarPictureError,
@@ -81,6 +82,12 @@ const colors = [
   "#000000",
 ];
 
+/** Not the popup, nor the emoji preview it moves from outside the popup. */
+const outsideEditor = (popup: HTMLElement | null, target: EventTarget | null) =>
+  target instanceof Element &&
+  !popup?.contains(target) &&
+  !target.closest("[data-emoji-position]");
+
 /** One draft editor for humans and agents; the enclosing form owns profile Save. */
 export function AvatarEditor(props: Props) {
   const setupAnchor = useRef<HTMLDivElement>(null);
@@ -97,12 +104,44 @@ export function AvatarEditor(props: Props) {
   );
   const pictureError = avatarPictureError(props.value);
   const errorId = useId();
+  // The empty and filled triggers swap as the draft preview changes. One id
+  // lets Base UI follow the mounted one, for Tab and return focus.
+  const triggerId = useId();
+  const popupElement = useRef<HTMLDivElement>(null);
+  // What the preview shows and Done could apply (an emoji needs a community).
+  const unsaved =
+    !!draftPreview &&
+    (draftPreview.emoji
+      ? !!props.community
+      : draftPreview.picture !== props.value);
   const callback = useRef(props.onBusyChange);
   callback.current = props.onBusyChange;
   useEffect(() => {
     callback.current?.(open);
     return () => callback.current?.(false);
   }, [open]);
+  // Only Done applies a draft, so a press elsewhere keeps the popup open
+  // (see onOpenChange) and its focus: once Base UI sees focus leave, it skips
+  // returning focus on the next close, even when that dismissal was cancelled,
+  // and Escape from outside would also dismiss an enclosing dialog. A press
+  // focuses on mousedown, and a label also focuses its control on click.
+  useEffect(() => {
+    if (!open || !unsaved || props.inlinePicker) return;
+    const keepFocus = (event: MouseEvent) => {
+      if (
+        outsideEditor(popupElement.current, event.target) &&
+        (event.type === "mousedown" ||
+          (event.target as Element).closest("label"))
+      )
+        event.preventDefault();
+    };
+    document.addEventListener("mousedown", keepFocus, true);
+    document.addEventListener("click", keepFocus, true);
+    return () => {
+      document.removeEventListener("mousedown", keepFocus, true);
+      document.removeEventListener("click", keepFocus, true);
+    };
+  }, [open, unsaved, props.inlinePicker]);
   const draft = open && (
     <AvatarDraft
       key={props.community ?? "local"}
@@ -127,8 +166,9 @@ export function AvatarEditor(props: Props) {
           // An inline picker stays open, so Escape belongs to its dialog.
           if (props.inlinePicker && details.reason === "escape-key")
             details.allowPropagation();
-          // Pressing or focusing the emoji preview moves the emoji; the
-          // preview is part of the editor even outside its popup.
+          // Pressing or focusing the emoji preview moves the emoji, so it
+          // never dismisses. An unsaved draft survives a press elsewhere.
+          // Escape still discards it, and so does tabbing out onto a guard.
           const { event } = details;
           const target =
             event instanceof FocusEvent ? event.relatedTarget : event.target;
@@ -136,7 +176,10 @@ export function AvatarEditor(props: Props) {
             (details.reason === "outside-press" ||
               details.reason === "focus-out") &&
             target instanceof Element &&
-            target.closest("[data-emoji-position]")
+            (target.closest("[data-emoji-position]") ||
+              (unsaved &&
+                outsideEditor(popupElement.current, target) &&
+                !target.closest("[data-base-ui-focus-guard]")))
           )
             return details.cancel();
           if (!props.inlinePicker || next) setOpen(next);
@@ -148,6 +191,7 @@ export function AvatarEditor(props: Props) {
         !draftPreview?.emoji ? (
           <div className={styles.avatarFrame}>
             <Popover.Trigger
+              id={triggerId}
               render={
                 <button
                   type="button"
@@ -177,6 +221,7 @@ export function AvatarEditor(props: Props) {
         ) : props.triggerStyle === "dotted-squircle" ? (
           <div className={styles.dottedFrame}>
             <Popover.Trigger
+              id={triggerId}
               render={
                 <button
                   type="button"
@@ -215,6 +260,7 @@ export function AvatarEditor(props: Props) {
           </div>
         ) : props.triggerLabel ? (
           <Popover.Trigger
+            id={triggerId}
             render={
               <Button size="compact" disabled={props.disabled}>
                 {props.triggerLabel}
@@ -251,6 +297,7 @@ export function AvatarEditor(props: Props) {
             )}
             <div className={styles.editBadge}>
               <Popover.Trigger
+                id={triggerId}
                 render={
                   <IconButton
                     variant="solid"
@@ -304,6 +351,7 @@ export function AvatarEditor(props: Props) {
               style={{ zIndex: "var(--layer-popover)" }}
             >
               <Popover.Popup
+                ref={popupElement}
                 data-buzz-ui=""
                 className={`popover-surface ${styles.popup}`}
               >
@@ -477,6 +525,22 @@ function AvatarDraft({
     observer.observe(element);
     return () => observer.disconnect();
   }, []);
+  // Focus scrolling stops above the sticky footer, however its actions wrap.
+  const [footer, setFooter] = useState<HTMLDivElement | null>(null);
+  useLayoutEffect(() => {
+    const popup = footer?.closest<HTMLElement>(`.${styles.popup}`);
+    if (!footer || !popup) return;
+    const measure = () => {
+      popup.style.scrollPaddingBlockEnd = `${footer.offsetHeight}px`;
+    };
+    measure();
+    const observer = new ResizeObserver(measure);
+    observer.observe(footer);
+    return () => {
+      observer.disconnect();
+      popup.style.removeProperty("scroll-padding-block-end");
+    };
+  }, [footer]);
   const [picture, setPicture] = useState(value);
   const [mode, setMode] = useState<"image" | "emoji" | "background">("image");
   const [emoji, setEmoji] = useState("😀");
@@ -520,6 +584,7 @@ function AvatarDraft({
   ]);
   useEffect(() => () => onPreview(null), [onPreview]);
   const input = useRef<HTMLInputElement>(null);
+  const urlInput = useRef<HTMLInputElement>(null);
   const pending = useRef<AbortController | null>(null);
   useEffect(
     () => () => {
@@ -556,18 +621,25 @@ function AvatarDraft({
     }
   }
   const pictureError = avatarPictureError(picture);
+  // Validate late: show the URL error after blur or an attempt to apply it,
+  // then keep it current so it clears as soon as the URL is fixed.
+  // An invalid saved URL is not a new attempt, so it shows at once.
+  const [checkPicture, setCheckPicture] = useState(() => !!pictureError);
+  const applyPicture = () => {
+    if (!pictureError) return done(picture);
+    setCheckPicture(true);
+    urlInput.current?.focus();
+  };
   const doneButton = (
     <Button
       variant="prominent"
       disabled={
-        disabled ||
-        busy ||
-        (mode !== "image" ? !community || !emoji.trim() : !!pictureError)
+        disabled || busy || (mode !== "image" && (!community || !emoji.trim()))
       }
       onClick={() => {
         if (mode !== "image")
           void upload(() => emojiAvatar(emoji, color, scale, offset), true);
-        else done(picture);
+        else applyPicture();
       }}
     >
       Done
@@ -628,13 +700,14 @@ function AvatarDraft({
         <Field
           label="Picture URL (optional)"
           labelVisibility="hidden"
-          error={pictureError}
+          error={checkPicture ? pictureError : undefined}
         >
           <InputGroup
             surface={inlinePicker ? "panel" : "inset"}
             leading={<LinkIcon size={18} aria-hidden="true" />}
           >
             <Input
+              ref={urlInput}
               type="url"
               placeholder="Paste an image URL"
               maxLength={2048}
@@ -643,9 +716,10 @@ function AvatarDraft({
               onKeyDown={(event) => {
                 if (event.key === "Enter") {
                   event.preventDefault();
-                  if (!disabled && !busy && !pictureError) done(picture);
+                  if (!disabled && !busy) applyPicture();
                 }
               }}
+              onBlur={() => setCheckPicture(true)}
               onChange={(event) => {
                 setPicture(event.target.value);
                 setError("");
@@ -768,22 +842,28 @@ function AvatarDraft({
         )}
         {!community && (
           <p className="text-body-sm text-subtle">
-            Select a community in the sidebar to upload an image or emoji. Your
-            local default can use a public HTTPS image URL.
+            Select a community to upload an image or emoji. Your local default
+            can use a public HTTPS image URL.
           </p>
         )}
         {!(mode === "background" && customColorOpen) && (
-          <div className="flex flex-wrap justify-between gap-2">
-            {!inlinePicker && (
-              <Button
-                variant="destructive"
-                disabled={(!value && !picture) || disabled || busy}
-                onClick={() => done("")}
-              >
-                Remove avatar
-              </Button>
-            )}
-            {actionTarget ? createPortal(doneButton, actionTarget) : doneButton}
+          <div ref={setFooter} className={styles.footer}>
+            {/* A short popup scrolls beneath its actions; inline, they sit in flow. */}
+            {!inlinePicker && <ScrollEdgeMaterial edge="bottom" />}
+            <div className={styles.footerActions}>
+              {!inlinePicker && (
+                <Button
+                  variant="destructive"
+                  disabled={(!value && !picture) || disabled || busy}
+                  onClick={() => done("")}
+                >
+                  Remove avatar
+                </Button>
+              )}
+              {actionTarget
+                ? createPortal(doneButton, actionTarget)
+                : doneButton}
+            </div>
           </div>
         )}
       </fieldset>

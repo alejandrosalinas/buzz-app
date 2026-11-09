@@ -83,6 +83,17 @@
 .transcript > [data-inline] {
   margin-block-end: 0;
 }
+/* Refresh stays in view while the reader follows the latest step. */
+.transcriptHeader {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  background: var(--surface-panel);
+}
+.transcriptHeader > [data-inline] {
+  margin-block-end: 0;
+  align-items: center;
+}
 .section > [data-inline],
 .transcript > [data-inline] {
   align-items: center;

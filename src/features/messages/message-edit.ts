@@ -15,9 +15,12 @@ export function profileMentionLink(label: string, target: string) {
   return `[${text}](${target})`;
 }
 
-/** Picker selection during an edit becomes the same link as a preserved mention. */
-export const editMentionText = ({ pubkey, name }: MentionRecipient) =>
-  `${profileMentionLink(`@${name}`, `nostr:${npubEncode(pubkey)}`)} `;
+/** Picker selection during an edit becomes the same link as a preserved
+ * mention, followed by the key that ended the name or a space. */
+export const editMentionText = (
+  { pubkey, name }: MentionRecipient,
+  after = " ",
+) => `${profileMentionLink(`@${name}`, `nostr:${npubEncode(pubkey)}`)}${after}`;
 
 /** Keep attachment Markdown and turn already-bound names into explicit identities.
  * Edited legacy prose remains unbound; the editor never invents recipients. */

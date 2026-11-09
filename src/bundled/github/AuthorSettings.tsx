@@ -1,14 +1,22 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
+import { Accordion } from "../../shared/design-system/ui/Accordion";
 import { Button } from "../../shared/design-system/ui/Button";
 import { Field } from "../../shared/design-system/ui/Field";
 import { InlineHeader } from "../../shared/design-system/ui/Header";
-import { Radio, RadioGroup } from "../../shared/design-system/ui/RadioGroup";
+import { Select } from "../../shared/design-system/ui/Select";
 import { SettingsGroup } from "../../shared/design-system/ui/SettingsGroup";
 import { Textarea } from "../../shared/design-system/ui/Textarea";
 import { loadPolicy, open, parse, savePolicy, type Rule } from "./authors";
+import type { GitHubCli } from "./gh";
 
 /** Whose pull request comments and reviews wake agents watching it. */
-export function AuthorSettings({ active }: { active(): boolean }) {
+export function AuthorSettings({
+  active,
+  gh,
+}: {
+  active(): boolean;
+  gh?: GitHubCli | undefined;
+}) {
   const [saved, setSaved] = useState(loadPolicy);
   const [draft, setDraft] = useState(saved.text);
   const [fallback, setFallback] = useState(saved.fallback);
@@ -46,6 +54,7 @@ export function AuthorSettings({ active }: { active(): boolean }) {
         }}
       >
         <SettingsGroup layout="form">
+          <Account gh={gh} />
           {saved.error !== undefined && (
             <p role="status" className="m-0 text-body-sm text-subtle">
               Your saved rules no longer parse, so no comment or review wakes
@@ -54,15 +63,13 @@ export function AuthorSettings({ active }: { active(): boolean }) {
           )}
           {open(saved) && (
             <p role="status" className="m-0 text-body-sm text-subtle">
-              Comments from anyone no rule denies can wake your agents. To limit
-              them, allow only org:name or author:login, and don’t wake them
-              when no rule matches.
+              Comments from anyone no rule denies can wake your agents.
             </p>
           )}
           <Field
             label="Rules"
             error={checked && typeof parsed === "string" ? parsed : undefined}
-            description="One per line: allow or deny, then any of author:login, author:/pattern/, org:organization, body:/pattern/ and prefix:text, which runs to the end of the line. Patterns are JavaScript regular expressions without backreferences, lookaround or escapes JavaScript reads as plain letters, such as \q. body: sees a comment's first 1,000 characters, the most a wake quotes. A bare allow or deny matches everyone. author:@me is your GitHub account, a bot's login ends in [bot], and logins match case aside. The first rule that matches decides. Membership your GitHub account cannot see, or of a misspelled organization, counts as none."
+            description="One rule per line. The first rule that matches decides."
           >
             <Textarea
               rows={6}
@@ -76,16 +83,56 @@ export function AuthorSettings({ active }: { active(): boolean }) {
               }}
             />
           </Field>
-          <Field label="When no rule matches" nativeLabel={false}>
-            <RadioGroup<Rule["effect"]>
-              aria-label="When no rule matches"
-              value={fallback}
-              onValueChange={setFallback}
-            >
-              <Radio value="allow" label="Wake the agent" />
-              <Radio value="deny" label="Don’t wake it" />
-            </RadioGroup>
-          </Field>
+          <Accordion
+            variant="form"
+            items={[
+              {
+                value: "syntax",
+                title: "Rule syntax",
+                content: (
+                  <ul className="m-0 flex flex-col gap-1 pl-5 text-body-sm text-subtle">
+                    <li>
+                      allow or deny, then any of author:login, author:/pattern/,
+                      org:organization, body:/pattern/ and prefix:text, which
+                      runs to the end of the line. A bare allow or deny matches
+                      everyone.
+                    </li>
+                    <li>
+                      author:@me is your GitHub account, a bot’s login ends in
+                      [bot], and logins match case aside.
+                    </li>
+                    <li>
+                      body: sees a comment’s first 1,000 characters, the most a
+                      wake quotes.
+                    </li>
+                    <li>
+                      Patterns are JavaScript regular expressions without
+                      backreferences, lookaround or escapes JavaScript reads as
+                      plain letters, such as \q.
+                    </li>
+                    <li>
+                      Membership your GitHub account cannot see, or of a
+                      misspelled organization, counts as none.
+                    </li>
+                  </ul>
+                ),
+              },
+            ]}
+          />
+          <Select
+            label="When no rule matches"
+            value={fallback}
+            groups={[
+              {
+                label: "",
+                options: [
+                  { value: "allow", label: "Wake the agent" },
+                  { value: "deny", label: "Don’t wake it" },
+                ],
+              },
+            ]}
+            onValueChange={(value) => setFallback(value as Rule["effect"])}
+          />
           {error && (
             <p role="alert" className="m-0 text-body-sm text-danger">
               {error}
@@ -99,5 +146,37 @@ export function AuthorSettings({ active }: { active(): boolean }) {
         </SettingsGroup>
       </form>
     </section>
+  );
+}
+/** Who author:@me is: the account the person's `gh` is signed in to. */
+function Account({ gh }: { gh: GitHubCli | undefined }) {
+  /** The login, or why `gh` could not say. */
+  const [answer, setAnswer] = useState<{ login: string } | Error>();
+  useEffect(() => {
+    if (!gh) return;
+    const stop = new AbortController();
+    gh<{ viewer: { login: string } }>(
+      "query{viewer{login}}",
+      {},
+      stop.signal,
+    ).then(
+      ({ viewer }) => setAnswer(viewer),
+      (reason) => {
+        if (!stop.signal.aborted)
+          setAnswer(reason instanceof Error ? reason : Error(String(reason)));
+      },
+    );
+    return () => stop.abort();
+  }, [gh]);
+  return (
+    <p className="m-0 text-body-sm text-subtle">
+      {!gh
+        ? "Your GitHub account is the one gh is signed in to in the desktop app."
+        : !answer
+          ? "Checking which GitHub account gh is signed in to…"
+          : answer instanceof Error
+            ? `gh couldn’t read your GitHub account: ${answer.message}`
+            : `Signed in to GitHub as ${answer.login} through gh.`}
+    </p>
   );
 }

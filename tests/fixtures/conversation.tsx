@@ -50,9 +50,13 @@ const owners = ["a", "b"].map((community) => {
       ["emoji", "party", `https://${community}.test/media/current.png`],
     ],
   });
-  const historic = message(viewer, "general", "History :party:", 10, [
-    ["emoji", "party", `https://${community}.test/media/history.png`],
-  ]);
+  const historic = message(
+    viewer,
+    "general",
+    "History :party: [Inspect fixture](consumer://message/inspect)",
+    10,
+    [["emoji", "party", `https://${community}.test/media/history.png`]],
+  );
   const reaction = signed(member, {
     kind: 7,
     content: ":party:",
@@ -61,7 +65,14 @@ const owners = ["a", "b"].map((community) => {
       ["emoji", "party", `https://${community}.test/media/reaction.png`],
     ],
   });
-  const events = [historic, reaction];
+  // These rows give the panel journey a scroll position above the latest row.
+  const events = [
+    historic,
+    reaction,
+    ...Array.from({ length: 24 }, (_, index) =>
+      message(viewer, "general", `Fixture context ${index + 1}`, index + 1),
+    ),
+  ];
   const rejected = new Set<string>();
   const owner = createRelaySession(
     {

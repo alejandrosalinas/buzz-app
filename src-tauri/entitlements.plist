@@ -4,5 +4,8 @@
 <dict>
   <key>com.apple.security.device.audio-input</key>
   <true/>
+  <!-- MeshLLM installs versioned native runtimes outside the app bundle (same as classic Buzz). -->
+  <key>com.apple.security.cs.disable-library-validation</key>
+  <true/>
 </dict>
 </plist>

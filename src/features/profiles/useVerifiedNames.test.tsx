@@ -5,6 +5,7 @@ import { eventDto } from "../relay/events";
 import { createProfileDirectory } from "../relay/profile-directory";
 import { keypair, signed } from "../relay/testing";
 import type { VerifiedProfile } from "../relay/verified-profile";
+import { setNamePreference } from "./name-preference";
 import {
   useVerifiedNames,
   withVerifiedNames,
@@ -440,6 +441,74 @@ it("drops a searched name when the shared directory's first head for that person
     expect(hook.result.current.has(person.pubkey)).toBe(false);
   } finally {
     cleanup();
+    directory.dispose();
+    vi.useRealTimers();
+  }
+});
+
+it("names verified people by full name on a device that prefers it, and refolds shared names when the choice changes", async () => {
+  vi.useFakeTimers();
+  const relay = keypair(),
+    person = keypair();
+  const authority = { pubkey: relay.pubkey, multipleIssuers: false };
+  let sink: { event(event: unknown): void; eose(): void } | undefined;
+  const directory = createProfileDirectory({} as never, undefined, undefined, {
+    authority,
+    subscribe: (_filter, next) => {
+      sink = next;
+      return () => {};
+    },
+  });
+  try {
+    directory.accept([
+      eventDto(
+        signed(person, {
+          kind: 0,
+          content: JSON.stringify({ name: "Profile" }),
+          tags: [],
+          created_at: 1,
+        }),
+      ),
+    ]);
+    await directory.ensure([person.pubkey]);
+    sink?.eose();
+    await act(async () => {
+      sink?.event(
+        eventDto(
+          signed(relay, {
+            kind: 30382,
+            content: "",
+            created_at: 2,
+            tags: [
+              ["d", person.pubkey],
+              ["p", person.pubkey],
+              ["active", "true"],
+              ["display_name", "ada"],
+              ["username", "ada"],
+              ["full_name", "Ada Lovelace"],
+              ["issuer_label", "Block"],
+              ["verified_at", "1"],
+            ],
+          }),
+        ),
+      );
+      await vi.runOnlyPendingTimersAsync();
+    });
+    const shown = () => directory.queries.snapshot().get(person.pubkey)?.name;
+    expect(shown()).toBe("ada");
+    act(() => setNamePreference("full-name"));
+    expect(shown()).toBe("Ada Lovelace");
+    expect(
+      withVerifiedNames(
+        [{ pubkey: key(1), name: "Profile" }],
+        new Map([[key(1), name("bea", "Bea Name")]]),
+        new Map(),
+      )[0]?.name,
+    ).toBe("Bea Name");
+    act(() => setNamePreference("username"));
+    expect(shown()).toBe("ada");
+  } finally {
+    setNamePreference("username");
     directory.dispose();
     vi.useRealTimers();
   }

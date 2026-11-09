@@ -1,5 +1,5 @@
-// One agent's goose sessions, in the `goose-acp` process all goose agents
-// share. The sessions themselves live in the shared ACP client.
+// One agent's goose sessions, in that agent's own `goose-acp` process. The
+// sessions themselves live in the shared ACP client.
 import {
   AgentSessions as AcpAgentSessions,
   type SessionsOptions as AcpSessionsOptions,
@@ -24,10 +24,10 @@ export {
   type SessionStore,
 } from "../../features/agent-harness/acp/agent-sessions";
 
-/** The one `goose-acp` every goose agent's sessions open in, started in the
- * home folder when a session first needs it, and again after it exits. One
- * runtime shares one. */
-export class SharedProcess {
+/** The `goose-acp` one agent's sessions open in, started in the home folder
+ * when a session first needs it, and again after it exits. Its own process,
+ * so its environment carries only this agent's Buzz credential. */
+export class AgentProcess {
   private ready: Promise<GooseProcess> | undefined;
   /** The process `ready` started, kept until it exits, even when its start
    * failed. */
@@ -37,6 +37,10 @@ export class SharedProcess {
     /** Starts a session's MCP server for its agent's tools. */
     private readonly serve: ServeMcp,
     private readonly protection?: AgentProtection,
+    /** The agent as its latest delivery named it, once known. */
+    private readonly agent: () =>
+      | Readonly<{ pubkey: string; relay: string }>
+      | undefined = () => undefined,
   ) {}
 
   /** The running process. One that failed to start is started again on the
@@ -44,6 +48,7 @@ export class SharedProcess {
   get(): Promise<GooseProcess> {
     this.protection?.assertAvailable();
     if (this.ready) return this.ready;
+    const agent = this.agent();
     const ready = (async () => {
       const bridge =
         this.protection &&
@@ -58,6 +63,9 @@ export class SharedProcess {
             cwd: await this.host.resolveDirectory("~"),
             serve: this.serve,
             onProcess: (goose) => (this.process = goose),
+            ...(agent && {
+              agent: { pubkey: agent.pubkey, relay: agent.relay },
+            }),
             ...(bridge && {
               protected: true,
               env: {
@@ -109,7 +117,7 @@ export class SharedProcess {
 
 export type SessionsOptions = Omit<AcpSessionsOptions, "label">;
 
-/** An agent's sessions, in the process all goose agents share. */
+/** An agent's sessions, in its own process. */
 export class AgentSessions extends AcpAgentSessions {
   constructor(options: SessionsOptions) {
     super({ ...options, label: "goose" });

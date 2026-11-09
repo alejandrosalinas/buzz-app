@@ -166,6 +166,62 @@ describe("hover intent", () => {
     expect(screen.getByRole("tooltip")).toHaveTextContent("Go back");
   });
 
+  it("releases a pressed trigger when roving focus arrives from a sibling", async () => {
+    render(
+      <div role="tablist" aria-label="Apps" aria-orientation="vertical">
+        <Tooltip content="Activity label" hint="dock">
+          <button type="button" role="tab">
+            Activity
+          </button>
+        </Tooltip>
+        <Tooltip content="Messages label" hint="dock">
+          <button type="button" role="tab">
+            Messages
+          </button>
+        </Tooltip>
+      </div>,
+    );
+    const activity = screen.getByRole("tab", { name: "Activity" });
+    const messages = screen.getByRole("tab", { name: "Messages" });
+    // Click Activity, then click Messages, then move back with an arrow key.
+    fireEvent.pointerDown(activity, { pointerType: "mouse" });
+    act(() => activity.focus());
+    fireEvent.pointerDown(messages, { pointerType: "mouse" });
+    act(() => messages.focus());
+    fireEvent.keyDown(messages, { key: "ArrowUp" });
+    act(() => activity.focus());
+    await rest(0);
+    expect(screen.getByRole("tooltip")).toHaveTextContent("Activity label");
+  });
+
+  it("keeps a pressed trigger quiet after keys inside its own menu", async () => {
+    render(
+      <>
+        <div role="tablist" aria-label="Apps">
+          <Tooltip content="Activity label" hint="dock">
+            <button type="button" role="tab">
+              Activity
+            </button>
+          </Tooltip>
+        </div>
+        <div role="menu" aria-label="Tab actions">
+          <button type="button" role="menuitem">
+            Close
+          </button>
+        </div>
+      </>,
+    );
+    const activity = screen.getByRole("tab", { name: "Activity" });
+    const item = screen.getByRole("menuitem", { name: "Close" });
+    fireEvent.pointerDown(activity, { pointerType: "mouse" });
+    act(() => item.focus());
+    fireEvent.keyDown(item, { key: "ArrowDown" });
+    fireEvent.keyDown(item, { key: "Escape" });
+    act(() => activity.focus());
+    await rest(0);
+    expect(screen.queryByRole("tooltip")).toBeNull();
+  });
+
   it("opens a neighbor at once while a hint in the same provider is showing", async () => {
     render(
       <TooltipProvider>

@@ -48,7 +48,7 @@ export function MarkAllReadShortcut({
     name: string;
   }>();
   const [pending, setPending] = useState(false);
-  const cancel = useRef<HTMLButtonElement>(null);
+  const proceed = useRef<HTMLButtonElement>(null);
   // A different session retires an open question about the old one.
   // biome-ignore lint/correctness/useExhaustiveDependencies: Only the session retires it.
   useEffect(() => setAsking(undefined), [session]);
@@ -77,14 +77,15 @@ export function MarkAllReadShortcut({
       title="Mark everything as read?"
       description={`Every conversation in ${asking.name} will show as read. You can still mark a conversation unread afterward.`}
       pending={pending}
-      initialFocus={cancel}
+      initialFocus={proceed}
       onClose={close}
       actions={
         <>
-          <Button ref={cancel} disabled={pending} onClick={close}>
+          <Button disabled={pending} onClick={close}>
             Cancel
           </Button>
           <Button
+            ref={proceed}
             variant="primary"
             loading={pending}
             onClick={() => {

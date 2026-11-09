@@ -16,13 +16,21 @@ const accent =
 // code point alone keeps a map from folded text back to the name for
 // underlining, and gives the same result as folding the whole name.
 const foldPoint = (char: string) =>
-  char.normalize("NFKD").replace(accent, "").toLowerCase().replace(/ς/g, "σ");
+  // ASCII has no accents, decompositions or final sigma.
+  char < "\x80"
+    ? char.toLowerCase()
+    : char
+        .normalize("NFKD")
+        .replace(accent, "")
+        .toLowerCase()
+        .replace(/ς/g, "σ");
+
+/** The folded code points of `text`, one or more per code point. */
+const foldChars = (text: string) =>
+  [...text].flatMap((char) => [...foldPoint(char)]);
 
 /** A name or query without accents and case. Keeps spaces at the ends. */
 export const foldName = (text: string) => [...text].map(foldPoint).join("");
-
-/** The normalized form for comparing and ordering names. */
-export const normalizeName = (text: string) => foldName(text).trim();
 
 /** Words are runs of letters, marks and digits; anything else separates them. */
 const wordChar = /[\p{L}\p{M}\p{N}]/u;
@@ -87,7 +95,7 @@ const startLength = 32;
  * than 16 starts is not `complete`: callers must match it directly.
  */
 export function nameStarts(name: string) {
-  const chars = [...name].flatMap((char) => [...foldPoint(char)]);
+  const chars = foldChars(name);
   let start = 0;
   let end = chars.length;
   while (start < end && space.test(chars[start] ?? "")) start += 1;
@@ -114,6 +122,61 @@ export type PersonMatch = {
   positions: number[];
 };
 
+// Folding is the cost of matching, and the same names meet a new query on
+// every keystroke, so folded names stay folded. Long names are not kept,
+// raw or folded: combining marks can fold a long relay name to a short one.
+const foldedNames = new Map<string, readonly string[]>();
+const foldedLimit = 65536;
+const foldedChars = (name: string) => {
+  if (name.length > 128) return foldChars(name);
+  let chars = foldedNames.get(name);
+  if (!chars) {
+    chars = foldChars(name);
+    if (chars.length > 128) return chars;
+    if (foldedNames.size >= foldedLimit) foldedNames.clear();
+    foldedNames.set(name, chars);
+  }
+  return chars;
+};
+
+/** The normalized form for comparing and ordering names. Reads the folded
+ * names cache, since mentions normalize every name on each keystroke; a
+ * query adds one entry per keystroke, within the same bound. */
+export const normalizeName = (text: string) =>
+  foldedChars(text).join("").trim();
+
+/** Where and how well folded `chars` match the folded `needle`, or undefined. */
+function search(chars: readonly string[], needle: readonly string[]) {
+  let start = 0;
+  let end = chars.length;
+  while (start < end && space.test(chars[start] ?? "")) start += 1;
+  while (end > start && space.test(chars[end - 1] ?? "")) end -= 1;
+  if (!needle.length) return { tier: 0 as const, from: start };
+  const at = (from: number) =>
+    from + needle.length <= end &&
+    needle.every((char, n) => chars[from + n] === char);
+  if (end - start === needle.length && at(start))
+    return { tier: 0 as const, from: start };
+  if (end - start > needle.length && at(start))
+    return { tier: 1 as const, from: start };
+  // A later word: the match starts where a word starts. It is that whole
+  // word (tier 2) when it also ends where a word ends. A query with a space
+  // matches only from the start of the name.
+  if (needle.some((char) => space.test(char))) return undefined;
+  let prefix: number | undefined;
+  for (let from = start + 1; from < end; from += 1) {
+    if (!isWord(chars[from]) || isWord(chars[from - 1]) || !at(from)) continue;
+    const stop = from + needle.length;
+    if (!isWord(chars[stop])) return { tier: 2 as const, from };
+    prefix ??= from;
+  }
+  return prefix === undefined ? undefined : { tier: 3 as const, from: prefix };
+}
+
+/** The tier of `matchPerson`, given `[...normalizeName(query)]`. */
+export const matchTier = (name: string, foldedQuery: readonly string[]) =>
+  search(foldedChars(name), foldedQuery)?.tier;
+
 /** How `name` matches `query`, or undefined. An empty query matches at tier 0. */
 export function matchPerson(
   name: string,
@@ -133,30 +196,13 @@ export function matchPerson(
       origin.push([index]);
     }
   });
-  let start = 0;
-  let end = chars.length;
-  while (start < end && space.test(chars[start] ?? "")) start += 1;
-  while (end > start && space.test(chars[end - 1] ?? "")) end -= 1;
-  if (!needle.length) return { tier: 0, positions: [] };
-  const at = (from: number) =>
-    from + needle.length <= end &&
-    needle.every((char, n) => chars[from + n] === char);
-  const found = (tier: PersonMatch["tier"], from: number) => ({
-    tier,
-    positions: [...new Set(origin.slice(from, from + needle.length).flat())],
-  });
-  if (end - start === needle.length && at(start)) return found(0, start);
-  if (end - start > needle.length && at(start)) return found(1, start);
-  // A later word: the match starts where a word starts. It is that whole
-  // word (tier 2) when it also ends where a word ends. A query with a space
-  // matches only from the start of the name.
-  if (needle.some((char) => space.test(char))) return undefined;
-  let prefix: number | undefined;
-  for (let from = start + 1; from < end; from += 1) {
-    if (!isWord(chars[from]) || isWord(chars[from - 1]) || !at(from)) continue;
-    const stop = from + needle.length;
-    if (!isWord(chars[stop])) return found(2, from);
-    prefix ??= from;
-  }
-  return prefix === undefined ? undefined : found(3, prefix);
+  const found = search(chars, needle);
+  return (
+    found && {
+      tier: found.tier,
+      positions: [
+        ...new Set(origin.slice(found.from, found.from + needle.length).flat()),
+      ],
+    }
+  );
 }

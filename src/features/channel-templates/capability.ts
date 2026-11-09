@@ -3,6 +3,7 @@ import { isTransientFailure } from "../relay/errors";
 import type { RelayEvent, ReadFilter } from "../relay/events";
 import type { Outbox, LocalEvents } from "../relay/outbox";
 import type { ChannelKitHost } from "./host";
+import type { ChannelSummary } from "../relay/contracts";
 import {
   CanvasConflictError,
   isDefinitiveCanvasConflict,
@@ -74,7 +75,8 @@ export function createChannelKit({
 }) {
   let state: Snapshot = { status: host ? "idle" : "unavailable", entries: [] };
   let pending: Promise<void> | undefined;
-  let saving = false;
+  /** One save per record coordinate; saves of other records proceed. */
+  const saving = new Set<string>();
   let epoch = 0;
   const listeners = new Set<() => void>();
   const update = (next: Snapshot) => {
@@ -231,9 +233,9 @@ export function createChannelKit({
       ? AbortSignal.any([signal, operationSignal])
       : signal;
     preparing.throwIfAborted();
-    if (!host || !outbox || saving)
+    if (!host || !outbox || saving.has(d))
       throw new Error("Recipe saving is unavailable or already in progress");
-    saving = true;
+    saving.add(d);
     try {
       await ready;
       const head = async (readSignal = signal) =>
@@ -295,7 +297,7 @@ export function createChannelKit({
         );
       return id;
     } finally {
-      saving = false;
+      saving.delete(d);
     }
   }
   const capability = Object.freeze({
@@ -335,7 +337,9 @@ export function createChannelKit({
         resume,
         operationSignal,
       );
-      await refresh();
+      // Another record's save may have started a catalog read before this
+      // one was confirmed; do not join it.
+      await refresh({ after: true });
       return id;
     },
   });
@@ -486,3 +490,6 @@ export function createChannelKit({
 export type Resume = { id?: string | undefined; enqueued(id: string): void };
 export type ChannelKit = ReturnType<typeof createChannelKit>["capability"];
 export type ChannelCanvas = ReturnType<typeof createChannelKit>["canvas"];
+/** Canvas and Todos show a channel read-only until the viewer can write it. */
+export const canvasReadOnly = (channel: ChannelSummary | undefined) =>
+  !channel || !!channel.archived || !!channel.readOnly || !!channel.cached;

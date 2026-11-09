@@ -110,6 +110,7 @@ export function PrivateChannels({
   /** The channel Remove asked about, as the Members dialog asks first. */
   const [removing, setRemoving] = useState<ChannelSummary>();
   const cancelRemove = useRef<HTMLButtonElement>(null);
+  const proceed = useRef<HTMLButtonElement>(null);
   const headingId = useId();
   const section = useRef<HTMLDivElement>(null);
   /** The control here that has focus, and its place among them. */
@@ -393,12 +394,14 @@ export function PrivateChannels({
               ? `Members of each channel will see that you removed ${name}.`
               : "Members of each channel will see that you added Bestie."
           }
+          initialFocus={former ? undefined : proceed}
           onClose={() => setConfirming(undefined)}
           actions={
             <>
               <Button onClick={() => setConfirming(undefined)}>Cancel</Button>
               <Button
-                variant="prominent"
+                ref={proceed}
+                variant={former ? "destructive" : "prominent"}
                 onClick={() => {
                   setConfirming(undefined);
                   void (former ? remove : add)(confirming);

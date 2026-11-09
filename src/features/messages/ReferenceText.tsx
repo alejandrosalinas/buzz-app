@@ -12,6 +12,29 @@ import type { AgentLibrary } from "../agents/library";
 import styles from "../../shared/InlineReference.module.css";
 
 const emptyProfiles: ReadonlyMap<string, Profile> = new Map();
+const graphemes = new Intl.Segmenter(undefined, { granularity: "grapheme" });
+
+/** A mention chip's contents. The icon stays with the first character, so a
+ * chip at a line end never strands its icon; the rest wraps within the message. */
+export function MentionLabel({
+  agent,
+  label,
+}: {
+  agent: boolean;
+  label: string;
+}) {
+  const Icon = agent ? RobotIcon : AtIcon;
+  const lead = graphemes.segment(label).containing(0)?.segment ?? "";
+  return (
+    <>
+      <span className={styles.lead}>
+        <Icon aria-hidden="true" className={styles.icon} />
+        {lead}
+      </span>
+      {label.slice(lead.length)}
+    </>
+  );
+}
 /** The only channel fields a reference may read; the rest can be out of date. */
 export type ReferenceChannel = Pick<
   ChannelSummary,
@@ -200,7 +223,6 @@ export function ReferenceText({
       reference.kind === "channel"
         ? reference.label.slice(1)
         : resolveName(reference.id, reference.label.slice(1));
-    const Icon = reference.kind === "agent" ? RobotIcon : AtIcon;
     parts.push(
       reference.kind === "channel" ? (
         <MessageLink
@@ -222,8 +244,7 @@ export function ReferenceText({
           data-mention-self={reference.id === session?.viewer ? "" : undefined}
           title={`${reference.kind === "agent" ? "Agent" : "Person"}: ${label}\n${reference.id}`}
         >
-          <Icon aria-hidden="true" className={styles.icon} />
-          {label}
+          <MentionLabel agent={reference.kind === "agent"} label={label} />
         </span>
       ),
     );

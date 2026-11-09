@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useRef, useState } from "react";
 import { AlertDialog } from "../../shared/design-system/ui/AlertDialog";
 import { Button } from "../../shared/design-system/ui/Button";
 import type {
@@ -38,6 +38,7 @@ export function Restrictions({ communityHost }: { communityHost: string }) {
     pages.next ? pages.more : pages.restart,
   );
   const [lifting, setLifting] = useState<Lift | null>(null);
+  const proceed = useRef<HTMLButtonElement>(null);
   const keys = pages.items.map((row) => row.pubkey);
   const names = usePeople(keys);
   const [error, setError] = useState("");
@@ -135,11 +136,16 @@ export function Restrictions({ communityHost }: { communityHost: string }) {
         <AlertDialog
           title={lifting.kind === "ban" ? "Lift ban?" : "Clear timeout?"}
           description={`${names.text(lifting.pubkey)} will be able to post in ${communityHost} again.`}
+          initialFocus={proceed}
           onClose={() => setLifting(null)}
           actions={
             <>
               <Button onClick={() => setLifting(null)}>Cancel</Button>
-              <Button variant="prominent" onClick={() => lift(lifting)}>
+              <Button
+                ref={proceed}
+                variant="prominent"
+                onClick={() => lift(lifting)}
+              >
                 {lifting.kind === "ban" ? "Lift ban" : "Clear timeout"}
               </Button>
             </>

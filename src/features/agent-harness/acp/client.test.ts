@@ -5,7 +5,7 @@ import {
   flush,
 } from "../../../bundled/goose/goose-testing";
 import { GOOSE } from "../../../bundled/goose/goose";
-import { SharedProcess } from "../../../bundled/goose/sessions";
+import { AgentProcess } from "../../../bundled/goose/sessions";
 import type {
   HostMcpServer,
   HostProcess,
@@ -531,6 +531,28 @@ describe("a session without hooks", () => {
     ]);
   });
 
+  it("answers a check of work only while that work runs, not for work after it", async () => {
+    const harness = fakeHarness({ hold: true });
+    const acp = await start(harness);
+    const session = await acp.open({ cwd: "/work", systemPrompt: "" });
+    const before = session.current();
+    const first = session.send("first");
+    await flush();
+    const current = session.current();
+    expect(current()).toBe(true);
+    harness.turns[0]?.finish();
+    await expect(first).resolves.toEqual({ ok: true });
+    expect(current()).toBe(false);
+
+    const second = session.send("second");
+    await flush();
+    expect(session.current()()).toBe(true);
+    expect(current()).toBe(false);
+    expect(before()).toBe(false);
+    harness.turns[1]?.finish();
+    await second;
+  });
+
   it("keeps the harness's error code on a failed turn", async () => {
     const harness = fakeHarness({
       promptError: { code: -32000, message: "Authentication required" },
@@ -605,7 +627,7 @@ describe("the shared server pool", () => {
       label: "goose",
       resolveDirectory: goose.resolveDirectory,
       tools,
-      process: new SharedProcess(goose, goose.serve),
+      process: new AgentProcess(goose, goose.serve),
       pool,
       launch,
       choice,

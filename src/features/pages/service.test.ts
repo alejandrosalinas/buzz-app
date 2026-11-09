@@ -67,7 +67,7 @@ describe("page decoration validation", () => {
     return snapshot;
   }
 
-  it.each([undefined, "sidebar", "topbar", "toolbar"])(
+  it.each([undefined, "sidebar", "dock", "topbar", "toolbar"])(
     "preserves placement %j without changing the primary opt-in",
     async (placement) => {
       const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
@@ -89,7 +89,7 @@ describe("page decoration validation", () => {
       expect(page).toMatchObject({ key: "example/main", primary: true, icon });
       expect(page).not.toHaveProperty("placement");
       expect(warn).toHaveBeenCalledExactlyOnceWith(
-        "Ignoring page placement for example/main: expected sidebar, topbar, or toolbar",
+        "Ignoring page placement for example/main: expected sidebar or dock",
       );
     },
   );

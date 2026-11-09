@@ -21,6 +21,7 @@ const release = `v${version}`;
 // Linux entries are installer-specific: a deb install must never receive an AppImage.
 const assets = {
   "darwin-aarch64": `Buzz_${version}_aarch64.app.tar.gz`,
+  "darwin-x86_64": `Buzz_${version}_x64.app.tar.gz`,
   "windows-x86_64": `Buzz_${version}_x64_unsigned.exe`,
   "linux-x86_64-deb": `Buzz_${version}_amd64.deb`,
   "linux-x86_64-appimage": `Buzz_${version}_x86_64.AppImage`,

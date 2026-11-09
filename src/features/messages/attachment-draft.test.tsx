@@ -336,6 +336,81 @@ it("accepts the 500 MiB source and 1,000 MiB shared retention boundaries, not ca
   expect(a.result.current.items).toHaveLength(10);
 });
 
+it("admits a batch's files that fit in pick order and names the rest by reason", () => {
+  const h = fixture();
+  const draft = renderHook(() => useAttachmentDraft(h.session, "one", "one"));
+  const names = (from: number, to: number) =>
+    Array.from({ length: to - from + 1 }, (_, i) => `${from + i}.txt`);
+  act(() => draft.result.current.store.add(names(1, 3).map((n) => file(n))));
+  let left: readonly string[] = [];
+  act(() => {
+    left = draft.result.current.store.add([
+      file("4.txt"),
+      file("empty.txt", 0),
+      file("big.bin", 500 * 1024 * 1024 + 1),
+      ...names(5, 12).map((n) => file(n)),
+    ]);
+  });
+  // The ten-file limit counts attached chips and admitted files, not refused ones.
+  expect(draft.result.current.items.map((item) => item.file.name)).toEqual(
+    names(1, 10),
+  );
+  expect(left).toEqual([
+    "empty.txt is empty.",
+    "big.bin: File exceeds the supported limit: images 50 MiB, GIFs 10 MiB, documents 100 MiB, videos 500 MiB. The relay may enforce a lower limit.",
+    "11.txt, 12.txt: Attach at most 10 files per message.",
+  ]);
+  act(() => {
+    left = draft.result.current.store.add([file("13.txt"), file("14.txt")]);
+  });
+  expect(left).toEqual([
+    "13.txt, 14.txt: Attach at most 10 files per message.",
+  ]);
+  expect(draft.result.current.items).toHaveLength(10);
+});
+
+it("names three files per reason, counts the rest and gives empty files one sentence", () => {
+  const h = fixture();
+  const draft = renderHook(() => useAttachmentDraft(h.session, "one", "one"));
+  let left: readonly string[] = [];
+  act(() => {
+    left = draft.result.current.store.add([
+      file("a.png", 0),
+      ...Array.from({ length: 15 }, (_, i) => file(`${i + 1}.txt`)),
+      file("b.png", 0),
+      file("c.png", 0),
+    ]);
+  });
+  expect(draft.result.current.items).toHaveLength(10);
+  expect(left).toEqual([
+    "a.png, b.png, c.png are empty.",
+    "11.txt, 12.txt, 13.txt and 2 more: Attach at most 10 files per message.",
+  ]);
+});
+
+it("charges a batch's admitted files, not its refused ones, to the shared retention budget", () => {
+  const h = fixture();
+  const a = renderHook(() => useAttachmentDraft(h.session, "a", "a"));
+  const b = renderHook(() => useAttachmentDraft(h.session, "b", "b"));
+  const cap = 500 * 1024 * 1024;
+  act(() => b.result.current.store.add([file("b.bin", cap)]));
+  let left: readonly string[] = [];
+  act(() => {
+    left = a.result.current.store.add([
+      file("a.bin", cap - 5),
+      file("over.bin", 6),
+      file("last.txt", 5),
+    ]);
+  });
+  expect(a.result.current.items.map((item) => item.file.name)).toEqual([
+    "a.bin",
+    "last.txt",
+  ]);
+  expect(left).toEqual([
+    "over.bin: Attachment drafts are full (1,000 MiB). Send or remove some files first.",
+  ]);
+});
+
 it("confirmed scoped cleanup aborts pending uploads and removes only that destination's files", async () => {
   const h = fixture();
   const key = "scope:draft:one";

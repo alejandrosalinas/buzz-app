@@ -119,6 +119,8 @@ function HuddleCapsuleContent({
         >
           <span className={styles.capsuleContent}>
             <HuddleAvatarStack
+              thinking={call.thinking}
+              speakers={call.speakers}
               participants={call.participants}
               relay={relay}
               transition
@@ -183,6 +185,16 @@ function HuddleCapsuleContent({
   if (call.phase !== "connected") return null;
   return (
     <div className={styles.capsuleWrap}>
+      {call.error && (
+        <ToastNotice
+          title="Agent voice stopped"
+          description={call.error}
+          closeLabel="Dismiss agent voice error"
+          onDismiss={() => {
+            if (call.id) huddles.voiceError(call.id);
+          }}
+        />
+      )}
       {presentation.error && (
         <ToastNotice
           title="Couldn’t update Huddle"
@@ -211,6 +223,8 @@ function HuddleCapsuleContent({
           <span className={styles.capsuleContent}>
             <HuddleWaveform level={call.level ?? 0} muted={call.muted} />
             <HuddleAvatarStack
+              thinking={call.thinking}
+              speakers={call.speakers}
               participants={call.participants}
               relay={relay}
               transition

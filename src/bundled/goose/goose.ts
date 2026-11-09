@@ -39,7 +39,15 @@ export type GooseHost = Readonly<{
   resolveDirectory(path: string): Promise<string>;
 }>;
 
-const DEVELOPER = { type: "platform", name: "developer" };
+/** A goose built-in extension for `session/new`; `available_tools` limits it
+ * to the listed tools. */
+export type PlatformExtension = Readonly<{
+  type: "platform";
+  name: string;
+  available_tools?: readonly string[];
+}>;
+
+const DEVELOPER: PlatformExtension = { type: "platform", name: "developer" };
 /** goose's provider id for the provider and model its config picks. */
 const CONFIGURED = "goose";
 
@@ -84,24 +92,34 @@ export const GOOSE: AcpHooks = {
         },
         () => true,
       ),
-  newSessionMeta: (buzz, { title, provider }) => ({
+  newSessionMeta: (buzz, { title, provider, platform }) => ({
     // The session's whole tool set: goose's developer tools and the Buzz
     // tools, so extensions in the owner's goose config and plugins never load
     // into a Buzz agent. The pinned Goose persists this list, including the
     // Buzz MCP token; aaif-goose/goose#12908 is not in v1.57.0. Keep the entry
     // until upstream supports client MCP servers alongside this allowlist.
     // The non-persistence acceptance test remains a known failure.
-    enabledExtensions: buzz ? [DEVELOPER, { type: "mcp", server: buzz }] : [],
+    // Mesh sessions pass a narrower `platform` set (see mesh-compute).
+    enabledExtensions: buzz
+      ? [...(platform ?? [DEVELOPER]), { type: "mcp", server: buzz }]
+      : [],
     ...(title ? { sessionTitle: title } : {}),
     // On the provider's default model, whatever goose's config holds.
     ...(provider ? { provider } : {}),
   }),
   // Appended under goose's own prompt, which carries each extension's
-  // instructions; `set` would replace it, and render ours as a template.
-  systemPrompt: async (goose, sessionId, text) => {
+  // instructions. `set` replaces that prompt and renders the text as a
+  // template, so ours goes in raw.
+  systemPrompt: async (goose, sessionId, text, replace) => {
     await goose.request(
       "_goose/unstable/session/system-prompt/set",
-      { sessionId, mode: "append", key: "buzz", text },
+      replace
+        ? {
+            sessionId,
+            mode: "set",
+            text: `{% raw %}${text.replace(/{%-?\s*endraw\s*-?%}/g, "")}{% endraw %}`,
+          }
+        : { sessionId, mode: "append", key: "buzz", text },
       REQUEST_TIMEOUT_MS,
     );
   },
@@ -177,6 +195,7 @@ export const GooseProcess = {
       protected?: boolean;
       signal?: AbortSignal;
       onProcess?: (goose: AcpProcess) => void;
+      agent?: Readonly<{ pubkey: string; relay: string }>;
     }>,
   ) => {
     const goose = await AcpProcess.start(spawn, GOOSE, {
@@ -196,9 +215,18 @@ export const GooseProcess = {
           "_buzz/security/capabilities",
           {},
           REQUEST_TIMEOUT_MS,
-        )) as { version?: number };
+        )) as { version?: number; enabled?: boolean };
         if (capability.version !== 2)
           throw new Error("This Goose build lacks mandatory security hooks");
+        // The engine gates exactly when Buzz gives it the security bridge.
+        // Engines released before it reported this omit `enabled`.
+        if (
+          capability.enabled !== undefined &&
+          capability.enabled !== (launch.env?.BUZZ_SECURITY_URL != null)
+        )
+          throw new Error(
+            "Protected Goose's security gate is in the wrong state",
+          );
       }
       launch.signal?.throwIfAborted();
       return goose;

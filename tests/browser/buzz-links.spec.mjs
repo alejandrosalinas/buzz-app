@@ -7,7 +7,7 @@ import {
   settingsDialog,
 } from "./navigation.mjs";
 import { test, expect } from "./fixture.mjs";
-import { hoverRow, open, virtuaIdle } from "./timeline.mjs";
+import { frames, hoverRow, open, virtuaIdle } from "./timeline.mjs";
 
 test.use({
   productionBroker: true,
@@ -118,9 +118,13 @@ test("Buzz channel and message links render, reveal verified targets, and preser
   // Closing the thread widens the timeline. Its rows re-measure, and the
   // scroller compensates over several scroll events, longer on a slow runner.
   // Virtua holds the list's pointer events off for 150ms after each one, so a
-  // still pointer leaves the link and nothing re-enters it. Wait for idle.
+  // still pointer leaves the link and nothing re-enters it. Let late size
+  // updates reach Virtua, then wait for the link's centre to hit-test before
+  // one raw move: locator.hover() can scroll again during a retry.
   await virtuaIdle(page);
-  await link.hover();
+  await frames(page);
+  await virtuaIdle(page);
+  await hoverRow(page, link);
   await expect(
     preview.getByText("Broadcast reply", { exact: true }),
   ).toBeVisible();

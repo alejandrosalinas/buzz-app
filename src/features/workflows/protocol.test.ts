@@ -78,6 +78,32 @@ it("strict authoring boundary rejects malformed coordinates/tags, accepts webhoo
     ),
   ).not.toThrow();
 });
+it("allows human-signed canonical deletes targeting another author without allowing signer impersonation", () => {
+  const author = "c".repeat(64);
+  const event = {
+    ...base,
+    kind: 5,
+    content: "",
+    tags: [
+      ["h", id],
+      ["a", `30620:${author}:${id}`],
+    ],
+  };
+  expect(validateWorkflowEvent(event, owner)).toEqual({
+    id,
+    channelId: id,
+    owner: author,
+  });
+  expect(() =>
+    validateWorkflowEvent({ ...event, pubkey: author }, owner),
+  ).toThrow();
+  expect(() =>
+    validateWorkflowEvent(
+      { ...event, tags: [...event.tags, ["e", base.id]] },
+      owner,
+    ),
+  ).toThrow();
+});
 it("YAML remains unchanged and malformed input/duplicate steps are rejected", () => {
   expect(workflowYaml(yaml)).toMatchObject({ enabled: false });
   for (const text of [

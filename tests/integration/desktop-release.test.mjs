@@ -27,10 +27,15 @@ const version = `${baseVersion}-preview.42.2`;
 const sha = "a".repeat(40);
 const hash = (bytes) => createHash("sha256").update(bytes).digest("hex");
 const assets = {
-  macos: [
+  "macos-aarch64": [
     `Buzz_${version}_aarch64.dmg`,
     `Buzz_${version}_aarch64.app.tar.gz`,
     `Buzz_${version}_aarch64.app.tar.gz.sig`,
+  ],
+  "macos-x64": [
+    `Buzz_${version}_x64.dmg`,
+    `Buzz_${version}_x64.app.tar.gz`,
+    `Buzz_${version}_x64.app.tar.gz.sig`,
   ],
   windows: [`Buzz_${version}_x64_unsigned.exe`],
   linux: [`Buzz_${version}_amd64.deb`, `Buzz_${version}_x86_64.AppImage`],
@@ -143,7 +148,7 @@ function fixture(t) {
   };
 }
 
-test("actual assembly command collects all nine assets and emits one complete checksum file", (t) => {
+test("actual assembly command collects all twelve assets and emits one complete checksum file", (t) => {
   const { dir, run } = fixture(t);
   const result = run();
   assert.equal(result.status, 0, result.stderr);
@@ -169,6 +174,7 @@ for (const failure of [
   "corrupt",
   "mixed version",
   "missing platform",
+  "missing Intel macOS",
   "missing signature",
 ]) {
   test(`actual assembly refuses ${failure} before publication`, (t) => {
@@ -182,6 +188,8 @@ for (const failure of [
       writeFileSync(join(windows, "SHA256SUMS"), `${hash(file)}  ./${older}\n`);
     }
     if (failure === "missing platform") rmSync(windows, { recursive: true });
+    if (failure === "missing Intel macOS")
+      rmSync(join(dir, "build-assets/macos-x64"), { recursive: true });
     if (failure === "missing signature")
       rmSync(join(dir, "build-assets/signatures", assets.signatures[2]));
     assert.notEqual(run().status, 0);

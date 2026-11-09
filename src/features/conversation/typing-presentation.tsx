@@ -16,6 +16,9 @@ type Replacement = Readonly<{
   threadRootId: string | undefined;
   pubkey: string;
   requestId?: string | undefined;
+  /** This mounted row is the agent's live working indicator, not only its
+   * step details: the conversation must not show a second one. */
+  presence?: boolean | undefined;
 }>;
 function createPresentation() {
   const entries = new Map<symbol, Replacement>();
@@ -117,7 +120,8 @@ function useReplacement(
 ) {
   const store = context?.store;
   const active = context?.active;
-  const { session, channelId, threadRootId, pubkey, requestId } = value ?? {};
+  const { session, channelId, threadRootId, pubkey, requestId, presence } =
+    value ?? {};
   const participantKeys = (participants ?? (pubkey ? [pubkey] : [])).join(":");
   useLayoutEffect(() => {
     if (!active || !enabled || !session || !channelId || !participantKeys)
@@ -129,6 +133,7 @@ function useReplacement(
         threadRootId,
         pubkey,
         requestId,
+        presence,
       })),
     );
   }, [
@@ -140,12 +145,30 @@ function useReplacement(
     threadRootId,
     participantKeys,
     requestId,
+    presence,
   ]);
 }
+/** Agents whose step details a mounted row shows in this conversation. */
 export function useReplacedTypers(
   session: object | undefined,
   channelId: string,
   threadRootId: string | undefined,
+) {
+  return useScopedReplacements(session, channelId, threadRootId, false);
+}
+/** Agents whose live working indicator a mounted row shows in this conversation. */
+export function usePresentedAgents(
+  session: object | undefined,
+  channelId: string,
+  threadRootId: string | undefined,
+) {
+  return useScopedReplacements(session, channelId, threadRootId, true);
+}
+function useScopedReplacements(
+  session: object | undefined,
+  channelId: string,
+  threadRootId: string | undefined,
+  presenceOnly: boolean,
 ) {
   const context = useContext(Presentation);
   const activityStore = useContext(ActivityPresentation);
@@ -173,6 +196,7 @@ export function useReplacedTypers(
       ],
       (entry) =>
         !entry.requestId &&
+        (!presenceOnly || !!entry.presence) &&
         entry.session === session &&
         entry.channelId === channelId &&
         entry.threadRootId === threadRootId,

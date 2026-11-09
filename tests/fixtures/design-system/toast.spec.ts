@@ -362,9 +362,9 @@ test("notice body opens its destination while nested actions keep their targets"
     name: "Example dialog",
     exact: true,
   });
-  for (const [mode, width] of [
-    ["light", 390],
-    ["dark", 1280],
+  for (const [mode, width, key] of [
+    ["light", 390, "Enter"],
+    ["dark", 1280, "Space"],
   ] as const) {
     await page.setViewportSize({ width, height: 900 });
     const theme = page.getByRole("button", { name: `Use ${mode} mode` });
@@ -397,8 +397,17 @@ test("notice body opens its destination while nested actions keep their targets"
     await page
       .getByRole("button", { name: "Show linked notice", exact: true })
       .click();
-    await body.focus();
-    await page.keyboard.press("Enter");
+    // Reach the body by Tab from the stack: WebKit skips a button without an
+    // explicit tabindex unless the OS enables full keyboard access.
+    await expect(body).toHaveAttribute("tabindex", "0");
+    await page.keyboard.press("F6");
+    await page.keyboard.press("Tab");
+    await expect(
+      recovery.locator("xpath=ancestor::li[@data-sonner-toast]"),
+    ).toBeFocused();
+    await page.keyboard.press("Tab");
+    await expect(body).toBeFocused();
+    await page.keyboard.press(key);
     await expect(destination).toBeVisible();
     await destination
       .getByRole("button", { name: "Close", exact: true })

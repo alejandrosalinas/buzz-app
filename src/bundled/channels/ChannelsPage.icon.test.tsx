@@ -19,6 +19,6 @@ it("asks for the relay thumbnail of a DM participant, as message rows do", () =>
     />,
   );
   expect(container.querySelector("img")?.getAttribute("src")).toBe(
-    `https://relay.test/media/${sha}.thumb.jpg`,
+    `https://relay.test/media/${sha}.thumb.webp`,
   );
 });

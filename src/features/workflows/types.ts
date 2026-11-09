@@ -86,6 +86,11 @@ export type WorkflowAvailability = Readonly<{
 /** Bundled UI contract. No socket, signer, arbitrary HTTP, scheduler or approval writes. */
 export interface WorkflowCapability {
   readonly availability: WorkflowAvailability;
+  /** Local verified ownership evidence; the relay authorizes every deletion. */
+  readonly permissions: Readonly<{
+    canDelete(workflow: WorkflowReference): boolean;
+    subscribe(listener: () => void): () => void;
+  }>;
   /** Arrays page a batch of up to 128 channels; single-channel detail reads stay bounded. */
   definitions(
     channelId: string | readonly string[],

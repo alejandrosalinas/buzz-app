@@ -11,6 +11,7 @@ export const continueWithoutSecret = {
     "This private webhook secret cannot be recovered. Copy and store it before continuing, or explicitly leave it behind.",
   action: "Continue",
   cancel: "Go back",
+  destructive: true,
 };
 
 /** One-time display of a webhook secret. The value lives in component state only. */

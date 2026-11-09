@@ -9,10 +9,18 @@ import {
   type ReactElement,
   type ReactNode,
 } from "react";
-import { FAMILIAR_HINT_REST_MS, HELPFUL_HINT_REST_MS } from "./hoverIntent";
+import {
+  DOCK_LABEL_REST_MS,
+  FAMILIAR_HINT_REST_MS,
+  HELPFUL_HINT_REST_MS,
+} from "./hoverIntent";
 
 /** DESIGN.md "Hover timing": how long a hint waits for a resting pointer. */
-export type HintTiming = "helpful" | "familiar";
+export type HintTiming = "helpful" | "familiar" | "dock";
+
+/** Widgets whose items share one roving focus. */
+const COMPOSITE_WIDGETS =
+  '[role="tablist"], [role="toolbar"], [role="menubar"], [role="radiogroup"]';
 
 const promote = (positioner: HTMLDivElement | null) => {
   positioner?.showPopover?.();
@@ -45,7 +53,7 @@ export function Tooltip({
   hint?: HintTiming | undefined;
   closeOnClick?: boolean;
   disableHoverablePopup?: boolean;
-  side?: "top" | "right";
+  side?: "top" | "right" | "bottom";
   /** Attach a non-interactive hint below/right of the native pointer. */
   follow?: "trigger" | "pointer";
   /** Action feedback may open a hint after an asynchronous result. */
@@ -58,12 +66,22 @@ export function Tooltip({
   const pressed = useRef(false);
   // Focus returning to a pressed trigger, such as when its menu closes, is not
   // a request for the hint. Base UI blocks this only once the hint has opened,
-  // which a resting hover may not have done yet. Tabbing ends the press.
+  // which a resting hover may not have done yet. Tabbing ends the press, and so
+  // does a key on another item of the trigger's composite widget, such as an
+  // arrow key moving a dock's roving focus onto it. Keys inside the trigger's
+  // own menu are outside that widget, so menu return stays quiet.
   useEffect(() => {
     if (!trigger) return;
     const win = trigger.ownerDocument.defaultView ?? window;
+    const composite = trigger.closest(COMPOSITE_WIDGETS);
     const release = (event: KeyboardEvent) => {
-      if (event.key !== "Tab") return;
+      const target = event.target;
+      const fromSibling =
+        !!composite &&
+        target instanceof Node &&
+        target !== trigger &&
+        composite.contains(target);
+      if (event.key !== "Tab" && !fromSibling) return;
       pressed.current = false;
       win.removeEventListener("keydown", release, true);
     };
@@ -106,7 +124,11 @@ export function Tooltip({
       <BaseTooltip.Trigger
         ref={setTrigger}
         delay={
-          hint === "familiar" ? FAMILIAR_HINT_REST_MS : HELPFUL_HINT_REST_MS
+          hint === "dock"
+            ? DOCK_LABEL_REST_MS
+            : hint === "familiar"
+              ? FAMILIAR_HINT_REST_MS
+              : HELPFUL_HINT_REST_MS
         }
         closeOnClick={closeOnClick}
         // Base UI merges render-element props last. Put the combined link on
@@ -141,6 +163,7 @@ export function Tooltip({
             data-color-mode={children.props["data-color-mode"]}
             className="buzz-tooltip"
             data-follow={follow}
+            data-hint={hint}
           >
             {content}
           </BaseTooltip.Popup>

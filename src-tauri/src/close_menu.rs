@@ -1,6 +1,6 @@
-//! Cmd+W is a menu action that only ever closes a tab, never the window: with
-//! no tab to close it does nothing. Cmd+Shift+W clears the current channel's tabs.
-//! The red button still closes the window.
+//! Cmd+W closes the active tab, or the window when no tab handles the request.
+//! Cmd+Shift+W only clears the current channel's tabs.
+//! The red button still closes the window directly.
 //! Edit → Paste and Match Style (Cmd+Shift+V) pastes the clipboard as plain text.
 //! Buzz → Settings… runs the app's Open Settings shortcut. It has no native
 //! accelerator, so Cmd+, keeps the web shortcut's rebinding and IME rules.
@@ -30,7 +30,7 @@ const SWITCH: &str = include_str!("switch-tab-request.js");
 
 pub(crate) fn menu<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<Menu<R>> {
     let menu = Menu::default(app)?;
-    let close = MenuItem::with_id(app, CLOSE, "Close Tab", true, Some("CmdOrCtrl+W"))?;
+    let close = MenuItem::with_id(app, CLOSE, "Close", true, Some("CmdOrCtrl+W"))?;
     let close_all = MenuItem::with_id(
         app,
         CLOSE_ALL,
@@ -123,7 +123,7 @@ pub(crate) fn handle<R: Runtime>(app: &AppHandle<R>, event: tauri::menu::MenuEve
         }
         _ => return,
     };
-    send_request(app, &script);
+    dispatch_request(app, &script, event.id().as_ref());
 }
 
 // Unlike a tab request, Settings brings back a hidden or minimized window, as
@@ -157,6 +157,14 @@ fn paste_plain() {
 }
 
 pub(crate) fn send_request<R: Runtime>(app: &AppHandle<R>, script: &str) -> bool {
+    dispatch_request(app, script, "")
+}
+
+fn closes_window(action: &str, result: &str) -> bool {
+    action == CLOSE && result == r#""unhandled""#
+}
+
+fn dispatch_request<R: Runtime>(app: &AppHandle<R>, script: &str, action: &str) -> bool {
     let Some(window) = app.get_webview_window("main") else {
         return false;
     };
@@ -173,7 +181,25 @@ pub(crate) fn send_request<R: Runtime>(app: &AppHandle<R>, script: &str) -> bool
     let browser = serde_json::to_string(&crate::browser::focused_session())
         .expect("Browser session IDs are JSON strings");
     let script = format!("{{ const browserSessionId = {browser};\n{script}\n}}");
-    if let Err(error) = window.eval(script) {
+    let result = if action == CLOSE {
+        let target = window.clone();
+        window.eval_with_callback(script, move |result| {
+            // Evaluation failures and handled tab/modal requests must never
+            // cause a second, window-level close. Recheck focus after the reply.
+            if closes_window(CLOSE, &result)
+                && target.is_visible().unwrap_or(false)
+                && !target.is_minimized().unwrap_or(true)
+                && target.is_focused().unwrap_or(false)
+            {
+                if let Err(error) = target.close() {
+                    eprintln!("Could not close Buzz window: {error}");
+                }
+            }
+        })
+    } else {
+        window.eval(script)
+    };
+    if let Err(error) = result {
         eprintln!("Could not send Buzz request: {error}");
         return false;
     }
@@ -241,6 +267,23 @@ fn install_tab_keys<R: Runtime>(app: &AppHandle<R>) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn only_unhandled_close_falls_back_to_the_window() {
+        assert!(closes_window(CLOSE, r#""unhandled""#));
+        for result in [
+            r#""handled""#,
+            "null",
+            "",
+            "unhandled",
+            r#"{"error":"failed"}"#,
+        ] {
+            assert!(!closes_window(CLOSE, result));
+        }
+        for action in [CLOSE_ALL, NEXT, PREVIOUS, PASTE_PLAIN, ""] {
+            assert!(!closes_window(action, r#""unhandled""#));
+        }
+    }
 
     #[test]
     fn tab_keys_preserve_direction_and_leave_other_chords_to_appkit() {

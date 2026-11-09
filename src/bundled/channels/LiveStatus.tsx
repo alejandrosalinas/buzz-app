@@ -6,11 +6,7 @@ import {
   useSyncExternalStore,
 } from "react";
 import type { RelaySession } from "../../features/relay/session";
-import {
-  RECOVERY_TITLE,
-  RetryNowButton,
-  useInlineRecovery,
-} from "../../features/relay/RecoveryNotice";
+import { useRecovery } from "../../features/relay/RecoveryNotice";
 import { liveRecoveryStatus } from "../../features/relay/live-recovery";
 import { Button } from "../../shared/design-system/ui/Button";
 import styles from "./LiveStatus.module.css";
@@ -27,13 +23,13 @@ export function LiveStatus({
   channelId: string | undefined;
   partialRoster: boolean;
   diagnostics?: boolean;
-  /** The session recovery owner. A mounted status shows its notice inline
-   * above the composer, in place of the floating fallback. */
+  /** The session recovery owner. While its notice shows, that notice is the
+   * one report, so this status stays empty. */
   recovery?: RelaySession["recovery"];
-  /** A recovery or retry control that had focus went away; move focus on. */
+  /** A retry control that had focus went away; move focus on. */
   onRecovered?: (() => void) | undefined;
 }) {
-  const { recovering: retrying, shown } = useInlineRecovery(
+  const { recovering: retrying, shown } = useRecovery(
     diagnostics ? undefined : recovery,
   );
   const focused = useRef(false);
@@ -130,14 +126,8 @@ export function LiveStatus({
   if (keep?.reason !== held?.reason || keep?.channelId !== held?.channelId)
     setHeld(keep);
   const manual = failed || holding;
-  const control = diagnostics
-    ? undefined
-    : recovery && shown
-      ? "recovery"
-      : manual
-        ? "manual"
-        : undefined;
-  // Either control can go away while focused, by recovery or by an automatic
+  const control = diagnostics || shown || !manual ? undefined : "manual";
+  // The control can go away while focused, by recovery or by an automatic
   // retry. A removed element does not always report blur, so check where
   // focus landed once the control changed.
   useEffect(() => {
@@ -180,21 +170,7 @@ export function LiveStatus({
       </>
     );
   }
-  if (recovery && shown)
-    return (
-      <section
-        role="status"
-        aria-label={RECOVERY_TITLE}
-        className={styles.recovery}
-        {...track}
-      >
-        <div className={styles.message}>
-          <p className="text-label-sm text-warning">{RECOVERY_TITLE}</p>
-        </div>
-        <RetryNowButton recovery={recovery} />
-      </section>
-    );
-  if (quiet && !holding) return null;
+  if (shown || (quiet && !holding)) return null;
   return (
     <section
       role="status"

@@ -1,14 +1,36 @@
 # Packaged human identity and relay access
 
+## Authorize an external agent identity
+
+Settings → Buzz → Security → Authorize external identity accepts an application's
+existing public key as 64 hexadecimal characters. An explicit **Authorize
+identity** action opens a confirmation showing the exact npub and explaining
+that the key can direct the owner's coding agents to run commands as them.
+Only **Authorize this key** calls the existing `prepareRemoteAgentAuthorization` host
+wrapper and `identity_prepare_remote_agent_authorization` native signer. It
+returns a NIP-OA `auth` tag with empty conditions, bound to exactly that agent key
+and the current human owner. No key is exported, agent created, membership
+changed, or organization session obtained. This proof has no time or event-kind
+limits; the form says so before signing. The human copies it to the requesting
+application's owner-attestation field.
+
+The form never signs on mount or input changes. It rejects self and malformed
+keys, holds the input during signing, checks the returned owner against the
+displayed owner, and aborts preparation when settings unmount. Switching owners
+remounts an empty form. Proofs stay only in component state until explicitly
+copied; input changes clear the prior proof. This section requires a native
+desktop identity. A debug build signs as its separate debug identity, not
+the installed application's owner. This screen does not expand external-app MCP
+scopes or grant remote callers access to signing.
+
 Native macOS, Windows and Linux without the live development broker open on a
-welcome screen when no human key exists on this device: **Buzz** — "Your people,
-your agents, your projects — all in one place." — with **Sign in with Builderlab**
+welcome screen when no human key exists on this device: **Buzz**, "Your people,
+your agents, one place.", with **Sign in with Builderlab**
 (the label the Buzz mobile client uses; first-run copy never names the sign-in
 provider) and a live **Community URL** field with **Continue** beside it (the
-same field and normalisation as Join a community below). Sign in runs the
-bundled Builderlab plugin's browser sign-in under that plugin's own native
-network grant; that credential is not yet shared with Settings → Integrations →
-Builderlab. A failed or canceled sign-in shows *Couldn’t sign in* with the
+same field and normalisation as Join a community below). Sign in is the one
+Builderlab sign-in every Builderlab feature uses, the native NIP-FI session
+described next. A failed or canceled sign-in shows *Couldn’t sign in* with the
 error and **Back** to the welcome screen. The welcome screen carries the
 onboarding artwork and wordmark, and every later first-run page sits on the
 same artwork; pages without a finished design are plain black-and-white
@@ -16,13 +38,15 @@ wireframes. When a page replaces another, focus moves to the new page's
 heading unless the page focuses a field itself, and **Back** returns focus to
 the choice that opened the page.
 
-In federated-identity builds (`BUZZ_BUILD_FEDERATED_IDENTITY_CONFIG`) the
-bundled Builderlab plugin has no network grant of its own: its Builderlab calls
-go through the native FI session (#1461). There, **Sign in with Builderlab** is the
-native [organization sign-in](#native-federated-session-module), whose browser
+A build's Builderlab is its first sign-in server, the built-in one unless the
+build adds another (see
+[configuration](configuration.md#federated-identity-build-input)). The bundled
+Builderlab plugin has no network or file grant: its Builderlab calls go through
+the native FI session (#1461). **Sign in with Builderlab** is the native
+[organization sign-in](#native-federated-session-module), whose browser
 step, code exchange and token stay native. A session that already exists,
-including one saved by an earlier run, signs in again, so the browser can
-choose the account; if that sign-in is canceled, first run stops rather than
+including one saved by an earlier run or adopted from another Buzz copy's
+shared sign-in, signs in again, so the browser can choose the account; if that sign-in is canceled, first run stops rather than
 continuing as the old account, and one that times out fails as *Sign-in did
 not finish*. Setup's account calls then go through the native forwarder as the
 bundled plugin's installation, fenced to that session, and a backup hands the
@@ -38,21 +62,27 @@ below, which sends only the two unauthenticated GETs, so a typo, an unreachable
 relay or a non-Buzz address fails there with the same classified copy; **Cancel**
 (and **Retry**, when offered) behave as below, except that Cancel returns to the
 welcome screen with the address kept in the field. A build has one Builderlab,
-and the only listed deployment is the public one (`builderlab-hosted.ts`): a
-host under `communities.buzz.xyz` on the default port, or a relay publishing
-that deployment's NIP-11 `self` key, is hosted by this build's Builderlab when
-the origin of `BUZZ_BUILDERLAB_URL` is `https://app.builderlab.xyz`. Such a
+its first sign-in server, and a community is hosted by it when that server's
+`communityHosts` cover the community's host (`builderlab-hosted.ts`). The front
+end reads native's compiled server list and matches with native's own rules
+(`community-hosts.ts`, kept equal to `matches_relay` by shared fixtures): an
+exact host, or one label under a wildcard on the default port. A relay's NIP-11
+`self` key never decides. A build without a sign-in server (FI set empty,
+another or an empty `BUZZ_BUILDERLAB_URL`, or `tauri dev` with the development
+broker pinned) has no first-run Builderlab sign-in, so it hosts none, whatever
+its Builderlab URL. In live development the Builderlab plugin still signs in
+through the development broker (unless `BUZZ_BUILDERLAB_URL` is empty), but
+first run never uses that sign-in. The answer applies only to the lookup that
+asked: Cancel, another address or leaving the screen discards it. Such a
 community requires Builderlab sign-in, so it starts at once there, exactly as
 the welcome screen's own button does, and the welcome screen shows it pending
 (**Cancel sign-in**, with the field disabled); setup then lands on **Join
 Community** for the address, and it is never offered a key of the user's own
-instead. Cancel sign-in, and **Back** from a sign-in or setup failure, return
-to the welcome screen with the address kept and do not look it up again. A
+instead. Cancel sign-in, **Back** from a sign-in failure, and **Use a
+different account** from a setup failure, return to the welcome screen with the address kept and do not look it up again. A
 canceled sign-in that finishes later is ignored: it cannot restart setup or use
 a later sign-in's account. Any other found community, including one run by
-another Builderlab deployment, and every community in a build whose
-`BUZZ_BUILDERLAB_URL` is another origin or empty, pauses on **Connect to
-{host}**: nothing a relay publishes names its sign-in portal, so the user
+another Builderlab deployment, pauses on **Connect to {host}**: nothing a relay publishes names its sign-in portal, so the user
 chooses. The page says only that Buzz relies on a key for the user's identity; its choices are
 **Sign in with Builderlab**, which signs in at `BUZZ_BUILDERLAB_URL` and
 continues exactly as the welcome screen's own button does (the landing shows
@@ -63,14 +93,17 @@ the address;
 signed in, continues from there with no link step and no backup offer (once the
 app opens, the key's backup choice is
 [filled in like any missing one](#automatic-backup-consent-hooks)); **Back**
-returns to the welcome screen with the address kept.
+returns to the welcome screen with the address kept. A build without a sign-in
+server skips that page: with no first-run Builderlab sign-in to offer, every
+found community opens **Enter your private key**, whose **Back** returns to the
+welcome screen with the address kept.
 
 Success continues to **Getting ready**, with an animated bee. Detailed operation
 status remains available to screen readers without a visible second line. It first runs **Checking your account**, a real read of the
 Nostr key bound to the signed-in Builderlab account
 (`POST /api/goose/v1/buzz/nostr-identities/current` at the portal that signed
-the user in, authenticated with the first-run session credential and sent
-through the bundled plugin's native grant; `src/features/identity/builderlab-account.ts`,
+the user in, sent through the native forwarder with the NIP-FI session as the
+bundled plugin's installation; `src/features/identity/builderlab-account.ts`,
 sharing the hosted-communities card's routes and reply parsers). A `200` with
 no `identity` means no key is linked (kgoose sends `MISSING_MAPPING` only from
 the community list); any other failure is **Couldn’t finish setup**, naming the
@@ -102,9 +135,13 @@ automatic backup.
 **Not linked** pauses on **Get started with Buzz**, which says the account will
 manage the Buzz identity. **Set me up** creates and links a key; **Use an
 existing key** opens **Enter your private key**. **Use a different account**
-signs out the first-run session and returns to the welcome screen.
-The browser may retain its portal session. This choice page shows the signed-in
-email so the account can be checked before linking a key.
+signs out the shared native session first run signed in as, so the Builderlab
+plugin stops using it, and returns to the welcome screen. It leaves a newer
+session (from Settings or another copy) signed in, and a failed sign-out shows
+on the welcome screen. Cancel and Back do not sign out. Until a sign-in
+completes, every sign-in from there asks the browser for credentials rather
+than continuing as the account it remembers. This choice page shows the
+signed-in email so the account can be checked before linking a key.
 
 Builderlab setup automatically backs up the created key after linking it to the
 signed-in account and waits for the uploader. The import screen discloses
@@ -122,6 +159,50 @@ discards the draft. A successful account-backed import links the key and automat
 unless that key already has a backup. An import without Builderlab
 sign-in skips linking and backup. Importing without a Builderlab account never uploads the key.
 
+**Another account's key on this device** (a relaunch sign-in as someone else)
+is never replaced without asking: **A different account is saved on this
+computer** asks first. **Replace** signs it out, as **Sign out of Buzz** does
+without erase; Buzz restarts and signs in again by itself (a one-time note
+honoured for two minutes), now on the lane for a device with no key. **Cancel**
+signs out of the new account and returns to the welcome screen with the
+device's key in place. When this device has confirmed a stored backup of the key
+(`nsec_backup_confirmed`: a backup record here, under any account, that the
+service receipted or a restore wrote), the question says the key is backed up
+in Builderlab and that signing in to its account again restores it; otherwise
+it says the key may not be backed up. A local receipt is not consent, and the
+backup may since have been deleted, so it only changes the wording. Creating or
+importing a key still refuses while one is on the device.
+
+An account with no key takes this device's key, else old Buzz's, else a new
+one, without asking. When the account holds no key, the account check can't
+tell whose this device's key is, but the link can: kgoose refusing it as
+another account's (`pubkey_already_bound`) makes it another account's key on
+this device, handled as above rather than failing setup. Finding the account
+linked to another key meanwhile (`identity_already_bound`, a race with another
+device) leaves this device's key not the account's, which the account check
+also asks about with the same dialog; after Replace, the next sign-in finds the
+account's key. Old Buzz's key is
+linked before it is saved: native signs the link challenge with it straight
+from old Buzz's storage (`identity_sign_builderlab_binding` with `legacy`,
+only while no key is saved here, and saving nothing), and first run saves it
+only once the account holds it, from that same read (native holds the key in
+memory between the signature and the save, so the OS asks for old Buzz's
+storage once). When kgoose refuses it as another account's, or it can't be
+read (absent, a denied OS prompt or malformed, which native answers with
+null), first run makes a new key instead, so a key that can't be linked never
+reaches this device. Any other failure, such as a challenge that expired before
+native signed it or a busy or locked store, fails setup with Try again, which
+links old Buzz's key again. A run that linked it and then stopped before the
+save (a failed save, or Buzz quit in between) leaves the account holding a key
+this device lacks. First run notes on this device that it is linking old
+Buzz's key (`buzz.legacy-link-pending.v1`) until the key is saved or was never
+linked. Only with that note, when the account's key isn't backed up, the next
+sign-in checks old Buzz's key before resting on Welcome back
+(`identity_import_legacy` with `expected`, which saves it only when it is the
+account's key and otherwise saves nothing, and clears the note), then saves
+and backs it up and continues as a returning account would. Without the note,
+no other sign-in brings up the OS prompt for old Buzz's storage.
+
 **Linked** pauses on **Welcome back**: the account is already linked to a Buzz
 identity — the key on the user's other device — shown as the full npub under
 *Linked public key (npub)* with **Copy**, with the same *Signed in as {email}.*
@@ -134,8 +215,9 @@ is refused under the field with *That isn’t the key linked to this account. It
 expects npub1…*, and **Back** returns to Welcome back. **Recover from another
 device** is *Coming soon* (device pairing is its future entry). Last in the
 stack, **Use a different account** is the same exit as on Get started with Buzz: it
-signs the session out and returns to the welcome screen without importing,
-restoring or replacing the linked key. The imported
+signs the session out and returns to the welcome screen, where the next
+sign-in asks for credentials, without importing, restoring or replacing the
+linked key. The imported
 key is already the account's, so nothing is linked. Unless the lookup already
 lists it, a successful import automatically backs up the key as on a new
 account; a listed key continues without another upload.
@@ -193,7 +275,17 @@ account, **Continue without backup** skips only that backup step and runs the
 remaining community setup. It retains the saved linked key and does not persist
 a backup opt-out. Transient backup failures remain retry-only; linking cannot
 be bypassed.
-Before a key exists, the page also offers **Back** to the welcome screen.
+After a Builderlab sign-in, including the one a relaunch waits on, the page
+offers **Use a different account** in place of Back: it signs out of the
+account and returns to the welcome screen, keeping any key here, as a relaunch
+shows it. Back alone would sign in to the same account again from the
+browser's session. That screen's **Sign in** asks for credentials and checks
+the key with the next account, and **Continue without signing in** opens the
+app with a key already here, as on any relaunch; the account is checked at the
+next launch. A link kgoose refuses because the key or the account is already
+bound elsewhere (`pubkey_already_bound`, `identity_already_bound`) is not
+offered Try again, which would get the same answer; Use a different account is
+the only way on. Failures before any sign-in keep **Back**.
 
 Within one first-run session the Join page exits only through a join or a
 restored community; there is no skip. That holds only while the app stays
@@ -306,7 +398,18 @@ open the relay's `/api/join-policy/terms` and `/privacy` pages outside the app. 
 name, description, member count, owner or invite badge is shown: none is knowable
 before joining. **Join** sits to the right of **Cancel**, as in every dialog
 footer, and is always labelled Join: shown consent boxes gate it, they do not
-rename it. Lookup failures are classified, not echoed: an unreachable relay or an
+rename it. A signed-in Builderlab account's consent covers a community its
+server hosts (`accountConsents` in `src/features/communities/account-consent.ts`:
+the session's `communityHosts`, matched as native matches them). Account setup
+records a date of birth, which kgoose refuses for anyone under 18, and agrees to
+the Buzz Terms of Service and Privacy Policy that Builderlab-hosted relays
+publish as their policy. Such a community shows no boxes, and its Join attests
+both, so an invite claim confirms the person's age. Its **Continue** from Join a
+community, or a listed owned community, joins at once without Join Community, as
+a just-created community does, unless it comes back from a failed join. The
+in-app dialog likewise skips its access step for such a community when no code
+is needed or one was given. An imported key with no account, and a community no
+signed-in server hosts, still ask. Lookup failures are classified, not echoed: an unreachable relay or an
 unusable policy answer offers **Cancel** and **Retry** (a missing policy counts as
 "none" only once NIP-11 confirmed a Buzz relay); a non-Buzz address or a Buzz
 relay with no community bound to that host offers **Cancel** only.
@@ -399,7 +502,19 @@ One native owner keeps the key in memory after successful restore. The new
 create-only secure-storage item is service `xyz.block.buzz.desktop.identity` in release
 builds, or `xyz.block.buzz.desktop.identity.debug` with Rust debug assertions,
 account `human`. Debug worktrees share the debug item, not the release identity;
-ports and frontend dev mode do not isolate it. macOS keeps its existing default
+ports and frontend dev mode do not isolate it. `just desktop me` is the one
+exception: it signs in with the release key, read from
+`xyz.block.buzz.desktop.identity` (else its pre-1.0 service), and never copies,
+replaces or deletes it. Create, import and Sign out still use only the debug item,
+so Sign out ends the session but the next launch reads the release key again. A
+denied or broken read of the release key is an error, never a fallback; only
+an absent one falls back to the debug item. Only the `me` argument sets
+`BUZZ_DEV_RELEASE_KEY`: the launcher drops it from `.env.local` and the shell,
+since bootstrap copies `.env.local` into agent worktrees, and refuses `me`
+anywhere but first. On macOS the release
+item trusts only the release app; `me` reads it through the
+[local credential helper](#local-credential-helper-on-macos), so Keychain asks
+once rather than after each rebuild. macOS keeps its existing default
 file Keychain/security-framework implementation. Windows uses Credential Manager;
 Linux uses Secret Service through keyring 3.6.3, as old Buzz does. Linux requires
 a running desktop Secret Service with a default collection (for example GNOME
@@ -440,90 +555,72 @@ only the selected old Buzz service/account and copy the selected agent key into
 this app's separate agent namespace; it never writes the old blob.
 No user key belongs in release configuration.
 
-## Local restore helper on macOS
+## Local credential helper on macOS
 
-macOS builds with Rust debug assertions accept `BUZZ_DEV_CREDENTIAL_HELPER` as an
-absolute executable path. When set, `read_human()`, native agent storage, and
-federated session storage use this helper.
-The helper replaces both the normal read and the copy from the previous service.
-Its setup must select the intended saved identity, including its service name.
-Exit 10 declares that identity absent; it does not start a Keychain migration.
-Release builds ignore it. With no setting, the normal Keychain read is unchanged.
-Human import, creation, and deletion keep their own owners.
-Legacy agent import also keeps its exact-source read owner.
+Keychain approvals belong to the program that asks, and a debug build is a
+different program after every rebuild, so without help Keychain asks again for
+every saved item after each rebuild. On macOS, `just desktop me` avoids this with
+a helper: a small program, `crates/dev-credential-helper`, that does the debug
+build's Keychain reads and writes. It is installed once outside the repository
+and kept, so an approval given to it lasts across rebuilds and worktrees.
 
-The helper receives a fresh Unix socket as stdout and no stdin. It must return
-exactly 63 bytes of nsec text with no newline, then close stdout and exit zero.
-The native identity owner still validates the nsec checksum and scalar. Exit 10
-means absent, 11 means denied, and 12 means corrupt. Other failures stop restore.
-Only absence permits identity creation. The app clears the returned buffer when
-its owner releases it. It does not log helper output or stderr.
+Only `me` turns it on. Before launching, it:
 
-Normal reads have a five-second limit. For first approval only, set
-`BUZZ_DEV_CREDENTIAL_HELPER_AUTHORIZE=1`. This passes `--authorize` and allows
-two minutes. Remove that setting after approval. A failed helper never triggers
-a second credential read.
+1. installs the helper for this checkout's protocol as
+   `~/.buzz-foundation/dev-credential-helper/buzz-dev-credential-helper-v<protocol>`
+   if none is there or it does not report that `--version` protocol. Otherwise it
+   keeps the installed one, even if this worktree's source differs, since a new
+   helper needs every item approved again. Each protocol has its own helper, so
+   switching between worktrees on different protocols replaces neither; a new
+   protocol's helper needs every item approved once;
+2. creates a self-signed code-signing certificate, **Buzz Dev Signing**, in the
+   login Keychain if there is none, and records the code requirement
+   `identifier "xyz.block.buzz.desktop.dev" and certificate leaf = H"…"` beside the
+   helper;
+3. starts the debug build through `scripts/dev-sign-run.sh`, a Cargo runner that
+   signs it with that certificate, and sets `BUZZ_DEV_CREDENTIAL_HELPER` to the
+   helper and `BUZZ_DEV_CREDENTIAL_HELPER_AUTHORIZE=1`.
 
-The helper is trusted local code. Keep its setup and signing keys outside this
-repository. It must read only the exact debug human item in the default Keychain
-and disable Keychain dialogs during normal reads. Before it sends a key, it must
-verify the socket peer's audit token, parent PID, and live code signature against
-the configured app identifier and certificate. A PID check alone is insufficient.
-Reject pipes and sockets created before exec. Sign both processes with hardened
-runtime and without entitlements that allow code injection. These access controls
-need native tests; the app hook does not supply them.
+If any step fails, it warns and launches without the helper. As with
+`BUZZ_DEV_RELEASE_KEY`, the launcher drops these variables from `.env.local` and
+the shell, so agent worktrees and plain `just desktop` never use the helper.
 
-For native agents, the app passes `--agent-store <operation> <service> <account>`
-after the optional `--authorize`. Operations are `read`, `replace`, and `delete`.
-The service is `xyz.block.buzz.desktop.agents` or
-`dev.local.buzz.foundation.agents`. The account is `agent-bundle-v1` or the exact
-`agent:<credential-id>` selected by the bundle owner. The helper must reject
-other services, accounts, and operations. A helper that supports only human
-restore must reject agent requests. It must never return a human key for them.
+On the first launch, click **Always Allow** on each dialog: one for `codesign` to
+use the new certificate, then one per saved item. Later launches, rebuilds and new
+worktrees show none. Each helper request first runs with Keychain dialogs off;
+only an item not yet approved for the helper, under `--authorize`, is retried once
+with a dialog. A denied dialog is an error. Release builds ignore the helper.
 
-The fresh stdout socket carries data in both directions. Stdin stays closed.
-For `replace`, the app sends the bundle bytes, then closes its write side.
-The helper must authenticate the peer before it reads these bytes. It reads to
-EOF before it sends a response. For `read`, it returns the exact item bytes.
-Successful writes and deletes return no bytes. Each direction has a 2 MiB limit.
-The app uses the same deadline and exit codes as human restore. Exit 13 means
-occupied. A helper failure stops the operation without a direct Keychain retry.
+With `BUZZ_DEV_CREDENTIAL_HELPER` set (an absolute path) in a macOS debug build,
+every `buzz-credential-store` read, add, replace and delete goes through it: the
+human key, including the release key `me` reads, agents, federated sessions, the
+Jev and Claude keys, paired tools and external-app pairings. Bringing over old
+Buzz's items still reads them directly, since that happens once. A helper failure is
+returned as is; the app never retries through direct Keychain access, and keeps
+its own locks, create-only rules, validation and read-back checks. The app passes
+`[--authorize] --item <read|add|replace|delete> <service> <account>`, with a fresh
+Unix socket as stdout and no stdin. For `add` and `replace` it sends the value and
+closes its write side; for `read` the helper returns the exact item bytes. Each
+direction has a 2 MiB limit. Exit 0 is success, 10 absent, 11 denied, 12 corrupt
+and 13 occupied; other failures are unavailable. Requests time out after five
+seconds, or two minutes under `BUZZ_DEV_CREDENTIAL_HELPER_AUTHORIZE=1`.
 
-The helper must use the default Keychain and the same peer checks as human
-restore. It must preserve item access controls on replacement and confirm a
-deleted item is absent. Normal operations must disable Keychain dialogs.
-The app retains bundle validation, create-only agent writes, migration order,
-locks, cache epochs, and read-back checks. The helper does not store keys in
-files or change their access controls to avoid approval. Configure its signed
-binary outside this repository. Do not copy existing keys into its setup.
+The helper serves only an exact list of items and refuses any other service or
+account. It may only read the release key, never write, copy over or delete it, and
+it never replaces the debug human key, which stays create-only. Before it reads a
+value or touches the Keychain, it checks that stdout is a Unix socket whose peer is
+its parent process, by audit token, and that the peer's live code signature meets
+the recorded requirement. The requirement file must belong to the user and be
+writable by no one else. It uses the default Keychain, updates items in place so
+they keep their access lists, and confirms that a deleted item is gone. It logs
+nothing.
 
-For federated sessions, the app passes `--session-store <operation> <service>
-<account>`. It uses the same socket protocol as agent storage. Operations are
-`read`, `replace`, and `delete`. The only service is
-`xyz.block.buzz.desktop.federated-session.debug`. Accounts contain exactly 64
-lowercase hexadecimal characters. The session owner derives them from the
-profile and deployment, or from the exact agent grant. Each direction has a
-1 MiB limit. The helper must restrict access to the exact configured accounts.
-It must retain peer checks, item access controls, and disabled normal dialogs.
-The app retains session locks, compare-before-write, refusal records, and
-validation. An older helper that rejects session requests stops the operation;
-the app never retries through direct Keychain access.
-
-Independent worktrees have separate app identifiers. A helper must admit each
-exact identifier and certificate before it serves that app. Preserve the helper's
-code identity across compatible updates. An ad hoc signed helper has a code-hash
-requirement; a rebuild cannot establish that it retains existing item approval.
-Verify normal launch and restart without approval mode before claiming success.
-
-Before a real test, wait for green CI. Obtain explicit consent for first approval.
-Then use a disposable agent to check creation, restore after restart, and deletion.
-Check denied access and an invalid helper path too. Confirm no normal operation
-shows a Keychain dialog. These native checks and a human check are required;
-synthetic helper tests do not prove signature or Keychain enforcement.
-
-The certificate check trusts access to its signing key. Another program that can
-use that key and app identifier can satisfy the same requirement. Approval to use
-the signing key across rebuilds therefore extends trust to those programs.
+The helper's source is in the repository. Its installed binary, the requirement,
+the certificate and its private key stay on each Mac, never in the repository.
+The certificate check trusts access to its signing key: any program running as you
+that can sign code with that key and identifier passes it, and the key lets
+`codesign` use it without asking. On that Mac, approving the helper's items
+therefore extends trust to those programs. Don't use `me` on a shared account.
 
 ## Automatic backup and optional recovery
 
@@ -539,9 +636,10 @@ backup was configured. The service and namespace are paired
 native build-process inputs; unset or empty leaves the feature disabled. Preview
 releases that sign in to `app.builderlab.xyz` set them to that origin's
 `/api/goose` service and the `backup/bb-public/production` namespace. The service URL
-includes its API prefix and must use HTTPS. Existing login credentials are accepted
-only for the matching trusted build origin. Without a qualifying login, backup
-defers without opening a browser or delaying identity readiness.
+includes its API prefix and must use HTTPS. Backup uses the NIP-FI session only
+when the service is the build's Builderlab, at its identity origin and API base
+path. Without a current session, backup defers without opening a browser or
+delaying identity readiness. Recovery keeps its own browser sign-in (below).
 
 The native host validates enrollment and seals with the reviewed HPKE v1 protocol.
 Only encrypted pending bytes and public completion metadata are saved in the OS
@@ -567,7 +665,7 @@ First run's **Backing up your key** is a pass of this uploader. It saves the
 automatic choice for the key, hands the first-run Builderlab sign-in to the
 uploader, waits up to 60 seconds for the pass that handoff starts, and then
 hands the sign-in back, whatever the outcome; an earlier pass's result never
-answers it. In an FI build the sign-in is the session the Builderlab plugin
+answers it. The sign-in is the NIP-FI session the Builderlab plugin
 also hands the uploader, so after a completed backup it stays with the
 uploader, which runs one more pass; after a failure the uploader has no session
 until the plugin hands it over again, when that session changes or the app
@@ -630,9 +728,8 @@ crosses IPC once, on **Continue with this key**, through `identity_import`; leav
 discards it, and nothing logs or persists it. On the returning-user lane the
 page compares the typed key's derived npub with the account's linked npub in
 the page, before IPC, so a mismatched nsec never reaches native import. The
-**Welcome back** page shows the linked public key and the signed-in email; the first-run
-Builderlab session credential is held by the OAuth session store and sent only
-in the two account reads' `X-BB-Session-Credential` header, never rendered.
+**Welcome back** page shows the linked public key and the signed-in email; the
+NIP-FI session token stays native and is never rendered.
 
 The app UI passes a private string through IPC only during explicit import/export
 interaction. JavaScript/IPC string memory is not guaranteed zeroized. Native
@@ -904,20 +1001,51 @@ The consent hooks are the base of the draft stack:
 
 Federated identity ([NIP-FI](https://github.com/block/buzz/blob/main/docs/nips/NIP-FI.md),
 [NIP-FA](https://github.com/block/buzz/blob/main/docs/nips/NIP-FA.md)) adds a native
-owner separate from the human Nostr key. Its deployment descriptor is documented
-in [configuration](configuration.md#federated-identity-build-input).
-The native commands return status, authority, revision, optional email, and fixed
-failure codes. Session tokens and assertion headers are native-only.
+owner separate from the human Nostr key, one per sign-in server: each compiled
+one, and each Builderlab customer's server, added when its first community
+connects and again at every later launch. The servers are documented in
+[configuration](configuration.md#federated-identity-build-input). Each relay is
+routed by its host to the server that covers it, never by anything the relay
+publishes; that server issues its assertions and later checks ask it alone. A
+community no server covers connects without a token. The build's first server
+is its Builderlab: the bundled plugin, agent credentials and Settings use its
+session, and the native commands act on it unless given a community `relay`,
+which a community's sign-in prompt passes so it signs in to that community's
+server. The native commands return status, authority, revision, optional email,
+and fixed failure codes. Session tokens and assertion headers are native-only.
 
 Sign-in uses the existing native loopback callback owner with NIP-FA `return_to`
 and an S256 handoff challenge, exchanges the code natively, and verifies the
 fixed session expiry before persistence. Restore checks the stored credential
 against `/v1/session`; failed reads and unrecognized refusals do not authorize
 replacement. Local expiry, cancellation, and sign-out fence stale work.
+Sign-out also asks the server to end the session, best effort: one `POST` to
+`v1/auth/logout` under the identity origin's API base path, with the session as
+`X-BB-Session-Credential` and no `Authorization`. Native follows no redirect
+and ignores the result, so sign-out never waits for it and works offline. It
+ends only the session this copy held, never one read back from the secure
+store. Sign out of Buzz, expiry and refusals end nothing at the server.
+
+The browser callback shows that sign-in was received and attempts to close after
+three seconds. After verified session installation, macOS can return focus to
+the visible Buzz window while the captured sign-in browser is still foreground.
+Cancellation, sign-out, replacement and failed verification retire that attempt's
+return permission. Other platforms keep manual focus return.
 
 FI records use the OS secure-store service
 `xyz.block.buzz.desktop.federated-session` (with `.debug` for Rust debug
-builds), keyed by profile and deployment fingerprint. On macOS one item per
+builds), keyed by profile and each server's deployment fingerprint, so a build's
+first server keeps the sessions it saved as the only server. Neither includes the
+app identifier: like the human key, copies in one debug/release namespace that
+use the same server (Buzz and Buzz Staging both use the public server) share its
+session. A signed-out copy reads the item again before a browser sign-in and
+adopts a session another copy saved. A completed browser sign-in, including a
+renewal, saves over whatever session the item holds. When another copy already
+ended or replaced the session, a sign-out here finishes signed out, and an
+expiry or refusal here ends it as expired; both leave the newer session alone.
+A signed-in copy keeps its session until it restarts, even after another copy
+signs out, unless that sign-out ended the same session at the server: this
+copy then ends it when the server next refuses it. On macOS one item per
 profile and deployment holds the session and every agent grant, so Keychain
 prompts once; Windows and Linux keep one item per record. Older macOS items
 move into it on read. This is a one-way development migration: close older
@@ -934,8 +1062,12 @@ The app's `federatedIdentity` service exposes this public state to the shared
 sign-in UI. Session record revision survives restore and scopes account caches
 without inventing a NIP-FA subject.
 
-NIP-11 discovery from the exact relay carries no FI credential. Valid absent or
-false FI flags retain ordinary Nostr transport. A true flag requires the supported
+NIP-11 discovery from the exact relay carries no FI credential. The community
+requires NIP-FI when its top-level `requires_nip_fi` is true; when that flag is
+absent, `limitation.federated_identity` decides, as before it existed. A false
+`requires_nip_fi` means not required even where the host supports NIP-FI (as a
+shadow-mode host advertises), and a non-boolean one is invalid discovery. Not
+required retains ordinary Nostr transport. Required needs the supported
 client-attached/offline-jwt descriptor and compiled authority mapping. Assertions
 are acquired with native same-key NIP-98 proof and checked for exact audience,
 key, and lifetime. Native HTTP, media, repository Git reads/imports, and socket
@@ -949,12 +1081,13 @@ Each local agent enrolls using the signed-in owner's session and its own NIP-98
 proof. The native agent-token owner stores the resulting grant beside session
 records in the same OS secure-store service, keyed by profile, deployment, owner
 public key and agent public key: in the session's item on macOS, under a
-separate key elsewhere. Grants never cross IPC, and assertion headers cross it
-only as the `repo` tool's Git headers. There the NIP-98 proof is bound to one
-repository URL for 60 seconds, while the assertion is scoped to the relay for
-the lifetime its issuer set and bound to the agent's key, so it is unusable
-without that key (NIP-FI, Assertion–key binding). Git asks for an assertion
-valid for at least 70 seconds and fails rather than accept a shorter one.
+separate key elsewhere. Grants never cross IPC. An assertion header leaves
+native code in two places only, each bound to the agent's key (NIP-FI,
+Assertion–key binding), so it is useless without that key's signatures. The
+`repo` tool's Git headers pair it with a NIP-98 proof bound to one repository
+URL for 60 seconds; Git asks for an assertion valid for at least 70 seconds and
+fails rather than accept a shorter one. The local credential service below
+answers `federated_identity` with an assertion valid for at least 60 seconds.
 Enrollment validates the returned owner and issuer;
 assertions are checked for the agent key, issuer, relay audience and lifetime.
 The relay remains responsible for signature and authorization verification.
@@ -981,18 +1114,98 @@ standard endpoints defined by NIP-FI/NIP-FA. NIP-FI defines the
 `nip-fi-agent+jwt` assertion class and owner checks; that does not establish
 interoperability with another adapter's enrollment endpoints.
 
-In an FI build, Builderlab's remote-agent, hosted-community, known-community,
-Apps viewer and backup calls go through the native FI session. The renderer
-names only the public session revision. For API calls, native checks the
-plugin's authority/operation grant, enabled artifact revision, live
-registration and that revision; the Apps viewer exchange and backup check only
-that the revision is current. Each sends the adapter session as
-`Authorization: Bearer` to the identity origin only. A 401 fails that call
-without ending the session; native then checks the adapter's `GET /v1/session`
-once and ends the session only if the adapter refuses it there. Builderlab's
-Settings card has no sign-out of its own in an FI build: it links to Identity →
-Organization sign-in, which ends the shared session. Builderlab
-Apps' agent tools still need the legacy login and are absent in FI builds.
+### Local credential service
+
+A process the app launches for an agent can run the `buzz` CLI as that agent
+without its key. Native code serves block/buzz's local credential provider
+contract (`docs/local-credential-provider.md`) on `127.0.0.1` and puts the
+caller's endpoint and a fresh 256-bit token in the process's
+`BUZZ_CREDENTIAL_PROVIDER`. The service looks tokens up by their SHA-256, and
+no token is written to disk or logged. A host shared by several agents (Codex,
+Pi) also keeps each agent's raw token in memory, and the page passes it over
+Tauri IPC and the host's stdin to that agent's tools. The CLI builds each event and asks
+the service to sign it; keys, NIP-44 conversation keys and grants never leave
+native code.
+
+- **One identity.** A token acts for nobody until the runtime binds it, once, to
+  the agent its process serves. A plugin may bind only to an agent of its own
+  type. Claude Code's shared spare is bound when an agent takes it.
+- **What it signs.** Every event passes the contract's operation policy before
+  signing. NIP-42, NIP-98 and Blossom proofs are signed only for the token's own
+  community and only when created within a minute of now. Ordinary content kinds
+  are signed as built. Profile, contacts, deletions, membership, moderation and
+  agent-management kinds are refused with `denied`: a local tool can't sign
+  them, and there is no approval prompt. Every other kind is denied too.
+- **Evidence.** `federated_identity` goes through the same agent grant and
+  assertion checks as the app's own requests and answers no header on relays
+  without NIP-FI. `auth_tag` answers the agent's NIP-OA tag.
+- **Limits and revocation.** Each token has a request budget per method and
+  answers `rate_limited` with a retry delay. It is revoked as soon as its
+  process exits, even while a descendant still holds its output or
+  environment, and for good once its agent is deleted, the owner signs out or
+  changes account, or the identity closes: each request rechecks the owner's
+  retirement count recorded when the token was issued and the agent's
+  incarnation recorded at binding, and a
+  closed identity issues no token.
+- **Callers.** Requests must name the bound address in `Host` and carry no
+  `Origin`, so a web page cannot use it. A process serving one agent
+  carries its token (Claude Code, and goose, which runs one process per
+  agent). A process serving several (Codex, Pi) carries none; each agent's
+  token goes only into that agent's tool commands and is revoked when the
+  process exits. Windows has no transport in version 1 and gets none.
+
+Builderlab's remote-agent, hosted-community, known-community, Decisions, Apps,
+Apps viewer and backup calls all use the native FI session of the build's first
+sign-in server. The only other Builderlab sign-ins are the development broker's
+in live development and key recovery's own browser sign-in
+([above](#automatic-backup-and-optional-recovery)), which may pick a different
+account. The renderer names only the public session revision. For API calls,
+native checks the plugin's authority/operation grant, enabled artifact
+revision, live registration and that revision; the Apps viewer exchange and
+backup check only that the revision is current. Apps agent tools send the
+session to the Apps control plane (below); other API calls and Decisions send
+it as `Authorization: Bearer` to the server's identity origin. The Apps viewer
+exchange sends it as `X-BB-Session-Credential` to the identity origin's
+hosted-site native-session route, with no `Authorization` header, which that
+route refuses. Backup sends it as `Authorization: Bearer` to the backup
+service, used only when that service is the identity origin and API base path.
+A 401 on an API or Decisions call fails that call without ending the session;
+native then checks the adapter's `GET /v1/session` once and ends the session
+only if the adapter refuses it there. Builderlab's
+Settings card has no sign-out of its own: it links to Identity →
+Organization sign-in, which ends the shared session.
+
+Builderlab Apps' agent tools use the same session, as `bl apps` does. Only the
+bundled Builderlab plugin may ask, and only for `/v1/agent/` paths: native
+sends them to the Apps control plane paired with the server's identity origin
+(`apps_control_plane` in the plugin manager) with the session as
+`Authorization: BBIdentity`. A deploy names a `.tar.gz` file in the home
+directory, which native reads and uploads itself, with the same checks as a
+plugin upload. A 401 is handled as for API calls.
+
+Settings → Identity → Organization sign-in is the same whichever community is
+open. It lists each server you are signed in to, with its name and origin, the
+account and expiry, **Used by:** the joined communities its hosts cover, and a
+**Sign out** that ends that server's session only. A sign-out native could not
+finish (for example, secure storage refused) stays below the list, naming the
+server, with **Try again**; so does an ended session whose saved record native
+could not remove. A saved session native could not check, for example offline,
+is kept and offers no **Try again**. Communities no server covers are not listed. While the build's Builderlab isn't signed in, its row to sign in
+from comes first, named by its server beside other servers' rows, with its
+expiry or recovery message.
+
+When a community refuses a signed-in account (`authorization-denied` or
+`binding-mismatch`), its prompt names the community's server and account, and
+the other joined communities that server covers, and offers **Switch account**:
+it signs out of that server only, signs in to it again, and retries. Other
+servers' sessions are not touched. While it runs the prompt says so, with
+**Cancel sign-in** during the browser step. A canceled sign-in leaves that
+server signed out: the prompt says the sign-in was canceled and offers
+**Sign in**. A refused or failed step names the server and offers **Try
+again**, which repeats the step that failed: after a failed sign-out it signs
+out again before signing in, so it never renews the old account. **Not now**
+closes the prompt and changes nothing. Binding-mismatch recovery points to that
+server's identity origin.
 
 ### Sign in at launch
 

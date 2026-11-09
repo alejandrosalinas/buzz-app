@@ -1,6 +1,10 @@
 import { useState, type ReactNode } from "react";
 import { modelLogo, type ModelChoice } from "./ModelPicker";
-import { CaretDownIcon, CheckIcon } from "../../shared/design-system/icons";
+import {
+  CaretDownIcon,
+  CheckIcon,
+  LightningIcon,
+} from "../../shared/design-system/icons";
 import { Button } from "../../shared/design-system/ui/Button";
 import { PreferenceRow } from "../../shared/design-system/ui/PreferenceRow";
 import styles from "./ModelFamilyMenu.module.css";
@@ -9,12 +13,46 @@ import {
   MenuTrigger,
   MenuPopup,
   MenuItem,
+  MenuGroup,
+  MenuGroupLabel,
+  MenuSeparator,
   MenuRadioGroup,
   MenuRadioItem,
   MenuSubmenu,
   MenuSubmenuTrigger,
   MenuSubmenuPopup,
 } from "../../shared/design-system/ui/Menu";
+
+/** A bolt after the name marks a low-latency model; its text stays for
+ * screen readers and the trigger's accessible name. */
+function FastMark() {
+  return (
+    <span className={styles.fast} title="Fast">
+      <LightningIcon size={14} aria-hidden="true" />
+      <span className="sr-only">Fast</span>
+    </span>
+  );
+}
+
+/** Menu rows space their children apart; one inline run keeps the mark
+ * attached to the name instead of floating as its own column. */
+function ModelName({
+  model,
+  label,
+  mark = true,
+}: {
+  model: ModelChoice;
+  label: string;
+  mark?: boolean;
+}) {
+  return model.fast && mark ? (
+    <span className={styles.name}>
+      {label} <FastMark />
+    </span>
+  ) : (
+    label
+  );
+}
 
 /** Catalogs expose IDs, not a common family field. Unknown IDs remain available. */
 export function modelFamily(model: ModelChoice): string {
@@ -85,7 +123,44 @@ export function ModelFamilyMenu({
   const hasFamilyLogos = [...families.keys()].some((family) =>
     modelLogo(family),
   );
-  const selectedLabel = `${selected.label}${inherited ? " · Default" : ""}`;
+  // Fast models get their own section up front, so the quick choices are one
+  // click away; they stay in their families too. A catalog of only fast (or
+  // no fast) models gains nothing from a separate section.
+  const fastModels = models.filter((model) => model.fast);
+  const fastSection =
+    fastModels.length > 0 && fastModels.length < models.length;
+  const selectedLabel = `${selected.label}${selected.fast ? " · Fast" : ""}${inherited ? " · Default" : ""}`;
+  const choiceRow = (model: ModelChoice, inFastSection: boolean) => {
+    const leading = inFastSection && hasFamilyLogos && (
+      <span className="buzz-select-leading" aria-hidden="true">
+        {modelLogo(modelFamily(model))}
+      </span>
+    );
+    return onEffortChange && (model.efforts?.length || model.loadEfforts) ? (
+      <EffortMenu
+        key={`${model.effortScope ?? ""}:${model.id}`}
+        model={model}
+        leading={leading}
+        mark={!inFastSection}
+        selected={selected.id === model.id}
+        effort={effort ?? ""}
+        onChange={onEffortChange}
+      />
+    ) : (
+      <MenuRadioItem key={model.id} value={model.id} closeOnClick>
+        {leading}
+        <ModelName
+          model={model}
+          mark={!inFastSection}
+          label={
+            model.unlisted && model.description
+              ? `${model.label} · ${model.description}`
+              : model.label
+          }
+        />
+      </MenuRadioItem>
+    );
+  };
   const menu = (
     <MenuRoot>
       <MenuTrigger
@@ -113,6 +188,7 @@ export function ModelFamilyMenu({
               <span className={`buzz-select-value ${styles.model}`}>
                 {selected.label}
               </span>
+              {selected.fast && <FastMark />}
               {inherited && appearance !== "glass-ghost" && (
                 <span className="buzz-select-value-suffix text-subtle">
                   {" · Default"}
@@ -142,6 +218,25 @@ export function ModelFamilyMenu({
             </MenuRadioItem>
           </MenuRadioGroup>
         )}
+        {fastSection && (
+          <>
+            <MenuGroup>
+              <MenuGroupLabel emphasis="quiet">
+                <span className={styles.name}>
+                  <LightningIcon size={14} aria-hidden="true" />
+                  Fast
+                </span>
+              </MenuGroupLabel>
+              <MenuRadioGroup
+                value={selected.id}
+                onValueChange={(id) => onChange(id)}
+              >
+                {fastModels.map((model) => choiceRow(model, true))}
+              </MenuRadioGroup>
+            </MenuGroup>
+            <MenuSeparator />
+          </>
+        )}
         {[...families]
           .sort(([a], [b]) =>
             a === "Other" ? 1 : b === "Other" ? -1 : a.localeCompare(b),
@@ -161,28 +256,7 @@ export function ModelFamilyMenu({
                   value={selected.id}
                   onValueChange={(id) => onChange(id)}
                 >
-                  {choices.map((model) =>
-                    onEffortChange &&
-                    (model.efforts?.length || model.loadEfforts) ? (
-                      <EffortMenu
-                        key={`${model.effortScope ?? ""}:${model.id}`}
-                        model={model}
-                        selected={selected.id === model.id}
-                        effort={effort ?? ""}
-                        onChange={onEffortChange}
-                      />
-                    ) : (
-                      <MenuRadioItem
-                        key={model.id}
-                        value={model.id}
-                        closeOnClick
-                      >
-                        {model.unlisted && model.description
-                          ? `${model.label} · ${model.description}`
-                          : model.label}
-                      </MenuRadioItem>
-                    ),
-                  )}
+                  {choices.map((model) => choiceRow(model, false))}
                 </MenuRadioGroup>
               </MenuSubmenuPopup>
             </MenuSubmenu>
@@ -213,11 +287,15 @@ export function ModelFamilyMenu({
 
 function EffortMenu({
   model,
+  leading,
+  mark,
   selected,
   effort,
   onChange,
 }: {
   model: ModelChoice;
+  leading?: ReactNode;
+  mark: boolean;
   selected: boolean;
   effort: string;
   onChange(model: string, effort: string): void;
@@ -238,7 +316,8 @@ function EffortMenu({
       }}
     >
       <MenuSubmenuTrigger role="menuitemradio" aria-checked={selected}>
-        {model.label}
+        {leading}
+        <ModelName model={model} label={model.label} mark={mark} />
         {selected && <CheckIcon size={16} aria-hidden="true" />}
       </MenuSubmenuTrigger>
       <MenuSubmenuPopup aria-label={`${model.label} thinking effort`}>

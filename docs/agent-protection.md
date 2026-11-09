@@ -102,6 +102,9 @@ only the captured agent's runtime and launches through that provider's captured
 host scope. It always supplies the captured containment. Missing engines refuse
 launch; provider replacement/unload kills its processes, including a launch that
 finishes after revocation. Adapters keep ownership of sessions and credentials.
+Native records the agent such a launch is for, after checking that agent's saved
+protection names the provider, so the adapter can still bind that process's Buzz
+credential to it, and to no other agent.
 
 Manifest processes may declare `artifact: {path, sha256, siblings?}` instead of
 `bundled`. Contained launches require one of these declarations; PATH-only
@@ -110,6 +113,8 @@ named siblings into a generation under the storage owner's shared Agents folder,
 then executes that worker-read-only copy. Corrupt generations fail closed;
 verification/copying runs off the async runtime. Symbolic links remain rejected.
 These paths come from the installed plugin manifest, never from model input or PATH.
+Host commands may also declare `artifact`; they are never contained, so each run
+verifies the installed bytes in place instead of copying them.
 
 `processProtection` contains `readOnlyPaths` and `hiddenPaths`, absolute or under
 the user's home written `~/…`. Hidden paths must exist. A read-only path may lack
@@ -189,23 +194,32 @@ runtime dependency graph or defend against other unsandboxed same-user programs.
 Claude's protected agents and security reviews run its pinned release this way:
 the host runs only its own verified copy, so a changed file in the download
 folder never runs. Both ignore Claude settings files, though Claude still reads
-its folder's sign-in and cached managed settings. Security reviews also have
-their own sign-in, in a Claude folder of their own that Buzz Security
-hides from contained agents (`~/Library/Application Support/Buzz/claude-code-review-home`).
-To set it up, run `claude setup-token` in Terminal, then paste the token it
-prints under **Sign in for reviews** in **Settings → Agent setup → Harness
-defaults → Claude → Edit configuration**. It needs a Claude Pro, Max, Team or
-Enterprise subscription, not an API key or gateway, and lasts a year. Until it
-is saved, and once it expires or is revoked, Claude reviews fail closed; save a
-new token or choose another review model. A review's 60-second budget includes
+its folder's cached managed settings. Security reviews also run in a Claude
+folder of their own that Buzz Security hides from contained agents
+(`~/Library/Application Support/Buzz/claude-code-review-home`), with the
+Anthropic API key saved in **Settings → Agent setup → Harness defaults →
+Claude → Edit configuration**, and no other credentials or API endpoint from
+the environment. The key is not in a file: Buzz keeps it in the OS credential
+store (Keychain on macOS, readable without a prompt only by Buzz itself), and
+native code sets it as `ANTHROPIC_API_KEY` only in the Claude processes the
+Claude plugin starts (`claude_key.rs`). Those processes pass it on to what
+they start: commands a Claude agent runs, its hooks and its MCP servers can
+read the key from their environment. Buzz does not set Claude's
+`CLAUDE_CODE_SUBPROCESS_ENV_SCRUB`, which would also strip `SSH_AUTH_SOCK`,
+`GIT_*` and every `*TOKEN` and `*KEY` variable. Keeping the key out of the
+app's web view is the Claude plugin's own rule, not one native code enforces;
+native code only refuses the key to other plugins and processes. Until a key is saved, and once
+Anthropic rejects it, Claude reviews fail closed; save a working key or choose
+another review model. A review's 60-second budget includes
 waiting for Buzz to download that release the first time; a longer download
 fails the review closed and carries on for later reviews.
 Known Claude gaps: while a review runs, other processes of yours, likely
 contained agents too (not checked against the pinned release), can read its
-sign-in from the review's process environment. Protected Claude agents, unlike
+API key from the review's process environment, as every Claude agent has it in
+its own. Protected Claude agents, unlike
 reviews, still use `~/.claude`, which other contained agents can write, so one
-can plant a sign-in there, or cached managed settings that carry hooks and env
-into a protected run's checks. Their transcripts live in `~/.claude/projects`
+can plant cached managed settings there that carry hooks and env into a
+protected run's checks. Their transcripts live in `~/.claude/projects`
 too, so a contained agent can swap one between a run's checks or before it
 resumes.
 Broader restrictions on workspace writes, startup files and login jobs belong to
@@ -236,18 +250,23 @@ cover restored history, compaction and retries. Deferred provider jobs and paylo
 rewrite callbacks are refused. Image-generation and classifier request shapes without explicit conversation messages are refused. An approved shell command is one action; its
 internal syscalls are not separately reviewed.
 
-The separate [Buzz Security plugin](https://github.com/squareup/buzz-plugin-security)
-owns the protected Codex/Goose source pins, patches, builds, release assets and
+The separate Buzz Security plugin owns the protected Codex/Goose source pins, patches, builds, release assets and
 native boundary fixtures. Buzz packages only its ordinary Goose runtime; ordinary
 Codex retains its independent updater. Installing the security plugin supplies
 the protected engines on demand, without compiling them during Buzz development.
 
 Protected Goose's native provider decorator gates model input,
 including tool results, and its central tool dispatcher gates arguments together
-with the native conversation. Providers with internal tool loops, command-line agent
+with the native conversation, which Buzz exports from the worker hosting that
+session. Providers with internal tool loops, command-line agent
 providers such as `codex` and `cursor-agent`, toolshim, unreviewed native command
 hooks, recipe shell callbacks and unsupported extension launches are refused.
-Protected agents have dedicated contained workers. Goose reviews read the owner's
+A protected start is refused when the engine reports its gate in the wrong state:
+on for review workers, off for agent sessions. Engines released before they
+reported it are accepted. Protected agents have dedicated contained workers.
+When an agent's provider is replaced, its next worker starts only after every
+replaced worker has exited, and retiring the agent waits for them too.
+Goose reviews read the owner's
 Goose connection settings. The security plugin lists `config.yaml`, `secrets.yaml`,
 `custom_providers` and `config.tmp`, which Goose saves `config.yaml` through, plus the
 `.tmp` beside the target when `config.yaml` is a link, so they are read-only for

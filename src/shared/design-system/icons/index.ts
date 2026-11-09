@@ -1,4 +1,6 @@
 import { defineIcon } from "./createDecorativeIcon";
+import TablerMenuIcon from "@tabler/icons-react/dist/esm/icons/IconMenu2.mjs";
+export const MenuIcon = defineIcon("tabler", TablerMenuIcon);
 export type { DefinedIcon } from "./createDecorativeIcon";
 import { BestieMarkArtwork } from "./BestieMark";
 import { BlockLogoArtwork } from "./BlockLogo";
@@ -83,6 +85,8 @@ export const ArrowCounterClockwiseIcon = defineIcon(
   TablerArrowCounterClockwiseIcon,
 );
 // Tabler only. Add individual exports as needed; outline icons are the default.
+import TablerSendIcon from "@tabler/icons-react/dist/esm/icons/IconSend.mjs";
+export const SendIcon = defineIcon("tabler", TablerSendIcon);
 import TablerSparklesIcon from "@tabler/icons-react/dist/esm/icons/IconSparkles.mjs";
 export const SparklesIcon = defineIcon("tabler", TablerSparklesIcon);
 import TablerStarFilledIcon from "@tabler/icons-react/dist/esm/icons/IconStarFilled.mjs";
@@ -165,6 +169,8 @@ import TablerCopyIcon from "@tabler/icons-react/dist/esm/icons/IconCopy.mjs";
 export const CopyIcon = defineIcon("tabler", TablerCopyIcon);
 import TablerCloudOffIcon from "@tabler/icons-react/dist/esm/icons/IconCloudOff.mjs";
 export const CloudOffIcon = defineIcon("tabler", TablerCloudOffIcon);
+import TablerCloudIcon from "@tabler/icons-react/dist/esm/icons/IconCloud.mjs";
+export const CloudIcon = defineIcon("tabler", TablerCloudIcon);
 import TablerCloudUploadIcon from "@tabler/icons-react/dist/esm/icons/IconCloudUpload.mjs";
 export const CloudUploadIcon = defineIcon("tabler", TablerCloudUploadIcon);
 import TablerCrownIcon from "@tabler/icons-react/dist/esm/icons/IconCrown.mjs";
@@ -529,6 +535,12 @@ export const HashArrowInIcon = defineIcon("custom", HashArrowInArtwork, {
   intendedSizes: [{ width: 16, height: 16 }],
 });
 
+import TablerCpuIcon from "@tabler/icons-react/dist/esm/icons/IconCpu.mjs";
+export const CpuIcon = defineIcon("tabler", TablerCpuIcon);
+import TablerHexagonIcon from "@tabler/icons-react/dist/esm/icons/IconHexagon.mjs";
+export const HexagonIcon = defineIcon("tabler", TablerHexagonIcon);
+import TablerHexagonFilledIcon from "@tabler/icons-react/dist/esm/icons/IconHexagonFilled.mjs";
+export const HexagonFilledIcon = defineIcon("tabler", TablerHexagonFilledIcon);
 export const ClaudeLogoIcon = defineIcon("custom", ClaudeLogoArtwork, {
   meaning: "Claude harness",
   category: "Custom brand mark",

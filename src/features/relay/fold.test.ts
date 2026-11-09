@@ -23,6 +23,45 @@ const relay = keypair(),
 const channel = "chan-1";
 
 describe("message fold", () => {
+  it("shows a broadcast failure notice in the channel and preserves its exact reply target", () => {
+    const request = message(alice, channel, "Read this image", 1);
+    const tags = [
+      ["e", request.id, "", "reply"],
+      ["buzz:notice", "execution-failure"],
+    ];
+    const nested = message(bob, channel, "Failure explanation", 2, tags);
+    expect(foldMessages(channel, relay.pubkey, [request, nested])).toHaveLength(
+      1,
+    );
+    const broadcast = message(bob, channel, "Failure explanation", 2, [
+      ...tags,
+      ["broadcast", "1"],
+    ]);
+    const rows = foldMessages(channel, relay.pubkey, [request, broadcast]);
+    expect(rows).toHaveLength(2);
+    expect(rows[1]).toMatchObject({
+      id: broadcast.id,
+      notice: "execution-failure",
+      threadRootId: request.id,
+      replyParentId: request.id,
+      content: "Failure explanation",
+    });
+  });
+  it("reads only the explicit automatic failure notice tag without changing the message", () => {
+    const content = "A failure explanation";
+    for (const [tag, notice] of [
+      [["buzz:notice", "execution-failure"], "execution-failure"],
+      [["buzz:notice", "unknown"], undefined],
+      [["buzz:notice", "execution-failure", "extra"], undefined],
+      [["notice", "execution-failure"], undefined],
+    ] as const) {
+      const [row] = foldMessages(channel, relay.pubkey, [
+        message(alice, channel, content, 1, [[...tag]]),
+      ]);
+      expect(row?.notice).toBe(notice);
+      expect(row?.content).toBe(content);
+    }
+  });
   it("reads the id of a plugin request from the signed tag", () => {
     const content = "Requested: install Browser — Check the staging site";
     const id = "5d1f0b8e-8c2a-4a39-9a54-0f6a4e7e6c11";
@@ -53,6 +92,28 @@ describe("message fold", () => {
       ]);
       expect(plain?.pluginRequest).toBeUndefined();
     }
+  });
+  it("reads one safe signed media target without accepting ambiguous tags", () => {
+    const root = message(alice, channel, "Two videos", 1);
+    const url = "https://fixture.test/second.mp4";
+    const reply = (targets: readonly string[][]) =>
+      message(bob, channel, "⏱ 0:21 — 😍", 2, [
+        ["e", root.id, "", "reply"],
+        ...targets,
+      ]);
+    const fold = (targets: readonly string[][]) =>
+      foldMessages(channel, relay.pubkey, [root, reply(targets)], {
+        includeReplies: true,
+      })[1]?.mediaTargetUrl;
+    expect(fold([["buzz:media", url]])).toBe(url);
+    expect(fold([["buzz:media", "javascript:alert(1)"]])).toBeUndefined();
+    expect(
+      fold([
+        ["buzz:media", url],
+        ["buzz:media", "https://fixture.test/other.mp4"],
+      ]),
+    ).toBeUndefined();
+    expect(fold([["buzz:media", url, "extra"]])).toBeUndefined();
   });
 
   it("preserves diff patch bytes and signed metadata without Markdown attachment projection", () => {
@@ -862,8 +923,14 @@ describe("discovery", () => {
         visibility: undefined,
         joinRole: "member",
         members: [alice.pubkey, bob.pubkey].sort(),
+        owners: [],
       },
-      { id: "zeta", name: "zeta".slice(0, 8), members: [alice.pubkey] },
+      {
+        id: "zeta",
+        name: "zeta".slice(0, 8),
+        members: [alice.pubkey],
+        owners: [],
+      },
     ]);
     expect(
       state.accept(roster(relay, "alpha", [bob.pubkey], 1_700_000_001)),

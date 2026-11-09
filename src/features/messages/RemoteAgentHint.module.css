@@ -1,0 +1,15 @@
+.cloud {
+  flex-shrink: 0;
+}
+
+@keyframes remote-cloud-pulse {
+  50% {
+    opacity: 0.35;
+  }
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .cloud[data-active] {
+    animation: remote-cloud-pulse 1.4s ease-in-out infinite;
+  }
+}

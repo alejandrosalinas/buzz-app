@@ -20,7 +20,7 @@ import {
 import { createAgentDirectory } from "../../features/identity-names/testing";
 import { afterEach, assert, beforeEach, expect, it, vi } from "vitest";
 import { createRelaySession } from "../../features/relay/session";
-import { eventDto } from "../../features/relay/events";
+import { eventDto, type RelayEvent } from "../../features/relay/events";
 import { ReadError } from "../../features/relay/errors";
 import {
   keypair,
@@ -32,6 +32,12 @@ import {
   signed,
 } from "../../features/relay/testing";
 import type { LiveCallbacks } from "../../features/relay/live";
+import type { ReadStateSigning } from "../../features/relay/read-state-host";
+import {
+  decodeReadState,
+  signReadState,
+  // @ts-expect-error Test the production Node codec with disposable identities.
+} from "../../../browser-host/read-state.mjs";
 import {
   readJournal,
   type ReadJournal,
@@ -381,6 +387,192 @@ it("shows the first six unread conversations ahead of the rest", async () => {
       ).toBeNull(),
     );
     expect(screen.queryByText("No recent activity yet.")).toBeNull();
+  } finally {
+    cleanup();
+    owner.dispose();
+  }
+});
+
+it("previews and opens the newest unread reply of a channel unread only through threads", async () => {
+  const relay = keypair(),
+    viewer = keypair(),
+    larry = keypair(),
+    moe = keypair();
+  const discovery = [
+    profile(larry, { name: "Larry" }),
+    profile(moe, { name: "Moe" }),
+    ...["team", "blank", "mixed", "marked"].flatMap((id) => [
+      metadata(relay, id, id),
+      roster(relay, id, [viewer.pubkey, larry.pubkey]),
+    ]),
+    ...(
+      [
+        ["solo", larry],
+        ["pair", moe],
+      ] as const
+    ).flatMap(([id, friend]) => [
+      metadata(relay, id, id, undefined, [["t", "dm"]]),
+      roster(relay, id, [viewer.pubkey, friend.pubkey]),
+    ]),
+  ];
+  let live: LiveCallbacks | undefined;
+  let journal: ReadJournal | undefined;
+  const owner = createRelaySession(
+    {
+      ...scriptedTransport(viewer.pubkey, relay.pubkey).transport,
+      readState: {
+        decode: async (events) => decodeReadState(events, viewer.secret),
+        sign: async (intent: ReadStateSigning) =>
+          signReadState(intent, viewer.secret),
+        publish: async () => {},
+      },
+      async query(filters) {
+        return discovery.filter((event) =>
+          filters.some((filter) => matchFilter(filter as Filter, event)),
+        );
+      },
+      subscribe(callbacks) {
+        live = callbacks;
+        return { update() {}, retry() {}, dispose() {} };
+      },
+    },
+    {
+      readStateFloor: () => 0,
+      readPublisherLock: async (_signal, work) => work(),
+      readStateStorage: {
+        close() {},
+        async update(change) {
+          journal = readJournal(change(journal), viewer.pubkey);
+          return journal;
+        },
+      },
+    },
+  );
+  const reply = (
+    root: RelayEvent,
+    content: string,
+    time: number,
+    author = larry,
+  ) =>
+    message(
+      author,
+      root.tags.find(([tag]) => tag === "h")?.[1] ?? "",
+      content,
+      time,
+      [["e", root.id, "", "reply"]],
+    );
+  const root = message(
+    viewer,
+    "team",
+    "so uh how do I get that audio to stop",
+    10,
+  );
+  const blankRoot = message(viewer, "blank", "attachment thread", 10);
+  const mixedRoot = message(viewer, "mixed", "mixed thread", 10);
+  const markedRoot = message(viewer, "marked", "marked thread", 10);
+  const newerRoot = message(viewer, "team", "newer thread", 15);
+  const oldest = reply(root, "Draft PR is up", 11);
+  const older = reply(root, "CI is green now", 12);
+  const newest = reply(newerRoot, "Newest thread reply", 16);
+  const soloRoot = message(viewer, "solo", "solo thread", 10);
+  const soloReply = reply(soloRoot, "Only DM thread reply", 11);
+  const pairRoots = [
+    message(viewer, "pair", "first DM thread", 10),
+    message(viewer, "pair", "second DM thread", 10),
+  ] as const;
+  const open = vi.fn();
+  const rowsOf = (group: string) =>
+    within(screen.getByRole("group", { name: group })).getAllByRole("option");
+  const row = (name: string) =>
+    rowsOf("Unread").find((option) => option.textContent?.startsWith(name));
+  try {
+    render(
+      <SearchResults
+        session={owner.session}
+        query=""
+        onQueryChange={() => {}}
+        input={createRef()}
+        pages={[]}
+        openConversation={open}
+      />,
+    );
+    await waitFor(() => expect(rowsOf("Recent activity")).toHaveLength(4));
+    assert(live);
+    const callbacks = live;
+    act(() =>
+      callbacks.receive([
+        root,
+        oldest,
+        older,
+        newerRoot,
+        newest,
+        blankRoot,
+        reply(blankRoot, "", 13),
+        mixedRoot,
+        reply(mixedRoot, "mixed reply", 14),
+        message(larry, "mixed", "new top-level message", 15),
+        markedRoot,
+        reply(markedRoot, "marked reply", 17),
+        soloRoot,
+        soloReply,
+        ...pairRoots,
+        reply(pairRoots[0], "First DM reply", 11, moe),
+        reply(pairRoots[1], "Second DM reply", 12, moe),
+      ]),
+    );
+    await act(async () => {
+      await owner.session.unread.markUnreadLocal({
+        kind: "channel",
+        channelId: "marked",
+      });
+    });
+    await waitFor(() => expect(rowsOf("Unread")).toHaveLength(6));
+    // The newest unread reply of the newest thread, by its author, not a root.
+    await waitFor(() =>
+      expect(row("team")).toHaveTextContent(
+        "Thread reply, Larry: Newest thread reply",
+      ),
+    );
+    expect(row("blank")).toHaveTextContent("Larry replied in a thread");
+    // Unread channel messages keep the channel's own preview and destination.
+    expect(row("mixed")).not.toHaveTextContent("Larry:");
+    expect(row("mixed")).not.toHaveTextContent("Thread reply,");
+    fireEvent.click(row("mixed") as HTMLElement);
+    expect(open).toHaveBeenLastCalledWith("mixed");
+    // So does a channel marked unread, whatever its threads hold.
+    expect(row("marked")).not.toHaveTextContent("Larry:");
+    fireEvent.click(row("marked") as HTMLElement);
+    expect(open).toHaveBeenLastCalledWith("marked");
+    // A DM shares one read marker, so only a single unread thread leads it.
+    expect(row("Larry")).toHaveTextContent(
+      "Thread reply, Larry: Only DM thread reply",
+    );
+    fireEvent.click(row("Larry") as HTMLElement);
+    expect(open).toHaveBeenLastCalledWith("solo", soloReply.id, soloRoot.id);
+    expect(row("Moe")).not.toHaveTextContent("Thread reply,");
+    fireEvent.click(row("Moe") as HTMLElement);
+    expect(open).toHaveBeenLastCalledWith("pair");
+    // The row opens the reply it previews, in its thread.
+    fireEvent.click(row("team") as HTMLElement);
+    expect(open).toHaveBeenLastCalledWith("team", newest.id, newerRoot.id);
+    // Reading that thread previews the other one's newest reply.
+    const read = (rootId: string, messageId: string) =>
+      act(async () => {
+        await owner.session.unread.markThrough(
+          { kind: "thread", channelId: "team", rootId },
+          messageId,
+        );
+      });
+    await read(newerRoot.id, newest.id);
+    await waitFor(() =>
+      expect(row("team")).toHaveTextContent("Larry: CI is green now"),
+    );
+    expect(row("team")).not.toHaveTextContent("audio");
+    fireEvent.click(row("team") as HTMLElement);
+    expect(open).toHaveBeenLastCalledWith("team", older.id, root.id);
+    // Reading every thread takes the channel out of Unread.
+    await read(root.id, older.id);
+    await waitFor(() => expect(row("team")).toBeUndefined());
   } finally {
     cleanup();
     owner.dispose();
@@ -1233,9 +1425,13 @@ it("does not announce conversation enrichment over retained search choices", () 
   }
 });
 
-it.each(["stream", "forum", "solo"] as const)(
-  "finds joined archived %s channels by name without putting them in Recent activity",
-  async (channelType) => {
+it.each(
+  (["stream", "forum", "solo"] as const).flatMap((channelType) =>
+    (["live", "saved"] as const).map((source) => ({ channelType, source })),
+  ),
+)(
+  "finds joined archived $channelType channels by name in a $source session without putting them in Recent activity",
+  async ({ channelType, source }) => {
     const relay = keypair(),
       viewer = keypair();
     const wire = scriptedTransport(viewer.pubkey, relay.pubkey);
@@ -1256,14 +1452,41 @@ it.each(["stream", "forum", "solo"] as const)(
       metadata(relay, "active", "Current project"),
       roster(relay, "active", [viewer.pubkey]),
     ];
-    const owner = createRelaySession({
-      ...wire.transport,
-      async query(filters) {
-        return discovery.filter((event) =>
-          filters.some((filter) => filter.kinds?.includes(event.kind)),
-        );
+    const saved = source === "saved";
+    const owner = createRelaySession(
+      {
+        ...wire.transport,
+        async query(filters) {
+          // A saved session's relay reads fail.
+          if (saved) throw new Error("Relay unavailable");
+          return discovery.filter((event) =>
+            filters.some((filter) => filter.kinds?.includes(event.kind)),
+          );
+        },
       },
-    });
+      saved
+        ? {
+            cachedOnly: true,
+            prepared: true,
+            persistence: {
+              readStartup: async () => ({
+                discovery: {
+                  savedAt: Date.now(),
+                  relayAuthor: relay.pubkey,
+                  events: discovery,
+                },
+              }),
+              read: async () => [],
+              write: async () => {},
+              remove: async () => {},
+              retain: async () => {},
+              clear: async () => {},
+              close() {},
+            },
+          }
+        : undefined,
+    );
+    if (saved) await owner.restore();
     const open = vi.fn();
     const props = {
       session: owner.session,
@@ -1271,13 +1494,18 @@ it.each(["stream", "forum", "solo"] as const)(
       input: createRef<HTMLInputElement>(),
       pages: [],
       openConversation: open,
+      offline: saved ? (
+        <p>Only saved conversations are searched.</p>
+      ) : undefined,
     };
     try {
       const mounted = render(<SearchResults {...props} query="" />);
       await screen.findByRole("option", { name: /Current project/ });
-      expect(owner.session.channels.get?.("archive")?.channelType).toBe(
-        channelType,
-      );
+      const archived = owner.session.channels.get?.("archive");
+      expect(archived?.channelType).toBe(channelType);
+      // Restoration marks the saved member row read-only.
+      expect(!!archived?.readOnly).toBe(saved);
+      expect(!!archived?.cached).toBe(saved);
       expect(screen.queryByRole("option", { name: /Past project/ })).toBeNull();
       mounted.rerender(<SearchResults {...props} query="Past" />);
       fireEvent.click(
@@ -1305,8 +1533,10 @@ it.each([
   { channelType: "forum", readOnly: true },
   { channelType: "solo", readOnly: true },
   { channelType: "dm" },
+  { channelType: "dm", readOnly: true, cached: true },
+  { channelType: "stream", readOnly: true, cached: true, viewerRole: "guest" },
 ] as const)(
-  "does not surface archived nonmember or non-channel destinations: %j",
+  "does not surface archived nonmember, guest or non-channel destinations: %j",
   (state) => {
     const owner = createRelaySession(null);
     const snapshot = {
@@ -3050,6 +3280,46 @@ it("looks up an author by name only from two characters", async () => {
   }
 });
 
+it("asks for the connection, not more text, when a saved session's author picker finds no one", async () => {
+  vi.useFakeTimers();
+  const relay = keypair(),
+    viewer = keypair();
+  const owner = createRelaySession(
+    scriptedTransport(viewer.pubkey, relay.pubkey).transport,
+  );
+  const searchProfiles = vi.fn(async () => []);
+  const props = {
+    session: { ...owner.session, searchProfiles } as typeof owner.session,
+    onQueryChange: () => {},
+    input: createRef<HTMLInputElement>(),
+    pages: [],
+    openConversation: () => {},
+    offline: <p>Only saved conversations are searched.</p>,
+  };
+  try {
+    const view = render(<SearchResults {...props} query="from:a" />);
+    for (const query of ["from:a", "from:al"]) {
+      view.rerender(<SearchResults {...props} query={query} />);
+      await act(async () => vi.advanceTimersByTimeAsync(SEARCH_DEBOUNCE_MS));
+      expect(
+        screen.getByText("Connect to this community to search people."),
+      ).toBeVisible();
+      expect(screen.queryByText(/^Type at least/)).toBeNull();
+      expect(screen.queryByText(/Try a longer name/)).toBeNull();
+    }
+    expect(searchProfiles).not.toHaveBeenCalled();
+    // The offline notice sits below the results, outside their scrollport.
+    expect(
+      screen
+        .getByText("Only saved conversations are searched.")
+        .closest(".search-palette-scroll"),
+    ).toBeNull();
+  } finally {
+    cleanup();
+    owner.dispose();
+  }
+});
+
 it("searches the people directory only from two characters", async () => {
   vi.useFakeTimers();
   const relay = keypair(),
@@ -3079,6 +3349,40 @@ it("searches the people directory only from two characters", async () => {
       1,
       expect.any(AbortSignal),
     );
+  } finally {
+    cleanup();
+    owner.dispose();
+  }
+});
+
+it.each([
+  ["hex key", (pubkey: string) => pubkey],
+  ["npub", (pubkey: string) => npubEncode(pubkey)],
+  ["nostr: npub", (pubkey: string) => `nostr:${npubEncode(pubkey)}`],
+])("lists the person a pasted %s names under People", async (_case, typed) => {
+  const relay = keypair(),
+    viewer = keypair(),
+    sam = keypair();
+  const owner = createRelaySession(
+    scriptedTransport(viewer.pubkey, relay.pubkey).transport,
+  );
+  // The directory finds Sam by key; no name of his matches the text.
+  const t = peopleSession(owner.session, [
+    { pubkey: sam.pubkey, name: "Sam Rivera" },
+  ]);
+  try {
+    render(
+      <SearchResults
+        session={t.session}
+        query={typed(sam.pubkey)}
+        onQueryChange={() => {}}
+        input={createRef()}
+        pages={[]}
+        openConversation={() => {}}
+      />,
+    );
+    const group = await screen.findByRole("group", { name: "People" });
+    expect(within(group).getByRole("option")).toHaveTextContent("Sam Rivera");
   } finally {
     cleanup();
     owner.dispose();

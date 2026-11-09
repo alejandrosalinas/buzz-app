@@ -15,7 +15,7 @@ import { PanelWorkspace } from "../panels/PanelWorkspace";
 import { IconButton } from "../../shared/design-system/ui/IconButton";
 import { GaugeIcon } from "../../shared/design-system/icons";
 import { BrowserHostView } from "./BrowserHostView";
-import type { BrowserPlatform } from "./platform";
+import { BrowserAttachError, type BrowserPlatform } from "./platform";
 import { BrowserSessions } from "./sessions";
 
 class TestResizeObserver {
@@ -40,6 +40,7 @@ function fakePlatform(): BrowserPlatform {
     available: true,
     attach: vi.fn(async () => "session-1"),
     setBounds: vi.fn(async () => {}),
+    setMediaSuspended: vi.fn(async () => {}),
     navigate: vi.fn(async () => {}),
     action: vi.fn(async () => {}),
     status: vi.fn(async () => ({
@@ -49,6 +50,7 @@ function fakePlatform(): BrowserPlatform {
       error: null,
     })),
     detach: vi.fn(async () => {}),
+    openExternal: vi.fn(async () => {}),
   };
 }
 
@@ -700,6 +702,281 @@ it("renders attach failures in toolbar space outside native guest bounds", async
   expect(alert.parentElement).toHaveAttribute("aria-label", "Browser");
 });
 
+it("shows a refused app as a page in the website's place, with no reason", async () => {
+  const platform = fakePlatform();
+  const user = userEvent.setup();
+  vi.mocked(platform.attach)
+    .mockRejectedValueOnce(
+      new BrowserAttachError(
+        "Your Builderlab account cannot open this app",
+        "denied",
+      ),
+    )
+    .mockResolvedValueOnce("session-1");
+  render(
+    <BrowserHostView
+      url="https://example.com"
+      platform={platform}
+      sessions={new BrowserSessions(platform)}
+      pollInterval={50_000}
+    />,
+  );
+  const alert = await screen.findByRole("alert");
+  expect(alert).toHaveTextContent("You can’t open this app");
+  expect(alert).toHaveTextContent(
+    "The link may be wrong, or the app may have been removed. Ask whoever shared it.",
+  );
+  expect(alert).not.toHaveTextContent("Builderlab account");
+  expect(screen.getAllByRole("alert")).toHaveLength(1);
+  // In the website viewport, not the error bar's toolbar space.
+  expect(alert.parentElement).not.toHaveAttribute("aria-label", "Browser");
+
+  await user.click(screen.getByRole("button", { name: "Try again" }));
+  await waitFor(() =>
+    expect(platform.status).toHaveBeenCalledWith("session-1"),
+  );
+  expect(platform.attach).toHaveBeenCalledTimes(2);
+  expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+});
+
+it("offers Try again and the system browser when Builderlab can't be reached", async () => {
+  const platform = fakePlatform();
+  const user = userEvent.setup();
+  vi.mocked(platform.attach)
+    .mockRejectedValueOnce(
+      new BrowserAttachError(
+        "Builderlab sign-in request failed",
+        "unavailable",
+      ),
+    )
+    .mockResolvedValueOnce("session-1");
+  vi.mocked(platform.openExternal)
+    .mockRejectedValueOnce(new Error("no browser"))
+    .mockResolvedValueOnce(undefined);
+  render(
+    <BrowserHostView
+      url="https://example.com/app"
+      platform={platform}
+      sessions={new BrowserSessions(platform)}
+      pollInterval={50_000}
+    />,
+  );
+  const alert = await screen.findByRole("alert");
+  expect(alert).toHaveTextContent("Buzz couldn’t load this app");
+  expect(alert).not.toHaveTextContent("sign-in request failed");
+  expect(screen.getAllByRole("alert")).toHaveLength(1);
+
+  await user.click(screen.getByRole("button", { name: "Open in browser" }));
+  expect(platform.openExternal).toHaveBeenCalledWith("https://example.com/app");
+  expect(
+    await screen.findByText(
+      "Couldn’t open it in your browser. Try again in a moment.",
+    ),
+  ).toBeInTheDocument();
+  await user.click(screen.getByRole("button", { name: "Open in browser" }));
+  await waitFor(() =>
+    expect(
+      screen.queryByText(
+        "Couldn’t open it in your browser. Try again in a moment.",
+      ),
+    ).not.toBeInTheDocument(),
+  );
+  expect(platform.attach).toHaveBeenCalledTimes(1);
+
+  await user.click(screen.getByRole("button", { name: "Try again" }));
+  await waitFor(() =>
+    expect(platform.status).toHaveBeenCalledWith("session-1"),
+  );
+  expect(platform.attach).toHaveBeenCalledTimes(2);
+  expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+});
+
+it("keeps Try again focused while a refused app retries", async () => {
+  const platform = fakePlatform();
+  const user = userEvent.setup();
+  const refused = () =>
+    new BrowserAttachError(
+      "Your Builderlab account cannot open this app",
+      "denied",
+    );
+  let settle: { resolve(id: string): void; reject(error: unknown): void } = {
+    resolve: () => {},
+    reject: () => {},
+  };
+  const deferred = () =>
+    new Promise<string>((resolve, reject) => {
+      settle = { resolve, reject };
+    });
+  vi.mocked(platform.attach)
+    .mockRejectedValueOnce(refused())
+    .mockImplementationOnce(deferred)
+    .mockRejectedValueOnce(refused())
+    .mockImplementationOnce(deferred);
+  render(
+    <BrowserHostView
+      url="https://example.com"
+      platform={platform}
+      sessions={new BrowserSessions(platform)}
+      pollInterval={50_000}
+    />,
+  );
+  const retry = await screen.findByRole("button", { name: "Try again" });
+  retry.focus();
+
+  // Pending: the page and its focused button stay, and a repeat does nothing.
+  await user.keyboard("{Enter}");
+  await waitFor(() => expect(platform.attach).toHaveBeenCalledTimes(2));
+  expect(retry).toHaveFocus();
+  expect(retry).toHaveAttribute("aria-busy", "true");
+  await user.keyboard("{Enter}");
+  expect(platform.attach).toHaveBeenCalledTimes(2);
+
+  // Refused again: still the same focused button, ready to retry.
+  await act(async () => settle.reject(refused()));
+  expect(retry).toBeInTheDocument();
+  expect(retry).toHaveFocus();
+  expect(retry).not.toHaveAttribute("aria-busy");
+
+  // An immediate repeated refusal keeps focus too.
+  await user.keyboard("{Enter}");
+  await waitFor(() => expect(platform.attach).toHaveBeenCalledTimes(3));
+  await waitFor(() => expect(retry).not.toHaveAttribute("aria-busy"));
+  expect(retry).toHaveFocus();
+
+  // Success replaces the page with the website.
+  await user.keyboard("{Enter}");
+  await waitFor(() => expect(platform.attach).toHaveBeenCalledTimes(4));
+  expect(retry).toHaveFocus();
+  await act(async () => settle.resolve("session-1"));
+  await waitFor(() =>
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument(),
+  );
+});
+
+it("keeps Try again focused while an unreachable Builderlab retries", async () => {
+  const platform = fakePlatform();
+  const user = userEvent.setup();
+  const unreachable = () =>
+    new BrowserAttachError("Builderlab sign-in request failed", "unavailable");
+  let settle: { resolve(id: string): void; reject(error: unknown): void } = {
+    resolve: () => {},
+    reject: () => {},
+  };
+  const deferred = () =>
+    new Promise<string>((resolve, reject) => {
+      settle = { resolve, reject };
+    });
+  vi.mocked(platform.attach)
+    .mockRejectedValueOnce(unreachable())
+    .mockImplementationOnce(deferred)
+    .mockImplementationOnce(deferred);
+  render(
+    <BrowserHostView
+      url="https://example.com"
+      platform={platform}
+      sessions={new BrowserSessions(platform)}
+      pollInterval={50_000}
+    />,
+  );
+  const retry = await screen.findByRole("button", { name: "Try again" });
+  retry.focus();
+
+  await user.keyboard("{Enter}");
+  await waitFor(() => expect(platform.attach).toHaveBeenCalledTimes(2));
+  expect(retry).toHaveFocus();
+  expect(retry).toHaveAttribute("aria-busy", "true");
+  expect(
+    screen.getByRole("button", { name: "Open in browser" }),
+  ).toBeInTheDocument();
+  await user.keyboard("{Enter}");
+  expect(platform.attach).toHaveBeenCalledTimes(2);
+
+  await act(async () => settle.reject(unreachable()));
+  expect(retry).toHaveFocus();
+  expect(retry).not.toHaveAttribute("aria-busy");
+
+  await user.keyboard("{Enter}");
+  await waitFor(() => expect(platform.attach).toHaveBeenCalledTimes(3));
+  await act(async () => settle.resolve("session-1"));
+  await waitFor(() =>
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument(),
+  );
+});
+
+it("moves focus to the error when a retry from the page fails another way", async () => {
+  const platform = fakePlatform();
+  const user = userEvent.setup();
+  const refused = () =>
+    new BrowserAttachError(
+      "Your Builderlab account cannot open this app",
+      "denied",
+    );
+  let fail: (error: unknown) => void = () => {};
+  const deferred = () =>
+    new Promise<string>((_, reject) => {
+      fail = reject;
+    });
+  vi.mocked(platform.attach)
+    .mockRejectedValueOnce(refused())
+    .mockImplementationOnce(deferred)
+    .mockRejectedValueOnce(refused())
+    .mockImplementationOnce(deferred);
+  render(
+    <BrowserHostView
+      url="https://example.com"
+      platform={platform}
+      sessions={new BrowserSessions(platform)}
+      pollInterval={50_000}
+    />,
+  );
+  const retry = await screen.findByRole("button", { name: "Try again" });
+  retry.focus();
+  await user.keyboard("{Enter}");
+  await waitFor(() => expect(platform.attach).toHaveBeenCalledTimes(2));
+  await act(async () =>
+    fail(new BrowserAttachError("Builderlab sign-in request failed")),
+  );
+  const alert = screen.getByRole("alert");
+  expect(alert).toHaveTextContent("Builderlab sign-in request failed");
+  expect(alert).toHaveFocus();
+
+  // Focus the user has moved elsewhere in the meantime stays where it is.
+  await user.click(screen.getByRole("button", { name: "Reload" }));
+  const again = await screen.findByRole("button", { name: "Try again" });
+  again.focus();
+  await user.keyboard("{Enter}");
+  await waitFor(() => expect(platform.attach).toHaveBeenCalledTimes(4));
+  const address = screen.getByRole("textbox");
+  address.focus();
+  await act(async () =>
+    fail(new BrowserAttachError("Builderlab sign-in request failed")),
+  );
+  expect(screen.getByRole("alert")).toHaveTextContent(
+    "Builderlab sign-in request failed",
+  );
+  expect(address).toHaveFocus();
+});
+
+it("keeps other attach failures in the error bar", async () => {
+  const platform = fakePlatform();
+  vi.mocked(platform.attach).mockRejectedValue(
+    new BrowserAttachError("Builderlab sign-in request failed"),
+  );
+  render(
+    <BrowserHostView
+      url="https://example.com"
+      platform={platform}
+      sessions={new BrowserSessions(platform)}
+    />,
+  );
+  const alert = await screen.findByRole("alert");
+  expect(alert).toHaveTextContent("Builderlab sign-in request failed");
+  expect(alert.parentElement).toHaveAttribute("aria-label", "Browser");
+  expect(
+    screen.queryByRole("button", { name: "Try again" }),
+  ).not.toBeInTheDocument();
+});
+
 it("routes address and navigation controls to the active session", async () => {
   const platform = fakePlatform();
   const user = userEvent.setup();
@@ -819,6 +1096,29 @@ it("shows a synchronous address validation error", async () => {
   );
 });
 
+it("shows a step to take elsewhere as a status, not an error", async () => {
+  const platform = fakePlatform();
+  vi.mocked(platform.status).mockResolvedValue({
+    url: "https://example.com/",
+    title: "",
+    loading: false,
+    error: null,
+    notice: "Approve this app in your web browser, then select Reload",
+  });
+  render(
+    <BrowserHostView
+      url="https://example.com"
+      platform={platform}
+      sessions={new BrowserSessions(platform)}
+      pollInterval={5}
+    />,
+  );
+  expect(await screen.findByRole("status")).toHaveTextContent(
+    "Approve this app in your web browser, then select Reload",
+  );
+  expect(screen.queryByRole("alert")).toBeNull();
+});
+
 it("ignores status from a replaced session", async () => {
   const oldStatus = deferred<{
     url: string;
@@ -890,7 +1190,7 @@ it.each([false, true])(
     const sessions = new BrowserSessions(platform);
     const lifetime = new AbortController();
     const builderlab = {
-      credential: "private",
+      federated: "private",
       storage: "viewer-test",
       signal: lifetime.signal,
     };
@@ -937,7 +1237,7 @@ it("restores the last approved app after eviction instead of a later consent tic
   const sessions = new BrowserSessions(platform);
   const lifetime = new AbortController();
   const builderlab = {
-    credential: "private",
+    federated: "private",
     storage: "viewer-test",
     signal: lifetime.signal,
   };

@@ -1,4 +1,5 @@
 import { beforeAll, describe, expect, it, vi } from "vitest";
+import { npubEncode } from "nostr-tools/nip19";
 import { createRelaySession } from "./session";
 import { createDirectMessages } from "./direct-messages";
 import type { RelayReader } from "./reader";
@@ -251,29 +252,42 @@ it("reads paginated verified profiles, excludes the viewer, and cancels with the
   }
 });
 
-it("reads an exact public-key profile without widening directory search", async () => {
-  const t = setup();
-  try {
-    const result = await t.dm.people(
-      t.other.pubkey,
-      1,
-      new AbortController().signal,
-    );
-    expect(result.people).toEqual([
-      expect.objectContaining({ pubkey: t.other.pubkey, name: "Other" }),
-    ]);
-    expect(t.query.mock.calls.at(-1)?.[0]).toEqual([
-      {
-        kinds: [0],
-        authors: [t.other.pubkey],
-        limit: 30,
-        page: 1,
-      },
-    ]);
-  } finally {
-    t.owner.dispose();
-  }
-});
+it.each([
+  ["hex", (pubkey: string) => pubkey],
+  ["uppercase hex", (pubkey: string) => pubkey.toUpperCase()],
+  ["an npub", (pubkey: string) => npubEncode(pubkey)],
+  ["a nostr: npub", (pubkey: string) => `nostr:${npubEncode(pubkey)}`],
+])(
+  "reads an exact public-key profile from %s without widening directory search",
+  async (_case, typed) => {
+    const t = setup();
+    try {
+      const result = await t.dm.people(
+        typed(t.other.pubkey),
+        1,
+        new AbortController().signal,
+      );
+      expect(result.people).toEqual([
+        expect.objectContaining({ pubkey: t.other.pubkey, name: "Other" }),
+      ]);
+      expect(t.query.mock.calls.at(-1)?.[0]).toEqual([
+        {
+          kinds: [0],
+          authors: [t.other.pubkey],
+          limit: 30,
+          page: 1,
+        },
+      ]);
+      expect(
+        t.query.mock.calls.some(([filters]) =>
+          filters.some((filter) => filter.search !== undefined),
+        ),
+      ).toBe(false);
+    } finally {
+      t.owner.dispose();
+    }
+  },
+);
 
 it.each(["", "C"])(
   "keeps large-profile pages within the read budget without skipping matches: %s",

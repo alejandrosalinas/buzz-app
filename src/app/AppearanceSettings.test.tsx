@@ -24,6 +24,10 @@ import {
 } from "../features/messages/thread-preferences";
 
 import {
+  namePreference,
+  setNamePreference,
+} from "../features/profiles/name-preference";
+import {
   followUpBehaviorPreference,
   setFollowUpBehaviorPreference,
 } from "../features/messages/follow-up-preference";
@@ -474,6 +478,60 @@ it("switches contrast through the shared select and restores it", async () => {
   appearance.dispose();
 });
 
+it("switches message density, restores it, and retries a failed save", async () => {
+  const appearance = createAppearance();
+  preferenceAppearances.push(appearance);
+  render(
+    <ToastProvider>
+      <AppearanceSettings appearance={appearance} />
+    </ToastProvider>,
+  );
+  const user = userEvent.setup();
+  const density = screen.getByRole("combobox", { name: "Message density" });
+  const preview = screen.getByRole("figure", { name: "Appearance preview" });
+  expect(preview.querySelector("[data-message-density]")).toHaveAttribute(
+    "data-message-density",
+    "default",
+  );
+  expect(density).toHaveTextContent("Default");
+  await user.click(density);
+  await user.click(await screen.findByRole("option", { name: "Compact" }));
+  expect(preview.querySelector("[data-message-density]")).toHaveAttribute(
+    "data-message-density",
+    "compact",
+  );
+  expect(preview.querySelector("[data-message-width]")).toHaveAttribute(
+    "data-message-width",
+    "wide",
+  );
+  expect(screen.queryByRole("combobox", { name: "Message width" })).toBeNull();
+  expect(document.documentElement.dataset.messageDensity).toBe("compact");
+  expect(localStorage.getItem("buzz-message-density.v1")).toBe("compact");
+  const restored = createAppearance();
+  expect(restored.snapshot().density).toBe("compact");
+  restored.dispose();
+
+  const write = vi
+    .spyOn(Storage.prototype, "setItem")
+    .mockImplementationOnce(() => {
+      throw new Error("denied");
+    });
+  await user.click(density);
+  await user.click(await screen.findByRole("option", { name: "Default" }));
+  expect(document.documentElement.dataset.messageDensity).toBe("default");
+  expect(localStorage.getItem("buzz-message-density.v1")).toBe("compact");
+  await user.click(
+    await screen.findByRole("button", { name: "Retry saving message density" }),
+  );
+  expect(write).toHaveBeenLastCalledWith("buzz-message-density.v1", "default");
+  expect(localStorage.getItem("buzz-message-density.v1")).toBe("default");
+  await waitFor(() =>
+    expect(
+      screen.queryByRole("button", { name: "Retry saving message density" }),
+    ).not.toBeInTheDocument(),
+  );
+});
+
 it("offers message spelling correction only on Mac WebKit, off until this device opts in", async () => {
   const user = userEvent.setup();
   const appearance = createAppearance();
@@ -615,3 +673,114 @@ it.each([
     ).toBe(shown);
   },
 );
+
+it("changes message width through the shared select and restores the saved choice", async () => {
+  const user = userEvent.setup();
+  const view = render(preferencesPage(), { wrapper: ToastProvider });
+  const choice = () => screen.getByRole("combobox", { name: "Message width" });
+  expect(choice()).toHaveTextContent("Narrow");
+  const preview = screen.getByRole("figure", { name: "Appearance preview" });
+  expect(preview.querySelector("[data-message-width]")).toHaveAttribute(
+    "data-message-width",
+    "narrow",
+  );
+  expect(
+    screen.queryByText(
+      "Wide gives conversations 50% more room when space is available.",
+    ),
+  ).not.toBeInTheDocument();
+  await user.click(choice());
+  await user.click(await screen.findByRole("option", { name: "Wide" }));
+  expect(choice()).toHaveTextContent("Wide");
+  expect(preview.querySelector("[data-message-width]")).toHaveAttribute(
+    "data-message-width",
+    "wide",
+  );
+  expect(
+    document.documentElement.style.getPropertyValue("--buzz-message-width"),
+  ).toBe("78rem");
+  expect(localStorage.getItem("buzz-message-width.v1")).toBe("wide");
+  view.unmount();
+  render(preferencesPage(), { wrapper: ToastProvider });
+  expect(choice()).toHaveTextContent("Wide");
+  await user.click(choice());
+  await user.click(await screen.findByRole("option", { name: "Narrow" }));
+  expect(
+    document.documentElement.style.getPropertyValue("--buzz-message-width"),
+  ).toBe("52rem");
+});
+
+it("retries an unsaved message width when returning to Appearance", async () => {
+  const user = userEvent.setup();
+  const appearance = createAppearance();
+  preferenceAppearances.push(appearance);
+  const content = (active: boolean) => (
+    <ToastProvider>
+      <AppearanceSettings appearance={appearance} active={active} />
+    </ToastProvider>
+  );
+  const view = render(content(true));
+  const write = vi
+    .spyOn(Storage.prototype, "setItem")
+    .mockImplementation(() => {
+      throw new Error("denied");
+    });
+  await user.click(screen.getByRole("combobox", { name: "Message width" }));
+  await user.click(await screen.findByRole("option", { name: "Wide" }));
+  expect(await screen.findByRole("dialog")).toHaveTextContent(
+    "Message width wasn’t saved",
+  );
+  view.rerender(content(false));
+  await waitFor(() =>
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument(),
+  );
+  view.rerender(content(true));
+  expect(
+    screen.getByRole("combobox", { name: "Message width" }),
+  ).toHaveTextContent("Wide");
+  write.mockRestore();
+  await user.click(
+    await screen.findByRole("button", { name: "Retry saving message width" }),
+  );
+  expect(localStorage.getItem("buzz-message-width.v1")).toBe("wide");
+  await waitFor(() =>
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument(),
+  );
+});
+
+it("offers a choice between usernames and full names only where the community verifies names", async () => {
+  const appearance = createAppearance();
+  preferenceAppearances.push(appearance);
+  let authority: object | undefined;
+  const listeners = new Set<() => void>();
+  const subscribe = (listener: () => void) => {
+    listeners.add(listener);
+    return () => listeners.delete(listener);
+  };
+  const connection = {
+    status: "ready",
+    session: {
+      profiles: { subscribe, verifiedAuthority: () => authority },
+    },
+  };
+  const communities = {
+    relay: { subscribe, snapshot: () => connection },
+  } as unknown as Parameters<typeof AppearanceSettings>[0]["communities"];
+  render(
+    <ToastProvider>
+      <AppearanceSettings appearance={appearance} communities={communities} />
+    </ToastProvider>,
+  );
+  expect(screen.queryByText("Show people by")).toBeNull();
+  act(() => {
+    authority = { pubkey: "relay", multipleIssuers: false };
+    for (const listener of listeners) listener();
+  });
+  const choice = screen.getByRole("combobox", { name: "Show people by" });
+  expect(choice).toHaveTextContent("Username");
+  const user = userEvent.setup();
+  await user.click(choice);
+  await user.click(await screen.findByRole("option", { name: "Full name" }));
+  expect(namePreference()).toBe("full-name");
+  setNamePreference("username");
+});

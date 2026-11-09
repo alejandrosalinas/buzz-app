@@ -1,3 +1,4 @@
+import { reactionRows } from "./reaction-rows";
 import {
   useCallback,
   useEffect,
@@ -20,6 +21,7 @@ import {
   useProfileGeneration,
   useRelayConnection,
 } from "../../features/relay/react";
+import { communityRefusalTitle } from "../../features/federated-identity/CommunitySignIn";
 import type { RelayData } from "../../features/relay/service";
 import type { RelaySession } from "../../features/relay/session";
 import { ArrowRightIcon, ChecksIcon } from "../../shared/design-system/icons";
@@ -27,28 +29,23 @@ import { Button } from "../../shared/design-system/ui/Button";
 import { EmptyState } from "../../shared/design-system/ui/EmptyState";
 import { NavigationItem } from "../../shared/design-system/ui/NavigationItem";
 import { Switch } from "../../shared/design-system/ui/Switch";
-import {
-  readView,
-  subscribeView,
-  viewRevision,
-  writeView,
-} from "../../shared/view-state";
-import { archiveIndex, archiveKey, isArchived, readArchives } from "./archive";
+import { readView, writeView } from "../../shared/view-state";
 import {
   hasUnread,
   InboxRowButton,
+  ReactionRowButton,
   rowIdentity,
   rowProfileIds,
 } from "./InboxRow";
 import { inboxTarget } from "./route";
 import styles from "./InboxPreview.module.css";
 
-/** Rows the card renders and enriches; the Inbox page holds the rest. */
+/** Rows the card renders and enriches; the Activity page holds the rest. */
 const maxRows = 50;
-/** The card's own Unread only choice, separate from the Inbox page filters. */
+/** The card's own Unread only choice, separate from the Activity page filters. */
 const unreadOnlyKey = "inbox:preview-unread-only";
 
-// The card is narrower than the Inbox page, so it abbreviates its timestamps
+// The card is narrower than the Activity page, so it abbreviates its timestamps
 // as the channel activity preview does, with a date after a week.
 const shortAge = (createdAt: number, now = Date.now()) => {
   const seconds = Math.max(0, Math.floor(now / 1000) - createdAt);
@@ -62,7 +59,7 @@ const shortAge = (createdAt: number, now = Date.now()) => {
   });
 };
 
-/** Recent Inbox conversations, shown while the pointer rests on the sidebar's Inbox row. */
+/** Recent activity, shown while the pointer rests on the dock's Activity bell. */
 export function InboxPreview({
   relay,
   navigator,
@@ -87,10 +84,13 @@ export function InboxPreview({
     <Card navigator={navigator} close={close}>
       <p className={`text-body text-subtle ${styles.notice}`} role="status">
         {connection.status === "connecting"
-          ? "Connecting to your inbox…"
-          : (connection.error ?? "Choose a community to see your inbox.")}
+          ? "Connecting to your activity…"
+          : connection.denied
+            ? // Its notice, on every page, offers what fixes it.
+              communityRefusalTitle(connection.refusal)
+            : (connection.error ?? "Choose a community to see your activity.")}
       </p>
-      {connection.status === "error" && (
+      {connection.status === "error" && !connection.denied && (
         <div className={styles.notice}>
           <Button size="sm" onClick={relay.retry}>
             Retry connection
@@ -122,23 +122,17 @@ function InboxPreviewCard({
     session.inboxFeed.snapshot,
     session.inboxFeed.snapshot,
   );
+  const reactions = useSyncExternalStore(
+    session.inboxFeed.reactions.subscribe,
+    session.inboxFeed.reactions.snapshot,
+    session.inboxFeed.reactions.snapshot,
+  );
   const sync = useSyncExternalStore(
     session.unread.subscribeSync,
     session.unread.sync,
     session.unread.sync,
   );
   const viewScope = session.scope;
-  const subscribeViews = useCallback(
-    (listener: () => void) => subscribeView(viewScope, listener),
-    [viewScope],
-  );
-  const archiveRevision = useSyncExternalStore(subscribeViews, () =>
-    viewRevision(viewScope, archiveKey),
-  );
-  const archives = useMemo(
-    () => archiveIndex(readArchives(archiveRevision)),
-    [archiveRevision],
-  );
   const [unreadOnly, setUnreadOnlyState] = useState(
     () => readView<unknown>(viewScope, unreadOnlyKey, false) === true,
   );
@@ -154,25 +148,49 @@ function InboxPreviewCard({
     // Retry after a roster failure also refreshes activity that failed meanwhile.
     if (refreshAfterRoster) {
       setRefreshAfterRoster(false);
-      void Promise.all([session.unread.refresh(), session.inboxFeed.refresh()]);
+      void Promise.all([
+        session.unread.refresh(),
+        session.inboxFeed.refresh(),
+        session.inboxFeed.reactions.refresh(),
+      ]);
     } else {
       void session.unread.ensure();
       void session.inboxFeed.ensure();
+      void session.inboxFeed.reactions.ensure();
     }
   }, [session, list.status, list.asOf, refreshAfterRoster]);
   const channelOf = (channelId: string) =>
     list.channels.find((channel) => channel.id === channelId);
-  // Read archives only: reopening archived conversations is the Inbox page's write.
-  const recent = inbox.items
-    .filter((item) => !isArchived(archives, item))
-    .sort((a, b) => b.createdAt - a.createdAt || a.id.localeCompare(b.id));
+  const recent = [...inbox.items].sort(
+    (a, b) => b.createdAt - a.createdAt || a.id.localeCompare(b.id),
+  );
   const unread = recent.filter(hasUnread);
-  const rows = (unreadOnly ? unread : recent).slice(0, maxRows);
+  const rows = [
+    ...(unreadOnly ? unread : recent).map((item) => ({
+      kind: "conversation" as const,
+      item,
+    })),
+    ...(!unreadOnly ? reactionRows(reactions.items) : []).map((item) => ({
+      kind: "reaction" as const,
+      item,
+    })),
+  ]
+    .sort(
+      (a, b) =>
+        b.item.createdAt - a.item.createdAt ||
+        a.item.id.localeCompare(b.item.id),
+    )
+    .slice(0, maxRows);
   const profileKey = [
     ...new Set(
-      rows.flatMap((item) => [
-        item.authorId,
-        ...rowProfileIds(item, channelOf(item.channelId)),
+      rows.flatMap((row) => [
+        ...(row.kind === "reaction"
+          ? row.item.events.map((event) => event.pubkey)
+          : [row.item.authorId]),
+        ...rowProfileIds(
+          row.kind === "reaction" ? {} : row.item,
+          channelOf(row.item.channelId),
+        ),
       ]),
     ),
   ]
@@ -203,10 +221,15 @@ function InboxPreviewCard({
     list.status === "idle" ||
     list.status === "loading" ||
     inbox.status === "loading" ||
-    feed.status === "loading";
+    feed.status === "loading" ||
+    reactions.status === "loading";
   // As on the page, an empty result is only shown once activity was checked.
-  const checked = inbox.status === "ready" || feed.status === "ready";
-  const failure = list.error ?? inbox.error ?? feed.error ?? sync.error;
+  const checked =
+    inbox.status === "ready" ||
+    feed.status === "ready" ||
+    reactions.status === "ready";
+  const failure =
+    list.error ?? inbox.error ?? feed.error ?? reactions.error ?? sync.error;
   const retry = async () => {
     if (list.status !== "ready") {
       setRefreshAfterRoster(true);
@@ -215,6 +238,7 @@ function InboxPreviewCard({
       await Promise.all([
         session.unread.refresh(),
         session.inboxFeed.refresh(),
+        session.inboxFeed.reactions.refresh(),
       ]);
     await session.unread.retrySync();
   };
@@ -234,13 +258,15 @@ function InboxPreviewCard({
     if (failure || document.activeElement !== document.body) return;
     unreadOnlyControl.current?.focus({ preventScroll: true });
   }, [failure]);
-  // Each conversation counts once, under its most specific kind.
+  // Each conversation counts once, under its most specific kind, as the
+  // page's filters with Unread only would list it. A Solo chat's own row has
+  // no kind, so the total leads.
   let dms = 0;
   let mentions = 0;
   let threads = 0;
   for (const item of unread) {
     if (channelOf(item.channelId)?.channelType === "dm") dms++;
-    else if (item.mentioned) mentions++;
+    else if (item.mention && hasUnread(item.mention)) mentions++;
     else if (item.thread) threads++;
   }
   const kinds = [
@@ -251,11 +277,19 @@ function InboxPreviewCard({
   const summary = loading
     ? "Checking recent activity…"
     : unread.length
-      ? `${kinds.length ? kinds.join(" · ") : unread.length} unread`
+      ? [`${unread.length} unread`, ...kinds].join(" · ")
       : checked
         ? "Nothing unread"
         : undefined;
-  const open = (item: (typeof rows)[number]) => {
+  const open = (row: (typeof rows)[number]) => {
+    const item =
+      row.kind === "reaction"
+        ? {
+            channelId: row.item.channelId,
+            messageId: row.item.message.id,
+            rootId: row.item.message.threadRootId,
+          }
+        : row.item;
     close();
     void navigator.open({
       version: 1,
@@ -279,29 +313,44 @@ function InboxPreviewCard({
         <div className={styles.notice} role="alert">
           <p className="text-body">{failure}</p>
           <Button ref={retryButton} size="sm" onClick={() => void retry()}>
-            Retry inbox
+            Retry activity
           </Button>
         </div>
       )}
       {rows.length ? (
-        <ul className={styles.list} aria-label="Recent Inbox conversations">
-          {rows.map((item) => (
-            <li key={item.id}>
-              <InboxRowButton
-                item={item}
-                identity={rowIdentity(
-                  item,
-                  channelOf(item.channelId),
-                  profiles,
-                  name,
+        <ul className={styles.list} aria-label="Recent activity">
+          {rows.map((row) => {
+            const item = row.item;
+            return (
+              <li key={item.id}>
+                {row.kind === "reaction" ? (
+                  <ReactionRowButton
+                    item={row.item}
+                    session={session}
+                    profiles={profiles}
+                    name={name}
+                    channel={channelOf(item.channelId)}
+                    time={shortAge(item.createdAt)}
+                    onClick={() => open(row)}
+                  />
+                ) : (
+                  <InboxRowButton
+                    item={row.item}
+                    identity={rowIdentity(
+                      row.item,
+                      channelOf(item.channelId),
+                      profiles,
+                      name,
+                    )}
+                    media={session.media}
+                    feed={feed}
+                    time={shortAge(item.createdAt)}
+                    onClick={() => open(row)}
+                  />
                 )}
-                media={session.media}
-                feed={feed}
-                time={shortAge(item.createdAt)}
-                onClick={() => open(item)}
-              />
-            </li>
-          ))}
+              </li>
+            );
+          })}
         </ul>
       ) : loading ? (
         [0, 1, 2].map((row) => (
@@ -324,7 +373,7 @@ function InboxPreviewCard({
               title="You're all caught up"
               description="No unread mentions, direct messages, or thread replies."
               action={
-                recent.length ? (
+                recent.length || reactions.items.length ? (
                   <Button
                     size="sm"
                     variant="ghost"
@@ -341,7 +390,7 @@ function InboxPreviewCard({
               level={4}
               icon={<ChecksIcon />}
               title="No recent activity"
-              description="Mentions, direct messages, and replies in threads you participate in appear here."
+              description="Mentions, direct messages, thread replies, and reactions to your messages appear here."
             />
           )}
         </div>
@@ -350,7 +399,7 @@ function InboxPreviewCard({
   );
 }
 
-/** The card's frame: title and Unread only above, Open Inbox below. */
+/** The card's frame: title and Unread only above, Open Activity below. */
 function Card({
   navigator,
   close,
@@ -372,7 +421,7 @@ function Card({
     <div className={styles.card}>
       <header className={styles.header}>
         <div className={styles.headerCopy}>
-          <h2 className={`text-label ${styles.title}`}>Inbox</h2>
+          <h2 className={`text-label ${styles.title}`}>Activity</h2>
           <p
             className={`text-caption text-subtle ${styles.summary}`}
             role="status"
@@ -400,7 +449,7 @@ function Card({
       <div className={styles.body}>{children}</div>
       <footer className={styles.footer}>
         <NavigationItem
-          label="Open Inbox"
+          label="Open Activity"
           trailing={<ArrowRightIcon size="1rem" aria-hidden="true" />}
           onClick={() => {
             close();

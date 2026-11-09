@@ -120,3 +120,31 @@ it("swallows a follow-up request thrown by a browser-initiated abort", async () 
   expect(tx.abort).not.toHaveBeenCalled();
   expect(vi.getTimerCount()).toBe(0);
 });
+
+it("evicts the profile mirror before any saved roster", async () => {
+  vi.useFakeTimers();
+  const MB = 1024 * 1024;
+  const rows = {
+    onsuccess: () => {},
+    result: [
+      { key: "viewer:relay", bytes: 6.5 * MB, savedAt: 1 },
+      { key: "viewer:relay:profiles", bytes: 2 * MB, savedAt: 2 },
+    ],
+  };
+  const store = {
+    put: vi.fn(),
+    delete: vi.fn(),
+    getAll: () => rows as unknown as IDBRequest,
+  };
+  const { tx, result } = transaction(
+    () => {},
+    (cache) => cache.writeProfiles?.([]) ?? Promise.resolve(),
+    store,
+  );
+  await vi.advanceTimersByTimeAsync(0);
+  expect(store.put).toHaveBeenCalledOnce();
+  rows.onsuccess();
+  expect(store.delete.mock.calls).toEqual([["viewer:relay:profiles"]]);
+  tx.oncomplete();
+  await expect(result).resolves.toBeUndefined();
+});

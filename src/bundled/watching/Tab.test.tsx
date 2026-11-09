@@ -13,6 +13,7 @@ import { afterEach, expect, it, vi } from "vitest";
 import { AgentSaveState } from "../../features/agents/AgentSaveButton";
 import type { Context } from "../../plugins/author";
 import { createTab, describe } from "./Tab";
+import { AttentionSonar } from "./AttentionSonar";
 
 afterEach(cleanup);
 const viewer = "f".repeat(64);
@@ -54,7 +55,6 @@ it("keeps listening channels distinct from destinations and respects rearmed tim
   ).toBe(true);
 });
 it("shows one agent's watches, reacts to changes and surfaces save errors", async () => {
-  let changed = () => {};
   const enabled = true;
   const record = () => ({
     key: "membership-a",
@@ -90,7 +90,7 @@ it("shows one agent's watches, reacts to changes and surfaces save errors", asyn
       },
     },
   });
-  let snapshot = {
+  const snapshot = {
     status: "ready",
     running: [
       record(),
@@ -114,10 +114,7 @@ it("shows one agent's watches, reacts to changes and surfaces save errors", asyn
     agents: {
       presentWatch: () => undefined,
       snapshot: () => snapshot,
-      subscribe: (listener: () => void) => {
-        changed = listener;
-        return () => {};
-      },
+      subscribe: () => () => {},
       save,
     },
     relay: { snapshot: () => disconnected, subscribe: () => () => {} },
@@ -127,16 +124,22 @@ it("shows one agent's watches, reacts to changes and surfaces save errors", asyn
   );
   const ada = screen.getByRole("region", { name: "Attention" });
   expect(within(ada).getByRole("heading", { name: "task" })).toBeTruthy();
-  expect(within(ada).getByText("1 interest · 1 watch")).toBeTruthy();
   fireEvent.click(
     within(ada).getByRole("button", { name: "Details for task" }),
   );
-  expect(within(ada).getByText("Last woke 3 minutes ago")).toBeTruthy();
+  fireEvent.click(screen.getByLabelText("Show activity for task"));
+  fireEvent.click(screen.getByLabelText("Watch details for task"));
+  expect(
+    within(
+      screen.getByLabelText("Watch details for task")
+        .parentElement as HTMLElement,
+    ).getByText("3 minutes ago"),
+  ).toBeTruthy();
   expect(within(ada).getByText("build succeeded")).toBeTruthy();
-  expect(within(ada).getByRole("heading", { name: "Command" })).toBeTruthy();
-  expect(ada.querySelector(".attention-details code")?.textContent).toBe(
-    "check",
-  );
+  expect(screen.getByText("Command", { selector: "dt" })).toBeTruthy();
+  expect(
+    document.querySelector(".attention-configuration code")?.textContent,
+  ).toBe("check");
   expect(
     ada.querySelector(
       ".attention-instructions summary .attention-instructions-preview",
@@ -148,19 +151,17 @@ it("shows one agent's watches, reacts to changes and surfaces save errors", asyn
   expect(
     ada.querySelector("details.attention-instructions")?.hasAttribute("open"),
   ).toBe(false);
-  expect(
-    within(screen.getByRole("region", { name: "Interest task" })).getByRole(
-      "switch",
-      { name: "Watch task" },
-    ),
-  ).toBeTruthy();
+  fireEvent.click(
+    screen.getByRole("button", { name: "Watch status for task" }),
+  );
+  expect(screen.getByRole("menuitem", { name: "Resume" })).toBeTruthy();
   expect(within(ada).getByText("Paused")).toBeTruthy();
   expect(
-    within(ada).getByRole("switch", {
-      name: "Run Ada’s watches on this device",
+    within(ada).queryByRole("button", {
+      name: "Attention status for Ada",
     }),
-  ).toBeTruthy();
-  fireEvent.click(within(ada).getByRole("switch", { name: "Watch task" }));
+  ).toBeNull();
+  fireEvent.click(screen.getByRole("menuitem", { name: "Resume" }));
   await waitFor(() =>
     expect(screen.getByRole("alert").textContent).toBe("Save failed"),
   );
@@ -172,23 +173,6 @@ it("shows one agent's watches, reacts to changes and surfaces save errors", asyn
       },
     },
   });
-  await act(async () => {
-    snapshot = {
-      ...snapshot,
-      running: [{ ...record(), attentionEnabled: false }],
-    };
-    changed();
-  });
-  const toggle = within(ada).getByRole("switch", {
-    name: "Run Ada’s watches on this device",
-  });
-  expect(toggle.getAttribute("aria-checked")).toBe("false");
-  fireEvent.click(toggle);
-  await waitFor(() =>
-    expect(save).toHaveBeenCalledWith("membership-a", {
-      attentionEnabled: true,
-    }),
-  );
   expect(within(ada).getByRole("heading", { name: "task" })).toBeTruthy();
 });
 
@@ -230,6 +214,15 @@ it.each(["source", "event", "timer"] as const)(
         },
         "watch/check": { slug: "watch/check", modifiedAt: 1, value },
       },
+      // Over the limit here; deleting its Interest deletes it too.
+      skipped: {
+        "watch/over": {
+          slug: "watch/over",
+          modifiedAt: 1,
+          value,
+          problem: "Over the limit of 100 watches and timers",
+        },
+      },
     };
     let snapshot = { status: "ready", running: [agent] };
     let finishSave = () => {};
@@ -262,7 +255,17 @@ it.each(["source", "event", "timer"] as const)(
             value: { ...value, enabled: target.enabled },
           };
         }
-        agent = { ...agent, attention: attention as typeof agent.attention };
+        // Deleting a skipped slug clears it, as the store does.
+        const skipped = Object.fromEntries(
+          Object.entries(agent.skipped).filter(
+            ([slug]) => patch.attention?.[slug] !== null,
+          ),
+        ) as typeof agent.skipped;
+        agent = {
+          ...agent,
+          attention: attention as typeof agent.attention,
+          skipped,
+        };
         snapshot = { ...snapshot, running: [agent] };
         changed();
         await saving;
@@ -287,18 +290,56 @@ it.each(["source", "event", "timer"] as const)(
     );
     expect(
       screen
-        .getByRole("button", { name: "Delete Interest release" })
+        .getByRole("button", { name: "Interest status for release" })
         .hasAttribute("disabled"),
-    ).toBe(true);
-    fireEvent.click(screen.getByRole("switch", { name: "Watch release" }));
-    const remove = screen.getByRole("button", { name: "Delete release" });
+    ).toBe(false);
+    fireEvent.click(
+      screen.getByRole("button", { name: "Interest status for release" }),
+    );
+    fireEvent.click(screen.getByRole("menuitem", { name: "Delete" }));
+    expect(screen.getByRole("alertdialog")).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+    expect(save).not.toHaveBeenCalled();
+    fireEvent.click(
+      screen.getByRole("button", { name: "Interest status for release" }),
+    );
+    fireEvent.click(screen.getByRole("menuitem", { name: "Delete" }));
+    fireEvent.click(screen.getByRole("button", { name: "Delete" }));
+    await waitFor(() =>
+      expect(screen.getByRole("alert").textContent).toBe(
+        "Interest save failed",
+      ),
+    );
+    expect(save).toHaveBeenLastCalledWith("membership-a", {
+      attentionExpected: expect.objectContaining({
+        "interest/release": expect.objectContaining({
+          slug: "interest/release",
+        }),
+      }),
+      attention: {
+        "watch/check": null,
+        "watch/over": null,
+        "interest/release": null,
+      },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+    expect(
+      screen.getByRole("button", { name: "Watch status for release" }),
+    ).toBeTruthy();
+    save.mockClear();
+    expect(screen.queryByRole("menuitem", { name: "Pause" })).toBeNull();
+    fireEvent.click(
+      screen.getByRole("button", { name: "Watch status for release" }),
+    );
+    fireEvent.click(screen.getByRole("menuitem", { name: "Pause" }));
+    const remove = screen.getByRole("menuitem", { name: "Delete release" });
     try {
       await waitFor(() =>
         expect(
           screen
-            .getByRole("switch", { name: "Watch release" })
-            .getAttribute("aria-checked"),
-        ).toBe("false"),
+            .getByRole("menuitem", { name: "Resume" })
+            .getAttribute("aria-disabled"),
+        ).toBe("true"),
       );
       expect(save).toHaveBeenLastCalledWith("membership-a", {
         watchEnabled: {
@@ -320,18 +361,16 @@ it.each(["source", "event", "timer"] as const)(
     if (type === "timer") {
       expect(
         screen
-          .getByRole("switch", { name: "Watch release" })
+          .getByRole("menuitem", { name: "Resume" })
           .getAttribute("aria-disabled"),
       ).toBe("true");
       expect(
         screen.getByText("Ask Ada to set this timer’s next run."),
       ).toBeTruthy();
     }
-    fireEvent.click(screen.getByRole("button", { name: "Delete release" }));
+    fireEvent.click(screen.getByRole("menuitem", { name: "Delete release" }));
     await waitFor(() =>
-      expect(
-        screen.queryByRole("switch", { name: "Watch release" }),
-      ).toBeNull(),
+      expect(screen.queryByRole("menuitem", { name: "Pause" })).toBeNull(),
     );
     expect(save).toHaveBeenLastCalledWith("membership-a", {
       attention: { "watch/check": null },
@@ -341,9 +380,12 @@ it.each(["source", "event", "timer"] as const)(
       screen.getByRole("region", { name: "Interest release" }),
     ).toBeTruthy();
     const removeInterest = screen.getByRole("button", {
-      name: "Delete Interest release",
+      name: "Interest status for release",
     });
     fireEvent.click(removeInterest);
+    fireEvent.click(screen.getByRole("menuitem", { name: "Delete" }));
+    // Its skipped watch is deleted with it, so this still confirms.
+    fireEvent.click(screen.getByRole("button", { name: "Delete" }));
     await waitFor(() =>
       expect(screen.getByRole("alert").textContent).toBe(
         "Interest save failed",
@@ -351,14 +393,17 @@ it.each(["source", "event", "timer"] as const)(
     );
     expect(agent.attention["interest/release"]).toBeTruthy();
     rejectInterest = false;
-    fireEvent.click(removeInterest);
+    fireEvent.click(screen.getByRole("button", { name: "Delete" }));
     await waitFor(() =>
-      expect(
-        screen.getByText("Nothing is being watched yet. Try asking Ada:"),
-      ).toBeTruthy(),
+      expect(screen.getByRole("heading", { name: "Attention" })).toBeTruthy(),
     );
     expect(save).toHaveBeenLastCalledWith("membership-a", {
-      attention: { "interest/release": null },
+      attentionExpected: expect.objectContaining({
+        "interest/release": expect.objectContaining({
+          slug: "interest/release",
+        }),
+      }),
+      attention: { "watch/over": null, "interest/release": null },
     });
   },
 );
@@ -417,10 +462,15 @@ it("keeps subscription controls disabled and the tab open while saving, and pres
       React.createElement(createTab(ctx), { agent: { key: "membership-a" } }),
     ),
   );
-  const toggle = screen.getByRole("switch", {
-    name: "Watch Build",
+  fireEvent.click(screen.getByRole("button", { name: "Details for Build" }));
+  fireEvent.click(screen.getByLabelText("Show activity for Build"));
+  fireEvent.click(
+    screen.getByRole("button", { name: "Watch status for Build" }),
+  );
+  let toggle = screen.getByRole("menuitem", {
+    name: "Pause",
   }) as HTMLButtonElement;
-  const remove = screen.getByRole("button", {
+  let remove = screen.getByRole("menuitem", {
     name: "Delete Build",
   }) as HTMLButtonElement;
   fireEvent.click(toggle);
@@ -434,6 +484,10 @@ it("keeps subscription controls disabled and the tab open while saving, and pres
   );
   fireEvent.click(remove);
   expect(save).toHaveBeenCalledTimes(1);
+  fireEvent.keyDown(toggle, { key: "Escape" });
+  await waitFor(() =>
+    expect(screen.queryByRole("menuitem", { name: "Pause" })).toBeNull(),
+  );
   await act(async () => reject(new Error("Could not save")));
   await waitFor(() =>
     expect(screen.getByRole("alert").textContent).toBe("Could not save"),
@@ -442,13 +496,22 @@ it("keeps subscription controls disabled and the tab open while saving, and pres
     { dirty: false, saving: false },
     expect.any(String),
   );
+  fireEvent.click(
+    screen.getByRole("button", { name: "Watch status for Build" }),
+  );
+  toggle = screen.getByRole("menuitem", {
+    name: "Pause",
+  }) as HTMLButtonElement;
+  remove = screen.getByRole("menuitem", {
+    name: "Delete Build",
+  }) as HTMLButtonElement;
   expect(toggle.getAttribute("aria-disabled")).not.toBe("true");
   expect(remove.getAttribute("aria-disabled")).not.toBe("true");
-  expect(toggle.getAttribute("aria-checked")).toBe("true");
+  expect(screen.queryByRole("menuitem", { name: "Resume" })).toBeNull();
   expect(save).toHaveBeenCalledTimes(1);
 });
 
-it("explains Attention to a new agent and switches it on this device", async () => {
+it("explains Attention to a new agent with no switch to turn on", () => {
   const snapshot = {
     status: "ready",
     running: [
@@ -458,57 +521,31 @@ it("explains Attention to a new agent and switches it on this device", async () 
         owner: viewer,
         relay: "wss://example.com",
         name: "Bo",
-        attentionEnabled: false,
+        attentionEnabled: true,
         timers: {},
         attention: {},
       },
     ],
   };
-  const save = vi
-    .fn()
-    .mockRejectedValueOnce(new Error("Enable failed"))
-    .mockResolvedValueOnce(undefined);
   const disconnected = { status: "disconnected", ...community };
   const ctx = {
     react: React,
-    agents: { snapshot: () => snapshot, subscribe: () => () => {}, save },
+    agents: {
+      snapshot: () => snapshot,
+      subscribe: () => () => {},
+      save: vi.fn(),
+    },
     relay: { snapshot: () => disconnected, subscribe: () => () => {} },
   } as unknown as Context;
   render(
     React.createElement(createTab(ctx), { agent: { key: "membership-b" } }),
   );
+  expect(screen.getByRole("region", { name: "Start watching" })).toBeTruthy();
+  expect(screen.getByRole("heading", { name: "Attention" })).toBeTruthy();
   expect(
-    screen.getByText(
-      /Attention lets agents watch for events and automatically wake/,
-    ),
-  ).toBeTruthy();
-  expect(
-    screen.getByText("Watches only run while Buzz is open on this device."),
-  ).toBeTruthy();
-  expect(
-    screen.getByText("Nothing is being watched yet. Try asking Bo:"),
-  ).toBeTruthy();
-  expect(
-    screen.getAllByRole("listitem").map((item) => item.textContent),
-  ).toEqual([
-    "\u201cWatch this thread for new messages\u201d",
-    "\u201cWatch my PR and tell me when CI finishes or someone reviews it\u201d",
-    "\u201cCheck this channel every morning at 9\u201d",
-  ]);
-  expect(screen.queryByRole("button")).toBeNull();
-  const toggle = screen.getByRole("switch", {
-    name: "Run Bo’s watches on this device",
-  });
-  expect(toggle.getAttribute("aria-checked")).toBe("false");
-  fireEvent.click(toggle);
-  await waitFor(() =>
-    expect(screen.getByRole("alert").textContent).toBe("Enable failed"),
-  );
-  fireEvent.click(toggle);
-  await waitFor(() => expect(save).toHaveBeenCalledTimes(2));
-  expect(save).toHaveBeenLastCalledWith("membership-b", {
-    attentionEnabled: true,
-  });
+    screen.queryByRole("button", { name: "Attention status for Bo" }),
+  ).toBeNull();
+  expect(screen.getByText(/Send Bo a message/)).toBeTruthy();
 });
 
 it("says why an agent's watches are not shown", async () => {
@@ -770,40 +807,60 @@ it.each([false, true])(
     render(
       React.createElement(createTab(ctx), { agent: { key: "membership-a" } }),
     );
-    const icon = (name: string) =>
-      screen
-        .getByRole("button", { name: `Open destination ${name}` })
-        .querySelector("path")
-        ?.getAttribute("d");
-    expect(
-      screen.getByRole("button", { name: "Open destination Berd-call" })
-        .textContent,
-    ).toBe("Replies inBerd-call");
-    expect(icon("Berd-call")).toBeTruthy();
-    expect(icon("buzz-github-prs")).toBeTruthy();
-    expect(icon("Berd-call")).not.toBe(icon("buzz-github-prs"));
-    expect(screen.getByText("GitHub PR")).toBeTruthy();
-    expect(screen.getByText("Messages")).toBeTruthy();
-    expect(screen.getByText("buzz-app#1578")).toBeTruthy();
-    expect(screen.queryByText("On")).toBeNull();
-    expect(screen.queryByText("Shared instructions")).toBeNull();
-    expect(screen.queryByText("Show raw")).toBeNull();
-    expect(screen.queryByRole("button", { name: "New watch" })).toBeNull();
     const disclosure = screen.getByRole("button", {
       name: "Details for Release checks",
     });
-    expect(disclosure.textContent).toContain("buzz-app#1578");
+    expect(
+      screen.getByRole("button", { name: "Source details for Release checks" })
+        .textContent,
+    ).toContain("buzz-app#1578");
     expect(disclosure.classList.contains("attention-heading")).toBe(true);
     expect(disclosure.getAttribute("aria-expanded")).toBe("false");
     fireEvent.click(
       screen.getByRole("button", { name: "Details for Release checks" }),
     );
-    expect(screen.getByRole("heading", { name: "Recent events" })).toBeTruthy();
-    expect(screen.getByText("CI completed: all checks passed")).toBeTruthy();
-    expect(screen.getByText("Who wakes it")).toBeTruthy();
+    fireEvent.click(screen.getByLabelText("Show activity for Release checks"));
     fireEvent.click(
       screen.getByRole("button", { name: "Details for Discussion" }),
     );
+    fireEvent.click(screen.getByLabelText("Show activity for Discussion"));
+    fireEvent.click(screen.getByLabelText("Watch details for Discussion"));
+    const icon = (name: string) =>
+      screen
+        .getByRole("button", { name: `Open destination ${name}` })
+        .querySelector("path")
+        ?.getAttribute("d");
+    const discussionIcon = icon("buzz-github-prs");
+    expect(discussionIcon).toBeTruthy();
+    expect(screen.getByText("Messages")).toBeTruthy();
+    fireEvent.click(screen.getByLabelText("Watch details for Release checks"));
+    expect(
+      screen.getByRole("button", { name: "Open destination Berd-call" })
+        .textContent,
+    ).toBe("Berd-call");
+    expect(icon("Berd-call")).toBeTruthy();
+    expect(icon("Berd-call")).not.toBe(discussionIcon);
+    expect(screen.getByText("GitHub PR")).toBeTruthy();
+    expect(screen.getByText("buzz-app#1578")).toBeTruthy();
+    expect(
+      screen.getByRole("button", { name: "Watch status for Release checks" })
+        .textContent,
+    ).toBe(completed ? "Paused" : "Active");
+    expect(screen.queryByText("Shared instructions")).toBeNull();
+    expect(screen.queryByText("Show raw")).toBeNull();
+    expect(screen.queryByRole("button", { name: "New watch" })).toBeNull();
+    const sourceRow = disclosure.closest("li");
+    if (!sourceRow) throw new Error("Missing source watch");
+    expect(
+      within(sourceRow).getByRole("list", {
+        name: "Activity for Release checks",
+      }),
+    ).toBeTruthy();
+    expect(screen.getByText("CI completed: all checks passed")).toBeTruthy();
+    fireEvent.click(
+      screen.getByRole("button", { name: "Source details for Release checks" }),
+    );
+    expect(screen.getByText("Who wakes it")).toBeTruthy();
     expect(screen.getByText(/The release is ready/)).toBeTruthy();
     const link = screen.getByRole("link", { name: "Open buzz-app#1578" });
     expect(disclosure.contains(link)).toBe(false);
@@ -903,6 +960,9 @@ it("keeps overview and destination navigation in the selected community", async 
     React.createElement(createTab(ctx), { agent: { key: "membership-a" } }),
   );
   expect(screen.getByRole("region", { name: "Attention" })).toBeTruthy();
+  fireEvent.click(screen.getByRole("button", { name: "Details for Build" }));
+  fireEvent.click(screen.getByLabelText("Show activity for Build"));
+  fireEvent.click(screen.getByLabelText("Watch details for Build"));
   fireEvent.click(
     screen.getByRole("button", { name: "Open destination Release planning" }),
   );
@@ -988,13 +1048,22 @@ it("keeps technical data out of message summaries and avoids repeating the desti
     React.createElement(createTab(ctx), { agent: { key: "membership-a" } }),
   );
   expect(screen.getByRole("heading", { name: "release" })).toBeTruthy();
-  expect(
-    screen.getByRole("button", { name: "Open destination Releases" }),
-  ).toBeTruthy();
-  expect(screen.getAllByText("Releases")).toHaveLength(1);
   fireEvent.click(
     screen.getByRole("button", { name: "Details for Release messages" }),
   );
+  fireEvent.click(screen.getByLabelText("Show activity for Release messages"));
+
+  fireEvent.click(screen.getByLabelText("Watch details for Release messages"));
+  expect(
+    screen.getByRole("button", { name: "Open destination Releases" }),
+  ).toBeTruthy();
+  expect(
+    within(
+      screen.getByRole("button", {
+        name: "Source details for Release messages",
+      }),
+    ).getAllByText("Releases"),
+  ).toHaveLength(1);
   expect(screen.getByText(/Release is ready/).textContent).not.toContain(
     author,
   );
@@ -1005,7 +1074,7 @@ it("keeps technical data out of message summaries and avoids repeating the desti
   expect(screen.queryByText("Event kinds: 9")).toBeNull();
 });
 
-it("lists each recent event apart, shown as a chat message from its author", () => {
+it("shows a minimal activity timeline with full message and output previews", () => {
   const author = "b".repeat(64);
   const casey = "c".repeat(64);
   const now = Math.floor(Date.now() / 1000);
@@ -1121,7 +1190,157 @@ it("lists each recent event apart, shown as a chat message from its author", () 
       media: () => undefined,
     },
   };
+  let snapshot = { status: "ready", running: [agent] };
+  let changed = () => {};
+  const ctx = {
+    agents: {
+      presentWatch: () => undefined,
+      snapshot: () => snapshot,
+      subscribe: (listener: () => void) => {
+        changed = listener;
+        return () => {};
+      },
+    },
+    relay: { snapshot: () => connection, subscribe: () => () => {} },
+  } as unknown as Context;
+  render(
+    React.createElement(createTab(ctx), { agent: { key: "membership-a" } }),
+  );
+  fireEvent.click(
+    screen.getByRole("button", { name: "Details for Release messages" }),
+  );
+  fireEvent.click(screen.getByLabelText("Show activity for Release messages"));
+  fireEvent.click(screen.getByRole("button", { name: "Details for Build" }));
+  fireEvent.click(screen.getByLabelText("Show activity for Build"));
+  const messages = screen.getByRole("list", {
+    name: "Activity for Release messages",
+  });
+  const events = Array.from(messages.querySelectorAll("summary"));
+  expect(
+    events.map(
+      (event) =>
+        event.querySelector(".attention-activity-summary")?.textContent,
+    ),
+  ).toEqual(["Ask @Casey in #Beta.", "Tagged v2.", "Release is ready: notes."]);
+  expect(document.querySelector("[data-message-id]")).toBeNull();
+  for (const [index, event] of events.entries()) {
+    fireEvent.click(event);
+    const preview = document.querySelector("[data-message-id]");
+    if (!preview) throw new Error("Missing message preview");
+    expect(preview.getAttribute("data-message-id")).toBe(
+      String(3 - index).repeat(64),
+    );
+    expect(within(preview as HTMLElement).getByText("Alex").tagName).toBe(
+      "STRONG",
+    );
+    if (index === 0) {
+      expect(reads).toContainEqual([[author, casey], "background"]);
+      // A chip splits its first character from the rest of the name.
+      expect(
+        [...document.querySelectorAll("[data-mention-kind]")]
+          .find((element) => element.textContent === "Casey")
+          ?.getAttribute("data-mention-kind"),
+      ).toBe("person");
+      expect(
+        screen.getByRole("link", { name: "#Beta" }).getAttribute("href"),
+      ).toBe("buzz://channel/beta");
+    } else if (index === 1) {
+      expect(screen.getByText("v2").tagName).toBe("CODE");
+    } else {
+      expect(screen.getByText("Release").tagName).toBe("STRONG");
+      expect(
+        screen.getByRole("link", { name: "notes" }).getAttribute("href"),
+      ).toBe("https://example.com/notes");
+    }
+    fireEvent.click(event);
+  }
+  const build = screen.getByRole("list", { name: "Activity for Build" });
+  const outputs = Array.from(build.querySelectorAll("summary"));
+  expect(
+    outputs.map(
+      (item) => item.querySelector(".attention-activity-summary")?.textContent,
+    ),
+  ).toEqual(["second", "first"]);
+  for (const [index, item] of outputs.entries()) {
+    fireEvent.click(item);
+    expect(
+      screen.getByText(index === 0 ? "**second**" : "first", {
+        selector: "pre",
+      }),
+    ).toBeTruthy();
+    fireEvent.click(item);
+  }
+  // Newest-first history must retain the expanded event, not the row position.
+  fireEvent.click(outputs[0] as HTMLElement);
+  act(() => {
+    snapshot = {
+      ...snapshot,
+      running: [
+        {
+          ...agent,
+          attentionHistory: {
+            ...agent.attentionHistory,
+            "watch/build": {
+              events: [
+                ...agent.attentionHistory["watch/build"].events,
+                output("third", now + 1),
+              ],
+            },
+          },
+        },
+      ],
+    };
+    changed();
+  });
+  expect(
+    within(build).getByText("**second**", { selector: "pre" }),
+  ).toBeTruthy();
+  expect(within(build).queryByText("third", { selector: "pre" })).toBeNull();
+});
+
+it("keeps spoilers hidden in activity summaries", () => {
+  const agent = {
+    key: "membership-a",
+    pubkey: "a".repeat(64),
+    owner: viewer,
+    relay: origin,
+    name: "Ada",
+    attentionEnabled: true,
+    timers: {},
+    attentionHistory: {
+      "watch/pr": { events: [{ at: 1, text: "Status: ||private result||" }] },
+    },
+    attention: {
+      "interest/release": {
+        slug: "interest/release",
+        value: { type: "interest", instructions: "Follow releases." },
+      },
+      "watch/pr": {
+        slug: "watch/pr",
+        value: {
+          type: "source",
+          name: "Release PR",
+          enabled: true,
+          interest_id: "release",
+          provider: "github/pr",
+          config: {},
+        },
+      },
+    },
+  };
   const snapshot = { status: "ready", running: [agent] };
+  const list = { channels: [] };
+  const connection = {
+    status: "ready",
+    ...community,
+    session: {
+      channels: {
+        ensureList() {},
+        subscribeList: () => () => {},
+        list: () => list,
+      },
+    },
+  };
   const ctx = {
     agents: {
       presentWatch: () => undefined,
@@ -1134,49 +1353,217 @@ it("lists each recent event apart, shown as a chat message from its author", () 
     React.createElement(createTab(ctx), { agent: { key: "membership-a" } }),
   );
   fireEvent.click(
-    screen.getByRole("button", { name: "Details for Release messages" }),
+    screen.getByRole("button", { name: "Details for Release PR" }),
   );
-  fireEvent.click(screen.getByRole("button", { name: "Details for Build" }));
-  const recent = (heading: string) =>
-    screen
-      .getByRole("heading", { name: heading })
-      .parentElement?.querySelector("ol");
-  const [messages, build] = [recent("Recent events"), recent("Recent output")];
-  if (!messages || !build) throw new Error("Missing recent events");
-  const events = within(messages).getAllByRole("listitem");
-  // Newest first, each its own chat message with its author's byline.
-  expect(
-    events.map((item) =>
-      item.querySelector("[data-message-id]")?.getAttribute("data-message-id"),
-    ),
-  ).toEqual(["3".repeat(64), "2".repeat(64), "1".repeat(64)]);
-  // Each row reads the profiles it names, so its mentions resolve.
-  expect(reads).toContainEqual([[author, casey], "background"]);
-  for (const item of events)
-    expect(within(item).getByText("Alex").tagName).toBe("STRONG");
-  // Its tags and the community's channels give a message its references.
-  const tagged = events[0] as HTMLElement;
-  expect(
-    within(tagged)
-      .getByText("Casey", { selector: "[data-mention-kind]" })
-      .getAttribute("data-mention-kind"),
-  ).toBe("person");
-  expect(
-    within(tagged).getByRole("link", { name: "#Beta" }).getAttribute("href"),
-  ).toBe("buzz://channel/beta");
-  expect(within(events[2] as HTMLElement).getByText("Release").tagName).toBe(
-    "STRONG",
+  fireEvent.click(screen.getByLabelText("Show activity for Release PR"));
+  const row = within(
+    screen.getByRole("list", { name: "Activity for Release PR" }),
+  ).getByLabelText(/^Open activity/);
+  expect(row.getAttribute("aria-label")).toBe(
+    "Open activity: Status: [Spoiler]",
   );
+  expect(row.textContent).not.toContain("private");
+});
+
+it("shows a fired timer's wake as activity", () => {
+  const agent = {
+    key: "membership-a",
+    pubkey: "a".repeat(64),
+    owner: viewer,
+    relay: origin,
+    name: "Ada",
+    attentionEnabled: true,
+    timers: {},
+    attentionHistory: {
+      "watch/tick": {
+        lastWokeAt: 1,
+        events: [{ at: 1, text: "Check the **release**." }],
+      },
+    },
+    attention: {
+      "interest/release": {
+        slug: "interest/release",
+        value: { type: "interest", instructions: "Follow releases." },
+      },
+      "watch/tick": {
+        slug: "watch/tick",
+        value: {
+          type: "timer",
+          interest_id: "release",
+          enabled: true,
+          prompt: "Check the **release**.",
+          armed_at: 1,
+          interval_secs: 3600,
+          max_occurrences: null,
+          expires_at: null,
+        },
+      },
+    },
+  };
+  const snapshot = { status: "ready", running: [agent] };
+  const list = { channels: [] };
+  const connection = {
+    status: "ready",
+    ...community,
+    session: {
+      channels: {
+        ensureList() {},
+        subscribeList: () => () => {},
+        list: () => list,
+      },
+    },
+  };
+  const ctx = {
+    agents: { snapshot: () => snapshot, subscribe: () => () => {} },
+    relay: { snapshot: () => connection, subscribe: () => () => {} },
+  } as unknown as Context;
+  render(
+    React.createElement(createTab(ctx), { agent: { key: "membership-a" } }),
+  );
+  fireEvent.click(screen.getByRole("button", { name: "Details for release" }));
+  const activity = screen.getByLabelText("Show activity for release");
+  expect(activity.querySelector(".attention-detail-preview")?.textContent).toBe(
+    "1 event",
+  );
+  fireEvent.click(activity);
   expect(
-    within(events[2] as HTMLElement)
-      .getByRole("link", { name: "notes" })
-      .getAttribute("href"),
-  ).toBe("https://example.com/notes");
-  expect(within(events[1] as HTMLElement).getByText("v2").tagName).toBe("CODE");
-  // Command output stays as it was printed.
-  expect(
-    within(build)
-      .getAllByRole("listitem")
-      .map((item) => item.querySelector("pre")?.textContent),
-  ).toEqual(["**second**", "first"]);
+    within(
+      screen.getByRole("list", { name: "Activity for release" }),
+    ).getByLabelText("Open activity: Check the release."),
+  ).toBeTruthy();
+});
+
+it("shows an Interest's title and summary, and no summary when it has none", () => {
+  const agent = {
+    key: "membership-a",
+    pubkey: "a".repeat(64),
+    owner: viewer,
+    relay: origin,
+    name: "Ada",
+    attentionEnabled: true,
+    timers: {},
+    attention: {
+      "interest/release": {
+        slug: "interest/release",
+        value: {
+          type: "interest",
+          title: "Release checks",
+          summary: "Wakes when CI finishes and reports failures to John.",
+          instructions: "# Old heading\nFollow releases.",
+        },
+      },
+      "interest/builds": {
+        slug: "interest/builds",
+        value: { type: "interest", instructions: "Follow builds." },
+      },
+    },
+  };
+  const snapshot = { status: "ready", running: [agent] };
+  const list = { channels: [] };
+  const connection = {
+    status: "ready",
+    ...community,
+    session: {
+      channels: {
+        ensureList() {},
+        subscribeList: () => () => {},
+        list: () => list,
+      },
+    },
+  };
+  const ctx = {
+    agents: { snapshot: () => snapshot, subscribe: () => () => {} },
+    relay: { snapshot: () => connection, subscribe: () => () => {} },
+  } as unknown as Context;
+  render(
+    React.createElement(createTab(ctx), { agent: { key: "membership-a" } }),
+  );
+  const titled = screen.getByRole("region", {
+    name: "Interest Release checks",
+  });
+  expect(titled.querySelector(".attention-interest-summary")?.textContent).toBe(
+    "Wakes when CI finishes and reports failures to John.",
+  );
+  const untitled = screen.getByRole("region", { name: "Interest builds" });
+  expect(untitled.querySelector(".attention-interest-summary")).toBeNull();
+});
+
+it("does not repeat consecutive sonar messages across sweeps", () => {
+  const random = vi.spyOn(Math, "random").mockReturnValue(0.25);
+  try {
+    const { container } = render(
+      <AttentionSonar name="Ada" size="large" hints />,
+    );
+    const signals = [
+      ...container.querySelectorAll(".attention-sonar-signal"),
+    ].filter((signal) => signal.querySelector(".attention-sonar-hint"));
+    expect(signals).toHaveLength(3);
+    const seen = signals.map(
+      (signal) => signal.querySelector(".attention-sonar-hint")?.textContent,
+    );
+    for (let turn = 0; turn < 12; turn++) {
+      const signal = signals[turn % signals.length];
+      const dot = signal?.querySelector(".attention-sonar-dot");
+      if (!dot) throw new Error("Missing message signal");
+      fireEvent.animationIteration(dot);
+      seen.push(signal?.querySelector(".attention-sonar-hint")?.textContent);
+    }
+    for (let index = 1; index < seen.length; index++) {
+      expect(seen[index]).not.toBe(seen[index - 1]);
+    }
+  } finally {
+    random.mockRestore();
+  }
+});
+
+it("confirms deleting an Interest whose only watch was skipped", () => {
+  const agent = {
+    key: "membership-a",
+    pubkey: "a",
+    owner: viewer,
+    relay: "wss://example.com",
+    name: "Ada",
+    attentionEnabled: true,
+    timers: {},
+    attention: {
+      "interest/release": {
+        slug: "interest/release",
+        modifiedAt: 1,
+        value: { type: "interest", instructions: "Keep releases moving." },
+      },
+    },
+    skipped: {
+      "watch/over": {
+        slug: "watch/over",
+        modifiedAt: 1,
+        value: { type: "event", interest_id: "release", enabled: true },
+        problem: "Over the limit of 100 watches and timers",
+      },
+    },
+  };
+  const save = vi.fn(async () => {});
+  const snapshot = { status: "ready", running: [agent] };
+  const disconnected = { status: "disconnected", ...community };
+  const ctx = {
+    react: React,
+    agents: {
+      presentWatch: () => undefined,
+      snapshot: () => snapshot,
+      subscribe: () => () => {},
+      save,
+    },
+    relay: {
+      snapshot: () => disconnected,
+      subscribe: () => () => {},
+    },
+  } as unknown as Context;
+  render(
+    React.createElement(createTab(ctx), { agent: { key: "membership-a" } }),
+  );
+  fireEvent.click(
+    screen.getByRole("button", { name: "Interest status for release" }),
+  );
+  fireEvent.click(screen.getByRole("menuitem", { name: "Delete" }));
+  expect(screen.getByRole("alertdialog")).toBeTruthy();
+  expect(save).not.toHaveBeenCalled();
 });

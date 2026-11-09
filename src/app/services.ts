@@ -40,8 +40,11 @@ import { ConversationService } from "../features/conversation/service";
 import { createAppearance } from "../shared/theme/service";
 import { createCommunities } from "../features/communities/service";
 import { createInviteIntent } from "../features/communities/invite-intent";
-import type { InviteLink } from "../features/communities/invite-link";
-import { connectNativeTransport } from "../features/relay/native";
+import type { JoinRequest } from "../features/communities/invite-intent";
+import {
+  connectNativeTransport,
+  verifyNativeStored,
+} from "../features/relay/native";
 import { createUpdates } from "../features/updates/updates";
 import { PanelsService } from "../features/panels/service";
 import { BackdropsService } from "../features/backdrops/service";
@@ -121,6 +124,7 @@ export function createServices() {
     identity?.ready,
     identity ? connectNativeTransport : undefined,
     localActivity.reader,
+    identity ? verifyNativeStored : undefined,
   );
   ctx.provide("communityReader", {
     snapshot: communities.snapshot,
@@ -176,7 +180,7 @@ export function createServices() {
   const invites = {
     ...inviteIntent,
     // With no code to claim, an existing membership just opens its community.
-    open(invite: InviteLink, viewer: string) {
+    open(invite: JoinRequest, viewer: string) {
       const { memberships } = communities.snapshot();
       const id = communityDestination(invite.community).id;
       if (invite.code || !memberships.some((m) => m.id === id))
@@ -194,6 +198,30 @@ export function createServices() {
       });
     },
   };
+  // A community the account just created is joined as an address the person
+  // already chose: the join dialog opens on it and connects at once.
+  ctx.provide("communityJoin", {
+    open(address: string) {
+      const { viewer } = communities.snapshot();
+      if (!viewer) return false;
+      let community: string;
+      try {
+        community = communityDestination(address).url;
+      } catch {
+        // Not a community origin (a path, credentials): hand it off instead.
+        return false;
+      }
+      invites.open(
+        {
+          community,
+          code: "",
+          submitted: true,
+        },
+        viewer,
+      );
+      return true;
+    },
+  });
   // OS deep links; a no-op in the browser build. Invite admission remains in
   // the join dialog, never in navigation or the native queue.
   const rejectedLinks = createRejectedLinks();

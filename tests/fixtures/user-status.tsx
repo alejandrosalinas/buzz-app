@@ -180,6 +180,7 @@ createRoot(root).render(
               selected={undefined}
               onSelect={() => {}}
               onOpenThread={() => {}}
+              onOpenMessage={() => {}}
             />
           </div>
         </section>

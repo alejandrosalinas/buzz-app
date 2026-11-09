@@ -13,6 +13,7 @@ import channelStyles from "../../src/bundled/channels/Channels.module.css";
 import { apply } from "../../src/bundled/terminal";
 import { nativeBridge } from "../../src/bundled/terminal/bridge";
 import type { TerminalBridge } from "../../src/bundled/terminal/bridge";
+import { SettingsCardsService } from "../../src/features/settings/service";
 import type {
   Panel,
   Panels,
@@ -44,6 +45,7 @@ scope.provide("pluginStatus", {
   subscribe: () => () => {},
 });
 const shortcuts = new ShortcutsService(scope, window, bindings);
+const settingsCards = new SettingsCardsService(scope);
 Object.assign(window, {
   terminalPanel: {
     written: () => written,
@@ -119,12 +121,25 @@ if (!contribution?.channelLauncher)
   throw new Error("Missing terminal contribution");
 const Launcher = contribution.channelLauncher;
 const Content = contribution.component;
+const FontSettings = settingsCards
+  .snapshot()
+  .find((card) => card.title === "Terminal")?.component;
+if (!FontSettings) throw new Error("Missing terminal settings card");
 function Fixture() {
   useKeyboardFocusVisibility();
   const [visible, show] = useState(false);
   const [settings, showSettings] = useState(false);
+  const [fontSettings, showFontSettings] = useState(false);
   return (
     <>
+      <button type="button" onClick={() => showFontSettings((value) => !value)}>
+        Terminal font settings
+      </button>
+      {fontSettings && FontSettings && (
+        <div style={{ maxWidth: "48rem", padding: "var(--space-4)" }}>
+          <FontSettings active={() => true} />
+        </div>
+      )}
       <button type="button" onClick={() => showSettings((value) => !value)}>
         Shortcut settings
       </button>

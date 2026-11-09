@@ -175,7 +175,7 @@ test("old root and reply beyond the first thread page open exactly; reclick and 
   ).toBe(true);
   await page
     .locator(
-      '.buzz-tabs-item:not(:has([data-tab-value^="thread:"])) > button:not([role="tab"])',
+      '.buzz-tabs-item:not(:has([data-tab-value^="thread:"])) > button[aria-label^="Close "]',
     )
     .click();
   // Closing the profile returns to its retained thread tab.
@@ -183,7 +183,7 @@ test("old root and reply beyond the first thread page open exactly; reclick and 
   expect(await openTarget(page, target(app))).toEqual({ status: "opened" });
   await page
     .locator(
-      '.buzz-tabs-item:has([data-tab-value^="thread:"][aria-selected="true"]) > button:not([role="tab"]), button[aria-label="Close thread"]',
+      '.buzz-tabs-item:has([data-tab-value^="thread:"][aria-selected="true"]) > button[aria-label^="Close "], button[aria-label="Close thread"]',
     )
     .click();
   await expect(
@@ -392,7 +392,7 @@ for (const nested of [false, true])
             `[data-message-id="${app.exact.target.id}"]`,
           );
           const close = page.locator(
-            '.buzz-tabs-item:has([data-tab-value^="thread:"][aria-selected="true"]) > button:not([role="tab"]), button[aria-label="Close thread"]',
+            '.buzz-tabs-item:has([data-tab-value^="thread:"][aria-selected="true"]) > button[aria-label^="Close "], button[aria-label="Close thread"]',
           );
           let originalRow;
           try {
@@ -641,7 +641,7 @@ test("post-success membership loss removes the thread and live updates do not sn
   expect(await openTarget(page, target(app))).toEqual({ status: "opened" });
   const region = thread(page);
   const channelButton = page.locator(
-    '.buzz-tabs-item:has([data-tab-value^="thread:"][aria-selected="true"]) > button:not([role="tab"]), button[aria-label="Close thread"]',
+    '.buzz-tabs-item:has([data-tab-value^="thread:"][aria-selected="true"]) > button[aria-label^="Close "], button[aria-label="Close thread"]',
   );
   await expect(region.locator("[data-message-id]")).toHaveCount(81);
   // A shorter edit can legitimately clamp a bottom-aligned scroll offset.
@@ -783,7 +783,7 @@ readingTest(
       expect(await openTarget(page, target(app))).toEqual({ status: "opened" });
       await page
         .locator(
-          '.buzz-tabs-item:has([data-tab-value^="thread:"][aria-selected="true"]) > button:not([role="tab"]), button[aria-label="Close thread"]',
+          '.buzz-tabs-item:has([data-tab-value^="thread:"][aria-selected="true"]) > button[aria-label^="Close "], button[aria-label="Close thread"]',
         )
         .click();
       await expect(history).toBeVisible();
@@ -1031,7 +1031,7 @@ for (const movedFocus of [false, true])
       await row.getByRole("button", { name: "Reveal spoiler" }).click();
       const original = await row.elementHandle();
       const close = page.locator(
-        '.buzz-tabs-item:has([data-tab-value^="thread:"][aria-selected="true"]) > button:not([role="tab"]), button[aria-label="Close thread"]',
+        '.buzz-tabs-item:has([data-tab-value^="thread:"][aria-selected="true"]) > button[aria-label^="Close "], button[aria-label="Close thread"]',
       );
       const focusTarget = movedFocus ? close : row;
       await focusTarget.focus();
@@ -1140,6 +1140,14 @@ liveTest(
       // retained-range repair finished, not merely that its first lookup returned.
       app.relay.disconnect("primary");
       const missedReply = app.reply(app.exact.root.id, false, false);
+      // A busy gap: the replay reaches its limit without the reply, so only
+      // the thread's repair read can restore it.
+      const channel = app.exact.root.tags.find(([key]) => key === "h")[1];
+      app.relay.replayNext(
+        "primary",
+        channel,
+        Array.from({ length: 500 }, () => app.exact.root),
+      );
       await seen.promise;
       await expect
         .poll(() => app.relay.hasRoute("primary", "alpha"))
@@ -1214,7 +1222,7 @@ liveTest(
     await expect(region).toHaveAttribute("tabindex", "0");
     await page
       .locator(
-        '.buzz-tabs-item:has([data-tab-value^="thread:"][aria-selected="true"]) > button:not([role="tab"])',
+        '.buzz-tabs-item:has([data-tab-value^="thread:"][aria-selected="true"]) > button[aria-label^="Close "]',
       )
       .focus();
     await page.keyboard.press("Tab");

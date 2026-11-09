@@ -1,6 +1,7 @@
 import { WORKFLOW_CHANNEL_BATCH, WORKFLOW_DEFINITION_LIMIT } from "./queries";
 import type { EventData } from "../relay/events";
 import type { RelayReader } from "../relay/reader";
+import type { ProfileQueries } from "../relay/profile-directory";
 import type { Outbox, LocalEvents } from "../relay/outbox";
 import type { WorkflowHost } from "./host";
 import type {
@@ -36,6 +37,7 @@ export function createWorkflows({
   host,
   relayHttpUrl,
   canAccess,
+  profiles,
   notify = (listener: () => void) => listener(),
 }: {
   reader: RelayReader | undefined;
@@ -46,6 +48,7 @@ export function createWorkflows({
   /** Relay HTTP base for display only; hook URLs are never fetched from here. */
   relayHttpUrl?: string | undefined;
   canAccess(channel: string): boolean;
+  profiles?: Pick<ProfileQueries, "owner" | "subscribe"> | undefined;
   notify?: (listener: () => void) => void;
 }) {
   let closed = false;
@@ -145,7 +148,11 @@ export function createWorkflows({
               } catch {
                 return [];
               }
-              if (workflow.owner !== viewer || !canAccess(workflow.channelId))
+              if (
+                item.event.pubkey !== viewer ||
+                (item.event.kind !== 5 && workflow.owner !== viewer) ||
+                !canAccess(workflow.channelId)
+              )
                 return [];
               const result = results.get(item.event.id);
               const outcome =
@@ -362,6 +369,25 @@ export function createWorkflows({
     if (!enabled)
       throw new Error("Workflow writes are unavailable on this connection");
   }
+  const permissions = Object.freeze({
+    canDelete(workflow: WorkflowReference) {
+      return (
+        !closed &&
+        canAccess(workflow.channelId) &&
+        (workflow.owner === viewer ||
+          profiles?.owner?.(workflow.owner) === viewer)
+      );
+    },
+    subscribe(listener: () => void) {
+      const stopProfiles = profiles?.subscribe(listener);
+      // clear() and dispose() already rebuild after access/lifetime changes.
+      listeners.add(listener);
+      return () => {
+        stopProfiles?.();
+        listeners.delete(listener);
+      };
+    },
+  });
   function send(
     kind: 30620 | 46020 | 5,
     workflow: WorkflowReference,
@@ -369,7 +395,9 @@ export function createWorkflows({
     revision?: string,
   ) {
     assertAccess(workflow);
-    if (workflow.owner !== viewer)
+    if (
+      kind === 5 ? !permissions.canDelete(workflow) : workflow.owner !== viewer
+    )
       throw new Error("Only the workflow owner can modify or run it");
     assertOperation(kind);
     const tags = [
@@ -394,6 +422,7 @@ export function createWorkflows({
   }
   const capability = Object.freeze<WorkflowCapability>({
     availability,
+    permissions,
     definitions(channelId) {
       const aggregate = typeof channelId !== "string";
       const channelIds =
@@ -613,6 +642,10 @@ export function createWorkflows({
       assertOperation(event.kind);
       const reference = validateWorkflowEvent(event, viewer);
       assertAccess(reference);
+      if (event.kind === 5 && !permissions.canDelete(reference))
+        throw new Error(
+          "Only the author or their verified agent owner can delete this workflow",
+        );
     },
     receipt(event: EventData, message: string | undefined) {
       if (closed || !receiptInterest.delete(event.id)) return;

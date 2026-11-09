@@ -12,6 +12,8 @@ test("local settings retain keyboard focus through save, recovery, cancel and re
       invoke(command, args) {
         if (command === "workspace_pick_folder")
           return Promise.resolve("~/Development");
+        if (command === "credential_pairing_communities")
+          return Promise.resolve();
         if (command !== "repositories_folder_validate")
           throw new Error(`Unexpected command: ${command}`);
         window.folderRequests.push(args.path);

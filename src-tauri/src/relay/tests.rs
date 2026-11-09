@@ -868,16 +868,22 @@ fn isolated_agent_ipc_probe() {
         }
     })).is_err());
     let id = "11111111-1111-4111-8111-111111111111";
-    assert!(invoke(
+    let agent_deletion = invoke(
         "relay_sign",
         serde_json::json!({
             "community": "https://relay.test", "event": {
                 "kind": 5, "created_at": 123,
                 "tags": [["h", id], ["a", format!("30620:{}:{id}", "a".repeat(64))]], "content": ""
             }
-        })
+        }),
     )
-    .is_err());
+    .unwrap();
+    verify(&agent_deletion);
+    assert_eq!(agent_deletion["pubkey"], public);
+    assert_eq!(
+        agent_deletion["tags"][1][1],
+        format!("30620:{}:{id}", "a".repeat(64))
+    );
     let deletion = invoke("relay_sign", serde_json::json!({
         "community": "https://relay.test", "event": {
             "kind": 5, "created_at": 123,
@@ -1834,6 +1840,73 @@ fn js_signs_emoji_sets_but_never_blossom_tokens() {
     assert!(validate_event("https://relay.test", &template(24242)).is_err());
 }
 
+/// Answers each request with `status` for `.thumb.webp` and the JPEG
+/// otherwise, and records every requested path.
+fn thumbnail_server(status: &'static str) -> (Url, std::sync::Arc<std::sync::Mutex<Vec<String>>>) {
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let base = Url::parse(&format!("http://{}/", listener.local_addr().unwrap())).unwrap();
+    let paths = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+    let seen = paths.clone();
+    std::thread::spawn(move || {
+        for socket in listener.incoming() {
+            let mut socket = socket.unwrap();
+            let mut bytes = Vec::new();
+            let mut buffer = [0; 4096];
+            while !bytes.windows(4).any(|window| window == b"\r\n\r\n") {
+                let count = socket.read(&mut buffer).unwrap();
+                assert!(count > 0);
+                bytes.extend_from_slice(&buffer[..count]);
+            }
+            let path = String::from_utf8_lossy(&bytes)
+                .split(' ')
+                .nth(1)
+                .unwrap()
+                .to_owned();
+            let response = if path.ends_with(".thumb.webp") {
+                format!("HTTP/1.1 {status}\r\nContent-Length: 0\r\nConnection: close\r\n\r\n")
+            } else {
+                "HTTP/1.1 200 OK\r\nContent-Type: image/jpeg\r\nContent-Length: 4\r\nConnection: close\r\n\r\njpeg".into()
+            };
+            seen.lock().unwrap().push(path);
+            socket.write_all(response.as_bytes()).unwrap();
+        }
+    });
+    (base, paths)
+}
+
+#[tokio::test]
+async fn webp_thumbnails_fall_back_to_jpeg_only_when_missing() {
+    let hash = "a".repeat(64);
+    let webp = format!("/media/{hash}.thumb.webp");
+    let jpeg = format!("/media/{hash}.thumb.jpg");
+    let (base, paths) = thumbnail_server("404 Not Found");
+    let response = serve_media(
+        &IdentityHost::fixture(),
+        None,
+        base.join(&webp).unwrap(),
+        None,
+    )
+    .await
+    .unwrap();
+    assert_eq!(response.body(), b"jpeg");
+    assert_eq!(*paths.lock().unwrap(), [webp.clone(), jpeg]);
+
+    let (base, paths) = thumbnail_server("401 Unauthorized");
+    let status = serve_media(
+        &IdentityHost::fixture(),
+        None,
+        base.join(&webp).unwrap(),
+        None,
+    )
+    .await
+    .unwrap_err();
+    assert_eq!(status, 401);
+    assert_eq!(*paths.lock().unwrap(), [webp]);
+
+    let png = Url::parse(&format!("https://relay.test/media/{hash}.png")).unwrap();
+    assert_eq!(jpeg_thumb(&png), None);
+}
+
 #[test]
 fn media_proxy_only_reaches_relay_blobs() {
     let hash = "a".repeat(64);
@@ -2651,6 +2724,43 @@ async fn truncated_whole_videos_fail_and_are_fetched_again() {
         );
     }
     assert_eq!(served.load(std::sync::atomic::Ordering::SeqCst), 2);
+    spool_files_deleted().await;
+}
+
+#[tokio::test]
+async fn a_failed_spool_still_answers_the_bytes_it_wrote() {
+    let _serial = SPOOL_TESTS.lock().await;
+    let block = media_blocks::BLOCK;
+    let blob = media_blob(2 * block);
+    let length = 3 * block;
+    let (base, _, _) = whole_media_server(blob.clone(), Some(length), Duration::ZERO);
+    let url = base
+        .join(&format!("/media/{}.mp4", "b".repeat(64)))
+        .unwrap();
+    let upstream = reqwest::Client::new()
+        .get(url.clone())
+        .header("Range", "bytes=0-")
+        .send()
+        .await
+        .unwrap();
+    let spool = media_spool::open(&url, upstream, WHOLE_VIDEO_MAX)
+        .await
+        .unwrap();
+    // The tail never arrives, so this returns only once the copy has failed.
+    assert_eq!(
+        media_spool::read(spool.clone(), length - 4, length - 1)
+            .await
+            .unwrap_err(),
+        502
+    );
+    // A read that starts after the failure, and so never sees the copy's
+    // progress, still gets the bytes written before it.
+    let first = media_spool::read(spool, 0, block - 1).await.unwrap();
+    assert_eq!(first.body(), &blob[..block as usize]);
+    assert_eq!(
+        first.headers()["content-range"],
+        format!("bytes 0-{}/{length}", block - 1)
+    );
     spool_files_deleted().await;
 }
 
@@ -4381,6 +4491,127 @@ async fn finished_native_reads_release_their_cancel_slot() {
         match result {
             Ok(_) => assert_eq!(read % 2, 0),
             Err(error) => assert_eq!(error.to_string(), "relay down"),
+        }
+    }
+}
+
+#[test]
+fn reaction_author_address_is_accepted_by_packaged_signing() {
+    let event = EventTemplate {
+        kind: 7,
+        created_at: 123,
+        content: "❤️".into(),
+        tags: vec![
+            vec!["h".into(), "room".into()],
+            vec!["e".into(), "a".repeat(64)],
+            vec!["p".into(), "b".repeat(64)],
+        ],
+    };
+    assert!(validate_event("https://relay.test", &event).is_ok());
+}
+
+#[tokio::test]
+async fn community_refusals_reach_the_window_from_any_signed_request() {
+    let response = |status, body: &str| -> Result<RelayResponse> {
+        Ok(RelayResponse {
+            status,
+            headers: BTreeMap::new(),
+            body: body.into(),
+        })
+    };
+    for (result, expected) in [
+        (response(401, "authentication required\n"), Some("sign-in")),
+        (response(403, "evidence rejected\n"), Some("sign-in")),
+        (response(403, "authorization denied\n"), Some("access")),
+        (
+            response(
+                403,
+                r#"{"error":"relay_membership_required","message":"You must be a relay member to access this relay"}"#,
+            ),
+            Some("access"),
+        ),
+        (
+            response(
+                403,
+                r#"{"error":"blocked: you are banned from this community"}"#,
+            ),
+            Some("access"),
+        ),
+        // Media routes spell a non-member's or a banned key's refusal apart.
+        (
+            response(403, r#"{"error":"relay membership required"}"#),
+            Some("access"),
+        ),
+        (Err(SIGNED_OUT.into()), Some("sign-in")),
+        // Exact bytes and status only: an item's refusal or an edge page stays
+        // with whoever asked for it.
+        (response(401, "authorization denied\n"), None),
+        (response(403, "authorization denied"), None),
+        (
+            response(403, r#"{"error":"restricted: authorization denied"}"#),
+            None,
+        ),
+        (response(503, "authorization unavailable\n"), None),
+        (
+            response(503, r#"{"error":"media service temporarily unavailable"}"#),
+            None,
+        ),
+        (
+            response(401, r#"{"error":"relay_membership_required"}"#),
+            None,
+        ),
+        (
+            response(403, r#"{"error":"restricted: not a channel member"}"#),
+            None,
+        ),
+        (response(403, "relay_membership_required"), None),
+        (Err("Relay request could not be confirmed".into()), None),
+    ] {
+        assert_eq!(community_refusal(&result), expected);
+    }
+    let mut refused = refusals().subscribe();
+    let url = Url::parse("https://refusal.test/query").unwrap();
+    observe_refusal(&url, &response(200, "[]"));
+    observe_refusal(&url, &response(403, "authorization denied\n"));
+    loop {
+        let refusal = refused.recv().await.unwrap();
+        if refusal.community == "https://refusal.test" {
+            assert_eq!(refusal.refusal, "access");
+            break;
+        }
+    }
+}
+
+#[tokio::test]
+async fn a_plugin_request_refused_without_the_users_sign_in_is_not_their_refusal() {
+    // Native plugins read and publish without federated evidence, so an
+    // FI-gated community's missing-evidence refusal is about that request.
+    let (url, task) = fixture_server(
+        "HTTP/1.1 401 Unauthorized\r\nContent-Length: 24\r\nConnection: close\r\n\r\nauthentication required\n"
+            .into(),
+    );
+    let community = url.origin().ascii_serialization();
+    let mut refused = refusals().subscribe();
+    let response = send(
+        &IdentityHost::fixture(),
+        None,
+        url,
+        "POST",
+        Some("[]".into()),
+        true,
+        MAX_RESPONSE,
+    )
+    .await
+    .unwrap();
+    assert_eq!(response.status, 401);
+    task.join().unwrap();
+    let marker = Url::parse("https://plugin-refusal-marker.test/query").unwrap();
+    observe_refusal(&marker, &Err(SIGNED_OUT.into()));
+    loop {
+        let refusal = refused.recv().await.unwrap();
+        assert_ne!(refusal.community, community);
+        if refusal.community == "https://plugin-refusal-marker.test" {
+            break;
         }
     }
 }

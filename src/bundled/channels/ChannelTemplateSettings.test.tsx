@@ -69,7 +69,7 @@ it("uses the relay thumbnail for a template agent after community registration",
         ?.querySelector("img"),
     ).toHaveAttribute(
       "src",
-      `/api/relay/${encodeURIComponent(community)}/media?url=${encodeURIComponent(picture.replace(/\.png$/, ".thumb.jpg"))}`,
+      `/api/relay/${encodeURIComponent(community)}/media?url=${encodeURIComponent(picture.replace(/\.png$/, ".thumb.webp"))}`,
     );
   });
 });

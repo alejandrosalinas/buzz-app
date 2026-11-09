@@ -237,10 +237,14 @@ it("routes internal links and signed mentions while leaving unbound or edited na
   const mounted = render(view());
   fireEvent.click(screen.getByRole("link", { name: "Channel" }));
   expect(openLink).toHaveBeenCalledWith("buzz://channel/test");
-  expect(screen.getByText("Taylor").getAttribute("data-mention-kind")).toBe(
-    "person",
-  );
+  // A chip splits its first character from the rest of the name.
+  const chip = () =>
+    [...document.querySelectorAll("[data-mention-kind]")].find(
+      (element) => element.textContent === "Taylor",
+    );
+  expect(chip()?.getAttribute("data-mention-kind")).toBe("person");
   value.rows[0] = { ...value.rows[0], edited: true };
   mounted.rerender(view());
-  expect(screen.queryByText("Taylor")).toBeNull();
+  expect(chip()).toBeUndefined();
+  expect(screen.getByText(/@Taylor/)).toBeTruthy();
 });

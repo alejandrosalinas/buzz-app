@@ -32,6 +32,7 @@ export function pluginUpdateSource(plugins: PluginManager, id: string) {
   )
     return;
   const managed = managedBy(configuration.managed, id)?.entry;
+  if (managed && "url" in managed) return;
   return managed
     ? {
         repository: managed.repository,

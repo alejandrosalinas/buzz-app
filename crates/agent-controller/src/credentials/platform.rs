@@ -24,9 +24,7 @@ mod macos {
         }
         fn saved(&self, service: &str, account: &str) -> Result<Zeroizing<Vec<u8>>, Failure> {
             #[cfg(debug_assertions)]
-            if let Some(result) =
-                buzz_credential_store::dev_agent_store("read", service, account, &[])
-            {
+            if let Some(result) = buzz_credential_store::dev_item("read", service, account, &[]) {
                 return result.map_err(super::store_error);
             }
             // Read the same default Keychain that add writes, never a search-list match.
@@ -39,6 +37,10 @@ mod macos {
             })
         }
         fn add(&self, service: &str, account: &str, value: &[u8]) -> Result<(), Failure> {
+            #[cfg(debug_assertions)]
+            if let Some(result) = buzz_credential_store::dev_item("add", service, account, value) {
+                return result.map(|_| ()).map_err(super::store_error);
+            }
             observe("add", account, || {
                 SecKeychain::default()
                     .map_err(error)?
@@ -49,7 +51,7 @@ mod macos {
         fn replace(&self, service: &str, account: &str, value: &[u8]) -> Result<(), Failure> {
             #[cfg(debug_assertions)]
             if let Some(result) =
-                buzz_credential_store::dev_agent_store("replace", service, account, value)
+                buzz_credential_store::dev_item("replace", service, account, value)
             {
                 return result.map(|_| ()).map_err(super::store_error);
             }
@@ -76,9 +78,7 @@ mod macos {
         }
         fn delete(&self, service: &str, account: &str) -> Result<(), Failure> {
             #[cfg(debug_assertions)]
-            if let Some(result) =
-                buzz_credential_store::dev_agent_store("delete", service, account, &[])
-            {
+            if let Some(result) = buzz_credential_store::dev_item("delete", service, account, &[]) {
                 return result.map(|_| ()).map_err(super::store_error);
             }
             let keychain = SecKeychain::default().map_err(error)?;

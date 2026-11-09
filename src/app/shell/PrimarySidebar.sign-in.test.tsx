@@ -60,23 +60,32 @@ it("offers explicit sign-in when the live socket refuses a protected community",
   const h = await refusedLive("Federated sign-in is required");
   // The cached channel list stays; nothing signs in on its own.
   expect(screen.getByRole("button", { name: "Chats" })).toBeVisible();
+  expect(
+    await screen.findByText(
+      "This community requires builderlab.example sign-in.",
+    ),
+  ).toBeVisible();
   expect(h.identity.service.signIn).not.toHaveBeenCalled();
   expect(h.connects()).toBe(1);
-  await userEvent
-    .setup()
-    .click(await screen.findByRole("button", { name: "Sign in" }));
+  await userEvent.setup().click(
+    await screen.findByRole("button", {
+      name: "Sign in with builderlab.example",
+    }),
+  );
   expect(h.identity.service.signIn).toHaveBeenCalledOnce();
   // A completed sign-in reconnects the live socket with the new session.
   await waitFor(() => expect(h.connects()).toBe(2));
 });
 
 it.each([
-  ["binding-mismatch", "Settings → Builderlab hosting"],
+  ["binding-mismatch", "identity link"],
   ["authorization-denied", "administrator"],
 ])("shows %s recovery from the live socket", async (refusal, text) => {
   await refusedLive(refusal);
   expect(await screen.findByRole("alert")).toHaveTextContent(text);
-  expect(screen.queryByRole("button", { name: "Sign in" })).toBeNull();
+  expect(
+    screen.queryByRole("button", { name: "Sign in with builderlab.example" }),
+  ).toBeNull();
 });
 
 it.each(["adapter-refused", "grant-refused", "invalid-response"])(
@@ -87,7 +96,9 @@ it.each(["adapter-refused", "grant-refused", "invalid-response"])(
       "Restart Buzz to try again",
     );
     expect(screen.getByRole("button", { name: "Chats" })).toBeVisible();
-    expect(screen.queryByRole("button", { name: "Sign in" })).toBeNull();
+    expect(
+      screen.queryByRole("button", { name: "Sign in with builderlab.example" }),
+    ).toBeNull();
     expect(h.connects()).toBe(1);
   },
 );

@@ -188,6 +188,36 @@
       background: var(--affordance-subtle-pressed);
     }
   }
+  /* Proposed clear glass: primary glass, the most translucent material, for a
+     secondary action over a bright brand surface where the backdrop should stay
+     visible through it. Interaction moves one step up the ramp. */
+  .buzz-button[data-variant="glass-clear"] {
+    @apply glass-primary;
+  }
+  @media (hover: hover) and (pointer: fine) {
+    .buzz-button[data-variant="glass-clear"]:hover:not([data-disabled]) {
+      background: var(--bg-glass-primary-hover);
+    }
+  }
+  .buzz-button[data-variant="glass-clear"]:is(
+    :active,
+    [aria-expanded="true"]
+  ):not([data-disabled]) {
+    background: var(--bg-glass-primary-hover);
+  }
+  @media (prefers-reduced-transparency: reduce), (forced-colors: active) {
+    .buzz-button[data-variant="glass-clear"] {
+      background: var(--surface-panel);
+      backdrop-filter: none;
+      box-shadow: inset 0 0 0 1px var(--border-standard);
+    }
+  }
+  @supports not (backdrop-filter: blur(1px)) {
+    .buzz-button[data-variant="glass-clear"] {
+      background: var(--surface-panel);
+      box-shadow: inset 0 0 0 1px var(--border-standard);
+    }
+  }
   /* Proposed quiet artwork control. Blur stays fixed across interaction states. */
   .buzz-button[data-variant="glass-ghost"] {
     @apply glass-primary;
@@ -484,7 +514,8 @@
     margin-inline-start: -1px;
   }
   /* The focused half's ring stays above its neighbour. */
-  .buzz-split-button > .buzz-button:focus-visible {
+  .buzz-split-button > .buzz-button:focus-visible,
+  :where(.buzz-dialog) .buzz-split-button > .buzz-button:focus {
     z-index: 1;
   }
   /* Preserve fill avatars and pointer-origin Tab traversal in WebKit. */
@@ -1008,6 +1039,50 @@
     -webkit-user-select: none;
     user-select: none;
   }
+  /* Scroll fade: a scroller feathers its edges into the surface instead of
+     cutting content at a hard line. `always` feathers both edges, as message
+     history does; `scrolled` feathers only an edge with content past it, so a
+     list at rest keeps its first row crisp. Set `data-scroll-fade` on the
+     scroller; `scrolled` also needs `useScrollEdges("block")` on it. A host
+     that cannot mark its scroller applies `--scroll-fade-always` itself. */
+  :root {
+    --scroll-fade: var(--space-4);
+    --scroll-fade-always: linear-gradient(
+      to bottom,
+      transparent,
+      #000 var(--scroll-fade),
+      #000 calc(100% - var(--scroll-fade)),
+      transparent
+    );
+    --scroll-fade-start: linear-gradient(
+      to bottom,
+      transparent,
+      #000 var(--scroll-fade)
+    );
+    --scroll-fade-end: linear-gradient(
+      to top,
+      transparent,
+      #000 var(--scroll-fade)
+    );
+  }
+  @media (forced-colors: active), (prefers-reduced-transparency: reduce) {
+    :root {
+      --scroll-fade-always: none;
+      --scroll-fade-start: none;
+      --scroll-fade-end: none;
+    }
+  }
+  [data-scroll-fade="always"],
+  [data-scroll-fade="scrolled"][data-overflow-start][data-overflow-end] {
+    mask-image: var(--scroll-fade-always);
+  }
+  [data-scroll-fade="scrolled"][data-overflow-start]:not([data-overflow-end]) {
+    mask-image: var(--scroll-fade-start);
+  }
+  [data-scroll-fade="scrolled"][data-overflow-end]:not([data-overflow-start]) {
+    mask-image: var(--scroll-fade-end);
+  }
+
   /* A scrolling strip fades out on each edge that has tabs past them, so a cut
      tab reads as "more this way" rather than as clipped. Only the panel and
      navigation lists scroll; the others never hide a tab to fade. */
@@ -1143,6 +1218,53 @@
     box-shadow: var(--shadow-xs);
   }
 
+  /* Dock destinations retain tab behavior, with independent icon tiles. */
+  .buzz-tabs[data-variant="dock"] {
+    display: inline-flex;
+  }
+  .buzz-tabs[data-variant="dock"] .buzz-tabs-list {
+    gap: var(--space-2);
+  }
+  .buzz-tabs[data-variant="dock"] .buzz-tabs-tab {
+    flex: none;
+    width: var(--size-control);
+    height: var(--size-control);
+    padding: 0;
+    border-radius: calc(var(--radius-row) - var(--space-1));
+    corner-shape: squircle;
+    color: var(--text-chrome-subtle);
+    background: transparent;
+  }
+  .buzz-tabs[data-variant="dock"]
+    .buzz-tabs-tab:hover:not([data-selected], [data-disabled]) {
+    background: var(--affordance-backdrop-hover);
+    color: var(--text-standard);
+  }
+  .buzz-tabs[data-variant="dock"]
+    .buzz-tabs-tab:active:not([data-selected], [data-disabled]) {
+    background: var(--affordance-backdrop-pressed);
+    color: var(--text-standard);
+  }
+  .buzz-tabs[data-variant="dock"] .buzz-tabs-tab[data-selected] {
+    background: var(--surface-sidebar-selected);
+    color: var(--text-sidebar-selected);
+  }
+  .buzz-tabs[data-variant="dock"] .buzz-tabs-badge {
+    position: absolute;
+    inset-block-start: 0;
+    inset-inline-end: 0;
+    max-width: var(--space-8);
+    max-height: var(--space-4);
+    pointer-events: none;
+    overflow: hidden;
+  }
+
+  .buzz-tabs[data-variant="dock"]:where([data-orientation="vertical"])
+    .buzz-tabs-list {
+    flex-direction: column;
+    gap: var(--space-1);
+  }
+
   /* Segmented filters on opaque surfaces, as used by sidebar scope. */
   .buzz-tabs:is([data-variant="segmented"], [data-variant="segmented-icons"]) {
     display: flex;
@@ -1266,6 +1388,7 @@
   }
 
   .panel-header {
+    border-block-end: 1px solid var(--border-standard);
     position: relative;
     display: flex;
     min-height: var(--size-panel-header);
@@ -1279,24 +1402,9 @@
     padding-inline: var(--space-1);
   }
 
-  /* The painted band includes the outer rim above and excludes the separator
-     below. Center its controls one hairline above the layout box's center. */
-  .panel-header > * {
+  /* Borderless floating cards retain their established optical alignment. */
+  .panel-header[data-variant="card"] > * {
     translate: 0 -1px;
-  }
-
-  .panel-header::after {
-    position: absolute;
-    inset-block-end: 0;
-    inset-inline: var(--space-1);
-    height: 1px;
-    background: var(--border-standard);
-    content: "";
-    pointer-events: none;
-  }
-
-  .panel[data-joined] .panel-header::after {
-    inset-inline: 0;
   }
 
   .panel-header[data-variant="compact"] {
@@ -1323,13 +1431,20 @@
     margin-inline-start: auto;
   }
 
+  .panel-header-actions
+    .buzz-button[data-icon-variant="ghost"]:not(
+      [data-disabled],
+      [aria-pressed="true"],
+      [aria-expanded="true"]
+    ) {
+    color: var(--text-metadata);
+  }
+
   /* Floating agent cards keep actions beside a truncating title. */
   .panel-header[data-variant="card"] {
+    border-block-end: 0;
     min-width: 0;
     flex-wrap: nowrap;
-  }
-  .panel-header[data-variant="card"]::after {
-    display: none;
   }
   .panel-header[data-variant="card"] .panel-header-title {
     flex: 1 1 0;
@@ -1402,13 +1517,141 @@
     margin-top: var(--space-section-gap);
   }
 
+  /* Auto layout: the label fills and truncates, the actions hug. Nothing is
+     positioned over the row or reserves width for something else. */
   .navigation-section-heading {
     display: flex;
     min-height: var(--size-row);
     align-items: center;
-    justify-content: space-between;
     gap: var(--space-row-gap);
     padding: 0 var(--space-control-inset);
+  }
+
+  .navigation-section-heading-label {
+    display: flex;
+    flex: 1 1 auto;
+    min-width: 0;
+    align-items: center;
+  }
+
+  .navigation-section-heading-actions {
+    display: flex;
+    flex: none;
+    align-items: center;
+  }
+
+  .navigation-section-heading-actions:empty {
+    display: none;
+  }
+
+  /* A disclosure heading's trigger spans the label slot, so the inset is its
+     hit area and focus ring; the actions keep a small trailing inset. */
+  .navigation-section-heading[data-disclosure] {
+    min-height: var(--size-control-sm);
+    gap: 0;
+    padding: 0;
+  }
+
+  /* Quiet section actions use text-subtle; disabled actions keep their own
+     shared disabled color. */
+  .navigation-section-heading[data-disclosure]
+  .navigation-section-heading-actions {
+    padding-inline-end: var(--space-1);
+    color: var(--text-subtle);
+  }
+
+  .navigation-section-heading[data-disclosure]
+    .navigation-section-heading-actions
+    [data-icon-variant]:not([data-disabled]) {
+    color: inherit;
+  }
+
+  .navigation-section-heading[data-disclosure]
+    .navigation-section-heading-label
+    > :where(details, summary, button) {
+    flex: 1 1 auto;
+    min-width: 0;
+  }
+
+  /* Only the trigger itself, never a control nested inside it. */
+  .navigation-section-heading[data-disclosure]
+    .navigation-section-heading-label
+    > button,
+  .navigation-section-heading[data-disclosure]
+    .navigation-section-heading-label
+    > details
+    > summary {
+    @apply text-label-sm;
+    display: flex;
+    align-items: center;
+    gap: var(--space-1);
+    width: 100%;
+    min-height: var(--size-control-sm);
+    padding: var(--space-half) var(--space-2);
+    border: 0;
+    border-radius: var(--radius-control);
+    background: transparent;
+    color: var(--text-metadata);
+    text-align: start;
+    list-style: none;
+    cursor: pointer;
+    /* Like NavigationItem, a disclosure is navigation, not document text. */
+    -webkit-user-select: none;
+    user-select: none;
+  }
+
+  .navigation-section-heading[data-disclosure]
+    .navigation-section-heading-label
+    summary::-webkit-details-marker {
+    display: none;
+  }
+
+  .navigation-section-heading[data-disclosure]
+    .navigation-section-heading-label
+    > button:focus-visible,
+  .navigation-section-heading[data-disclosure]
+    .navigation-section-heading-label
+    > details
+    > summary:focus-visible {
+    outline: 2px solid var(--border-focus);
+    outline-offset: -2px;
+  }
+
+  /* Quiet parts are transparent while hidden. Quiet actions also give up
+     their content width, like a hidden auto layout child, so the label takes
+     that space until they appear. They stay focusable, and a focused quiet
+     part always shows, however focus got there: a dialog closed with the
+     mouse returns focus to its trigger without the keyboard flag. */
+  .navigation-section-heading [data-navigation-reveal] {
+    opacity: 0;
+  }
+
+  .navigation-section-heading-actions[data-navigation-reveal] {
+    max-width: 0;
+    overflow: hidden;
+  }
+
+  :is(
+      .navigation-section-heading:hover,
+      html[data-keyboard-navigation] .navigation-section-heading:focus-within,
+      .navigation-section-heading:has([data-navigation-reveal]:focus-within),
+      .navigation-section-heading:has(
+        [aria-expanded="true"][aria-haspopup="menu"]
+      ),
+      [data-context-menu-present] > .navigation-section-heading
+    )
+    [data-navigation-reveal] {
+    opacity: 1;
+    max-width: none;
+    overflow: visible;
+  }
+
+  @media (hover: none) {
+    .navigation-section-heading [data-navigation-reveal] {
+      opacity: 1;
+      max-width: none;
+      overflow: visible;
+    }
   }
 
   .navigation-section-label {
@@ -1420,10 +1663,6 @@
   /* A headingless reference stays above the named groups when navigation wraps. */
   .navigation-section[data-headingless] {
     grid-column: 1 / -1;
-  }
-
-  .navigation-section-heading .buzz-button[data-icon-size="compact"] {
-    margin-right: calc(var(--space-control-inset) * -1);
   }
 
   .navigation-section-rows {
@@ -1486,7 +1725,10 @@
       > .navigation-card-row [aria-expanded="true"][aria-haspopup="menu"]
     ),
     [data-context-menu-present]
-  ):not(:has(> .navigation-card-row [aria-current="page"])) {
+  ):not(
+    :has(> .navigation-card-row [aria-current="page"]),
+    :has(> .navigation-card-row [aria-current="true"])
+  ) {
     background: var(--affordance-panel-hover);
   }
   .navigation-card:not([data-tone="tonal"], [data-tone="inset"]):has(
@@ -1495,6 +1737,18 @@
     background: var(--surface-sidebar-selected);
   }
   .navigation-card:has(> .navigation-card-row [aria-current="page"])
+    > :is(.navigation-card-row, .navigation-card-footer) {
+    --text-subtle: var(--text-row-selected-subtle);
+  }
+  /* Collection selection is neutral; route selection above keeps sidebar paint. */
+  .navigation-card:not([data-tone="tonal"], [data-tone="inset"]):has(
+    > .navigation-card-row [aria-current="true"]
+  ) {
+    background: var(--affordance-selected);
+  }
+  .navigation-card:not([data-tone="tonal"], [data-tone="inset"]):has(
+      > .navigation-card-row [aria-current="true"]
+    )
     > :is(.navigation-card-row, .navigation-card-footer) {
     --text-subtle: var(--text-row-selected-subtle);
   }
@@ -1815,6 +2069,25 @@
     color: var(--text-metadata);
   }
 
+  /* Quiet count: a circle for one digit, a pill for more. */
+  .buzz-count-badge {
+    @apply text-caption;
+    display: grid;
+    place-items: center;
+    flex-shrink: 0;
+    min-inline-size: 1lh;
+    block-size: 1lh;
+    padding-inline: var(--space-1);
+    border-radius: var(--radius-pill);
+    background: var(--affordance-subtle);
+    color: var(--text-subtle);
+    font-variant-numeric: tabular-nums;
+  }
+  .navigation-item[data-selected] .buzz-count-badge {
+    background: var(--surface-row-selected-detail);
+    color: var(--text-row-selected-detail);
+  }
+
   /* SidebarNavigation copies main's compact sidebar appearance. Keep this global:
      applying nested shared selectors inside CSS Modules would rename their targets. */
   .buzz-sidebar-navigation {
@@ -1876,11 +2149,11 @@
     > :is(svg, img) {
     flex-shrink: 0;
   }
-  /* Named static groups use main's disclosure-heading type and leading inset.
-     Disclosure, chevron and action behavior stay with their feature owner. */
-  .buzz-sidebar-navigation .navigation-section-heading {
+  /* Named static groups use main's disclosure-heading type and leading inset,
+     and end their actions where disclosure headings do. */
+  .buzz-sidebar-navigation .navigation-section-heading:not([data-disclosure]) {
     min-height: var(--size-control-sm);
-    padding: var(--space-half) var(--space-2);
+    padding: var(--space-half) var(--space-1) var(--space-half) var(--space-2);
   }
   .buzz-sidebar-navigation .navigation-section-label {
     @apply text-body-sm;
@@ -1916,13 +2189,15 @@
   }
   .buzz-tabs[data-variant="navigation"] .buzz-tabs-list {
     min-width: 0;
-    height: var(--size-panel-header);
+    /* The shared header's bottom border is part of its total height. */
+    height: calc(var(--size-panel-header) - 1px);
     align-items: flex-start;
     overflow-x: auto;
     overflow-y: hidden;
     gap: var(--space-1);
-    /* The scrollbar uses the bottom inset without moving the tab row. */
-    padding-block: var(--space-1) 0;
+    /* Split the header’s separator evenly to keep controls centered.
+       The scrollbar track reserves that separator pixel in scrollbars.css. */
+    padding-block: calc(var(--space-1) - 0.5px) 0;
   }
   .buzz-tabs[data-variant="navigation"] .buzz-tabs-item {
     display: flex;
@@ -2003,11 +2278,25 @@
     justify-content: center;
   }
 
+  .buzz-tabs[data-variant="dock"] .buzz-tabs-icon {
+    flex-basis: var(--space-5);
+    width: var(--space-5);
+    height: var(--space-5);
+  }
+
   html[data-keyboard-navigation] .buzz-surface-button:focus-visible,
-  html[data-keyboard-navigation] .buzz-button:focus-visible,
   html[data-keyboard-navigation] .navigation-item:focus-visible,
   html[data-keyboard-navigation] .buzz-tabs-tab:focus-visible {
     outline: 2px solid var(--text-standard);
+    outline-offset: 2px;
+  }
+
+  /* Dialog autofocus identifies what Enter will press, even after pointer entry.
+     Keep that focus indicator separate from the button's action hierarchy. */
+  html[data-keyboard-navigation] .buzz-button:focus-visible,
+  .buzz-dialog .buzz-button:focus {
+    outline: 2px solid var(--border-focus);
+    /* Fit the existing 4px focus allowance in scrolling dialog footers. */
     outline-offset: 2px;
   }
 
@@ -2046,7 +2335,9 @@
   .buzz-menu-popup {
     min-width: 11.5rem;
     max-width: min(20rem, var(--available-width), calc(100vw - var(--space-4)));
-    max-height: min(24rem, var(--available-height));
+    /* No fixed cap: macOS hides overlay scrollbars until scrolled, so rows past one look
+       absent. Only a viewport too short for the menu still scrolls. */
+    max-height: var(--available-height);
     overflow-y: auto;
     @apply floating-surface;
     color: var(--text-standard);
@@ -2623,9 +2914,15 @@
   /* A compact choice ellipsizes its value, so a long one, such as a model
    * name, takes at most 60% of the row and the title keeps its words. Fixed
    * controls, such as pickers and swatches, and trailings that only contain
-   * a choice beside other content keep their full width. */
+   * a choice beside other content keep their full width. A lone wrapper, such
+   * as Create agent's model recovery, still holds just the choice. */
   .buzz-preference-row:has(
     > .buzz-preference-row-trailing > .buzz-select[data-variant="compact"]
+  ),
+  .buzz-preference-row:has(
+    > .buzz-preference-row-trailing
+      > :only-child
+      .buzz-select[data-variant="compact"]
   ) {
     --preference-row-trailing: fit-content(60%);
   }

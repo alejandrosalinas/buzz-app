@@ -2,6 +2,17 @@ import type { AgentLibrary } from "../agents/library";
 import type { ChannelMessage, Profile } from "../relay/contracts";
 import { profileTarget } from "../profiles/target";
 
+/** The names a person's signed prose mention binds by: their shown name and,
+ * when verified, both verified names, so prose written under either name
+ * preference stays a mention. Renderers key their caches on the same list. */
+export function profileMentionNames(profile: Profile | undefined) {
+  return [
+    profile?.name,
+    profile?.verified?.displayName,
+    profile?.verified?.fullName,
+  ];
+}
+
 type Part = { text: string; target?: string | undefined };
 /** Display only: signed recipients bound by an unedited body's exact known names.
  * This does not infer notification intent or resolve a name against a directory. */
@@ -25,12 +36,12 @@ export function profileMentionParts(
     const target = profileTarget(id);
     if (!target) continue;
     const labels = [
-      profiles?.get(id)?.name,
+      ...profileMentionNames(profiles?.get(id)),
       ...agents
         .filter((agent) => agent.pubkey === id)
         .map((agent) => agent.name),
     ];
-    for (const name of labels) {
+    for (const name of new Set(labels)) {
       if (!name || /[\r\n]/.test(name)) continue;
       const keys = names.get(name) ?? new Set<string>();
       keys.add(target);

@@ -1,5 +1,5 @@
 // View intent is durable and explicitly partitioned; connection generations are not storage keys.
-const viewListeners = new Map<string, Set<() => void>>();
+const viewListeners = new Map<string, Set<(key?: string) => void>>();
 const composerDraftKey =
   /^draft:([a-zA-Z0-9][a-zA-Z0-9._-]{0,255})(?::thread:([0-9a-f]{64}))?$/;
 export function draftCoordinates(key: string) {
@@ -8,11 +8,12 @@ export function draftCoordinates(key: string) {
     ? { channelId: match[1], ...(match[2] ? { threadRootId: match[2] } : {}) }
     : undefined;
 }
-const changed = (scope: string) => {
-  for (const listener of viewListeners.get(scope) ?? []) listener();
+// `key` names the one key that changed; undefined means any key may have.
+const changed = (scope: string, key?: string) => {
+  for (const listener of viewListeners.get(scope) ?? []) listener(key);
 };
 /** Same durable view keys as the composer; no parallel draft store or index. */
-export function subscribeView(scope: string, listener: () => void) {
+export function subscribeView(scope: string, listener: (key?: string) => void) {
   let listeners = viewListeners.get(scope);
   if (!listeners) {
     listeners = new Set();
@@ -28,7 +29,8 @@ export function subscribeView(scope: string, listener: () => void) {
       }
       if (!event.key.startsWith("buzz-view.v1:")) return;
       const pair: unknown = JSON.parse(event.key.slice("buzz-view.v1:".length));
-      if (Array.isArray(pair) && pair[0] === scope) listener();
+      if (Array.isArray(pair) && pair[0] === scope)
+        listener(typeof pair[1] === "string" ? pair[1] : undefined);
     } catch {
       /* Storage may be unavailable while a window is closing. */
     }
@@ -64,7 +66,7 @@ export function writeView(scope: string, key: string, value: unknown) {
       revision,
     );
     if (viewRevision(scope, key) !== revision) return false;
-    changed(scope);
+    changed(scope, key);
     return true;
   } catch {
     // Ordinary view callers remain usable in memory; recovery callers check this.
@@ -83,6 +85,10 @@ export function replaceView(
   if (current !== expected) return "changed";
   return writeView(scope, key, value) ? "saved" : "failed";
 }
+
+// Rich snapshots contain structure as well as text (up to 32,001 nodes).
+// Keep a receiver bound, not the old text-sized 128 KiB envelope cutoff.
+export const MAX_DRAFT_VIEW_LENGTH = 8 * 1024 * 1024;
 
 /** Snapshot of a viewer's existing composer drafts, never other view coordinates. */
 export function listDraftViews(
@@ -118,9 +124,7 @@ export function listDraftViews(
         continue;
       const raw = localStorage.getItem(storageKey);
       if (!raw) continue;
-      // Rich snapshots contain structure as well as text (up to 32,001 nodes).
-      // Keep a receiver bound, not the old text-sized 128 KiB envelope cutoff.
-      if (raw.length > 8 * 1024 * 1024) {
+      if (raw.length > MAX_DRAFT_VIEW_LENGTH) {
         unavailable++;
         continue;
       }
@@ -149,7 +153,7 @@ export function listDraftViews(
       const raw = localStorage.getItem(
         `${prefix}${JSON.stringify([scope, selected])}`,
       );
-      if (raw && raw.length <= 8 * 1024 * 1024)
+      if (raw && raw.length <= MAX_DRAFT_VIEW_LENGTH)
         drafts.push({ key: selected, value: JSON.parse(raw) });
     } catch {
       /* Missing/malformed/removed draft has no list summary. */
@@ -209,5 +213,5 @@ export function clearView(scope: string, ...keys: string[]) {
     if (localStorage.getItem(storageKey) !== null)
       throw new Error("Could not clear the saved message. Try again.");
   }
-  changed(scope);
+  changed(scope, keys.length === 1 ? keys[0] : undefined);
 }

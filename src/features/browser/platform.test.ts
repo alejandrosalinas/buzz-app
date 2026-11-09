@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   addressInputUrl,
+  BrowserAttachError,
   createBrowserPlatform,
   validateBrowsableUrl,
 } from "./platform";
@@ -96,6 +97,7 @@ describe("createBrowserPlatform", () => {
     );
     await platform.attach("https://example.com", bounds, "builderlab-apps");
     await platform.setBounds("session-1", bounds, true);
+    await platform.setMediaSuspended("session-1", true);
     await platform.navigate("session-1", "https://other.example.com");
     await platform.navigate("session-1", "https://typed.example.com", true);
     await platform.action("session-1", "reload");
@@ -121,6 +123,10 @@ describe("createBrowserPlatform", () => {
         },
       ],
       ["browser_set_bounds", { sessionId: "session-1", bounds, visible: true }],
+      [
+        "browser_set_media_suspended",
+        { sessionId: "session-1", suspended: true },
+      ],
       [
         "browser_navigate",
         {
@@ -157,7 +163,7 @@ describe("createBrowserPlatform", () => {
       "https://counter--workspace.apps.example/second",
       { x: 0, y: 0, width: 1, height: 1 },
       "account",
-      { credential: "private", storage: "account", signal: lifetime.signal },
+      { federated: "private", storage: "account", signal: lifetime.signal },
     );
     const rejected = expect(attach).rejects.toThrow();
     lifetime.abort();
@@ -177,7 +183,7 @@ describe("createBrowserPlatform", () => {
       url,
       { x: 0, y: 0, width: 1, height: 1 },
       "account",
-      { credential: "private", storage: "account", signal: lifetime.signal },
+      { federated: "private", storage: "account", signal: lifetime.signal },
     );
     expect(sdk.invoke.mock.calls.at(-1)).toEqual([
       "browser_navigate",
@@ -204,6 +210,55 @@ describe("createBrowserPlatform", () => {
         builderlab: { federated: "revision-1" },
       },
     ]);
+  });
+
+  it("turns a structured native attach refusal into an error naming its page", async () => {
+    const bounds = { x: 0, y: 0, width: 1, height: 1 };
+    const attach = (rejection: unknown) => {
+      sdk.invoke.mockRejectedValueOnce(rejection as never);
+      return createBrowserPlatform().attach("https://example.com", bounds);
+    };
+    const denied = await attach({
+      message: "Your Builderlab account cannot open this app",
+      page: "denied",
+    }).catch((error: unknown) => error);
+    expect(denied).toBeInstanceOf(BrowserAttachError);
+    expect(denied).toMatchObject({
+      message: "Your Builderlab account cannot open this app",
+      page: "denied",
+    });
+
+    const plain = await attach({
+      message: "Builderlab sign-in request failed",
+    }).catch((error: unknown) => error);
+    expect(plain).toBeInstanceOf(BrowserAttachError);
+    expect((plain as BrowserAttachError).page).toBeUndefined();
+
+    const outage = await attach({
+      message: "Builderlab sign-in request failed",
+      page: "unavailable",
+    }).catch((error: unknown) => error);
+    expect((outage as BrowserAttachError).page).toBe("unavailable");
+
+    const unknownPage = await attach({ message: "x", page: "elsewhere" }).catch(
+      (error: unknown) => error,
+    );
+    expect((unknownPage as BrowserAttachError).page).toBeUndefined();
+
+    await expect(attach("Browser session is closed")).rejects.toBe(
+      "Browser session is closed",
+    );
+  });
+
+  it("opens only a valid HTTP(S) URL in the system browser", async () => {
+    const platform = createBrowserPlatform();
+    await platform.openExternal("https://example.com/app?x=1");
+    expect(sdk.invoke).toHaveBeenCalledWith("plugin:opener|open_url", {
+      url: "https://example.com/app?x=1",
+    });
+    sdk.invoke.mockClear();
+    await expect(platform.openExternal("file:///etc/passwd")).rejects.toThrow();
+    expect(sdk.invoke).not.toHaveBeenCalled();
   });
 
   it("rejects an invalid URL before native invocation", async () => {

@@ -139,6 +139,7 @@
   min-width: 0;
 }
 .detailsScroll {
+  --profile-content-inset: var(--space-5);
   --agent-footer-height: 0px;
   flex: 1;
   min-height: 0;
@@ -146,9 +147,14 @@
   display: flex;
   flex-direction: column;
   gap: var(--space-4);
-  padding: var(--space-5);
+  padding: var(--space-5) var(--profile-content-inset);
   padding-block-end: calc(var(--space-5) + var(--agent-footer-height));
   scroll-padding-block-end: calc(var(--space-5) + var(--agent-footer-height));
+}
+@media (max-width: 30rem) {
+  .detailsScroll {
+    --profile-content-inset: var(--space-2);
+  }
 }
 .panelFooter {
   display: grid;
@@ -178,8 +184,8 @@
 }
 .identityPortrait {
   position: relative;
-  width: 8rem;
-  height: 8rem;
+  width: min(8rem, 100%);
+  aspect-ratio: 1;
 }
 /* Motion drives only artwork; labels and controls retain color. */
 .identityCard > :is([aria-hidden="true"], .identityPortrait) {
@@ -198,7 +204,7 @@
   bottom: calc(-1 * var(--space-5));
   z-index: 1;
   margin-block-start: auto;
-  margin-inline: calc(-1 * var(--space-5));
+  margin-inline: calc(-1 * var(--profile-content-inset));
   margin-block-end: calc(-1 * var(--space-5));
 }
 .saveFooter:empty {

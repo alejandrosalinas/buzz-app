@@ -17,6 +17,7 @@ export const gooseRun = (
   | "timeoutMs"
   | "syncedSettings"
   | "resumes"
+  | "readFile"
 > => ({
   sessionControls: {
     scope: (agent) => config(agent.config).scope,
@@ -26,6 +27,11 @@ export const gooseRun = (
   },
   run: (delivery) => runtime.run(delivery),
   runOnce: (turn) => runtime.runOnce(turn),
+  // Its host reader cannot be stopped once started.
+  readFile: (agent, path, signal) => {
+    signal.throwIfAborted();
+    return runtime.workspaceFile(agent, path);
+  },
   timeoutMs: HANDOVER_MS,
   syncedSettings: {
     schema: syncedSettingsSchema,

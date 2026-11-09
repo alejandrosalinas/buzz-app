@@ -1,0 +1,55 @@
+name: Mesh cross-node CPU
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - 'src/bundled/mesh-compute/compute/**'
+      - 'scripts/*mesh-cross-node*'
+      - '.github/workflows/mesh-cross-node.yml'
+      - 'Cargo.lock'
+      - 'Cargo.toml'
+  push:
+    branches: [main]
+    paths:
+      - 'src/bundled/mesh-compute/compute/**'
+      - 'scripts/*mesh-cross-node*'
+      - '.github/workflows/mesh-cross-node.yml'
+      - 'Cargo.lock'
+      - 'Cargo.toml'
+permissions:
+  contents: read
+concurrency:
+  group: mesh-cross-node-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  remote-only:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - uses: cashapp/activate-hermit@cea9af7913204a965fd488637a8d1811bba2e616 # v1
+      - name: Install Linux dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install --no-install-recommends -y libwebkit2gtk-4.1-dev build-essential libssl-dev librsvg2-dev libayatana-appindicator3-dev
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          key: mesh-cross-node
+          save-if: ${{ github.event_name == 'push' }}
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: .cache/mesh-cross-node
+          key: mesh-smoke-assets-linux-v0.78.1-8030f045
+      - name: Full mesh crate tests
+        run: ./bin/cargo test --locked -p buzz-mesh-compute
+      - name: Remote-only completion and provider outage
+        run: scripts/ci-mesh-cross-node.sh
+      - name: Evidence (includes ephemeral test identities only)
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: mesh-cross-node
+          path: test-results/mesh-cross-node
+          retention-days: 7

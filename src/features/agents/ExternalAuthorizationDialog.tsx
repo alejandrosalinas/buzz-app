@@ -5,7 +5,11 @@ import {
   type ReactNode,
 } from "react";
 import type { ExternalApps } from "./external-connection";
-import { externalMcpEnabled } from "./external-connection";
+import {
+  externalMcpEnabled,
+  fullAgentAccess,
+  legacyRequest,
+} from "./external-connection";
 import type { Agents } from "./service";
 import type { Communities } from "../communities/service";
 import type { RelayData } from "../relay/service";
@@ -37,9 +41,15 @@ export function ExternalAuthorizationDialog({
   return (
     <>
       {pending &&
-        (transport.status === "ready" &&
-        client.viewer === pending.viewer &&
-        externalMcpEnabled(client.selected) ? (
+        (!fullAgentAccess(pending.request.scope) ? (
+          <ConsentDialog connection={connection} communities={communities}>
+            <p role="status" className="m-0 text-body-sm text-secondary">
+              {legacyRequest}
+            </p>
+          </ConsentDialog>
+        ) : transport.status === "ready" &&
+          client.viewer === pending.viewer &&
+          externalMcpEnabled(client.selected) ? (
           <ReadyConsent
             key={transport.scope}
             session={transport.session}
@@ -130,21 +140,21 @@ function ConsentDialog({
             ]}
             onValueChange={(id) => communities.select(id)}
           />
-          <p className="m-0 text-body-sm text-secondary">
-            Requested access:{" "}
-            {request.scope
-              .map((scope) =>
-                scope === "read"
-                  ? "read channels, messages and threads"
-                  : scope === "post"
-                    ? "post text as the selected agent"
-                    : "create private Solo chats with you, the selected agent and your saved Bestie",
-              )
-              .join("; ")}
-            . Keys stay in Buzz.
-            {request.version === 2 &&
-              " The app can renew valid approval for another 30 days. Approval expires after 30 days without renewal. The app can restore this access after either app restarts. You can revoke it in External apps."}
-          </p>
+          {fullAgentAccess(request.scope) && (
+            <p className="m-0 text-body-sm text-secondary">
+              Full access as the selected agent: the app can use every Buzz tool
+              the agent has, including tools plugins add later. It reads, posts
+              and manages channels where the agent can, uses its memory,
+              attention and Git access to its community's repositories, wakes
+              the agent in its conversations, runs the Nexus workers the agent
+              may run, and can change Buzz settings on this device. It can post
+              any file the agent can read on this device, including outside its
+              workspace. It can disable plugins; installing, updating, enabling
+              or removing one needs your confirmation. Keys stay in Buzz.
+              {request.version === 2 &&
+                " The app can renew valid approval for another 30 days. Approval expires after 30 days without renewal. The app can restore this access after either app restarts. You can revoke it in External apps."}
+            </p>
+          )}
           {children}
           {!state.available && (
             <p role="alert" className="m-0 text-body-sm text-danger">

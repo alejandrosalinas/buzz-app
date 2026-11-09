@@ -7,7 +7,6 @@ import {
   useState,
   type ReactNode,
   type ReactElement,
-  type Ref,
   type RefObject,
 } from "react";
 import {
@@ -46,7 +45,7 @@ type Props = {
   children?: ReactElement | undefined;
   rowRef?: RefObject<HTMLDivElement | null>;
   messageId?: string;
-  menuTriggerRef?: Ref<HTMLButtonElement>;
+  menuTriggerRef?: RefObject<HTMLButtonElement | null>;
   onSendToChannel?: (() => void) | undefined;
   onReply?: (() => void) | undefined;
   onForward?: (() => void) | undefined;
@@ -54,6 +53,7 @@ type Props = {
   link?: string | undefined;
   copyText(): string;
   quickControls?: ReactNode;
+  toolbarItems?: ReactNode;
   /** Menu items rendered above the built-in actions. */
   leadingItems?: ReactNode;
   overflowItems?: ReactNode;
@@ -97,6 +97,7 @@ function MessageActionBarControls({
   link,
   copyText,
   quickControls,
+  toolbarItems,
   leadingItems,
   overflowItems,
   messageId,
@@ -128,6 +129,8 @@ function MessageActionBarControls({
   const [openedByPointer, setOpenedByPointer] = useState(false);
   const [contextAnchor, setContextAnchor] = useState<HTMLElement>();
   const contextFocus = useRef<HTMLElement | null>(null);
+  const ownTrigger = useRef<HTMLButtonElement>(null);
+  const trigger = menuTriggerRef ?? ownTrigger;
   const copy = async (text: () => string, label: string) => {
     if (busy.current) return;
     busy.current = true;
@@ -233,7 +236,17 @@ function MessageActionBarControls({
             title={!link ? "Message link unavailable" : undefined}
             onClick={() => {
               setHandingOffFocus(true);
-              afterClose.current = onForward;
+              // Forward returns focus to what is focused when it opens. So
+              // focus this menu's target first (⋯, however it opened, or the
+              // context menu's target), as the toolbar Forward button focuses
+              // itself; a press need not have focused ⋯.
+              afterClose.current = () => {
+                const target = children
+                  ? contextFocus.current
+                  : trigger.current;
+                if (target?.isConnected) target.focus({ preventScroll: true });
+                onForward();
+              };
             }}
           >
             <MenuIcon>
@@ -316,6 +329,7 @@ function MessageActionBarControls({
             aria-label="Message actions"
           >
             {quickControls}
+            {toolbarItems}
             {onReply && (
               <IconButton
                 hint={replyDisabled ? "helpful" : "familiar"}
@@ -385,7 +399,7 @@ function MessageActionBarControls({
                 render={
                   <IconButton
                     hint="familiar"
-                    ref={menuTriggerRef}
+                    ref={trigger}
                     aria-label="More message actions"
                     title="More message actions"
                     size="sm"

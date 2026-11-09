@@ -12,7 +12,10 @@ import {
 import { SidebarNavigation } from "../shared/design-system/ui/SidebarNavigation";
 import { CommunityAddress } from "./CommunityAddress";
 import type { Agents } from "../features/agents/service";
-import type { DecisionsService } from "../features/decisions/service";
+import type {
+  DecisionsService,
+  RegisteredProvider,
+} from "../features/decisions/service";
 import { DecisionsSettings } from "./DecisionsSettings";
 import { Header, InlineHeader } from "../shared/design-system/ui/Header";
 import { ToastNotice } from "../shared/design-system/ui/Toast";
@@ -30,6 +33,7 @@ import { Tabs } from "../shared/design-system/ui/Tabs";
 import { SearchField } from "../shared/design-system/ui/SearchField";
 import { EmptyState } from "../shared/design-system/ui/EmptyState";
 import {
+  Fragment,
   type ReactNode,
   forwardRef,
   type RefObject,
@@ -54,16 +58,26 @@ import type { Catalog, PluginInfo } from "../plugins/types";
 import type { Communities, Membership } from "../features/communities/service";
 import { PluginImport } from "./PluginImport";
 import { AgentPluginRequests } from "./AgentPluginRequests";
-import { ManagedPluginUpdate, ManagedPlugins } from "./ManagedPlugins";
+import {
+  ManagedPluginUpdate,
+  ManagedPlugins,
+  UrlPluginInstallReview,
+  UrlPluginDetails,
+} from "./ManagedPlugins";
 import { managedBy, pendingManaged } from "../plugins/managed";
 import { RecommendationCount } from "./RecommendationCount";
-import type { PluginInstallRequests } from "../plugins/installer";
+import {
+  isUrlInstallSource,
+  type PluginInstallRequest,
+  type PluginInstallRequests,
+} from "../plugins/installer";
 import { PluginReadme } from "./PluginReadme";
 import { bundledReadmes } from "../bundled/readmes";
 import { bundledIcons } from "../bundled/icons";
 import type { Identity } from "../features/identity/service";
 import { ProfileSettings } from "./ProfileSettings";
 import { IdentitySettings, keyActivity } from "./IdentitySettings";
+import { SecuritySettings } from "./SecuritySettings";
 import type { FederatedIdentity } from "../features/federated-identity/service";
 import { CommunityLocalSettings } from "./CommunityLocalSettings";
 
@@ -81,7 +95,12 @@ import { OwnedContribution } from "../plugins/OwnedContribution";
 import type { Updates } from "../features/updates/updates";
 import { UpdateSettings } from "../features/updates/UpdateSettings";
 import { CommunityDepartureSettings } from "./CommunityDepartureSettings";
-import { developerMode, settingsSections } from "./settings-sections";
+import {
+  developerMode,
+  settingsSections,
+  type SettingsSection,
+} from "./settings-sections";
+import { SettingsSectionLink } from "../features/navigation/SettingsSectionLink";
 
 import { pluginCategoryDefinitions } from "./plugin-categories";
 
@@ -228,6 +247,10 @@ function PluginProvenance({
 
 const noAccessSubscription = () => () => {};
 const noInstallRequest = () => undefined;
+const noProviders: readonly RegisteredProvider[] = [];
+const noDecisionProviders = () => noProviders;
+/** The plugin whose details a Manage plugins visit shows, for Back/Forward. */
+const PLUGIN_DETAILS = "settings.pluginDetails";
 
 function restrictedPlugin(plugin: PluginInfo) {
   return (
@@ -274,6 +297,14 @@ function scrollport(element: Element) {
   return null;
 }
 
+/** Whether any scrollport around `element` has scrolled past its start. */
+function startHidden(element: Element) {
+  const top = element.getBoundingClientRect().top;
+  for (let port = scrollport(element); port; port = scrollport(port))
+    if (top < port.getBoundingClientRect().top) return true;
+  return false;
+}
+
 function pluginToggleDisabled(
   plugin: PluginInfo,
   access: AdminAccessState,
@@ -305,6 +336,8 @@ function PluginDetails({
   initialUpdateAvailable,
   holdReview,
   openUpdateSettings = false,
+  sections,
+  openSection,
 }: {
   plugin: PluginInfo;
   managed?: ReturnType<typeof managedBy>;
@@ -325,6 +358,8 @@ function PluginDetails({
   initialUpdateAvailable: boolean;
   holdReview: (() => () => void) | undefined;
   openUpdateSettings?: boolean;
+  sections: readonly SettingsSection[];
+  openSection: ((section: string) => void) | undefined;
 }) {
   const accessReason = restrictedPlugin(plugin)
     ? accessMessage(plugin, access)
@@ -333,9 +368,6 @@ function PluginDetails({
     useState<HTMLSpanElement | null>(null);
   const toggle = useRef<HTMLButtonElement>(null);
   const [actionTarget, setActionTarget] = useState<HTMLDivElement | null>(null);
-  const [primaryActionTarget, setPrimaryActionTarget] =
-    useState<HTMLDivElement | null>(null);
-  const updateAvailable = initialUpdateAvailable;
   useLayoutEffect(() => {
     close.current?.focus({ preventScroll: true });
   }, [close]);
@@ -419,67 +451,54 @@ function PluginDetails({
           </span>
         )}
         <div className={styles.pluginPrimaryActions}>
-          <div
-            ref={setPrimaryActionTarget}
-            className={styles.pluginPrimaryAction}
-          >
+          <div className={styles.pluginPrimaryAction}>
             {/* Channels is required and has no enable/disable control. */}
-            {!updateAvailable &&
-              (plugin.manifest.id === "buzz.channels" ? (
-                <Button variant="outline" size="sm" disabled>
-                  Required
-                </Button>
-              ) : (
-                <Tooltip
-                  content={
-                    access === "error"
-                      ? "Could not check access. Try again."
+            {plugin.manifest.id === "buzz.channels" ? (
+              <Button variant="outline" size="sm" disabled>
+                Required
+              </Button>
+            ) : (
+              <Tooltip
+                content={
+                  access === "error"
+                    ? "Could not check access. Try again."
+                    : accessReason
+                }
+                {...(accessReason ? {} : { open: false })}
+                disableHoverablePopup
+              >
+                <Button
+                  variant={
+                    plugin.enabled
+                      ? "subtle"
                       : accessReason
+                        ? "outline"
+                        : "prominent"
                   }
-                  {...(accessReason ? {} : { open: false })}
-                  disableHoverablePopup
+                  size="sm"
+                  disabled={pluginToggleDisabled(plugin, access, busy)}
+                  loading={
+                    !plugin.enabled &&
+                    restrictedPlugin(plugin) &&
+                    access === "checking"
+                  }
+                  aria-describedby={
+                    accessReason ? "plugin-detail-access" : undefined
+                  }
+                  focusableWhenDisabled
+                  ref={toggle}
+                  onClick={onToggle}
                 >
-                  <Button
-                    variant={
-                      plugin.enabled
-                        ? "subtle"
-                        : accessReason
-                          ? "outline"
-                          : "prominent"
-                    }
-                    size="sm"
-                    disabled={pluginToggleDisabled(plugin, access, busy)}
-                    loading={
-                      !plugin.enabled &&
-                      restrictedPlugin(plugin) &&
-                      access === "checking"
-                    }
-                    aria-describedby={
-                      accessReason ? "plugin-detail-access" : undefined
-                    }
-                    focusableWhenDisabled
-                    ref={toggle}
-                    onClick={onToggle}
-                  >
-                    {pluginActionLabel(plugin, access)}
-                  </Button>
-                </Tooltip>
-              ))}
+                  {pluginActionLabel(plugin, access)}
+                </Button>
+              </Tooltip>
+            )}
           </div>
           <PluginMenu
             plugin={plugin}
             plugins={plugins}
             busy={busy}
             openUpdateSettings={openUpdateSettings}
-            {...(updateAvailable
-              ? {
-                  toggle: {
-                    label: pluginActionLabel(plugin, access),
-                    disabled: pluginToggleDisabled(plugin, access, busy),
-                    run: onToggle,
-                  },
-                }
-              : {})}
           />
         </div>
         <div ref={setActionTarget} className={styles.pluginExtraActions} />
@@ -513,23 +532,50 @@ function PluginDetails({
           {...(authorizeGit ? { authorizeGit } : {})}
         />
       )}
-      {plugin.source === "external" && plugins.imports && !managed && (
-        <PluginImport
-          key={`${plugin.revision}:${JSON.stringify(plugin.updateSource)}`}
-          initialUpdateAvailable={initialUpdateAvailable}
-          actionTarget={updateAvailable ? primaryActionTarget : actionTarget}
-          onUpdateAvailableChange={onUpdateAvailableChange}
-          reviewRequested={reviewRequested}
-          onReviewHandled={onReviewHandled}
-          holdReview={holdReview}
-          statusTarget={installedStatus}
-          returnFocus={() => close.current}
-          updateId={plugin.manifest.id}
-          plugins={plugins}
-          catalog={catalog}
-          busy={busy}
-          {...(authorizeGit ? { authorizeGit } : {})}
-        />
+      {plugin.source === "external" &&
+        !managed &&
+        plugin.updateSource &&
+        "url" in plugin.updateSource && (
+          <UrlPluginDetails source={plugin.updateSource} />
+        )}
+      {plugin.source === "external" &&
+        plugins.imports &&
+        !managed &&
+        !(plugin.updateSource && "url" in plugin.updateSource) && (
+          <PluginImport
+            key={`${plugin.revision}:${JSON.stringify(plugin.updateSource)}`}
+            initialUpdateAvailable={initialUpdateAvailable}
+            actionTarget={actionTarget}
+            onUpdateAvailableChange={onUpdateAvailableChange}
+            reviewRequested={reviewRequested}
+            onReviewHandled={onReviewHandled}
+            holdReview={holdReview}
+            statusTarget={installedStatus}
+            returnFocus={() => close.current}
+            updateId={plugin.manifest.id}
+            plugins={plugins}
+            catalog={catalog}
+            busy={busy}
+            {...(authorizeGit ? { authorizeGit } : {})}
+          />
+        )}
+      {sections.length > 0 && (
+        // biome-ignore lint/a11y/useSemanticElements: This names links to Settings sections, not a fieldset of form controls.
+        <p
+          role="group"
+          aria-label={`${plugin.manifest.name} settings`}
+          className="m-0 text-body-sm text-secondary"
+        >
+          Settings:{" "}
+          {sections.map((section, index) => (
+            <Fragment key={section.id}>
+              {index > 0 && ", "}
+              <SettingsSectionLink section={section.id} open={openSection}>
+                {section.label}
+              </SettingsSectionLink>
+            </Fragment>
+          ))}
+        </p>
       )}
       {accessReason && (
         <p id="plugin-detail-access" className="sr-only">
@@ -676,6 +722,10 @@ export function Settings({
     installRequests?.subscribe ?? noAccessSubscription,
     installRequests?.snapshot ?? noInstallRequest,
   );
+  const linkedPlugin =
+    navigation?.target.kind === "settings"
+      ? navigation.target.pluginImport
+      : undefined;
   const settingsMounted = useRef(false);
   useEffect(() => {
     settingsMounted.current = true;
@@ -702,6 +752,10 @@ export function Settings({
       : moderationAccess;
   useEffect(() => communities.retainPresentation(), [communities]);
   const contributed = useSyncExternalStore(cards.subscribe, cards.snapshot);
+  const decisionProviders = useSyncExternalStore(
+    decisions?.subscribe ?? noAccessSubscription,
+    decisions?.providers ?? noDecisionProviders,
+  );
   const client = useSyncExternalStore(
     communities.subscribe,
     communities.snapshot,
@@ -734,13 +788,24 @@ export function Settings({
   useLayoutEffect(() => {
     if (selected !== contentFocus.current) return;
     contentFocus.current = undefined;
-    (selected === "plugins"
-      ? pluginSection.current
-      : document.getElementById(
-          navigationPane ? "settings-content" : "main-content",
-        )
-    )?.focus({ preventScroll: true });
+    const target =
+      selected === "plugins"
+        ? pluginSection.current
+        : document.getElementById(
+            navigationPane ? "settings-content" : "main-content",
+          );
+    target?.focus({ preventScroll: true });
+    // Stacked navigation shares one scrollport with the content, which keeps
+    // the previous section's offset; start the new one where the sidebar does.
+    if (target && startHidden(target))
+      target.scrollIntoView({ block: "start" });
   }, [selected, navigationPane]);
+  const openSection =
+    onSection &&
+    ((id: string) => {
+      contentFocus.current = id;
+      onSection(id);
+    });
   useEffect(() => {
     if (
       departure &&
@@ -853,21 +918,47 @@ export function Settings({
     );
   }, [catalog?.plugins, pluginFilter, pluginQuery]);
   const [selectedPluginId, setSelectedPluginId] = useState<string>();
+  const shownPluginId = useRef(selectedPluginId);
+  shownPluginId.current = selectedPluginId;
   const addressedPlugin = useRef(false);
+  // Set while Settings dismisses its own visit: the visit it lands on keeps
+  // what is shown rather than what it last showed.
+  const closingVisit = useRef(false);
+  // Open in Buzz and a finished install can call back after the visit changed.
+  const currentNavigation = useRef(navigation);
+  useLayoutEffect(() => {
+    currentNavigation.current = navigation;
+  }, [navigation]);
   const requestedPluginId =
     navigation?.target.kind === "settings"
       ? navigation.target.pluginId
       : undefined;
   useEffect(() => {
-    if (selected !== "plugins" || !navigation?.entryId) return;
-    if (requestedPluginId) {
-      setSelectedPluginId(requestedPluginId);
-      addressedPlugin.current = true;
-    } else if (addressedPlugin.current) {
-      setSelectedPluginId(undefined);
-      addressedPlugin.current = false;
+    if (
+      selected !== "plugins" ||
+      requestedSection !== "plugins" ||
+      !navigation?.entryId
+    )
+      return;
+    const leftAddressed = addressedPlugin.current;
+    const closed = closingVisit.current;
+    addressedPlugin.current = !!requestedPluginId;
+    closingVisit.current = false;
+    if (requestedPluginId) setSelectedPluginId(requestedPluginId);
+    else if (navigation.traversal && !closed) {
+      const shown = navigation.position(PLUGIN_DETAILS);
+      setSelectedPluginId(typeof shown === "string" ? shown : undefined);
+    } else {
+      // A visit records what it starts with; addressed details don't carry over.
+      const shown = leftAddressed ? undefined : shownPluginId.current;
+      setSelectedPluginId(shown);
+      navigation.savePosition(PLUGIN_DETAILS, shown ?? null);
     }
-  }, [requestedPluginId, navigation?.entryId, selected]);
+  }, [requestedPluginId, requestedSection, navigation, selected]);
+  const showPluginDetails = (id: string | undefined) => {
+    setSelectedPluginId(id);
+    currentNavigation.current?.savePosition(PLUGIN_DETAILS, id ?? null);
+  };
   const [reviewPluginId, setReviewPluginId] = useState<string>();
   const [updateChecks, setUpdateChecks] = useState<
     Record<string, { revision: string; available: boolean }>
@@ -895,7 +986,10 @@ export function Settings({
   const visibleReturn = (target: HTMLElement | null) =>
     covered(pluginSection.current) ? (detailsClose.current ?? target) : target;
   useEffect(() => {
-    if (selected !== "plugins") setSelectedPluginId(undefined);
+    if (selected !== "plugins") {
+      setSelectedPluginId(undefined);
+      addressedPlugin.current = closingVisit.current = false;
+    }
   }, [selected]);
   useEffect(() => {
     const element = layout.current;
@@ -921,14 +1015,18 @@ export function Settings({
     if (selectedPluginId && catalog && !selectedPlugin) {
       pluginSection.current?.focus();
       setSelectedPluginId(undefined);
+      navigation?.savePosition(PLUGIN_DETAILS, null);
     }
-  }, [catalog, selectedPlugin, selectedPluginId]);
+  }, [catalog, navigation, selectedPlugin, selectedPluginId]);
   const closePluginDetails = () => {
     holdPluginRow(pluginTrigger.current);
     restorePluginFocus.current = true;
     setReviewPluginId(undefined);
-    setSelectedPluginId(undefined);
-    if (requestedPluginId) onPluginDetailsClosed?.();
+    showPluginDetails(undefined);
+    if (requestedPluginId) {
+      closingVisit.current = true;
+      onPluginDetailsClosed?.();
+    }
   };
   useLayoutEffect(() => {
     const held = heldPluginRow.current;
@@ -965,6 +1063,22 @@ export function Settings({
         ? selectedRunning.error
         : null))
     : null;
+  // Only what the sidebar shows now: an inactive plugin registers no cards or
+  // providers, and community sections need a selected community. A decision
+  // provider's settings are under Decisions API.
+  const selectedSections = selectedPlugin
+    ? sections.filter((section) =>
+        section.id === "decisions"
+          ? decisionProviders.some(
+              (provider) => provider.pluginId === selectedPlugin.manifest.id,
+            )
+          : contributed.some(
+              (card) =>
+                card.key === section.id &&
+                card.pluginId === selectedPlugin.manifest.id,
+            ),
+      )
+    : [];
   const renderPluginGroup = (
     group: ReturnType<typeof groupPlugins>[number],
   ) => {
@@ -1079,7 +1193,7 @@ export function Settings({
                         pluginTrigger.current = event.currentTarget;
                         holdPluginRow(event.currentTarget);
                         if (!active) setActivationAttempt(undefined);
-                        setSelectedPluginId(active ? undefined : id);
+                        showPluginDetails(active ? undefined : id);
                       }}
                     >
                       {isEssentialPlugin(plugin) && (
@@ -1140,7 +1254,7 @@ export function Settings({
                           onClick={(event) => {
                             holdPluginRow(event.currentTarget);
                             setActivationAttempt(undefined);
-                            setSelectedPluginId(id);
+                            showPluginDetails(id);
                             setReviewPluginId(id);
                           }}
                         >
@@ -1273,6 +1387,7 @@ export function Settings({
           <AppearanceSettings
             appearance={appearance}
             active={selected === "appearance"}
+            communities={communities}
           />
         </div>
         <div hidden={selected !== "shortcuts"}>
@@ -1297,13 +1412,7 @@ export function Settings({
             <DecisionsSettings
               decisions={decisions}
               active={() => selected === "decisions"}
-              onSection={
-                onSection &&
-                ((id) => {
-                  contentFocus.current = id;
-                  onSection(id);
-                })
-              }
+              onSection={openSection}
             />
           </div>
         )}
@@ -1372,9 +1481,13 @@ export function Settings({
             viewer={client.viewer}
             identity={identity}
             federatedIdentity={federatedIdentity}
+            memberships={client.memberships}
             builderlabIdentity={builderlabIdentity}
             lastActive={lastActive}
           />
+        )}
+        {selected === "security" && (
+          <SecuritySettings viewer={identity ? client.viewer : undefined} />
         )}
         {developerMode && (
           <div hidden={selected !== "developer"}>
@@ -1454,23 +1567,60 @@ export function Settings({
                 </motion.div>
               </motion.div>
             )}
+            {catalog && installRequest && installRequests && (
+              <UrlInstallRequestReview
+                key={installRequest.id}
+                request={installRequest}
+                requests={installRequests}
+                plugins={plugins}
+                catalog={catalog}
+                busy={busy}
+                returnFocus={() => pluginSection.current}
+              />
+            )}
+            {catalog && linkedPlugin && "url" in linkedPlugin && (
+              <UrlPluginInstallReview
+                key={`url:${navigation?.entryId}`}
+                plugins={plugins}
+                catalog={catalog}
+                busy={busy}
+                source={linkedPlugin}
+                requester="A link"
+                holdReview={installRequests?.holdReview}
+                returnFocus={() => pluginSection.current}
+                onClose={() => onPluginImportClosed?.()}
+              />
+            )}
             {catalog ? (
               <PluginImport
                 key={
-                  navigation?.target.kind === "settings" &&
-                  navigation.target.pluginImport
-                    ? navigation.entryId
+                  linkedPlugin && !("url" in linkedPlugin)
+                    ? navigation?.entryId
                     : "add"
                 }
                 initialGit={
-                  navigation?.target.kind === "settings"
-                    ? navigation.target.pluginImport
+                  linkedPlugin && !("url" in linkedPlugin)
+                    ? linkedPlugin
                     : undefined
                 }
                 requestSignal={navigation?.signal}
-                onClosed={() => onPluginImportClosed?.()}
+                onClosed={() => {
+                  // "Open in Buzz" shows its plugin before this dismissal
+                  // lands. An install finishing after Back closes nothing.
+                  if (
+                    navigation?.target.kind === "settings" &&
+                    navigation.target.pluginImport &&
+                    navigation.entryId === currentNavigation.current?.entryId
+                  )
+                    closingVisit.current = true;
+                  onPluginImportClosed?.();
+                }}
                 actionTarget={pluginImportActions}
-                request={installRequest}
+                request={
+                  installRequest && !isUrlInstallSource(installRequest.source)
+                    ? { ...installRequest, source: installRequest.source }
+                    : undefined
+                }
                 onRequestSettled={installRequests?.settle}
                 onRequestClaimed={installRequests?.claim}
                 onRequestConfirmed={installRequests?.confirm}
@@ -1488,7 +1638,7 @@ export function Settings({
                       ) ?? []),
                     ].find((button) => button.dataset.pluginId === id) ?? null;
                   setActivationAttempt(undefined);
-                  setSelectedPluginId(id);
+                  showPluginDetails(id);
                 }}
                 returnFocus={() => detailsClose.current ?? visibleReturn(null)}
               />
@@ -1629,6 +1779,8 @@ export function Settings({
           onToggle={() => togglePlugin(selectedPlugin)}
           close={detailsClose}
           onClose={closePluginDetails}
+          sections={selectedSections}
+          openSection={openSection}
         />
       )}
     </>
@@ -1708,5 +1860,28 @@ export function Settings({
         </div>
       </Panel>
     </div>
+  );
+}
+
+function UrlInstallRequestReview({
+  request,
+  requests,
+  ...props
+}: Omit<
+  Parameters<typeof UrlPluginInstallReview>[0],
+  "source" | "requester" | "request" | "holdReview"
+> & {
+  request: PluginInstallRequest;
+  requests: PluginInstallRequests;
+}) {
+  if (!isUrlInstallSource(request.source)) return null;
+  return (
+    <UrlPluginInstallReview
+      {...props}
+      source={request.source}
+      requester={request.origin.name}
+      holdReview={requests.holdReview}
+      request={{ ...requests, id: request.id }}
+    />
   );
 }

@@ -7,11 +7,16 @@ import {
 } from "react";
 import type { RelaySession } from "../relay/session";
 import { motion, useReducedMotion } from "motion/react";
-import { Button, type ButtonProps } from "../../shared/design-system/ui/Button";
+import type { ButtonProps } from "../../shared/design-system/ui/Button";
+import { accentButtonStyle } from "../../shared/theme/accent";
 import { AgentsContext, useSessionState } from "../agents/react";
 import { Tooltip } from "../../shared/design-system/ui/Tooltip";
 import { IconButton } from "../../shared/design-system/ui/IconButton";
-import { TrashIcon } from "../../shared/design-system/icons";
+import {
+  ArrowUpIcon,
+  XIcon,
+  PencilSimpleIcon,
+} from "../../shared/design-system/icons";
 import { followUpQueue } from "./follow-up-queue";
 import styles from "./QueuedFollowUps.module.css";
 
@@ -20,11 +25,13 @@ export function QueuedFollowUps({
   channelId,
   disabled,
   focusComposer,
+  onEdit,
 }: {
   session: RelaySession;
   channelId: string;
   disabled: boolean;
   focusComposer(): void;
+  onEdit?(id: string): void;
 }) {
   const queue = followUpQueue(session);
   const entries = useSyncExternalStore(queue.subscribe, queue.snapshot).filter(
@@ -36,7 +43,7 @@ export function QueuedFollowUps({
   );
   const section = useRef<HTMLElement>(null);
   const focused = useRef<
-    { id: string; action: "send" | "remove" | "preview" } | undefined
+    { id: string; action: "send" | "remove" | "preview" | "edit" } | undefined
   >(undefined);
   useLayoutEffect(() => {
     if (
@@ -99,17 +106,30 @@ export function QueuedFollowUps({
                 onFocus={() => {
                   focused.current = { id: entry.id, action: "remove" };
                 }}
-                disabled={entry.sending}
-                data-remove-action
-                style={{ width: "var(--space-6)", height: "var(--space-6)" }}
-                variant="destructive-quiet"
-                shape="inset"
-                size="sm"
+                disabled={disabled || entry.sending}
+                variant="subtle"
+                shape="round"
+                size="xs"
                 aria-label="Remove queued message"
-                icon={<TrashIcon size={16} strokeWidth={1.5} />}
+                icon={<XIcon size={12} strokeWidth={2} />}
                 onClick={() => {
                   queue.remove(entry.id);
                 }}
+              />
+              <IconButton
+                data-queue-action="edit"
+                onFocus={() => {
+                  focused.current = { id: entry.id, action: "edit" };
+                }}
+                aria-label="Edit queued message"
+                variant="subtle"
+                size="xs"
+                shape="round"
+                disabled={
+                  disabled || entry.sending || !entry.message || !onEdit
+                }
+                icon={<PencilSimpleIcon size={12} strokeWidth={2.5} />}
+                onClick={() => onEdit?.(entry.id)}
               />
               <QueuedSend
                 channelId={channelId}
@@ -170,7 +190,7 @@ function QueuePreview({ text, onFocus }: { text: string; onFocus(): void }) {
       }}
       type="button"
       data-queue-action="preview"
-      className={`text-caption ${styles.preview}`}
+      className={`text-message ${styles.preview}`}
       aria-label={text}
       aria-expanded={canExpand ? expanded : undefined}
       aria-disabled={!canExpand || undefined}
@@ -234,7 +254,7 @@ function QueuedSend({
       {...(!compacting ? { open: false } : {})}
       disableHoverablePopup
     >
-      <Button
+      <IconButton
         {...props}
         data-queue-action="send"
         onClick={() =>
@@ -253,16 +273,15 @@ function QueuedSend({
               );
           })
         }
-        variant="subtle-muted"
+        variant="prominent"
         size="xs"
-        style={{
-          padding: "var(--space-1) var(--space-2)",
-        }}
+        shape="round"
+        style={accentButtonStyle}
+        aria-label="Send"
+        icon={<ArrowUpIcon size={12} strokeWidth={2.5} />}
         disabled={props.disabled || compacting}
         focusableWhenDisabled={compacting || undefined}
-      >
-        Send
-      </Button>
+      />
     </Tooltip>
   );
 }

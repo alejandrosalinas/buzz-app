@@ -1,6 +1,13 @@
 // @vitest-environment jsdom
 import "@testing-library/jest-dom/vitest";
-import { act, cleanup, render, screen, waitFor } from "@testing-library/react";
+import {
+  act,
+  cleanup,
+  render,
+  screen,
+  waitFor,
+  within,
+} from "@testing-library/react";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import type { Context } from "@deepseek-ai/cordis";
 import type { PageProps } from "../features/pages/service";
@@ -188,6 +195,31 @@ it.each([
   expect(
     await screen.findByRole("heading", { name: "This page isn’t available" }),
   ).toBeVisible();
+  expect(current.navigation.snapshot()).toMatchObject({
+    status: "failed",
+    reason: "unavailable",
+  });
+});
+
+it("says a link's plugin is turned off and offers Manage plugins", async () => {
+  localStorage.setItem(
+    "buzzodz.plugins.v1",
+    JSON.stringify({ version: 3, enabled: { "test.plain": false } }),
+  );
+  const current = start(link({ pluginId: "test.plain" }));
+  const card = (
+    await screen.findByRole("heading", { name: "Plain is turned off" })
+  ).closest<HTMLElement>('[role="alert"]');
+  if (!card) throw new Error("Expected the failure alert");
+  expect(
+    within(card).getByText("Turn it on in Manage plugins to open this page."),
+  ).toBeVisible();
+  // This fixture has no Messages page to go to.
+  expect(
+    within(card)
+      .getAllByRole("button")
+      .map((button) => button.textContent),
+  ).toEqual(["Manage plugins"]);
   expect(current.navigation.snapshot()).toMatchObject({
     status: "failed",
     reason: "unavailable",

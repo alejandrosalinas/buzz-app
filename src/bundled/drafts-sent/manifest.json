@@ -1,0 +1,10 @@
+{
+  "id": "buzz.drafts-and-sent",
+  "name": "Drafts & sent",
+  "apiVersion": 1,
+  "description": "Pick up messages you started, and see which of your sent messages got replies.",
+  "discovery": {
+    "category": "communication",
+    "tags": ["Essentials"]
+  }
+}

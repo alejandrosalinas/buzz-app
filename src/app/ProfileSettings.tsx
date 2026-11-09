@@ -225,7 +225,8 @@ export function ProfileSettings({
   }, [session, viewer, profileGeneration]);
   const verifiedName = verified
     ? {
-        name: verified.displayName,
+        name: verified.fullName ?? verified.displayName,
+        username: verified.username,
         issuerLabel: verified.issuerLabel,
         status: verified.status,
       }

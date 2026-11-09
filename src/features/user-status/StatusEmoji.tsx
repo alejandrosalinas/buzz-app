@@ -7,29 +7,16 @@ import {
   type ReactElement,
 } from "react";
 import type { RelaySession } from "../relay/session";
+import { useReactionName } from "../messages/use-reaction-name";
 import { Tooltip } from "../../shared/design-system/ui/Tooltip";
 import styles from "./Status.module.css";
-
-let unicodeName: ((emoji: string) => string) | undefined;
 
 /** An emoji's `:name:`. A custom code names itself; Unicode names load with the
  * reaction table, once, when a named emoji mounts. Free text has no name. */
 export function useEmojiName(value: string) {
   const code = /^:[^:\s]+:$/.test(value);
-  const [, setLoaded] = useState(!!unicodeName);
-  useEffect(() => {
-    if (!value || code) return;
-    let live = true;
-    void import("../messages/reaction-name").then(({ reactionName }) => {
-      unicodeName = reactionName;
-      if (live) setLoaded(true);
-    });
-    return () => {
-      live = false;
-    };
-  }, [value, code]);
+  const name = useReactionName(!!value && !code)?.(value);
   if (code) return value;
-  const name = unicodeName?.(value);
   return name === value ? undefined : name;
 }
 

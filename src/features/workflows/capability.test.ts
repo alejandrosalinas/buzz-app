@@ -1,4 +1,4 @@
-import { afterEach, expect, it, vi } from "vitest";
+import { afterEach, assert, expect, it, vi } from "vitest";
 import { createWorkflows } from "./capability";
 import {
   createOutbox,
@@ -7,6 +7,14 @@ import {
 } from "../relay/outbox";
 import { keypair, signed, flush } from "../relay/testing";
 import type { RelayEvent } from "../relay/events";
+import { eventDto } from "../relay/events";
+import {
+  createProfileDirectory,
+  type ProfileQueries,
+} from "../relay/profile-directory";
+import { createHash } from "node:crypto";
+import { schnorr } from "@noble/curves/secp256k1.js";
+import { bytesToHex } from "nostr-tools/utils";
 const id = "11111111-1111-4111-8111-111111111111",
   channelId = "22222222-2222-4222-8222-222222222222",
   runId = "33333333-3333-4333-8333-333333333333";
@@ -18,8 +26,12 @@ afterEach(() => {
   vi.restoreAllMocks();
   vi.useRealTimers();
 });
-function setup(relayHttpUrl?: string) {
-  const key = keypair();
+function setup(
+  relayHttpUrl?: string,
+  key = keypair(),
+  profiles?: ProfileQueries,
+  initial: readonly OutgoingEvent[] = [],
+) {
   let saved: readonly OutgoingEvent[] = [],
     allowed = true;
   let settle!: (value: string) => void, reject!: (error: Error) => void;
@@ -37,7 +49,7 @@ function setup(relayHttpUrl?: string) {
     key.pubkey,
     { kinds: [30620, 46020, 5], sign, publish },
     {
-      load: () => [],
+      load: () => initial,
       save: (rows) => {
         saved = structuredClone(rows);
       },
@@ -49,6 +61,7 @@ function setup(relayHttpUrl?: string) {
   );
   const read = vi.fn(async () => [] as RelayEvent[]);
   const workflows = createWorkflows({
+    profiles,
     viewer: key.pubkey,
     reader: { read },
     outbox: outbox.outbox,
@@ -87,6 +100,201 @@ function setup(relayHttpUrl?: string) {
     },
   };
 }
+function ownedWorkflow() {
+  const human = keypair(),
+    agent = keypair();
+  const attestation = [
+    "auth",
+    human.pubkey,
+    "",
+    bytesToHex(
+      schnorr.sign(
+        createHash("sha256")
+          .update(`nostr:agent-auth:${agent.pubkey}:`)
+          .digest(),
+        human.secret,
+      ),
+    ),
+  ];
+  const profile = (tags = [attestation], created_at = 1) =>
+    eventDto(
+      signed(agent, {
+        kind: 0,
+        created_at,
+        content: JSON.stringify({ owner: human.pubkey, is_agent: true }),
+        tags,
+      }),
+    );
+  const directory = createProfileDirectory({ read: async () => [profile()] });
+  disposers.push(directory.dispose);
+  const h = setup(undefined, human, directory.queries);
+  const workflow = { ...h.definition, owner: agent.pubkey };
+  return { h, human, agent, directory, profile, workflow };
+}
+
+it("uses hydrated verified ownership, signs as the human, and retains deletion recovery after ownership replacement", async () => {
+  const { h, human, agent, directory, profile, workflow } = ownedWorkflow();
+  expect(h.capability.permissions.canDelete(workflow)).toBe(false);
+  const listener = vi.fn();
+  const stop = h.capability.permissions.subscribe(listener);
+  h.read.mockResolvedValue([
+    eventDto(
+      signed(agent, {
+        kind: 30620,
+        created_at: 1,
+        content: yaml,
+        tags: [
+          ["h", channelId],
+          ["d", id],
+        ],
+      }),
+    ),
+  ]);
+  const view = h.capability.definitions(channelId);
+  await view.refresh();
+  await directory.queries.ensure([agent.pubkey]);
+  await vi.waitFor(() =>
+    expect(h.capability.permissions.canDelete(workflow)).toBe(true),
+  );
+  expect(listener).toHaveBeenCalled();
+  expect(() =>
+    h.capability.save({ channelId, yaml, existing: workflow }),
+  ).toThrow(/owner/i);
+  expect(() => h.capability.trigger(workflow)).toThrow(/owner/i);
+  const operation = h.capability.delete(workflow);
+  await flush();
+  const event = h.publish.mock.calls[0]?.[0];
+  assert.ok(event);
+  expect(event.pubkey).toBe(human.pubkey);
+  expect(event.tags).toContainEqual(["a", `30620:${agent.pubkey}:${id}`]);
+  expect(() => h.validate(event)).not.toThrow();
+  expect(h.capability.operations.snapshot()[0]).toMatchObject({
+    eventId: operation,
+    workflow: { id, channelId, owner: agent.pubkey },
+    action: "delete",
+    outcome: "pending",
+  });
+  directory.accept([profile([], 2)]);
+  expect(h.capability.permissions.canDelete(workflow)).toBe(false);
+  expect(() => h.validate(event)).toThrow(/verified agent owner/);
+  expect(() => h.capability.delete(workflow)).toThrow(/owner/i);
+  // Revocation must not hide a command that may already have reached the relay.
+  expect(h.capability.operations.snapshot()[0]?.eventId).toBe(operation);
+  h.settle("");
+  await flush();
+  expect(h.capability.operations.snapshot()[0]?.outcome).toBe("unknown");
+  h.read.mockResolvedValue([]);
+  await view.refresh();
+  expect(h.capability.operations.snapshot()[0]?.outcome).toBe("succeeded");
+  expect(h.publish).toHaveBeenCalledOnce();
+  stop();
+  view.dispose();
+});
+
+it.each([
+  "metadata only",
+  "forged attestation",
+  "another human",
+  "unverified profile",
+])("denies workflow deletion with %s ownership", async (scenario) => {
+  const { h, agent, directory, profile, workflow } = ownedWorkflow();
+  let event: RelayEvent = profile();
+  if (scenario === "metadata only") event = profile([]);
+  if (scenario === "forged attestation")
+    event = profile([["auth", h.definition.owner, "", "0".repeat(128)]]);
+  if (scenario === "another human") {
+    const other = keypair();
+    event = profile([
+      [
+        "auth",
+        other.pubkey,
+        "",
+        bytesToHex(
+          schnorr.sign(
+            createHash("sha256")
+              .update(`nostr:agent-auth:${agent.pubkey}:`)
+              .digest(),
+            other.secret,
+          ),
+        ),
+      ],
+    ]);
+  }
+  if (scenario === "unverified profile") event = { ...event };
+  directory.accept([event]);
+  await flush();
+  expect(h.capability.permissions.canDelete(workflow)).toBe(false);
+  expect(() => h.capability.delete(workflow)).toThrow(/owner/i);
+  expect(() =>
+    h.validate({
+      ...event,
+      pubkey: h.definition.owner,
+      kind: 5,
+      content: "",
+      tags: [
+        ["h", channelId],
+        ["a", `30620:${agent.pubkey}:${id}`],
+      ],
+    }),
+  ).toThrow();
+  expect(h.sign).not.toHaveBeenCalled();
+});
+
+it("keeps own-agent rejection visible and permits a deliberate retry without enabling unrelated deletes", async () => {
+  const { h, directory, workflow } = ownedWorkflow();
+  await directory.queries.ensure([workflow.owner]);
+  await vi.waitFor(() =>
+    expect(h.capability.permissions.canDelete(workflow)).toBe(true),
+  );
+  h.capability.delete(workflow);
+  await flush();
+  h.reject(new PublishRejected("ownership revoked"));
+  await flush();
+  expect(h.capability.operations.snapshot()[0]).toMatchObject({
+    action: "delete",
+    outcome: "rejected",
+    workflow: { id, channelId, owner: workflow.owner },
+  });
+  h.capability.delete(workflow);
+  await flush();
+  expect(h.publish).toHaveBeenCalledTimes(2);
+  expect(() =>
+    h.capability.delete({ ...workflow, owner: keypair().pubkey }),
+  ).toThrow(/owner/i);
+  h.revoke();
+  expect(h.capability.permissions.canDelete(workflow)).toBe(false);
+});
+
+it("restores an own-agent delete without current ownership evidence and never automatically republishes it", async () => {
+  const { h, human, directory, workflow } = ownedWorkflow();
+  await directory.queries.ensure([workflow.owner]);
+  await vi.waitFor(() =>
+    expect(h.capability.permissions.canDelete(workflow)).toBe(true),
+  );
+  const operation = h.capability.delete(workflow);
+  await flush();
+  h.settle("");
+  await flush();
+  const journal = h.saved();
+  h.outbox.dispose();
+  h.dispose();
+  directory.clear();
+  const restored = setup(undefined, human, directory.queries, journal);
+  await flush();
+  expect(restored.capability.permissions.canDelete(workflow)).toBe(false);
+  expect(restored.capability.operations.snapshot()[0]).toMatchObject({
+    eventId: operation,
+    action: "delete",
+    workflow: { id, channelId, owner: workflow.owner },
+    outcome: "unknown",
+  });
+  const view = restored.capability.definitions(channelId);
+  await view.refresh();
+  expect(restored.capability.operations.snapshot()[0]?.outcome).toBe("unknown");
+  expect(restored.publish).not.toHaveBeenCalled();
+  view.dispose();
+});
+
 it("save preserves exact YAML/coordinate/revision, receipt success is distinct from signed head readback", async () => {
   const h = setup();
   const view = h.capability.definitions(channelId);

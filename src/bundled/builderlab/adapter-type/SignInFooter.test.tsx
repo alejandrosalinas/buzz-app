@@ -11,30 +11,25 @@ import {
 import { afterEach, expect, it, vi } from "vitest";
 import userEvent from "@testing-library/user-event";
 import { StrictMode } from "react";
-import { createOAuthSession } from "../oauth/session";
-import {
-  browserCredential,
-  type Credential,
-  type OAuthCallback,
-  type BrowserBridge,
-} from "../oauth/browser";
+import { SignInAction } from "./SignInAction";
+import type { BuilderlabSession, Credential } from "../session";
 import type { Agent } from "../../../features/agents/service";
 import type { Host, HostResponse } from "../../../features/host/service";
 import { createAgentClient } from "../agents/client";
 import { createSettingsTab } from "./Instructions";
-import { deferred } from "../test-helpers";
-import {
-  AccountRecoverySheet,
-  createProfileActions,
-  createSignInFooter,
-} from "./SignInFooter";
+import { deferred, createTestSession } from "../test-helpers";
+import { AccountRecoverySheet, createProfileActions } from "./SignInFooter";
 
 vi.mock("../oauth/browser", async (original) => ({
   ...(await original<typeof import("../oauth/browser")>()),
   browserLoginAvailable: () => true,
 }));
+const signInControl = (session: BuilderlabSession) => () => (
+  <SignInAction session={session} />
+);
+
 const credential: Credential = {
-  value: "private-credential",
+  revision: "private-credential",
   account: {
     subject: "account",
     email: "a@example.com",
@@ -50,9 +45,9 @@ afterEach(() => {
 
 it("keeps account verification non-cancellable after the browser guidance deadline", async () => {
   vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
-  const session = createOAuthSession(async () => credential);
+  const session = createTestSession(async () => credential);
   const cancel = vi.fn();
-  const Footer = createSignInFooter({
+  const Footer = signInControl({
     ...session,
     snapshot: () => checking,
     cancel,
@@ -73,7 +68,7 @@ it("keeps account verification non-cancellable after the browser guidance deadli
 
 it("sends FI account recovery to Identity without ending the shared session", () => {
   vi.stubEnv("VITE_BUZZ_FEDERATED_IDENTITY", "1");
-  const session = createOAuthSession(async () => credential);
+  const session = createTestSession(async () => credential);
   const signOut = vi.spyOn(session, "signOut");
   const openIdentity = vi.fn();
   render(
@@ -93,16 +88,151 @@ it("sends FI account recovery to Identity without ending the shared session", ()
   session.dispose();
 });
 
-it("shows account status with one footer sign-in action and restores profile controls after authentication", async () => {
+it("automatically starts once, keeps slow login inline, and does not loop after cancellation", async () => {
+  vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+  const held = deferred<Credential>();
+  const acquire = vi.fn((_signal: AbortSignal) => held.promise);
+  const session = createTestSession(acquire);
+  render(<SignInAction session={session} automatic />, { wrapper: StrictMode });
+  expect(acquire).toHaveBeenCalledOnce();
+  expect(screen.queryByRole("region")).toBeNull();
+  await act(() => vi.advanceTimersByTimeAsync(2999));
+  expect(screen.queryByRole("region")).toBeNull();
+  await act(() => vi.advanceTimersByTimeAsync(1));
+  expect(screen.queryByRole("status")).toBeNull();
+  expect(screen.queryByRole("region")).toBeNull();
+  fireEvent.click(screen.getByRole("button", { name: "Cancel sign-in" }));
+  expect(acquire.mock.calls[0]?.[0].aborted).toBe(true);
+  expect(session.snapshot().status).toBe("signed-out");
+  await act(() => vi.advanceTimersByTimeAsync(10_000));
+  expect(acquire).toHaveBeenCalledOnce();
+  expect(
+    screen.getByRole("button", { name: "Sign in to Builderlab" }),
+  ).toBeEnabled();
+  await act(async () => held.resolve(credential));
+  expect(session.snapshot().status).toBe("signed-out");
+  session.dispose();
+});
+
+it("finishes a fast automatic sign-in without showing its sheet", async () => {
+  vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+  const held = deferred<Credential>();
+  const session = createTestSession(() => held.promise);
+  const signIn = vi.spyOn(session, "signIn");
+  render(<SignInAction session={session} automatic />);
+  await act(async () => {
+    held.resolve(credential);
+    await signIn.mock.results[0]?.value;
+  });
+  expect(session.snapshot().status).toBe("signed-in");
+  await act(() => vi.advanceTimersByTimeAsync(3000));
+  expect(screen.queryByRole("region")).toBeNull();
+  session.dispose();
+});
+
+it("shows automatic login failures inline and retries only when asked", async () => {
   const held = deferred<Credential>();
   const acquire = vi.fn(() => held.promise);
-  const session = createOAuthSession(acquire);
+  const session = createTestSession(acquire);
+  render(<SignInAction session={session} automatic />);
+  await act(async () => held.reject(new Error("Browser could not open.")));
+  expect(screen.getByRole("alert")).toHaveTextContent(
+    "Browser could not open.",
+  );
+  expect(acquire).toHaveBeenCalledOnce();
+  expect(screen.queryByRole("region")).toBeNull();
+  acquire.mockResolvedValueOnce(credential);
+  fireEvent.click(
+    screen.getByRole("button", { name: "Sign in to Builderlab" }),
+  );
+  await waitFor(() => expect(session.snapshot().status).toBe("signed-in"));
+  expect(acquire).toHaveBeenCalledTimes(2);
+  session.dispose();
+});
+
+it("returns a timed-out automatic login to inline retry without a sheet", async () => {
+  const held = deferred<Credential>();
+  const acquire = vi.fn(() => held.promise);
+  const session = createTestSession(acquire);
+  render(<SignInAction session={session} automatic />);
+  await act(async () =>
+    held.reject(new Error("Builderlab authentication timed out")),
+  );
+  expect(screen.getByRole("alert")).toHaveTextContent("timed out");
+  expect(
+    screen.getByRole("button", { name: "Sign in to Builderlab" }),
+  ).toBeEnabled();
+  expect(screen.queryByRole("region")).toBeNull();
+  expect(acquire).toHaveBeenCalledOnce();
+  acquire.mockResolvedValueOnce(credential);
+  fireEvent.click(
+    screen.getByRole("button", { name: "Sign in to Builderlab" }),
+  );
+  await waitFor(() => expect(session.snapshot().status).toBe("signed-in"));
+  expect(acquire).toHaveBeenCalledTimes(2);
+  session.dispose();
+});
+
+it("retains an existing sign-in failure on opening instead of starting another attempt", async () => {
+  const acquire = vi.fn(async () => {
+    throw new Error("Sign-in failed.");
+  });
+  const session = createTestSession(acquire);
+  await session.signIn();
+  render(<SignInAction session={session} automatic />, { wrapper: StrictMode });
+  expect(screen.getByRole("alert")).toHaveTextContent("Sign-in failed.");
+  expect(acquire).toHaveBeenCalledOnce();
+  session.dispose();
+});
+
+it("waits for restoration and leaves the subsequent login running when Identity closes", async () => {
+  const held = deferred<Credential>();
+  const acquire = vi.fn(() => held.promise);
+  const session = createTestSession(acquire);
+  const signIn = vi.spyOn(session, "signIn");
+  const checking = { status: "pending" as const, checking: true };
+  let restoring = true;
+  const listeners = new Set<() => void>();
+  const projected: BuilderlabSession = {
+    ...session,
+    snapshot: () => (restoring ? checking : session.snapshot()),
+    subscribe: (listener) => {
+      listeners.add(listener);
+      const stop = session.subscribe(listener);
+      return () => {
+        listeners.delete(listener);
+        stop();
+      };
+    },
+  };
+  const view = render(<SignInAction session={projected} automatic />, {
+    wrapper: StrictMode,
+  });
+  expect(acquire).not.toHaveBeenCalled();
+  expect(screen.queryByRole("region")).toBeNull();
+  act(() => {
+    restoring = false;
+    for (const changed of listeners) changed();
+  });
+  expect(acquire).toHaveBeenCalledOnce();
+  view.unmount();
+  expect(session.snapshot().status).toBe("pending");
+  held.resolve(credential);
+  await signIn.mock.results[0]?.value;
+  expect(session.snapshot().status).toBe("signed-in");
+  session.dispose();
+});
+
+it("keeps Message independent of the compact sign-in action and gates profile edits", async () => {
+  const held = deferred<Credential>();
+  const acquire = vi.fn(() => held.promise);
+  const session = createTestSession(acquire);
   const ProfileActions = createProfileActions(session);
-  const Footer = createSignInFooter(session);
+  const Footer = signInControl(session);
   render(
     <>
+      <button type="button">Message</button>
       <ProfileActions>
-        <button type="button">Message</button>
         <button type="button">Edit profile</button>
       </ProfileActions>
       <Footer />
@@ -110,18 +240,18 @@ it("shows account status with one footer sign-in action and restores profile con
     { wrapper: StrictMode },
   );
   expect(screen.queryByRole("button", { name: "Edit profile" })).toBeNull();
-  expect(screen.queryByRole("button", { name: "Message" })).toBeNull();
-  expect(screen.getByText("Signed out of Builderlab")).toBeVisible();
+  expect(screen.getByRole("button", { name: "Message" })).toBeVisible();
+  expect(screen.queryByText(/Offline|Signed out of Builderlab/)).toBeNull();
   expect(acquire).not.toHaveBeenCalled();
   const signIn = screen.getByRole("button", {
     name: "Sign in to Builderlab",
   });
   fireEvent.click(signIn);
   expect(acquire).toHaveBeenCalledTimes(1);
-  expect(screen.getByText("Signed out of Builderlab")).toBeVisible();
+  expect(screen.queryByText(/Offline|Signed out of Builderlab/)).toBeNull();
   await waitFor(() => expect(signIn).toBeVisible());
   expect(signIn).toHaveAttribute("aria-busy", "true");
-  expect(screen.queryByRole("button", { name: "Cancel sign-in" })).toBeNull();
+  expect(screen.getByRole("button", { name: "Cancel sign-in" })).toBeEnabled();
   await act(async () => held.resolve(credential));
   expect(
     await screen.findByRole("button", { name: "Edit profile" }),
@@ -132,41 +262,52 @@ it("shows account status with one footer sign-in action and restores profile con
   ).toBeNull();
   act(() => session.signOut());
   expect(screen.queryByRole("button", { name: "Edit profile" })).toBeNull();
-  expect(screen.queryByRole("button", { name: "Message" })).toBeNull();
+  expect(screen.getByRole("button", { name: "Message" })).toBeVisible();
   expect(
     screen.getAllByRole("button", { name: "Sign in to Builderlab" }),
   ).toHaveLength(1);
   session.dispose();
 });
 
-it("keeps keyboard focus while sign-in is pending and blocks repeat activation", async () => {
+it("keeps keyboard focus as the spinner cancels login and permits an explicit retry", async () => {
   const held = deferred<Credential>();
-  const acquire = vi.fn(() => held.promise);
-  const session = createOAuthSession(acquire);
-  const Footer = createSignInFooter(session);
-  render(<Footer />);
+  const acquire = vi.fn((_signal: AbortSignal) => held.promise);
+  const session = createTestSession(acquire);
+  render(<SignInAction session={session} />);
   const user = userEvent.setup();
   const signIn = screen.getByRole("button", { name: "Sign in to Builderlab" });
   try {
     await user.tab();
-    expect(signIn).toHaveFocus();
     await user.keyboard("{Enter}");
-    expect(signIn).toHaveAttribute("aria-busy", "true");
-    expect(signIn).toHaveAttribute("aria-disabled", "true");
-    expect(signIn).not.toHaveAttribute("disabled");
+    const cancel = screen.getByRole("button", { name: "Cancel sign-in" });
+    expect(cancel).toBe(signIn);
+    expect(cancel).toHaveFocus();
+    expect(cancel).toHaveAttribute("aria-busy", "true");
+    expect(cancel).toHaveAttribute("data-button-shape", "icon");
+    expect(cancel).toHaveTextContent("");
+    expect(
+      cancel.querySelector('[class~="motion-safe:animate-spin"]'),
+    ).toBeInTheDocument();
+    expect(cancel).toBeEnabled();
+    await user.keyboard(" ");
+    expect(acquire.mock.calls[0]?.[0].aborted).toBe(true);
+    expect(session.snapshot().status).toBe("signed-out");
     expect(signIn).toHaveFocus();
-    await user.keyboard("{Enter} ");
-    await user.click(signIn);
-    expect(signIn).toHaveFocus();
-    expect(acquire).toHaveBeenCalledTimes(1);
+    expect(signIn).toHaveAccessibleName("Sign in to Builderlab");
+    expect(acquire).toHaveBeenCalledOnce();
+    await user.keyboard("{Enter}");
+    expect(acquire).toHaveBeenCalledTimes(2);
+    await user.click(screen.getByRole("button", { name: "Cancel sign-in" }));
+    expect(acquire.mock.calls[1]?.[0].aborted).toBe(true);
   } finally {
     await act(async () => held.resolve(credential));
+    expect(session.snapshot().status).toBe("signed-out");
     session.dispose();
   }
 });
 
-it("keeps early sign-in passive, then offers guidance and cancellation without accepting late results", async () => {
-  // Control browser-guidance deadlines without replacing Motion's frame clock.
+it("offers spinner cancellation without accepting late results", async () => {
+  // Advance time to prove the cancelled attempt stays retired.
   vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
   const old = deferred<Credential>();
   const next = deferred<Credential>();
@@ -174,36 +315,29 @@ it("keeps early sign-in passive, then offers guidance and cancellation without a
     .fn<(signal: AbortSignal) => Promise<Credential>>()
     .mockImplementationOnce(() => old.promise)
     .mockImplementationOnce(() => next.promise);
-  const session = createOAuthSession(acquire);
-  const Footer = createSignInFooter(session);
+  const session = createTestSession(acquire);
+  const Footer = signInControl(session);
   render(<Footer />, { wrapper: StrictMode });
   expect(acquire).not.toHaveBeenCalled();
   expect(screen.queryByRole("dialog")).toBeNull();
   const signIn = screen.getByRole("button", { name: "Sign in to Builderlab" });
-  const subtitle = screen.getByRole("status");
-  fireEvent.click(signIn);
   fireEvent.click(signIn);
   expect(acquire).toHaveBeenCalledTimes(1);
   expect(signIn).toHaveAttribute("aria-busy", "true");
-  expect(signIn).toHaveAttribute("aria-disabled", "true");
+  expect(signIn).toBeEnabled();
   expect(signIn).not.toHaveAttribute("disabled");
   expect(session.snapshot().status).toBe("pending");
   expect(acquire.mock.calls[0]?.[0].aborted).toBe(false);
-  expect(subtitle).toHaveTextContent(
-    "Use your Builderlab account to access this agent.",
-  );
-  expect(screen.queryByRole("button", { name: "Cancel sign-in" })).toBeNull();
+  expect(screen.queryByRole("status")).toBeNull();
+  expect(screen.getByRole("button", { name: "Cancel sign-in" })).toBeEnabled();
   await act(() => vi.advanceTimersByTimeAsync(2999));
   expect(screen.queryByText(/Finish signing in/)).toBeNull();
   expect(signIn).toHaveAttribute("aria-busy", "true");
-  expect(signIn).toHaveAttribute("aria-disabled", "true");
-  expect(screen.queryByRole("button", { name: "Cancel sign-in" })).toBeNull();
+  expect(signIn).toBeEnabled();
+  expect(screen.getByRole("button", { name: "Cancel sign-in" })).toBeEnabled();
   await act(() => vi.advanceTimersByTimeAsync(1));
-  expect(subtitle).toHaveTextContent(
-    "Finish signing in to Builderlab in your browser, then return to Buzz.",
-  );
-  expect(screen.getAllByRole("status")).toEqual([subtitle]);
-  expect(screen.queryByText(/Use your Builderlab account/)).toBeNull();
+  expect(screen.queryByRole("status")).toBeNull();
+  expect(screen.queryByText(/Finish signing in/)).toBeNull();
   expect(screen.getByRole("button", { name: "Cancel sign-in" })).toBeEnabled();
   fireEvent.click(screen.getByRole("button", { name: "Cancel sign-in" }));
   expect(acquire.mock.calls[0]?.[0].aborted).toBe(true);
@@ -214,10 +348,8 @@ it("keeps early sign-in passive, then offers guidance and cancellation without a
   );
   expect(acquire).toHaveBeenCalledTimes(2);
   expect(signIn).toHaveAttribute("aria-busy", "true");
-  expect(subtitle).toHaveTextContent(
-    "Use your Builderlab account to access this agent.",
-  );
-  expect(screen.queryByRole("button", { name: "Cancel sign-in" })).toBeNull();
+  expect(screen.queryByRole("status")).toBeNull();
+  expect(screen.getByRole("button", { name: "Cancel sign-in" })).toBeEnabled();
   vi.useRealTimers();
   await act(async () => {
     old.resolve(credential);
@@ -235,8 +367,8 @@ it("keeps early sign-in passive, then offers guidance and cancellation without a
 it("shows failure inline and leaves retry user-started", async () => {
   const held = deferred<Credential>();
   const acquire = vi.fn(() => held.promise);
-  const session = createOAuthSession(acquire);
-  const Footer = createSignInFooter(session);
+  const session = createTestSession(acquire);
+  const Footer = signInControl(session);
   render(<Footer />);
   fireEvent.click(
     screen.getByRole("button", { name: "Sign in to Builderlab" }),
@@ -250,9 +382,7 @@ it("shows failure inline and leaves retry user-started", async () => {
   expect(
     screen.getByRole("button", { name: "Sign in to Builderlab" }),
   ).toBeEnabled();
-  expect(screen.getByRole("status")).toHaveTextContent(
-    "Use your Builderlab account to access this agent.",
-  );
+  expect(screen.queryByRole("status")).toBeNull();
   expect(acquire).toHaveBeenCalledTimes(1);
   session.dispose();
 });
@@ -260,14 +390,14 @@ it("shows failure inline and leaves retry user-started", async () => {
 it("observes an existing attempt and leaves it running when the pane closes", async () => {
   const held = deferred<Credential>();
   const acquire = vi.fn(() => held.promise);
-  const session = createOAuthSession(acquire);
+  const session = createTestSession(acquire);
   const pending = session.signIn();
-  const Footer = createSignInFooter(session);
+  const Footer = signInControl(session);
   const mounted = render(<Footer />, { wrapper: StrictMode });
   expect(
-    screen.getByRole("button", { name: "Sign in to Builderlab" }),
+    screen.getByRole("button", { name: "Cancel sign-in" }),
   ).toHaveAttribute("aria-busy", "true");
-  expect(screen.queryByRole("button", { name: "Cancel sign-in" })).toBeNull();
+  expect(screen.getByRole("button", { name: "Cancel sign-in" })).toBeEnabled();
   mounted.unmount();
   expect(session.snapshot().status).toBe("pending");
   expect(acquire).toHaveBeenCalledTimes(1);
@@ -278,9 +408,9 @@ it("observes an existing attempt and leaves it running when the pane closes", as
 });
 
 it("stays absent for an existing account and returns on explicit sign-out", async () => {
-  const session = createOAuthSession(async () => credential);
+  const session = createTestSession(async () => credential);
   await session.signIn();
-  const Footer = createSignInFooter(session);
+  const Footer = signInControl(session);
   render(<Footer />);
   expect(screen.queryByRole("button")).toBeNull();
   act(() => session.signOut());
@@ -292,25 +422,10 @@ it("stays absent for an existing account and returns on explicit sign-out", asyn
   session.dispose();
 });
 
-it("loads the pane after a late browser callback and verified exchange without waiting for tab closure or focus return", async () => {
+it("loads the pane after a late sign-in without waiting for focus return", async () => {
   vi.stubEnv("VITE_BUZZ_BUILDERLAB_URL", "https://builderlab.example");
-  const callback = deferred<OAuthCallback>();
-  const callbackStarted = deferred<void>();
-  const accountStarted = deferred<void>();
-  const verified = deferred<HostResponse>();
-  const focus = deferred<void>();
-  const bridge: BrowserBridge = {
-    begin: vi.fn(async () => ({
-      id: "attempt",
-      callbackUrl: "http://127.0.0.1/callback",
-    })),
-    wait: vi.fn(() => {
-      callbackStarted.resolve();
-      return callback.promise;
-    }),
-    complete: vi.fn(() => focus.promise),
-    cancel: vi.fn(async () => {}),
-  };
+  const signedIn = deferred<Credential>();
+  const started = deferred<void>();
   const pubkey = "ab".repeat(32);
   const reply = (body: unknown): HostResponse => ({
     status: 200,
@@ -318,12 +433,6 @@ it("loads the pane after a late browser callback and verified exchange without w
     body: JSON.stringify(body),
   });
   const request = vi.fn<Host["request"]>(async ({ url }) => {
-    if (url.endsWith("/exchange"))
-      return reply({ session_credential: credential.value });
-    if (url.endsWith("/me")) {
-      accountStarted.resolve();
-      return verified.promise;
-    }
     if (url.endsWith("/list-agents"))
       return reply({
         status: 1,
@@ -339,48 +448,26 @@ it("loads the pane after a late browser callback and verified exchange without w
       });
     return reply({ models: [] });
   });
-  const host: Host = { request, runCommand: vi.fn() };
-  const session = createOAuthSession(
-    (signal) => browserCredential(host, signal, bridge),
+  const session = createTestSession(
+    () => {
+      started.resolve();
+      return signedIn.promise;
+    },
     undefined,
-    { request: (input) => host.request(input) },
+    { request },
   );
-  const Footer = createSignInFooter(session);
   const Settings = createSettingsTab(createAgentClient(session), session);
   const agent = { pubkey, name: "Helper" } as Agent;
   vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
-  render(
-    <>
-      <Footer />
-      <Settings agent={agent} save={vi.fn()} settingsSection="identity" />
-    </>,
-  );
+  render(<Settings agent={agent} save={vi.fn()} settingsSection="identity" />);
   await act(async () => {
-    fireEvent.click(
-      screen.getByRole("button", { name: "Sign in to Builderlab" }),
-    );
-    await callbackStarted.promise;
+    await started.promise;
   });
   await act(() => vi.advanceTimersByTimeAsync(30_000));
-  expect(screen.getByRole("status")).toHaveTextContent(
-    "Finish signing in to Builderlab in your browser, then return to Buzz.",
-  );
-  await act(async () => {
-    callback.resolve({ parameters: [["code", "late-code"]] });
-    await accountStarted.promise;
-  });
-  // A code alone is not a verified account. The pending card stays actionable.
-  expect(session.snapshot().status).toBe("pending");
+  expect(screen.queryByText(/Finish signing in/)).toBeNull();
   expect(screen.getByRole("button", { name: "Cancel sign-in" })).toBeEnabled();
   vi.useRealTimers();
-  await act(async () => {
-    verified.resolve(
-      reply({
-        subject: "account",
-        capabilities: { can_use_remote_agents: true },
-      }),
-    );
-  });
+  await act(async () => signedIn.resolve(credential));
   await waitFor(() =>
     expect(screen.getByRole("textbox", { name: "Instructions" })).toHaveValue(
       "Loaded after the browser handoff.",
@@ -388,10 +475,5 @@ it("loads the pane after a late browser callback and verified exchange without w
   );
   expect(session.snapshot().status).toBe("signed-in");
   expect(screen.queryByRole("button", { name: "Cancel sign-in" })).toBeNull();
-  expect(bridge.cancel).not.toHaveBeenCalled();
-  await act(async () => {
-    focus.resolve();
-  });
-  expect(bridge.cancel).toHaveBeenCalledTimes(1);
   session.dispose();
 });

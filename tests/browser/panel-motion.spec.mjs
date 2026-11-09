@@ -80,26 +80,22 @@ test("joined header seams, drag feedback, and pointer-only overlay motion", asyn
   await expect(close).toBeVisible();
   await expect(dock).toHaveCSS("transition-duration", "0.18s, 0.18s");
   for (const header of await page.locator(".shell-body .panel-header").all()) {
-    expect(
-      await header.evaluate((el) => {
-        const style = getComputedStyle(el, "::after");
-        return [style.left, style.right];
-      }),
-    ).toEqual(["0px", "0px"]);
+    // The shared header owns a full-width border, including in joined panes.
+    await expect(header).toHaveCSS("border-bottom-width", "1px");
+    await expect(header).toHaveCSS("border-bottom-style", "solid");
+    const seam = await header.evaluate((element) => {
+      const bounds = element.getBoundingClientRect();
+      const pane = element.parentElement.getBoundingClientRect();
+      return { leading: bounds.x - pane.x, width: bounds.width - pane.width };
+    });
+    expect(seam.leading).toBeCloseTo(0);
+    expect(seam.width).toBeCloseTo(0);
   }
   await close.click();
   await expect(dock).toHaveCount(0);
 
-  // Keep the scrollbar unclipped and the capsule centered in the shared panel gutter.
-  const gap = await page
-    .locator(".shell-content")
-    .evaluate(
-      (element) =>
-        Number.parseFloat(
-          getComputedStyle(element).getPropertyValue("--space-panel-gap"),
-        ) *
-        Number.parseFloat(getComputedStyle(document.documentElement).fontSize),
-    );
+  // The hit target starts at the seam; the painted capsule stays centered on it.
+  // This keeps the scrollbar and sidebar actions clear of the resize target.
   const navigation = page.getByRole("navigation", {
     name: "Subscribed channels",
   });
@@ -109,17 +105,13 @@ test("joined header seams, drag feedback, and pointer-only overlay motion", asyn
     .getByRole("complementary", { name: "Sidebar", exact: true })
     .boundingBox();
   const mainBounds = await page.locator("#main-content > .panel").boundingBox();
-  expect(mainBounds.x - (sidebarBounds.x + sidebarBounds.width)).toBeCloseTo(
-    gap,
-  );
-  const railCenter = resizeBounds.x + resizeBounds.width / 2;
+  expect(mainBounds.x).toBeCloseTo(sidebarBounds.x + sidebarBounds.width);
+  const railCenter = resizeBounds.x;
   expect(railCenter).toBeCloseTo(
     (sidebarBounds.x + sidebarBounds.width + mainBounds.x) / 2,
   );
-  // The existing scrollbar inset is 3px inside the panel's trailing edge.
-  expect(railCenter - (scrollBounds.x + scrollBounds.width)).toBeCloseTo(
-    gap / 2 + 3,
-  );
+  // The scrollbar remains 2px inside the borderless joined pane's edge.
+  expect(railCenter - (scrollBounds.x + scrollBounds.width)).toBeCloseTo(2);
   const capsuleCenter = await resize.evaluate(
     (el) =>
       el.getBoundingClientRect().left +

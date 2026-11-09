@@ -1,20 +1,26 @@
 // Which Apps Platform a Builderlab sign-in deploys to: the control plane of
-// the same tenant, since its session is only valid there. Kept in step with
-// `apps_control_plane` in crates/plugin-manager, which grants the plugin that
-// origin.
+// the same tenant, since its session is only valid there. A build's
+// `BUZZ_BUILDERLAB_APPS_CONTROL_PLANE` serves its own login origin. Kept in step
+// with `apps_control_plane` in crates/plugin-manager, which grants the plugin
+// that origin.
 const CONTROL_PLANES: Readonly<Record<string, string>> = {
   "https://app.builderlab.xyz": "https://compose-ctrl.builderlab.xyz",
   "https://app.builderlabstaging.xyz":
     "https://compose-ctrl.builderlabstaging.xyz",
-  "https://block.builderlab.xyz": "https://compose-ctrl.block.builderlab.xyz",
 };
 
 /** The control plane for the configured Builderlab URL, if it has one. */
 export function controlPlane(
   value = import.meta.env.VITE_BUZZ_BUILDERLAB_URL ?? "",
+  login = import.meta.env.VITE_BUZZ_BUILDERLAB_URL ?? "",
+  configured = import.meta.env.VITE_BUZZ_BUILDERLAB_APPS_CONTROL_PLANE ?? "",
 ) {
   try {
-    return CONTROL_PLANES[new URL(value).origin];
+    const origin = new URL(value).origin;
+    if (configured && login && origin === new URL(login).origin) {
+      return configured;
+    }
+    return CONTROL_PLANES[origin];
   } catch {
     return undefined;
   }

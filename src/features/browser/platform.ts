@@ -56,6 +56,8 @@ export type BrowserStatus = Readonly<{
   title: string;
   loading: boolean;
   error: string | null;
+  /** A step to take elsewhere, such as approving an app in the web browser. */
+  notice?: string | null;
 }>;
 
 export type BrowserAction = "back" | "forward" | "reload";
@@ -73,6 +75,9 @@ export interface BrowserPlatform {
     bounds: BrowserBounds,
     visible: boolean,
   ): Promise<void>;
+  /** Holds the page's media, Web Audio included, until resumed. A hidden page
+   * keeps running, so a page no view shows would otherwise stay audible. */
+  setMediaSuspended(sessionId: string, suspended: boolean): Promise<void>;
   /** With `fallbackToHttp`, an https load that fails to connect retries over http. */
   navigate(
     sessionId: string,
@@ -82,6 +87,38 @@ export interface BrowserPlatform {
   action(sessionId: string, action: BrowserAction): Promise<void>;
   status(sessionId: string): Promise<BrowserStatus>;
   detach(sessionId: string): Promise<void>;
+  /** Opens `url` in the system browser, outside Buzz. */
+  openExternal(url: string): Promise<void>;
+}
+
+/** A page the browser view shows in place of the website when attach fails. */
+export type BrowserViewerPage = "denied" | "unavailable";
+
+/** An attach failure. `page` names a panel page to show instead of the error bar. */
+export class BrowserAttachError extends Error {
+  constructor(
+    message: string,
+    readonly page?: BrowserViewerPage,
+  ) {
+    super(message);
+    this.name = "BrowserAttachError";
+  }
+}
+
+const VIEWER_PAGES: readonly string[] = ["denied", "unavailable"];
+
+// Native attach rejects with `{ message, page? }`; older paths reject with a string.
+function attachError(error: unknown): unknown {
+  if (typeof error !== "object" || error === null || error instanceof Error)
+    return error;
+  const { message, page } = error as { message?: unknown; page?: unknown };
+  if (typeof message !== "string") return error;
+  return new BrowserAttachError(
+    message,
+    typeof page === "string" && VIEWER_PAGES.includes(page)
+      ? (page as BrowserViewerPage)
+      : undefined,
+  );
 }
 
 function normalizedUrl(url: string): string {
@@ -109,10 +146,10 @@ export function createBrowserPlatform(): BrowserPlatform {
         builderlab: builderlab
           ? "broker" in builderlab
             ? { broker: builderlab.broker }
-            : "federated" in builderlab
-              ? { federated: builderlab.federated }
-              : { credential: builderlab.credential }
+            : { federated: builderlab.federated }
           : null,
+      }).catch((error: unknown) => {
+        throw attachError(error);
       });
       if (builderlab) {
         const close = () => {
@@ -138,6 +175,8 @@ export function createBrowserPlatform(): BrowserPlatform {
     },
     setBounds: (sessionId, bounds, visible) =>
       invoke("browser_set_bounds", { sessionId, bounds, visible }),
+    setMediaSuspended: (sessionId, suspended) =>
+      invoke("browser_set_media_suspended", { sessionId, suspended }),
     navigate: async (sessionId, url, fallbackToHttp = false) =>
       invoke("browser_navigate", {
         sessionId,
@@ -149,5 +188,7 @@ export function createBrowserPlatform(): BrowserPlatform {
     status: (sessionId) =>
       invoke<BrowserStatus>("browser_status", { sessionId }),
     detach: (sessionId) => invoke("browser_detach", { sessionId }),
+    openExternal: async (url) =>
+      invoke("plugin:opener|open_url", { url: normalizedUrl(url) }),
   };
 }

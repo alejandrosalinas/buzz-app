@@ -13,11 +13,13 @@ import {
   type RelayFetch,
 } from "./find-community";
 
+import { ACCOUNT_CONSENT } from "./account-consent";
+import { consentAsked } from "./join-policy";
 import { communityName } from "./community-name";
 
 type State =
   | { status: "finding" }
-  | { status: "found"; found: FoundCommunity }
+  | { status: "found"; found: FoundCommunity; consentGiven: boolean }
   | { status: "failed"; failure: FindFailure };
 
 /** What the user ticked on Join Community; an invite claim attests `adult`. */
@@ -36,14 +38,6 @@ const FAILURES: Record<FindFailure, { message: string; retry: boolean }> = {
   },
 };
 
-/** The consent Join Community asks for before `policy`'s community may be joined. */
-function consentAsked(policy: FoundCommunity["policy"]) {
-  return {
-    age: policy?.age_attestation_required === true,
-    agreement: Boolean(policy?.terms_markdown || policy?.privacy_markdown),
-  };
-}
-
 /**
  * Looks up a community at a canonical secure origin before any identity or
  * session exists. Owns nothing beyond the lookup: the caller either takes the
@@ -56,6 +50,7 @@ export function FindCommunity({
   onFound,
   onJoin,
   autoJoin = false,
+  consentGiven,
   request = nativeRelayFetch,
   titleId,
   onboarding = false,
@@ -72,6 +67,7 @@ export function FindCommunity({
       onFound: (found: FoundCommunity) => void;
       onJoin?: never;
       autoJoin?: never;
+      consentGiven?: never;
     }
   | {
       onJoin: (
@@ -84,6 +80,12 @@ export function FindCommunity({
        * join that returns without the caller moving on.
        */
       autoJoin?: boolean;
+      /**
+       * Whether a found community's consent was given already, by the
+       * signed-in account (`accountConsents`): Join Community then asks
+       * nothing, and Join attests it.
+       */
+      consentGiven?: (found: FoundCommunity) => boolean;
       onFound?: never;
     }
 )) {
@@ -110,10 +112,15 @@ export function FindCommunity({
   };
   const settle = useEffectEvent((found: FoundCommunity) => {
     if (onFound) return onFound(found);
-    setState({ status: "found", found });
-    const asked = consentAsked(found.policy);
+    const given = consentGiven?.(found) ?? false;
+    setState({ status: "found", found, consentGiven: given });
+    const asked = consentAsked(found.policy, given);
     if (autoJoin && !asked.age && !asked.agreement)
-      void join(found, { adult: false, agreed: false }, "auto");
+      void join(
+        found,
+        given ? ACCOUNT_CONSENT : { adult: false, agreed: false },
+        "auto",
+      );
   });
   useEffect(() => {
     if (state.status !== "finding") return;
@@ -198,10 +205,13 @@ export function FindCommunity({
       </>
     );
   }
-  const { found } = state;
+  const { found, consentGiven: given } = state;
   const name = communityName(found.name, found.host);
   const policy = found.policy;
-  const { age: needsAge, agreement: needsAgreement } = consentAsked(policy);
+  const { age: needsAge, agreement: needsAgreement } = consentAsked(
+    policy,
+    given,
+  );
   const consented = (!needsAge || adult) && (!needsAgreement || agreed);
   return (
     <>
@@ -282,7 +292,13 @@ export function FindCommunity({
           variant="prominent"
           size={onboarding ? "lg" : "md"}
           disabled={!consented || Boolean(joining)}
-          onClick={() => void join(found, { adult, agreed }, "confirmed")}
+          onClick={() =>
+            void join(
+              found,
+              given ? ACCOUNT_CONSENT : { adult, agreed },
+              "confirmed",
+            )
+          }
         >
           Join
         </Button>

@@ -51,21 +51,6 @@
   border-radius: var(--radius-row);
   background: var(--affordance-panel-hover);
 }
-.projectHeading {
-  width: 100%;
-  border: 0;
-  background: transparent;
-  text-align: start;
-  /* Like NavigationItem, this disclosure is navigation, not document text. */
-  -webkit-user-select: none;
-  user-select: none;
-}
-.projectHeading span {
-  overflow-wrap: anywhere;
-}
-.projectHeading svg {
-  flex-shrink: 0;
-}
 .organizedRow {
   display: flex;
   align-items: center;
@@ -252,23 +237,6 @@
   .organizedRow [data-channel-activity] {
     opacity: 0;
   }
-}
-
-/* Project menus share the channel header's trailing action slots. */
-.projectHeader > [data-solo-overflow-action] {
-  position: absolute;
-  top: 50%;
-  transform: translateY(-50%);
-  inset-inline-end: calc(var(--space-1) + var(--size-control-sm));
-}
-.projectHeader:is(
-    :hover,
-    [data-context-menu-present],
-    :focus-within,
-    :has([aria-expanded="true"][aria-haspopup="menu"])
-  )
-  > [data-solo-overflow-action] {
-  opacity: 1;
 }
 
 /* Working flows in the row, so the title reserves exactly the pill. */

@@ -62,7 +62,7 @@ test("local agent receipt, work and failure agree across sidebar, thread and exa
   const second = send("Second local request");
   const secondRow = thread.locator(`[data-message-id="${second.id}"]`);
   const waiting = secondRow.getByRole("button", {
-    name: /^View agent activity:/,
+    name: /^(View agent activity|Show activity history|Collapse activity history):/,
   });
   await expect(waiting).toHaveAccessibleName(
     /Local tester, Received · waiting to start/,
@@ -92,12 +92,33 @@ test("local agent receipt, work and failure agree across sidebar, thread and exa
   ).toHaveCount(0);
   await page.evaluate((id) => window.localAgentFixture.handover(id), second.id);
   await expect(waiting).toContainText("Reading notes.txt");
+  // The message's live bubble is the only working indicator: the thread tail
+  // adds no second one. Its dots stay visible without motion; jsdom cannot
+  // prove CSS visibility.
+  const liveStep = thread.getByRole("button", {
+    name: "Activity: Local tester working",
+    exact: true,
+  });
+  await expect(liveStep).toHaveCount(0);
+  const dots = waiting.locator('[data-state="working"] > span');
+  await page.emulateMedia({ reducedMotion: "reduce" });
+  await expect(dots).toHaveCount(3);
+  await expect(dots.first()).toBeVisible();
+  await expect(dots.first()).toHaveCSS("animation-name", "none");
+  await page.screenshot({
+    path: testInfo.outputPath("local-working-reduced-motion.png"),
+  });
+  await page.emulateMedia({ reducedMotion: "no-preference" });
   // Work remains after run() returns; only actual completion settles it.
   await page.evaluate(
     (id) => window.localAgentFixture.finish(id, false),
     second.id,
   );
-  await expect(waiting).toContainText("1 failed");
+  await expect(
+    secondRow.getByText("Couldn’t finish", { exact: true }),
+  ).toBeVisible();
+  await expect(waiting).toHaveText("Couldn’t finish");
+  await expect(liveStep).toHaveCount(0);
   await expect(waiting).toHaveAccessibleName(
     /Local tester, Fixture provider unavailable/,
   );
@@ -109,19 +130,16 @@ test("local agent receipt, work and failure agree across sidebar, thread and exa
       await page.setViewportSize({ width, height: 950 });
       await waiting.focus();
       await page.keyboard.press("Enter");
-      const popup = page.getByRole("dialog", {
-        name: "Agent activity",
-        exact: true,
-      });
+      const popup = secondRow.locator("[data-activity-details]");
       await expect(popup).toContainText("Fixture provider unavailable");
       await expect(popup).not.toHaveAttribute("data-starting-style", "");
       const box = await popup.boundingBox();
       expect(box.x).toBeGreaterThanOrEqual(0);
       expect(box.x + box.width).toBeLessThanOrEqual(width);
-      // Errors stay on one line; the full reason remains in the accessible name.
+      // The full explanation stays readable inside the expanded history.
       await expect(popup.getByText("Fixture provider unavailable")).toHaveCSS(
         "white-space",
-        "nowrap",
+        "normal",
       );
       const dismiss = await popup
         .getByRole("button", { name: /^Dismiss error from / })
@@ -135,7 +153,7 @@ test("local agent receipt, work and failure agree across sidebar, thread and exa
       await page.screenshot({
         path: testInfo.outputPath(`local-activity-${colorScheme}-${width}.png`),
       });
-      await page.keyboard.press("Escape");
+      await waiting.click();
       await expect(popup).toBeHidden();
       await expect(waiting).toBeFocused();
     }
@@ -160,7 +178,9 @@ test("local agent receipt, work and failure agree across sidebar, thread and exa
     (id) => window.localAgentFixture.finish(id, false),
     second.id,
   );
-  await expect(waiting).toContainText("1 failed");
+  await expect(
+    secondRow.getByText("Couldn’t finish", { exact: true }),
+  ).toBeVisible();
   // Dismiss hides only this device's view of the error; focus stays in the row.
   await waiting.focus();
   await page.keyboard.press("Enter");
@@ -298,7 +318,12 @@ test("Stop in a message's activity ends its local work quietly", async ({
   await expect(
     page.getByText("Stopped Local tester", { exact: true }),
   ).toBeVisible();
-  const note = row.getByText("Local tester · Stopped", { exact: true });
+  await expect(
+    row.getByRole("button", {
+      name: /activity history: Local tester, Stopped/,
+    }),
+  ).toBeFocused();
+  const note = row.getByText("Stopped", { exact: true });
   await expect(note).toBeVisible();
   await row.screenshot({
     path: testInfo.outputPath("local-activity-stopped.png"),
@@ -380,6 +405,22 @@ test("Stop in a channel response activity stops its work", async ({
   await expect(
     page.getByRole("button", { name: "View transcript", exact: true }),
   ).toBeVisible();
+  app.relay.publish(
+    "primary",
+    app.sign({
+      kind: 9,
+      content: "Keep going while I check the result",
+      created_at: request.created_at + 3,
+      tags: [["h", "alpha"]],
+    }),
+  );
+  await expect(
+    page.getByText("Keep going while I check the result", { exact: true }),
+  ).toBeVisible();
+  const live = page.locator(
+    "[data-channel-timeline] [data-conversation-activity]",
+  );
+  await expect(live.getByText("Local tester", { exact: true })).toBeVisible();
   await stop.click();
   await expect
     .poll(() => page.evaluate(() => window.localAgentFixture.stopped()))
@@ -391,8 +432,12 @@ test("Stop in a channel response activity stops its work", async ({
   await expect(
     page.getByRole("button", { name: /^Collapse activity history:/ }),
   ).toBeFocused();
-  const note = row.locator("[data-activity-stopped]");
-  await expect(note).toContainText("Local tester · Stopped");
+  // These legacy updates have no explicit reply IDs, so they cannot claim
+  // this request's terminal outcome. It stays on the request itself.
+  const note = row.getByRole("button", {
+    name: /activity history: Local tester, Stopped/,
+  });
+  await expect(note).toContainText("Stopped");
   const [bounds, noted] = await Promise.all([
     row.boundingBox(),
     note.boundingBox(),
@@ -683,7 +728,8 @@ test("finishing a channel response hands focus back only when it owns focus", as
     });
     await expect(summary).toBeVisible();
     if (focusOn === "popup") {
-      await summary.hover();
+      // Pin the popup open: this case checks focus handoff, not hover intent.
+      await summary.click();
       await popup
         .getByRole("button", { name: "View activity for Local tester" })
         .focus();
@@ -755,8 +801,65 @@ test("the published-activity tab shows turns its agent published", async ({
     page.getByRole("tab", { name: "Activity", selected: true }),
   ).toBeVisible();
   await expect(
-    page.getByText("Published reply", { exact: true }),
+    page.locator("summary").getByText("Published reply", { exact: true }),
   ).toBeVisible();
+  // Real browser layout is required: jsdom cannot catch flex min-content collapse.
+  const path = "src/features/agents/ActivityTranscript.tsx";
+  app.observer(
+    frame("acp_read", {
+      jsonrpc: "2.0",
+      method: "session/update",
+      params: {
+        sessionId: "S",
+        update: {
+          sessionUpdate: "tool_call",
+          toolCallId: "layout-tool",
+          kind: "read",
+          title: path,
+          status: "completed",
+          rawInput: { path },
+        },
+      },
+    }),
+    key,
+  );
+  const toolSummary = page.locator("summary").filter({ hasText: path });
+  await toolSummary.click();
+  for (const width of [390, 360]) {
+    await page.setViewportSize({ width, height: 950 });
+    for (const size of ["150%", "200%"]) {
+      await page.evaluate((value) => {
+        document.documentElement.style.fontSize = value;
+      }, size);
+      await expect
+        .poll(async () => {
+          const label = await toolSummary
+            .getByText(path, { exact: true })
+            .boundingBox();
+          return label?.width ?? 0;
+        })
+        .toBeGreaterThan(100);
+      await expect
+        .poll(async () => (await toolSummary.boundingBox())?.height ?? Infinity)
+        .toBeLessThan(300);
+      // The host inset, hero, and footer must agree after the dock narrows it.
+      await expect
+        .poll(() =>
+          toolSummary.evaluate((summary) => {
+            let host = summary.parentElement;
+            while (host && getComputedStyle(host).overflowY !== "auto")
+              host = host.parentElement;
+            if (!host) throw new Error("Missing activity scrollport");
+            return host.scrollWidth - host.clientWidth;
+          }),
+        )
+        .toBe(0);
+    }
+  }
+  await page.evaluate(() => {
+    document.documentElement.style.removeProperty("font-size");
+  });
+  await page.setViewportSize({ width: 1280, height: 950 });
   // A turn's thread label opens that thread.
   const root = app.histories
     .get("primary/alpha")

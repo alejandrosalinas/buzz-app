@@ -216,7 +216,7 @@ test("a joined guest can read and leave without receiving a composer or Join pro
     page.getByRole("button", { name: "Channel actions", exact: true }),
   ).toBeFocused();
   await page
-    .getByRole("button", { name: "Manage members", exact: true })
+    .getByRole("button", { name: /^Channel access for /, exact: true })
     .click();
   const members = page.getByRole("dialog", {
     name: "Channel access",

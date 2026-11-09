@@ -48,6 +48,8 @@ export const test = base.extend({
   threadUnreadMentions: [false, { option: true }],
   threadUnreadJoined: [false, { option: true }],
   threadUnreadOwnedRoot: [true, { option: true }],
+  // Newer top-level alpha rows put the threadUnread roots beyond the head page.
+  threadUnreadNewerRows: [0, { option: true }],
   exactMessages: [false, { option: true }],
   openSearch: [false, { option: true }],
   searchAuthor: [false, { option: true }],
@@ -100,6 +102,8 @@ export const test = base.extend({
   channelIds: [channels, { option: true }],
   developmentReact: [false, { option: true, scope: "worker" }],
   builderlabLogin: [false, { option: true, scope: "worker" }],
+  // An FI build with no native host: the Builderlab plugin applies, signed out.
+  federatedIdentity: [false, { option: true, scope: "worker" }],
   pluginFixtures: [false, { option: true, scope: "worker" }],
   localAgentActivity: [false, { option: true, scope: "worker" }],
   pairingFixture: [false, { option: true, scope: "worker" }],
@@ -124,6 +128,7 @@ export const test = base.extend({
       threadUnreadMentions,
       threadUnreadJoined,
       threadUnreadOwnedRoot,
+      threadUnreadNewerRows,
       exactMessages,
       openSearch,
       searchAuthor,
@@ -827,6 +832,21 @@ export const test = base.extend({
             reply_count: 23,
             participants: [getPublicKey(peerKey)],
           }),
+        ),
+      );
+    }
+    if (threadUnread && threadUnreadNewerRows) {
+      const history = histories.get("primary/alpha");
+      const after = Math.max(...history.map((event) => event.created_at)) + 20;
+      history.push(
+        ...Array.from({ length: threadUnreadNewerRows }, (_, index) =>
+          sign(
+            9,
+            [["h", "alpha"]],
+            `Newer alpha message ${index}`,
+            userKey,
+            after + index,
+          ),
         ),
       );
     }
@@ -1547,8 +1567,14 @@ export const test = base.extend({
               ),
             ),
         ];
-      if (filter["#p"] && !filter["#h"] && filter.kinds?.includes(9)) {
-        expect([...filter.kinds].sort((a, b) => a - b)).toEqual([9, 40002]);
+      if (
+        filter["#p"] &&
+        !filter["#h"] &&
+        (filter.kinds?.includes(9) || filter.kinds?.includes(7))
+      ) {
+        expect([...filter.kinds].sort((a, b) => a - b)).toEqual(
+          filter.kinds.includes(7) ? [7] : [9, 40002],
+        );
         expect(filter["#p"]).toEqual([viewer]);
         expect(filter.limit).toBe(50);
         const candidates = [...histories.entries()]

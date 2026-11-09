@@ -215,10 +215,14 @@ export function Dialog({
             edge="bottom"
             className="buzz-dialog-bar-material"
           />
-          {leadingActions && (
-            <div className="buzz-dialog-leading-actions">{leadingActions}</div>
-          )}
-          {actions}
+          <div className="buzz-dialog-action-row">
+            {leadingActions && (
+              <div className="buzz-dialog-leading-actions">
+                {leadingActions}
+              </div>
+            )}
+            {actions}
+          </div>
         </footer>
       )}
     </>

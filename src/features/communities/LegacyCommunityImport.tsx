@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { AlertDialog } from "../../shared/design-system/ui/AlertDialog";
 import { Button } from "../../shared/design-system/ui/Button";
 import { importLegacyCommunities } from "./legacy-communities";
@@ -14,6 +14,7 @@ export function LegacyCommunityImport({
     origins: string[];
     resolve(approved: boolean): void;
   }>();
+  const proceed = useRef<HTMLButtonElement>(null);
   useEffect(() => {
     let answer: ((approved: boolean) => void) | undefined;
     const dispose = importLegacyCommunities(
@@ -38,6 +39,7 @@ export function LegacyCommunityImport({
     <AlertDialog
       title="Import communities from old Buzz?"
       description="Add these saved communities to your list and account. This may restore communities you previously removed."
+      initialFocus={proceed}
       onClose={() => respond(false)}
       actions={
         <>
@@ -45,6 +47,7 @@ export function LegacyCommunityImport({
             Skip import
           </Button>
           <Button
+            ref={proceed}
             type="button"
             variant="prominent"
             onClick={() => respond(true)}

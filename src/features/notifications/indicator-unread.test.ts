@@ -279,6 +279,20 @@ it("removes muted channel activity from the Dock indicator without marking it re
   expect(h.project).toHaveBeenLastCalledWith(true);
 });
 
+it("follows the sidebar row: opening a channel clears the Dock without reading it", () => {
+  const h = setup();
+  h.grant();
+  h.bind();
+  h.emit([message(h.peer, "room", "arrival", 11)]);
+  expect(h.project).toHaveBeenLastCalledWith(true);
+  void h.session.unread.enterChannel("room");
+  expect(h.project).toHaveBeenLastCalledWith(false);
+  expect(h.session.unread.snapshot(target).observedCount).toBe(1);
+  h.session.unread.leaveChannel("room");
+  h.emit([message(h.peer, "room", "later", 12)]);
+  expect(h.project).toHaveBeenLastCalledWith(true);
+});
+
 it("stays off for coordination between agents and lights for the next message to everyone", () => {
   const h = setup();
   h.bind();
@@ -319,4 +333,20 @@ it("counts only conversations the notification gates allow and follows gate chan
   allowed = new Set();
   for (const listener of gateListeners) listener();
   expect(h.project).toHaveBeenLastCalledWith(false);
+});
+
+it("relights the Dock projection for attention arriving during a background visit", async () => {
+  const h = setup();
+  h.grant();
+  h.bind();
+  h.emit([message(h.peer, "room", "before", 11)]);
+  await h.session.unread.enterChannel("room");
+  expect(h.project).toHaveBeenLastCalledWith(false);
+  h.session.unread.setChannelActive("room", false);
+  h.emit([
+    message(h.peer, "room", "background mention", 10, [["p", h.viewer.pubkey]]),
+  ]);
+  expect(h.project).toHaveBeenLastCalledWith(true);
+  h.session.unread.leaveChannel("room");
+  expect(h.project).toHaveBeenLastCalledWith(true);
 });

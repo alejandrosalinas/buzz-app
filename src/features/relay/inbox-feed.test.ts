@@ -122,7 +122,9 @@ it("reconciles live addressed updates and drops membership-revoked history befor
   const later = addressed(h, "later", 22);
   h.live.receive([later]);
   expect(rows(h).map((row) => row.messageId)).toEqual([later.id, first.id]);
-  expect(updates).toEqual([[later.id, first.id]]);
+  // Live evidence notifies on the coalescing window, not synchronously.
+  expect(updates).toEqual([]);
+  await vi.waitFor(() => expect(updates).toEqual([[later.id, first.id]]));
   h.admit([h.alice.pubkey], 30);
   expect(rows(h)).toEqual([]);
   // The revocation notification itself must already expose empty rows.

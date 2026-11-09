@@ -408,3 +408,29 @@ test("caret keys at the end of a composed message never insert a character, and 
     await page.evaluate(() => window.linkComposerFixture.sent.length),
   ).toBe(0);
 });
+
+test("the channel placeholder's icon overlay shows only while the editor is empty", async ({
+  page,
+}) => {
+  await page.goto("/tests/fixtures/link-messages.html");
+  const input = page.getByRole("textbox", {
+    name: "Message #design",
+    exact: true,
+  });
+  const overlay = page.locator('[aria-hidden="true"][data-name="design"]');
+  const nativePlaceholder = () =>
+    input.evaluate((node) => {
+      const paragraph = node.querySelector("[data-placeholder]");
+      return paragraph && getComputedStyle(paragraph, "::before").visibility;
+    });
+  await input.fill("");
+  await expect(overlay).toBeVisible();
+  await expect(overlay.locator("svg.tabler-icon-hash")).toBeVisible();
+  expect(await nativePlaceholder()).toBe("hidden");
+  await input.pressSequentially("hello");
+  await expect(overlay).toBeHidden();
+  for (let i = 0; i < 5; i++) await input.press("Backspace");
+  await expect(input).toHaveText("");
+  await expect(overlay).toBeVisible();
+  expect(await nativePlaceholder()).toBe("hidden");
+});

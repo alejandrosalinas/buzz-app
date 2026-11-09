@@ -569,6 +569,17 @@ test("branch hooks land on each reply's avatar across sides and row shapes", asy
   await expect(
     reacted.getByRole("button", { name: /👍/ }).last(),
   ).toBeVisible();
+  // The chip renders optimistically; confirm a signed kind-7 tagged with this
+  // reply's id actually reached the relay before the journey moves on.
+  await expect
+    .poll(() =>
+      app.report.publications.some(
+        ({ event }) =>
+          event.kind === 7 &&
+          event.tags.some(([name, id]) => name === "e" && id === emojiReply.id),
+      ),
+    )
+    .toBe(true);
   await panel.getByRole("textbox", { name: "Reply to thread" }).focus();
   const hook = await hookFor(reacted);
   expect(hook.itemBottom - hook.avatar.center).toBeGreaterThan(30);
@@ -623,6 +634,67 @@ test("branch hooks land on each reply's avatar across sides and row shapes", asy
     await row(reply).scrollIntoViewIfNeeded();
     expectHookOnAvatar(await hookFor(row(reply)), side);
   }
+});
+
+// A collapsed branch summary reads as the same quiet caption as the channel
+// feed's thread summary, not as a larger button label.
+test("branch summaries match the channel thread summary's type", async ({
+  page,
+  app,
+}) => {
+  const root = app.histories
+    .get("primary/alpha")
+    .find((event) => event.content === "Thread root 0");
+  const branch = app.append(
+    "primary",
+    "alpha",
+    "Summary branch",
+    false,
+    false,
+    root.id,
+  );
+  app.append(
+    "primary",
+    "alpha",
+    "Summary branch reply",
+    false,
+    false,
+    root.id,
+    branch.id,
+  );
+  await open(page, app);
+  const channelSummary = page
+    .locator(`[data-channel-timeline] [data-message-id="${root.id}"]`)
+    .getByRole("button", { name: /^View thread:/ });
+  await channelSummary.click();
+  const panel = page.getByRole("complementary", {
+    name: "Thread",
+    exact: true,
+  });
+  const branchSummary = panel
+    .locator(`[data-message-id="${branch.id}"]`)
+    .locator("xpath=ancestor::*[@data-depth][1]")
+    .getByRole("button", { name: /^View 1 reply/ });
+  await expect(branchSummary).toBeVisible();
+  await settlePanelMotion(page);
+  const type = (node) => {
+    const style = getComputedStyle(node);
+    return {
+      fontSize: style.fontSize,
+      lineHeight: style.lineHeight,
+      letterSpacing: style.letterSpacing,
+      fontWeight: style.fontWeight,
+      paddingBlock: `${style.paddingTop} ${style.paddingBottom}`,
+      paddingInline: `${style.paddingLeft} ${style.paddingRight}`,
+      height: Math.round(node.getBoundingClientRect().height),
+    };
+  };
+  expect(await branchSummary.evaluate(type)).toEqual(
+    await channelSummary.evaluate(type),
+  );
+  await page.screenshot({
+    path: test.info().outputPath("branch-summary-type.png"),
+  });
 });
 
 test("an exact linked reply stays readable when its parent is outside loaded history", async ({

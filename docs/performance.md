@@ -9,9 +9,11 @@ bin/pnpm perf --scenario channel-open --repeat 5 --cpu 4 --out results.json
 ```
 
 `--scenario all` is the default. A case name runs only that case; a group
-(`channel-open`, `scroll-paging` or `thread`) runs every case whose name it prefixes, so
-`scroll-paging-fast` excludes its variants. `--cpu` sets Chromium's CPU slowdown factor
-(1 means unthrottled); it does not throttle network or the fixture server.
+(`channel-open`, `scroll-paging`, `thread` or `thread-scroll`) runs every case whose
+name it prefixes, so `scroll-paging-fast` excludes its variants. `--cpu` sets
+Chromium's CPU slowdown factor (1 means unthrottled); it does not throttle network
+or the fixture server. `--browser webkit` runs the `thread-scroll` cases in WebKit
+([Thread scrolling](#thread-scrolling)); every other case is Chromium only.
 `--repeat` defaults to 5. Every sample gets fresh browser storage, signed
 histories and server state; a production frontend build is shared by the worker.
 One worker runs serially with no retries. Required CI runs every case once in
@@ -21,7 +23,8 @@ One worker runs serially with no retries. Required CI runs every case once in
 The existing browser fixture owns the production React/services/IndexedDB/Virtua
 app and modeled local HTTP broker. The runner owns settings and measurement
 windows; scenarios own setup, actions and proof that the intended work occurred.
-There is no comparison engine, second checkout or prescribed optimization target.
+There is no comparison engine or second checkout. Thread scrolling has advisory
+[targets](channels.md#targets); no case fails on timing.
 
 ## Measurements
 
@@ -175,8 +178,9 @@ less work. There is no mount-count target or automatic performance verdict.
 These variants replace the experimental zero-delay `scroll-paging` workload;
 collect new baselines rather than treating those old results as equivalent.
 
-`rafMaxGapMs`, `rafP95GapMs` and `rafGapsOver50` describe animation-frame callback
-cadence during the gesture. Raw `gestureStartMs` and `gestureEndMs` timestamps
+`rafMaxGapMs`, `rafP95GapMs`, `rafGapsOver33` (gaps longer than two 60 Hz frames
+plus 1ms) and `rafGapsOver50` describe animation-frame callback cadence during the
+gesture. Raw `gestureStartMs` and `gestureEndMs` timestamps
 are relative to the recording start: the first observed wheel event and the
 browser marker after Chromium reports the synthetic gesture complete. For paging,
 that marker follows the last gesture and its visible-oldest check; gaps between
@@ -229,7 +233,8 @@ before the click.
 ## Rich thread lifecycle
 
 `--scenario thread` measures `thread-open-rich`, `thread-close-rich` and
-`thread-reopen-rich` independently with the existing metrics. Each sample starts
+`thread-reopen-rich`, plus the [thread scrolling](#thread-scrolling) cases,
+independently with the existing metrics. Each sample starts
 fresh; close and reopen establish their prerequisite open state outside the
 measurement. Normal pointer-triggered panel animations remain enabled.
 
@@ -261,6 +266,102 @@ work-completion checks, not new timing counters. The workload covers populated
 thread mounting and panel reflow, not video playback, gallery interaction,
 expanding nested replies or live agent streaming.
 
+## Thread scrolling
+
+`--scenario thread-scroll` measures the long-thread workload behind the
+[thread scrolling targets](channels.md#targets). `tests/browser/perf/thread-corpus.mjs`
+fills the strict-window fixture thread with 460 weekly-update replies from 40
+authors: Markdown lists, bold text, inline code, mentions, links, quotes and plain
+prose, with 19 replies in collapsed branches. Their heights follow a real long
+thread's (median about 280px). Each sample opens the thread and loads all ten pages:
+wheel input at the top requests each older page, the fixture holds it until the
+sample sees the request, and the sample waits for its rows, so every page is
+loaded before measurement without fixed delays.
+
+| Case | Action |
+| --- | --- |
+| `thread-scroll-open` | Click Reply on the root: `firstRowsMs` to visible thread rows |
+| `thread-scroll-fling` | From the bottom of the loaded thread, one 6000px upward gesture at 6000px/s |
+| `thread-scroll-reverse` | Up 6000px, down 3000px, up 3500px at 8000px/s |
+
+Scroll cases report the scrolling cadence metrics above, `domGapFrames` (sampled
+frames inside the gesture with no loaded reply intersecting the viewport) and the
+traversed range,
+and require real wheel input, no older-page reads and at least 5000px of travel.
+The pointer rests mid-pane over replies, after a press in the empty gutter sets
+pointer modality.
+
+Chromium scrolls a composited thread off the main thread, so its frame intervals
+stay at 16.7ms whether or not each scroll update is expensive to composite. Its
+samples show main-thread cost (`taskMs` and the other counters). `--browser webkit`
+reproduces the stalls in frame intervals but has no gesture synthesis: wheel events
+arrive one rendering update apart, so use its frame intervals, not its duration or
+frame count. WebKit samples have no DevTools counters, CPU throttling or
+long-animation-frame data. Neither engine shows trackpad momentum or painted
+pixels; `domGapFrames` stays zero while the macOS app shows blank regions.
+
+### Native thread scrolling
+
+`scripts/perf/thread-native/run.mjs` measures the same workload in the macOS app,
+which is where the targets apply. It runs locally, not in CI:
+
+```sh
+source bin/activate-hermit
+bin/node scripts/perf/thread-native/run.mjs --arms base=origin/main,head=worktree --runs 4
+```
+
+Each arm names a revision (`worktree` builds the current files). The workload host
+(`host.spec.mjs`) runs the browser fixture with the thread corpus, builds one
+frontend per arm and serves the selected build through a loopback proxy that adds
+`agent.js`. A non-worktree arm builds in a temporary detached checkout of its
+revision, with that revision's dependencies and fixture build, so its styles,
+Tailwind classes and configuration all come from the revision; an interrupted run
+can leave that checkout behind, which `git worktree prune` and deleting its
+`buzz-thread-native-*` temporary directory clear. The fixture build
+always signs through the HTTP broker with an ephemeral fixture key. The desktop app opens the proxy with an empty
+`BUZZ_DEV_VIEWER`, which keeps a `.env.local` pin out of the Rust process, and its
+own app identifier, which separates its app and WebKit storage; the Keychain and
+plugin data stay shared with other development launches. The agent seeds the
+fixture account, opens the thread, loads all of its history and records each
+animation frame. Arms alternate run by run (ABBA) over one Rust build; a run whose
+gestures scrolled less than 10,000px (another window took the input) is repeated.
+
+For every run the harness shows and places the window from inside the app,
+activates it with a click on empty title bar (WebKit throttles an occluded
+window), presses the thread gutter, rests the pointer mid-pane, records the pane with ffmpeg at a constant 60 fps
+without the cursor, and sends the same synthetic trackpad gestures with scroll
+and momentum phases (`drive.swift`): a 7000px/s upward fling, a reversal 500ms
+into its coast and a second upward fling, then Jump to latest. It reports:
+
+| Metric | Meaning |
+| --- | --- |
+| `gapP95Ms`, `gapMaxMs` | Interval between animation frames |
+| `framesOver33` | Intervals longer than two 60 Hz frames plus 1ms |
+| `droppedFrames` | Frames missed across those intervals |
+| `blankFrames` | Captured frames with one uniform band covering at least 35% of the pane |
+| `longestBlankMs` | Longest run of blank frames |
+
+Frame metrics cover every interval from the first wheel event to the frame after
+the last one that moved the thread, where Jump to latest lands, including stalls
+whose ending frame kept the same offset. A stall on the scrolling thread alone, while animation
+frames keep running, shows only in the video. `summary.md` in the results directory gives each metric's median and range per arm against the
+targets, with 1ms of timestamp tolerance; per-run JSON and videos sit beside it. It needs a
+logged-in session, Screen Recording and Accessibility permission for the terminal,
+an idle machine and the main display at 60 Hz. The app is a development build
+serving a production frontend. Synthetic momentum approximates a trackpad;
+compare arms within one run, not across machines or sessions.
+
+### Current measurements
+
+Native medians on one MacBook Pro with a 60 Hz display, four ABBA runs per build in
+one session (2026-11-05). Each change that moves these numbers adds its row.
+
+| Build | p95 frame interval | Frames over two 60 Hz frames | Dropped frames | Blank frames | Longest blank |
+| --- | --- | --- | --- | --- | --- |
+| Before thread scrolling fixes | 85 ms | 76 | 194 | 54 | 300 ms |
+| Closed action bars skip the glass | 50 ms | 44 | 94 | 9 | 133 ms |
+| Thread rows isolated in the scroller | 30 ms | 10 | 44 | 6 | 67 ms |
+
 ## Results and iteration
 
 JSON contains raw per-frame geometry, work evidence, all samples and per-metric
@@ -284,11 +385,11 @@ alternate baseline/candidate runs when making a performance claim. Comparing
 different CPU settings, browsers, fixtures or concurrent host loads is not a
 controlled comparison. The runner does not decide which tradeoffs are acceptable.
 
-This is Chromium-local evidence with modeled backend responses (immediate except
-for the named paging delays),
+Apart from [thread scrolling](#thread-scrolling), this is Chromium-local evidence
+with modeled backend responses (immediate except for the named paging delays),
 HTTP interception (which disables HTTP cache) and preloaded fonts. Channel and
 scrolling workloads use text; the rich thread workload adds local media and
 multiple authors.
-It does not measure production network latency, native hosting, WebKit,
-long-session memory growth or application startup. Add those as explicit workloads
+It does not measure production network latency, native hosting or WebKit outside
+thread scrolling, long-session memory growth or application startup. Add those as explicit workloads
 when needed rather than changing the meaning of existing samples.

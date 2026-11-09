@@ -62,6 +62,16 @@ it("skips to the nearest conversation that shows unread or thread activity", () 
   expect(step("previous", true)).toBeUndefined();
 });
 
+it("wraps unread stepping past either end", () => {
+  sidebar([`a:${unread}`, "b", `c:${activity}`, "*d", "e"]);
+  expect(step("next", true)).toBe("a");
+  sidebar(["a", "*b", "c", `d:${unread}`, `e:${unread}`]);
+  expect(step("previous", true)).toBe("e");
+  // The open conversation alone is not a destination, even when unread.
+  sidebar(["a", `*b:${unread}`, "c"]);
+  expect(step("next", true)).toBeUndefined();
+});
+
 it("steps over a conversation listed twice, including the open one", () => {
   sidebar(["a", "*b", "c", "*b", "d"]);
   expect(step("next")).toBe("d");

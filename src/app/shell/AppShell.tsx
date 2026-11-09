@@ -1,4 +1,8 @@
+import { ActivityNavigationProvider } from "./ActivityNavigation";
+import { PageNavigation } from "./PageNavigation";
+import { navigationOwner, orderPages, pagePlacement } from "./presentation";
 import {
+  useCallback,
   useEffect,
   useLayoutEffect,
   useMemo,
@@ -10,7 +14,7 @@ import {
 } from "react";
 import { isApplePlatform } from "../../features/shortcuts/format";
 import { IconButton } from "../../shared/design-system/ui/IconButton";
-import { SidebarIcon, DotsThreeIcon } from "../../shared/design-system/icons";
+import { SidebarIcon } from "../../shared/design-system/icons";
 import { Panel } from "../../shared/design-system/ui/Panel";
 import { isTauri } from "@tauri-apps/api/core";
 import type { SettingsCards } from "../../features/settings/service";
@@ -19,23 +23,19 @@ import type { AccountActionsService } from "../../features/account-actions/servi
 import type { Communities } from "../../features/communities/service";
 import type { FederatedIdentity } from "../../features/federated-identity/service";
 import { ResizableSidebar } from "../../features/channel-navigation/ResizableSidebar";
-import type { InviteLink } from "../../features/communities/invite-link";
+import type { JoinRequest } from "../../features/communities/invite-intent";
 import type { OpenTarget } from "../../features/navigation/targets";
-import { CommunityPicker } from "../../features/communities/CommunityPicker";
+import {
+  CommunityPicker,
+  OpenCommunitySwitcher,
+} from "../../features/communities/CommunityPicker";
 import { ProfileButton } from "./ProfileButton";
 import { CommunityShortcuts } from "./CommunityShortcuts";
 import { MarkAllReadShortcut } from "./MarkAllReadShortcut";
 import type { Appearance } from "../../shared/theme/service";
 import { PageSearch, type SearchServices } from "./PageSearch";
-import { headerPageSelection, pagePlacement, orderPages } from "./presentation";
-import { PageNavigation } from "./PageNavigation";
 import { BestieNavigationProvider } from "./BestieNavigation";
 import type { NavigationOpenOptions } from "../../features/navigation/controller";
-import {
-  PopoverRoot,
-  PopoverTrigger,
-  PopoverPopup,
-} from "../../shared/design-system/ui/Popover";
 import { PanelFrame } from "../../features/panels/PanelFrame";
 import { useRelayConnection } from "../../features/relay/react";
 import { macTitleBarDragHandlers } from "./title-bar";
@@ -50,7 +50,12 @@ export function AppShell(props: ComponentProps<typeof AppShellContent>) {
       pages={props.pages}
       relay={props.communities.relay}
     >
-      <AppShellContent {...props} />
+      <ActivityNavigationProvider
+        pages={props.pages}
+        relay={props.communities.relay}
+      >
+        <AppShellContent {...props} />
+      </ActivityNavigationProvider>
     </BestieNavigationProvider>
   );
 }
@@ -96,7 +101,7 @@ function AppShellContent({
   workspaceRef?: Ref<HTMLDivElement>;
   sidebar?: (pages: ReactNode, creationAction: ReactNode) => ReactNode;
   communities: Communities;
-  invite?: (InviteLink & { requestId: number }) | undefined;
+  invite?: (JoinRequest & { requestId: number }) | undefined;
   onInviteClose?: ((requestId: number) => void) | undefined;
   settingsCards?: SettingsCards | undefined;
   federatedIdentity?: FederatedIdentity | undefined;
@@ -121,13 +126,67 @@ function AppShellContent({
   creationInSidebar?: boolean;
   children: ReactNode;
 }) {
+  const header = useRef<HTMLElement>(null);
+  const historyRef = useRef<HTMLDivElement>(null);
+  const actionsRef = useRef<HTMLDivElement>(null);
+  const searchRef = useRef<HTMLDivElement>(null);
+  useLayoutEffect(() => {
+    const element = header.current;
+    const history = historyRef.current;
+    const actions = actionsRef.current;
+    const search = searchRef.current;
+    if (!element || !history || !actions || !search) return;
+    const measure = () => {
+      // Equal wings keep Search centered even when the native controls or launchers differ.
+      const wing = Math.max(history.offsetWidth, actions.offsetWidth);
+      const style = getComputedStyle(element);
+      const available =
+        element.clientWidth -
+        parseFloat(style.paddingLeft) -
+        parseFloat(style.paddingRight);
+      const searchStyle = getComputedStyle(search);
+      const controls =
+        history.offsetWidth +
+        actions.offsetWidth +
+        2 * parseFloat(style.columnGap);
+      element.dataset.searchFluid = String(
+        available < controls + parseFloat(searchStyle.maxWidth),
+      );
+      element.style.setProperty("--shell-header-wing", `${wing}px`);
+      element.dataset.searchWrapped = String(
+        available < controls + parseFloat(searchStyle.minWidth),
+      );
+    };
+    // Header wrapping resizes the workspace below it. Apply it outside resize
+    // delivery so timeline observers do not receive a second layout mid-cycle.
+    let frame: number | undefined;
+    const observer = new ResizeObserver(() => {
+      if (frame !== undefined) cancelAnimationFrame(frame);
+      frame = requestAnimationFrame(() => {
+        frame = undefined;
+        measure();
+      });
+    });
+    for (const target of [element, history, actions]) observer.observe(target);
+    measure();
+    return () => {
+      observer.disconnect();
+      if (frame !== undefined) cancelAnimationFrame(frame);
+    };
+  }, []);
   const fillsWorkspace = workspace || selected === "settings";
   const [creationContainer, setCreationContainer] =
     useState<HTMLDivElement | null>(null);
   const [creationOpen, setCreationOpen] = useState(false);
+  const [switcherOpen, setSwitcherOpen] = useState(false);
+  const openSwitcher = useCallback(() => setSwitcherOpen(true), []);
   const connection = useRelayConnection(communities.relay);
   const sidebarScope = connection.scope ?? "disconnected";
-  const channelsNavigation = selected === "buzz.channels/channels";
+  const owner = navigationOwner(pages, selected);
+  const channelsNavigation = owner === "buzz.channels/channels";
+  const hasNavigation =
+    channelsNavigation ||
+    pages.some((page) => page.key === selected && !!page.sidebar);
   const [narrow, setNarrow] = useState(
     () => window.matchMedia("(max-width: 650px)").matches,
   );
@@ -147,7 +206,9 @@ function AppShellContent({
   const [sidebarOpen, setSidebarOpen] = useState(true);
   const [navigationOpen, setNavigationOpen] = useState(false);
   const navigationToggle = useRef<HTMLButtonElement>(null);
-  const visibleSidebar = narrow ? navigationOpen : sidebarOpen;
+  const visibleSidebar =
+    hasNavigation && (narrow ? navigationOpen : sidebarOpen);
+  const creationInNavigation = !!creationAction && creationInSidebar;
   useEffect(
     () =>
       searchServices?.shortcuts.registerHost({
@@ -157,6 +218,7 @@ function AppShellContent({
         order: 75,
         allowInEditable: true,
         when: () =>
+          hasNavigation &&
           !!creationAction &&
           !!creationContainer?.querySelector("button:not(:disabled)") &&
           (isApplePlatform(navigator.platform) ||
@@ -167,7 +229,7 @@ function AppShellContent({
           setCreationOpen(true);
         },
       }),
-    [searchServices, creationAction, creationContainer],
+    [searchServices, creationAction, creationContainer, hasNavigation],
   );
   const toggleLabel = narrow
     ? navigationOpen
@@ -185,36 +247,25 @@ function AppShellContent({
   // navigation element stable across those renders so React skips the whole
   // sidebar subtree instead of re-rendering every row on each click.
   const navigation = useMemo(() => {
-    const sidebarPages = orderPages(
-      pages.filter((page) => pagePlacement(page) === "sidebar"),
-    );
-    const pageNavigation = sidebarPages.length ? (
-      <nav aria-label="Pages" className="shell-pages">
-        <PageNavigation
-          pages={sidebarPages}
-          selected={selected}
-          onSelect={onSelect}
-          previews
-        />
-      </nav>
-    ) : null;
-    const content = sidebar ? (
-      sidebar(
-        pageNavigation,
-        creationAction && creationInSidebar && (
-          <div ref={setCreationContainer} />
-        ),
-      )
-    ) : (
-      <div className="shell-sidebar-default">
-        <Panel as="aside" aria-label="Page sidebar">
-          <div className="p-2">{pageNavigation}</div>
-        </Panel>
-      </div>
-    );
     const selectedPageHasSidebar = pages.some(
       (page) => page.key === selected && !!page.sidebar,
     );
+    // Sidebars retain their documented app-link and creation slots.
+    const content = sidebar
+      ? sidebar(
+          <nav aria-label="Pages" className="shell-pages">
+            <PageNavigation
+              pages={orderPages(
+                pages.filter((page) => pagePlacement(page) === "sidebar"),
+              )}
+              selected={selected}
+              onSelect={onSelect}
+              previews
+            />
+          </nav>,
+          creationInNavigation ? <div ref={setCreationContainer} /> : null,
+        )
+      : null;
     return selectedPageHasSidebar ? (
       <ResizableSidebar scope={sidebarScope} className="shell-sidebar">
         {content}
@@ -222,113 +273,12 @@ function AppShellContent({
     ) : (
       content
     );
-  }, [
-    pages,
-    selected,
-    onSelect,
-    sidebar,
-    sidebarScope,
-    creationAction,
-    creationInSidebar,
-  ]);
-  const headerPages = useMemo(
-    () =>
-      orderPages(
-        pages.filter(
-          (page) =>
-            pagePlacement(page) === "topbar" ||
-            pagePlacement(page) === "toolbar",
-        ),
-      ),
-    [pages],
+  }, [pages, selected, sidebar, sidebarScope, onSelect, creationInNavigation]);
+  const dockPages = orderPages(
+    pages.filter((page) => page.primary && pagePlacement(page) !== "sidebar"),
+    "dock",
   );
-  const topbarPages = headerPages.filter(
-    (page) => pagePlacement(page) === "topbar",
-  );
-  const selectedHeader = headerPageSelection(pages, selected);
-  const selectedTopbarPage = topbarPages.some(
-    (page) => page.key === selectedHeader,
-  );
-  const panelKey = selectedTopbarPage ? selectedHeader : selected;
-  const toolbarPages = headerPages.filter(
-    (page) => pagePlacement(page) === "toolbar",
-  );
-  const headerRef = useRef<HTMLElement>(null);
-  const historyRef = useRef<HTMLDivElement>(null);
-  const actionsRef = useRef<HTMLDivElement>(null);
-  const searchRef = useRef<HTMLDivElement>(null);
-  const topbarRef = useRef<HTMLElement>(null);
-  const toolbarRef = useRef<HTMLElement>(null);
-  const overflowTrigger = useRef<HTMLButtonElement>(null);
-  const overflowPages = useRef<HTMLElement>(null);
-  const movingFocus = useRef(false);
-  const [compactPages, setCompactPages] = useState(narrow);
-  const [overflowOpen, setOverflowOpen] = useState(false);
-  // Measure the real controls, including native insets and text scaling. Hidden
-  // header groups retain intrinsic size, but are inert and absent from the a11y tree.
-  // biome-ignore lint/correctness/useExhaustiveDependencies: Registrations can mount new nav elements; observe their refs after every contribution change.
-  useLayoutEffect(() => {
-    const header = headerRef.current;
-    if (!header) return;
-    const measure = () => {
-      const style = getComputedStyle(header);
-      const gap = parseFloat(style.columnGap) || 0;
-      const left =
-        (historyRef.current?.offsetWidth ?? 0) + parseFloat(style.paddingLeft);
-      const right =
-        (actionsRef.current?.offsetWidth ?? 0) +
-        (toolbarRef.current?.offsetWidth ?? 0) +
-        parseFloat(style.paddingRight) +
-        gap;
-      const center =
-        (topbarRef.current?.offsetWidth ?? 0) +
-        (searchRef.current?.offsetWidth ?? 0) +
-        gap;
-      const compact =
-        narrow ||
-        2 * (Math.max(left, right) + gap) + center > header.clientWidth;
-      // Do not strand keyboard focus inside a newly hidden group.
-      if (
-        compact &&
-        !compactPages &&
-        (topbarRef.current?.contains(document.activeElement) ||
-          toolbarRef.current?.contains(document.activeElement))
-      ) {
-        movingFocus.current = true;
-      }
-      setCompactPages(compact);
-    };
-    measure();
-    const observer = new ResizeObserver(measure);
-    for (const element of [
-      header,
-      historyRef.current,
-      actionsRef.current,
-      topbarRef.current,
-      searchRef.current,
-      toolbarRef.current,
-    ]) {
-      if (element) observer.observe(element);
-    }
-    return () => observer.disconnect();
-  }, [narrow, compactPages, headerPages]);
-  useLayoutEffect(() => {
-    if (movingFocus.current) {
-      movingFocus.current = false;
-      overflowTrigger.current?.focus();
-    }
-    if (!compactPages) {
-      if (
-        document.activeElement === overflowTrigger.current ||
-        overflowPages.current?.contains(document.activeElement)
-      ) {
-        (topbarRef.current ?? toolbarRef.current)
-          ?.querySelector<HTMLButtonElement>("button")
-          ?.focus();
-      }
-      setOverflowOpen(false);
-    }
-  }, [compactPages]);
+  const selectedDockPage = dockPages.some((page) => page.key === owner);
   return (
     <div
       data-shell-tone={tone}
@@ -348,11 +298,10 @@ function AppShellContent({
         Skip to content
       </a>
       <header
-        ref={headerRef}
+        ref={header}
         data-buzz-window-drag={
           macDesktop || hasIntegratedWindowControls() || undefined
         }
-        data-compact-pages={compactPages || undefined}
         data-tauri-drag-region={macDesktop ? undefined : true}
         {...titleBarDragProps}
         className={`shell-header ${macDesktop ? "shell-header-mac" : ""}`}
@@ -366,7 +315,7 @@ function AppShellContent({
           data-tauri-drag-region={macDesktop ? undefined : true}
           {...titleBarDragProps}
         >
-          {(collapsibleSidebar || narrow) && (
+          {hasNavigation && (collapsibleSidebar || narrow) && (
             <IconButton
               hint="familiar"
               ref={navigationToggle}
@@ -386,138 +335,63 @@ function AppShellContent({
             />
           )}
           {navigationControls}
-          {creationAction && !creationInSidebar && (
-            <div ref={setCreationContainer} />
-          )}
         </div>
-        <div className="shell-center-capsule shell-capsule">
-          <div className="shell-page-switcher chrome-navigation">
-            {headerPages.length > 0 && (
-              <PopoverRoot
-                open={overflowOpen && compactPages}
-                onOpenChange={setOverflowOpen}
-              >
-                <PopoverTrigger
-                  render={
-                    <IconButton
-                      hint="familiar"
-                      ref={overflowTrigger}
-                      data-shell-pages-overflow=""
-                      aria-label="More pages"
-                      title="More pages"
-                      variant="ghost"
-                      icon={<DotsThreeIcon size={16} aria-hidden="true" />}
-                    />
-                  }
-                />
-                <PopoverPopup
-                  size="compact"
-                  padding="list"
-                  align="end"
-                  aria-label="More pages"
-                  finalFocus={() =>
-                    compactPages
-                      ? overflowTrigger.current
-                      : ((
-                          topbarRef.current ?? toolbarRef.current
-                        )?.querySelector<HTMLButtonElement>("button") ??
-                        document.getElementById("main-content"))
-                  }
-                >
-                  <nav
-                    ref={overflowPages}
-                    aria-label="Header pages"
-                    className="shell-pages"
-                  >
-                    <PageNavigation
-                      pages={headerPages}
-                      selected={selectedHeader}
-                      currentPage={selected}
-                      onSelect={(key) => {
-                        setOverflowOpen(false);
-                        onSelect(key);
-                      }}
-                    />
-                  </nav>
-                </PopoverPopup>
-              </PopoverRoot>
-            )}
-            {topbarPages.length > 0 && (
-              <nav
-                ref={topbarRef}
-                aria-label="Topbar pages"
-                className="shell-topbar-pages"
-                aria-hidden={compactPages}
-                inert={compactPages}
-              >
-                <PageNavigation
-                  pages={topbarPages}
-                  selected={selectedHeader}
-                  currentPage={selected}
-                  onSelect={onSelect}
-                  placement="topbar"
-                />
-              </nav>
-            )}
-          </div>
-          <div ref={searchRef} className="shell-search-action shell-capsule">
-            <PageSearch
-              pages={pages}
-              onSelect={onSelect}
-              services={searchServices}
-            />
-          </div>
+        <div ref={searchRef} className="shell-menu-search">
+          <PageSearch
+            pages={pages}
+            onSelect={onSelect}
+            services={searchServices}
+          />
         </div>
         <div
+          ref={actionsRef}
           className="shell-actions"
           data-tauri-drag-region={macDesktop ? undefined : true}
           {...titleBarDragProps}
         >
-          {toolbarPages.length > 0 && (
-            <nav
-              ref={toolbarRef}
-              aria-label="Toolbar pages"
-              className="shell-toolbar-pages"
-              aria-hidden={compactPages}
-              inert={compactPages}
-            >
-              <PageNavigation
-                pages={toolbarPages}
-                selected={selected}
-                onSelect={onSelect}
-                placement="toolbar"
-              />
-            </nav>
-          )}
-          <div ref={actionsRef} className="shell-actions-fixed">
+          <div className="shell-actions-fixed">
             {launchers}
-            <div className="shell-community-switcher">
-              <CommunityPicker
-                communities={communities}
-                invite={invite}
-                onInviteClose={onInviteClose}
-                settingsCards={settingsCards}
-                federatedIdentity={federatedIdentity}
-                onSelect={onCommunitySelect}
-                onOpenTarget={onOpenTarget}
-              />
-              <ProfileButton
-                communities={communities}
-                accountActions={accountActions}
-                settingsSelected={selected === "settings"}
-                appearance={appearance}
-                pluginRecommendations={pluginRecommendations}
-                onSettings={(section) =>
-                  onSelect("settings", section ? { section } : undefined)
-                }
-              />
-            </div>
             <WindowControls />
           </div>
         </div>
       </header>
 
       <div className="shell-workspace">
+        <nav className="shell-side-dock" aria-label="Apps dock">
+          <div className="shell-dock-pages">
+            <PageNavigation
+              pages={dockPages}
+              selected={owner}
+              currentPage={selected}
+              onSelect={onSelect}
+              placement="dock"
+              previews
+            />
+          </div>
+          <div className="shell-community-switcher">
+            <CommunityPicker
+              communities={communities}
+              invite={invite}
+              onInviteClose={onInviteClose}
+              settingsCards={settingsCards}
+              federatedIdentity={federatedIdentity}
+              onSelect={onCommunitySelect}
+              onOpenTarget={onOpenTarget}
+              open={switcherOpen}
+              onOpenChange={setSwitcherOpen}
+            />
+            <ProfileButton
+              communities={communities}
+              accountActions={accountActions}
+              settingsSelected={selected === "settings"}
+              appearance={appearance}
+              pluginRecommendations={pluginRecommendations}
+              onSettings={(section) =>
+                onSelect("settings", section ? { section } : undefined)
+              }
+            />
+          </div>
+        </nav>
         <div
           ref={workspaceRef}
           className="shell-dialog-frame"
@@ -527,70 +401,77 @@ function AppShellContent({
           className={`shell-body ${selected === "settings" ? "shell-body-settings" : ""}`}
         >
           <div className="relative flex min-h-0 min-w-0 flex-1">
-            <div className="shell-content">
-              <div
-                id="shell-navigation"
-                className="shell-navigation"
-                data-sidebar-collapsible={
-                  (collapsibleSidebar && !narrow) || undefined
-                }
-                data-sidebar-open={visibleSidebar || undefined}
-                aria-hidden={(collapsibleSidebar || narrow) && !visibleSidebar}
-                inert={(collapsibleSidebar || narrow) && !visibleSidebar}
-                data-expanded={navigationOpen}
-                onKeyDown={(event) => {
-                  if (
-                    event.key === "Escape" &&
-                    !event.shiftKey &&
-                    navigationOpen &&
-                    !event.defaultPrevented
-                  ) {
-                    // Closing the drawer consumes Escape, so it marks nothing read.
-                    event.preventDefault();
-                    setNavigationOpen(false);
-                    navigationToggle.current?.focus();
+            <Panel as="div" joined>
+              <div className="shell-content">
+                <div
+                  id="shell-navigation"
+                  hidden={!hasNavigation}
+                  className="shell-navigation"
+                  data-sidebar-collapsible={
+                    (collapsibleSidebar && !narrow) || undefined
                   }
-                }}
-              >
-                <div className="shell-navigation-content">{navigation}</div>
-              </div>
-              <main
-                id="main-content"
-                tabIndex={-1}
-                className="min-h-0 min-w-0 flex-1"
-              >
-                <Panel as="div" joined>
-                  <PanelFrame scope={connection.scope} companion={companion}>
-                    <div
-                      id={`shell-page-${panelKey}`}
-                      {...(!compactPages && selectedTopbarPage
-                        ? {
-                            role: "tabpanel",
-                            "aria-labelledby": `shell-page-${panelKey}-tab`,
-                            tabIndex: 0,
-                            "data-focus-inset": "",
-                          }
-                        : {})}
-                      className={
-                        fillsWorkspace
-                          ? "buzz-tabs-panel h-full min-h-0"
-                          : "buzz-tabs-panel h-full min-h-0 overflow-y-auto px-2 pt-10 pb-8 sm:px-4 sm:pt-14 sm:pb-10"
-                      }
-                    >
+                  data-sidebar-open={visibleSidebar || undefined}
+                  aria-hidden={
+                    (collapsibleSidebar || narrow) && !visibleSidebar
+                  }
+                  inert={(collapsibleSidebar || narrow) && !visibleSidebar}
+                  data-expanded={navigationOpen}
+                  onKeyDown={(event) => {
+                    if (
+                      event.key === "Escape" &&
+                      !event.shiftKey &&
+                      navigationOpen &&
+                      !event.defaultPrevented
+                    ) {
+                      // Closing the drawer consumes Escape, so it marks nothing read.
+                      event.preventDefault();
+                      setNavigationOpen(false);
+                      navigationToggle.current?.focus();
+                    }
+                  }}
+                >
+                  <div className="shell-navigation-content">{navigation}</div>
+                </div>
+                <main
+                  id="main-content"
+                  tabIndex={-1}
+                  className="min-h-0 min-w-0 flex-1"
+                >
+                  <Panel as="div" joined>
+                    <PanelFrame scope={connection.scope} companion={companion}>
                       <div
+                        id={`shell-page-${owner}`}
+                        {...(selectedDockPage
+                          ? {
+                              role: "tabpanel",
+                              "data-focus-inset": "",
+                              "aria-labelledby": `shell-page-${owner}-tab`,
+                              tabIndex: 0,
+                            }
+                          : {})}
                         className={
                           fillsWorkspace
-                            ? "h-full min-h-0"
-                            : "mx-auto w-full max-w-4xl"
+                            ? "buzz-tabs-panel h-full min-h-0"
+                            : "buzz-tabs-panel h-full min-h-0 overflow-y-auto px-2 pt-10 pb-8 sm:px-4 sm:pt-14 sm:pb-10"
                         }
                       >
-                        {children}
+                        <div
+                          className={
+                            fillsWorkspace
+                              ? "h-full min-h-0"
+                              : "mx-auto w-full max-w-4xl"
+                          }
+                        >
+                          <OpenCommunitySwitcher value={openSwitcher}>
+                            {children}
+                          </OpenCommunitySwitcher>
+                        </div>
                       </div>
-                    </div>
-                  </PanelFrame>
-                </Panel>
-              </main>
-            </div>
+                    </PanelFrame>
+                  </Panel>
+                </main>
+              </div>
+            </Panel>
           </div>
         </div>
       </div>

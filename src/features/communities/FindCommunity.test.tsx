@@ -299,6 +299,65 @@ it("with autoJoin a policy's consent is still asked on Join Community", async ()
   expect(onJoin).not.toHaveBeenCalled();
 });
 
+it("a community whose consent was given asks nothing on Join Community, and Join attests it", async () => {
+  const request = relay(() => ({
+    "/": Response.json(buzz),
+    "/api/join-policy": Response.json({ policy }),
+  }));
+  const onJoin = vi.fn();
+  const consentGiven = vi.fn(() => true);
+  const user = userEvent.setup();
+  render(
+    <FindCommunity
+      url={url}
+      onCancel={vi.fn()}
+      onJoin={onJoin}
+      consentGiven={consentGiven}
+      request={request}
+    />,
+  );
+  expect(
+    await screen.findByRole("heading", { name: "Join Community" }),
+  ).toBeVisible();
+  expect(consentGiven).toHaveBeenCalledWith(
+    expect.objectContaining({ url, policy }),
+  );
+  expect(screen.queryByRole("checkbox")).toBeNull();
+  await user.click(join());
+  expect(onJoin).toHaveBeenCalledWith(expect.objectContaining({ url }), {
+    adult: true,
+    agreed: true,
+  });
+});
+
+it("with autoJoin a community whose consent was given joins at once, attesting it", async () => {
+  const request = relay(() => ({
+    "/": Response.json(buzz),
+    "/api/join-policy": Response.json({ policy }),
+  }));
+  const onJoin = vi.fn(() => new Promise<void>(() => {}));
+  render(
+    <FindCommunity
+      url={url}
+      onCancel={vi.fn()}
+      onJoin={onJoin}
+      autoJoin
+      consentGiven={() => true}
+      request={request}
+    />,
+  );
+  await waitFor(() =>
+    expect(onJoin).toHaveBeenCalledWith(expect.objectContaining({ url }), {
+      adult: true,
+      agreed: true,
+    }),
+  );
+  expect(
+    screen.getByRole("heading", { name: "Joining community" }),
+  ).toBeVisible();
+  expect(joinCommunity()).toBeNull();
+});
+
 it("announces the lookup only after a second, and again a second after Retry", async () => {
   vi.useFakeTimers();
   try {
@@ -425,7 +484,9 @@ it.each([
   ],
   [
     "a Buzz relay with no community here",
-    Response.json({ name: "Buzz Relay" }),
+    new Response("relay: no community is configured for this host", {
+      status: 404,
+    }),
     "No community is set up at this address.",
   ],
 ])("%s offers only Cancel", async (_label, answer, message) => {

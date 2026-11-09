@@ -203,6 +203,12 @@ export function externalLinkMarkdown(
     "script, style, template, iframe, object, hr, input",
   ))
     node.remove();
+  // Browser text/plain can include an inline image's alt text. Preserve it as
+  // literal text before stripping attributes, including inside link labels.
+  for (const image of body.querySelectorAll("img"))
+    image.replaceWith(
+      body.ownerDocument.createTextNode(image.getAttribute("alt") ?? ""),
+    );
   let linked = false;
   for (const element of body.querySelectorAll("*")) {
     const href =

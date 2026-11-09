@@ -6,13 +6,14 @@
 #   install VERSION PLATFORM SHA256  downloads a release, unless it is already
 #                                    downloaded, and checks it
 #   use VERSION                      makes a downloaded release the one in use
-#   review-token                     saves security reviews' sign-in from stdin
-#   review                           prints their folder, then that sign-in
+#   review                           makes security reviews' folder and
+#                                    prints it
 set -eu
 
 # Shared by every Buzz build on this computer, so there is one download.
 # Security reviews keep their own Claude folder beside it (macOS only), which
-# Buzz Security hides from contained agents.
+# Buzz Security hides from contained agents. The API key is not here: native
+# code keeps it in the OS credential store (`claude_key.rs`).
 review=""
 if [ "$(uname)" = Darwin ]; then
   dir="$HOME/Library/Application Support/Buzz/claude-code"
@@ -27,6 +28,15 @@ review_folder() {
     echo "The Claude review folder is not a folder" >&2
     exit 1
   fi
+}
+
+# Makes the review folder, private, unless something else is in its place.
+make_review() {
+  review_folder
+  mkdir -p "${review%/*}"
+  [ -d "$review" ] || mkdir -m 700 "$review"
+  review_folder
+  chmod 700 "$review"
 }
 
 # Versions name folders, so only digits and dots: no `..` or `/` escapes.
@@ -125,46 +135,12 @@ use)
       newer "$folder" "$version" || rm -rf "${dir:?}/$folder"
   done
   ;;
-review-token)
-  # The token `claude setup-token` printed, read from stdin so it is never an
-  # argument, and never printed: only these fixed lines are.
-  [ -n "$review" ] || { echo "Claude security reviews need macOS" >&2; exit 2; }
-  token=""
-  IFS= read -r token || true
-  # Loosely, as its exact form is Claude's: one `sk-ant-` word.
-  LC_ALL=C
-  case "$token" in
-  sk-ant-?*) ;;
-  *) token="" ;;
-  esac
-  case "$token" in "" | *[!A-Za-z0-9_-]*)
-    echo "That is not a Claude token. Paste what claude setup-token printed." >&2
-    exit 1
-    ;;
-  esac
-  review_folder
-  mkdir -p "${review%/*}"
-  [ -d "$review" ] || mkdir -m 700 "$review"
-  review_folder
-  chmod 700 "$review"
-  umask 077
-  # A new file only, then a rename over the old one, so no link is followed.
-  part="$review/token.$$"
-  trap 'rm -f "$part"' EXIT
-  (set -C && printf '%s\n' "$token" >"$part")
-  mv -f -h "$part" "$review/token"
-  echo "Saved the sign-in for Claude security reviews."
-  ;;
 review)
-  # Nothing until a review folder exists; its folder alone until it holds a
-  # sign-in.
+  # Reviews' own Claude folder, made on first use, which Buzz Security hides
+  # from contained agents.
   [ -n "$review" ] || { echo "Claude security reviews need macOS" >&2; exit 2; }
-  review_folder
-  [ -d "$review" ] || exit 0
+  make_review
   printf '%s\n' "$review"
-  if [ -f "$review/token" ] && [ ! -h "$review/token" ]; then
-    cat "$review/token"
-  fi
   ;;
 *)
   echo "Unknown command: $command" >&2

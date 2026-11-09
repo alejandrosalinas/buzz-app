@@ -117,6 +117,16 @@ export function createNavigationController(
   // up: background work never replaces content already shown.
   let shown: string | undefined;
   let ingressRetry: (() => Promise<OpenResult>) | undefined;
+  // Visits whose page currently reports nothing worth returning to.
+  const passing = new Map<string, () => boolean>();
+  // A page that cannot answer keeps its visit, never the opening.
+  const passes = (entryId: string) => {
+    try {
+      return passing.get(entryId)?.() === true;
+    } catch {
+      return false;
+    }
+  };
   const listeners = new Set<() => void>();
   // Commit state and capture each caller's result before invoking external code.
   // Reentrant opens run against committed state and own their own result; deferred
@@ -444,9 +454,16 @@ export function createNavigationController(
           opening = true;
           openingFocus = options?.focus;
           returningFocus = undefined;
+          // A passing visit leaves as a dismissal does: back to its opener when
+          // that is the page opening, else replaced by it. Settings returns to
+          // that visit, so it never replaces it. Any forward entries stay.
+          const dismiss =
+            options?.dismiss ||
+            (target.kind !== "settings" &&
+              passes(history.snapshot().current.id));
           const previous = history.snapshot().previous;
           if (
-            options?.dismiss &&
+            dismiss &&
             previous &&
             targetKey(previous.target) === targetKey(target) &&
             history.returnTo(previous.id)
@@ -454,7 +471,7 @@ export function createNavigationController(
             if (openingFocus) returningFocus = openingFocus;
             return active.promise;
           }
-          if (options?.replace || options?.dismiss) history.replace(target);
+          if (options?.replace || dismiss) history.replace(target);
           else {
             const { current, previous } = history.snapshot();
             if (
@@ -594,6 +611,15 @@ export function createNavigationController(
         return true;
       });
     },
+    /** While registered, the page presenting visit `entryId` reports through
+     * `passes` whether it holds anything to come back to. When it holds
+     * nothing, the next page opened from it replaces it in history. */
+    passThrough(entryId: string, passes: () => boolean) {
+      passing.set(entryId, passes);
+      return () => {
+        if (passing.get(entryId) === passes) passing.delete(entryId);
+      };
+    },
     /** Host-only traversal to a retained visit; does not retire dismissed content. */
     returnTo(entryId: string) {
       return transaction(() => !disposed && history.returnTo(entryId));
@@ -634,6 +660,7 @@ export function createNavigationController(
         const operation = active;
         effects.push(() => operation.controller.abort(NAVIGATION_ABORTED));
         listeners.clear();
+        passing.clear();
         history.dispose();
       });
     },

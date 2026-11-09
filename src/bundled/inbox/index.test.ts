@@ -1,31 +1,10 @@
 // @vitest-environment jsdom
 import { afterEach, expect, it, vi } from "vitest";
 import { apply } from "./index";
+import manifest from "./manifest.json";
 
 afterEach(() => vi.restoreAllMocks());
-it.each([
-  ["MacIntel", { key: "a", mod: true, ctrl: true }],
-  ["Win32", { key: "e", mod: true, shift: true }],
-])("on %s, Archive waits for an open conversation", (platform, binding) => {
-  vi.spyOn(navigator, "platform", "get").mockReturnValue(platform);
-  const shortcuts = { register: vi.fn() };
-  apply({
-    pages: { register: vi.fn() },
-    relay: {},
-    navigation: {},
-    shortcuts,
-  } as unknown as Parameters<typeof apply>[0]);
-  const [shortcut] = shortcuts.register.mock.calls[0] ?? [];
-  expect(shortcut).toMatchObject({
-    id: "archive-conversation",
-    binding,
-    allowInEditable: true,
-  });
-  expect(shortcut.when()).toBe(false);
-  expect(() => shortcut.run()).not.toThrow();
-});
-
-it("opens the Inbox page with filters from four chords, including from the composer", () => {
+it("opens the Activity page with filters from four chords, including from the composer", () => {
   const shortcuts = { register: vi.fn() };
   const pages = { register: vi.fn() };
   const open = vi.fn();
@@ -36,19 +15,25 @@ it("opens the Inbox page with filters from four chords, including from the compo
     shortcuts,
   } as unknown as Parameters<typeof apply>[0]);
   const registered = shortcuts.register.mock.calls.map(([item]) => item);
-  const archive = registered.find((item) => item.id === "archive-conversation");
   const cases = [
     [
       "open-unread",
-      "Open unread in Inbox",
+      "Open unread in Activity",
       "a",
       { activity: "all", attention: "unread" },
     ],
-    ["open-threads", "Open threads in Inbox", "t", { activity: "threads" }],
-    ["open-mentions", "Open mentions in Inbox", "m", { activity: "mentions" }],
-    ["open-dms", "Open DMs in Inbox", "k", { activity: "dms" }],
+    ["open-threads", "Open threads in Activity", "t", { activity: "threads" }],
+    [
+      "open-mentions",
+      "Open mentions in Activity",
+      "m",
+      { activity: "mentions" },
+    ],
+    ["open-dms", "Open DMs in Activity", "k", { activity: "dms" }],
   ] as const;
-  const orders = new Set<number>([archive.order]);
+  // No other Activity shortcut: Archive was removed with the Archived view.
+  expect(registered.map((item) => item.id)).toEqual(cases.map(([id]) => id));
+  const orders = new Set<number>();
   for (const [id, title, key, params] of cases) {
     const shortcut = registered.find((item) => item.id === id);
     expect(shortcut).toMatchObject({
@@ -57,7 +42,6 @@ it("opens the Inbox page with filters from four chords, including from the compo
       allowInEditable: true,
     });
     expect(shortcut.when).toBeUndefined();
-    expect(shortcut.order).toBeGreaterThan(archive.order);
     orders.add(shortcut.order);
     open.mockClear();
     shortcut.run();
@@ -69,10 +53,16 @@ it("opens the Inbox page with filters from four chords, including from the compo
       route: { version: 1, params },
     });
   }
-  expect(orders.size).toBe(5);
+  expect(orders.size).toBe(4);
   const [page] = pages.register.mock.calls[0] ?? [];
+  // Shown as Activity; the page id and route stay "inbox".
+  expect(page).toMatchObject({ id: "inbox", title: "Activity" });
   expect(page.route.version).toBe(1);
   expect(page.route.validate({ activity: "threads" })).toBe(true);
   expect(page.route.validate({ activity: "bogus" })).toBe(false);
   expect(page.handlesNavigation).toBeUndefined();
+});
+
+it("names the plugin Activity while keeping its buzz.inbox id", () => {
+  expect(manifest).toMatchObject({ id: "buzz.inbox", name: "Activity" });
 });

@@ -93,7 +93,13 @@ it("offers Message for a hosted agent while owned community evidence is availabl
   const user = userEvent.setup();
   try {
     expect(choices.snapshot().identities).toEqual([
-      { pubkey: person, name: "Morgan", managed: false, messageable: true },
+      {
+        pubkey: person,
+        name: "Morgan",
+        managed: false,
+        messageable: true,
+        execution: "remote",
+      },
     ]);
     f.open.mockResolvedValueOnce("hosted-dm");
     await user.tab();

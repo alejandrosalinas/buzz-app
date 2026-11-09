@@ -1,22 +1,8 @@
 .queue {
   box-sizing: border-box;
   flex-shrink: 0;
-  width: min(calc(100% - 2 * var(--space-4)), 52rem);
+  width: min(calc(100% - 2 * var(--space-4)), var(--buzz-message-width, 52rem));
   margin: 0 auto var(--space-2);
-  --queue-inset: var(--space-3);
-  padding: var(--queue-inset);
-  --queue-radius: calc(
-    var(--text-message) *
-    var(--text-message--line-height) /
-    2 +
-    var(--space-2)
-  );
-  --control-inset-radius: max(
-    0px,
-    calc(var(--queue-radius) - var(--queue-inset))
-  );
-  border-radius: var(--queue-radius);
-  background: var(--affordance-subtle);
   color: var(--text-secondary);
 }
 .list {
@@ -31,21 +17,35 @@
 }
 .row {
   display: flex;
-  flex-wrap: wrap;
   align-items: center;
   gap: var(--space-2);
-}
-.row + .row {
-  border-top: 1px solid var(--border-standard);
-  padding-top: var(--space-2);
+  box-sizing: border-box;
+  width: fit-content;
+  max-width: 85%;
+  margin-inline-start: auto;
+  /* Match the end inset to the vertical space around the xs action circle. */
+  --queue-end-inset: calc(
+    var(--space-2) +
+    max(
+      0px,
+      (
+        var(--text-message) *
+        var(--text-message--line-height) -
+        var(--space-5)
+      ) /
+      2
+    )
+  );
+  padding: var(--space-2) var(--queue-end-inset) var(--space-2) var(--space-4);
+  border: 1px dashed var(--border-standard);
+  border-radius: calc(var(--space-5) / 2 + var(--queue-end-inset) + 1px);
 }
 .content {
-  flex: 1;
+  flex: 0 1 auto;
   min-width: 0;
 }
 .preview {
   position: relative;
-  line-height: 1.1666666667;
   min-height: 1lh;
   overflow: hidden;
   display: block;
@@ -56,12 +56,12 @@
   background: transparent;
   text-align: start;
   cursor: pointer;
-  color: var(--text-quiet-control);
+  color: var(--text-secondary);
   margin: 0;
 }
 .collapsedPreview {
-  position: absolute;
-  inset: 0 0 auto;
+  position: relative;
+  display: block;
   height: 1lh;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -82,41 +82,18 @@ html[data-keyboard-navigation] .preview:focus-visible {
   outline: 2px solid var(--border-focus);
   outline-offset: -2px;
 }
-.row:hover .preview,
-html[data-keyboard-navigation] .row:focus-within .preview,
-.row [data-queue-action="send"]:not([data-disabled]):hover,
-html[data-keyboard-navigation]
-  .row
-  [data-queue-action="send"]:not([data-disabled]):focus-visible {
-  color: var(--text-standard);
-}
-.row [data-queue-action="send"]:not([data-disabled]) {
-  color: var(--text-quiet-control);
-}
 .actions {
-  --radius-capsule: var(--control-inset-radius);
-  --affordance-subtle: var(--surface-panel);
   display: flex;
   align-items: center;
-  gap: var(--space-1);
-  margin-inline-start: auto;
+  gap: var(--space-2);
+  flex-shrink: 0;
 }
 
 @media (max-width: 40.625rem) {
   .queue {
-    width: min(calc(100% - 2 * var(--space-3)), 52rem);
-  }
-}
-
-@media (hover: hover) and (pointer: fine) {
-  .row [data-remove-action] {
-    opacity: 0;
-    pointer-events: none;
-  }
-  .row [data-remove-action]:focus,
-  .row:hover [data-remove-action],
-  html[data-keyboard-navigation] .row:focus-within [data-remove-action] {
-    opacity: 1;
-    pointer-events: auto;
+    width: min(
+      calc(100% - 2 * var(--space-3)),
+      var(--buzz-message-width, 52rem)
+    );
   }
 }

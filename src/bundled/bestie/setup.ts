@@ -222,7 +222,7 @@ export function createRemoteBestie(
     /** Stops for the owner to choose Bestie's model from Builderlab's
      * catalog; choosing resumes this same request. */
     const askForModel = async (message: string) => {
-      const models = await builderlab.modelCatalog(signal);
+      const { models } = await builderlab.modelCatalog(signal);
       check();
       if (!models.length)
         throw new Error(

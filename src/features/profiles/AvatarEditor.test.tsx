@@ -194,11 +194,48 @@ it("rejects unsafe URLs before selecting the draft", async () => {
     fireEvent.change(screen.getByLabelText("Picture URL (optional)"), {
       target: { value },
     });
-    expect(screen.getByRole("button", { name: "Done" })).toBeDisabled();
+    fireEvent.click(screen.getByRole("button", { name: "Done" }));
+    expect(screen.getByLabelText("Draft picture")).toHaveTextContent(original);
     expect(
       screen.getByLabelText("Picture URL (optional)"),
     ).toHaveAccessibleDescription(/Use an HTTPS image URL/);
   }
+});
+
+it("shows a URL error after blur or an attempt, then keeps it current", async () => {
+  render(<Form />);
+  await open();
+  const url = screen.getByLabelText("Picture URL (optional)");
+  const message = /Use an HTTPS image URL/;
+  fireEvent.change(url, { target: { value: "h" } });
+  expect(url).not.toHaveAccessibleDescription(message);
+  // Enter is an attempt: it shows the error and applies nothing.
+  fireEvent.keyDown(url, { key: "Enter" });
+  expect(url).toHaveAccessibleDescription(message);
+  expect(screen.getByLabelText("Draft picture")).toHaveTextContent(original);
+  fireEvent.change(url, { target: { value: next } });
+  expect(url).not.toHaveAccessibleDescription(message);
+  fireEvent.change(url, { target: { value: "http://images.example/a.png" } });
+  expect(url).toHaveAccessibleDescription(message);
+  fireEvent.change(url, { target: { value: "" } });
+  expect(url).not.toHaveAccessibleDescription(message);
+
+  close();
+  await open();
+  const fresh = screen.getByLabelText("Picture URL (optional)");
+  fireEvent.change(fresh, { target: { value: "ftp://x" } });
+  expect(fresh).not.toHaveAccessibleDescription(message);
+  fireEvent.blur(fresh);
+  expect(fresh).toHaveAccessibleDescription(message);
+
+  close();
+  await open();
+  const attempt = screen.getByLabelText("Picture URL (optional)");
+  fireEvent.change(attempt, { target: { value: "ftp://x" } });
+  fireEvent.click(screen.getByRole("button", { name: "Done" }));
+  expect(attempt).toHaveAccessibleDescription(message);
+  expect(attempt).toHaveFocus();
+  expect(screen.getByLabelText("Draft picture")).toHaveTextContent(original);
 });
 
 it("accepts equivalent HTTPS spellings without a misleading validation error", async () => {

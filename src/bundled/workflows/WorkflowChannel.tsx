@@ -1,5 +1,6 @@
 import {
   useEffect,
+  useId,
   useCallback,
   useRef,
   useState,
@@ -10,7 +11,11 @@ import type {
   WorkflowDefinition,
 } from "../../features/workflows/types";
 import { PlayIcon, TrashIcon } from "../../shared/design-system/icons";
-import { MenuIcon, MenuItem } from "../../shared/design-system/ui/Menu";
+import {
+  MenuIcon,
+  MenuItem,
+  MenuNote,
+} from "../../shared/design-system/ui/Menu";
 import { Button } from "../../shared/design-system/ui/Button";
 import { IconButton } from "../../shared/design-system/ui/IconButton";
 import { ConfirmAction } from "./ConfirmAction";
@@ -21,6 +26,7 @@ import { saveAwaitsReadback } from "./WorkflowLanding";
 import { exactSaveReadback } from "./editor-model";
 import { DEFAULT_FORM_STATE, formStateToYaml } from "./workflowFormTypes";
 import { useWorkflowView } from "./useWorkflowView";
+import { useWorkflowCanDelete } from "./useWorkflowCanDelete";
 import {
   type ChannelLabel,
   channelIcon,
@@ -82,6 +88,7 @@ export function WorkflowChannel({
     capability.operations.snapshot,
   );
   const submission = useRef<string | null>(null);
+  const deleteReasonId = useId();
   const editorGeneration = useRef(0);
   const [draft, setDraft] = useState<Draft | null>(() =>
     draftFor(initialSelection, 0),
@@ -106,6 +113,7 @@ export function WorkflowChannel({
     !!draft?.operationId && (!operation || operation.outcome === "pending");
   const [localDraftAtRisk, setLocalDraftAtRisk] = useState(false);
   const readonly = !!draft?.original && draft.original.owner !== viewer;
+  const canDelete = useWorkflowCanDelete(capability, draft?.original);
   const dirty = !!draft && (draft.yaml !== draft.initial || localDraftAtRisk);
   const atRisk = dirty || !!draft?.operationId;
   // A run request never changes configuration, so its lost receipt cannot
@@ -236,12 +244,22 @@ export function WorkflowChannel({
     if (
       !draft?.original ||
       submission.current ||
-      readonly ||
       unresolvedWrite ||
-      !capability.availability.delete ||
       draft.operationId
     )
       return;
+    if (
+      !capability.permissions.canDelete(draft.original) ||
+      !capability.availability.delete
+    ) {
+      setConfirmDelete(false);
+      setError(
+        capability.availability.delete
+          ? "You no longer have permission to delete this workflow. Refresh and try again."
+          : "Workflow deletion is unavailable on this connection.",
+      );
+      return;
+    }
     // The page owns submission and recovery after this editor is discarded.
     const definition = draft.original;
     setDraft(null);
@@ -371,21 +389,31 @@ export function WorkflowChannel({
               )
             }
             actions={
-              !readonly && (
-                <MenuItem
-                  tone="danger"
-                  disabled={
-                    !!draft.operationId ||
-                    unresolvedWrite ||
-                    !capability.availability.delete
-                  }
-                  onClick={() => setConfirmDelete(true)}
-                >
-                  <MenuIcon>
-                    <TrashIcon size={14} />
-                  </MenuIcon>
-                  Delete workflow
-                </MenuItem>
+              draft.original && (
+                <>
+                  <MenuItem
+                    tone="danger"
+                    aria-describedby={!canDelete ? deleteReasonId : undefined}
+                    disabled={
+                      !canDelete ||
+                      !!draft.operationId ||
+                      unresolvedWrite ||
+                      !capability.availability.delete
+                    }
+                    onClick={() => setConfirmDelete(true)}
+                  >
+                    <MenuIcon>
+                      <TrashIcon size={14} />
+                    </MenuIcon>
+                    Delete workflow
+                  </MenuItem>
+                  {!canDelete && (
+                    <MenuNote id={deleteReasonId}>
+                      Only the author or their verified agent owner can delete
+                      this workflow.
+                    </MenuNote>
+                  )}
+                </>
               )
             }
             runs={
@@ -486,6 +514,7 @@ export function WorkflowChannel({
                 title="Leave this draft?"
                 description="Unsaved draft changes will be discarded. Any submitted operation stays with the captured community session; leaving does not cancel or repeat it."
                 action="Leave draft"
+                destructive
                 onConfirm={() => open(pendingSelection)}
                 onCancel={() => setPendingSelection(null)}
               />

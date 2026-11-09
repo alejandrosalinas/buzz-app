@@ -170,11 +170,11 @@ export type ComposerAccessoryProps = Readonly<{
   message?: ChannelMessage;
   /** Agents already represented by subsequent content in this request's visible run. */
   representedAgents?: readonly string[] | undefined;
-  /** Agents with a later public reply to this request; their stopped notes
+  /** Agents with a later public reply to this request; their outcome captions
    * follow that reply instead of this message. */
   repliedAgents?: readonly string[] | undefined;
   /** The request this row is its author's latest public reply to; that
-   * author's stopped note follows this row. */
+   * author's outcome caption follows this row. */
   stoppedRequest?: ChannelMessage | undefined;
   /** Host geometry for response-side accessories. */
   messageLayout?: "timeline" | "thread" | "continuation" | undefined;
@@ -221,15 +221,16 @@ export type MessageRenderer = Readonly<{
   ): boolean;
   component: ComponentType<TargetOpener & { message: ChannelMessage }>;
 }>;
-/** One ⋯ menu entry for a message. The host owns the menu, focus and row lifetime. */
+/** A message action. The host owns placement, focus and row lifetime. */
 export type MessageAction = Readonly<{
   id: string;
   title: string;
   icon?: ComponentType;
   matches(message: ChannelMessage, session: RelaySession): boolean;
-  /** A menu contribution (such as a submenu) mounts inside the host menu. */
-  placement?: "menu";
-  /** Mounted after the menu closes by default; call close() to dismiss. */
+  /** `menu` mounts inside the menu. `toolbar` uses a host icon button.
+   * Without a placement, the host adds a menu entry that opens the component. */
+  placement?: "menu" | "toolbar";
+  /** Mounted on activation, or inside the menu for `menu`; call close() to dismiss. */
   component: ComponentType<
     TargetOpener & {
       message: ChannelMessage;

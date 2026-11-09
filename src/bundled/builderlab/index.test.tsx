@@ -5,6 +5,7 @@ import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import {
   act,
   cleanup,
+  fireEvent,
   render,
   screen,
   waitFor,
@@ -29,7 +30,6 @@ import * as builderlab from "./index";
 import { PluginRuntime } from "../../plugins/runtime";
 import type { PluginInfo } from "../../plugins/types";
 import manifest from "./manifest.json";
-import type { OAuthCallback } from "./oauth/browser";
 import { deferred } from "./test-helpers";
 import { communityFixture } from "./agents/community-testing";
 import { stubAvatarBrowserApis } from "../../features/agents/avatar-testing";
@@ -54,6 +54,7 @@ function provideKnownCommunities(root: Context, viewer: string) {
     apply: vi.fn(async () => {}),
   };
   root.provide("knownCommunities", knownCommunities);
+  root.provide("communityJoin", { open: vi.fn(() => true) });
   return knownCommunities;
 }
 beforeEach(() => {
@@ -123,12 +124,51 @@ function provideAgents(
   });
 }
 
+/** The bundled plugin as an FI build loads it; this module loaded without
+ * the native session in `inject`. */
+const fiPlugin = async () => ({
+  ...builderlab,
+  inject: [...builderlab.inject, "federatedIdentity"],
+});
+const reply = (result: unknown): HostResponse => ({
+  status: 200,
+  headers: {},
+  body: JSON.stringify(result),
+});
+
+/** An FI build whose native session forwards each request to `respond` at
+ * the URL native sends it to. */
+function fiBuild(
+  respond: (url: string, body: string) => Promise<HostResponse>,
+) {
+  vi.stubEnv("VITE_BUZZ_FEDERATED_IDENTITY", "1");
+  vi.stubEnv("VITE_BUZZ_LIVE", "0");
+  const identity = federatedFixture();
+  const url = (path: string) => `https://builderlab.example${path}`;
+  identity.request.mockImplementation(({ path, body }) =>
+    respond(url(path), body ?? ""),
+  );
+  return {
+    ...identity,
+    /** What the plugin asked native to send, in order. */
+    forwarded: () =>
+      identity.request.mock.calls.map(([input]) => ({
+        ...input,
+        url: url(input.path),
+        body: input.body ?? "",
+      })),
+  };
+}
+
 it.each([undefined, "", "http://builderlab.example"])(
-  "an unavailable desktop build (%s) shows setup guidance without login or an agent type",
+  "an FI build with an unusable Builderlab address (%s) shows setup guidance without login or an agent type",
   async (url) => {
+    const identity = fiBuild(async () => {
+      throw new Error("No request expected");
+    });
     vi.stubEnv("VITE_BUZZ_BUILDERLAB_URL", url);
     const root = new Context();
-    const runtime = new PluginRuntime(root, async () => builderlab);
+    const runtime = new PluginRuntime(root, fiPlugin);
     new HostService(root);
     provideApps(root);
     const cards = new SettingsCardsService(root);
@@ -136,6 +176,7 @@ it.each([undefined, "", "http://builderlab.example"])(
     const community = communityFixture(null);
     root.provide("relay", community.relay as never);
     root.provide("navigation", { open: vi.fn() } as never);
+    root.provide("federatedIdentity", identity.service);
     const knownCommunities = provideKnownCommunities(root, community.viewer);
     const agents = provideAgents(root, community);
     try {
@@ -165,6 +206,7 @@ it.each([undefined, "", "http://builderlab.example"])(
           ([command]) => command !== "jev_classifier_status",
         ),
       ).toEqual([]);
+      expect(identity.request).not.toHaveBeenCalled();
       expect(agents.types()).toHaveLength(0);
       // No sign-in is possible, so no sync owner runs.
       expect(knownCommunities.subscribe).not.toHaveBeenCalled();
@@ -185,38 +227,71 @@ it.each([undefined, "", "http://builderlab.example"])(
   },
 );
 
+it("a build with neither NIP-FI nor the development broker has no Builderlab", async () => {
+  vi.stubEnv("VITE_BUZZ_FEDERATED_IDENTITY", "0");
+  vi.stubEnv("VITE_BUZZ_LIVE", "0");
+  const root = new Context();
+  const runtime = new PluginRuntime(root, async () => builderlab);
+  new HostService(root);
+  provideApps(root);
+  const cards = new SettingsCardsService(root);
+  const decisions = new DecisionsService(root, localStorage);
+  const community = communityFixture(null);
+  root.provide("relay", community.relay as never);
+  root.provide("navigation", { open: vi.fn() } as never);
+  const knownCommunities = provideKnownCommunities(root, community.viewer);
+  const agents = provideAgents(root, community);
+  try {
+    runtime.reconcile([
+      {
+        manifest: { ...manifest, apiVersion: 1 },
+        source: "bundled",
+        revision: "bundled",
+        enabled: true,
+        previous: null,
+        reloadable: false,
+        error: null,
+      },
+    ]);
+    await waitFor(() =>
+      expect(runtime.snapshot()[manifest.id]?.status).toBe("active"),
+    );
+    expect(cards.snapshot()).toEqual([]);
+    expect(agents.types()).toEqual([]);
+    expect(decisions.providers()).toEqual([]);
+    expect(knownCommunities.subscribe).not.toHaveBeenCalled();
+    expect(
+      native.invoke.mock.calls.filter(
+        ([command]) => command !== "jev_classifier_status",
+      ),
+    ).toEqual([]);
+  } finally {
+    cleanup();
+    await runtime.dispose();
+    await root.fiber.dispose();
+    await community.dispose();
+  }
+});
+
 it.each([undefined, false, true])(
-  "gates remote agents on the login capability %s and refreshes it on sign-in",
+  "gates remote agents on capability %s and refreshes after one minute without signing in again",
   async (initialCapability) => {
+    let now = Date.now();
+    const clock = vi.spyOn(Date, "now").mockImplementation(() => now);
     let capability = initialCapability;
-    native.invoke.mockImplementation(async (command, input) => {
-      if (command === "oauth_callback_begin")
-        return {
-          id: "attempt",
-          callbackUrl: "http://127.0.0.1:12345/callback",
-        };
-      if (command === "oauth_callback_wait")
-        return { parameters: [["code", "one-time"]] };
-      if (command === "oauth_callback_cancel") return;
-      if (command !== "plugin_host_request") return;
-      const { url } = input.request;
-      return {
-        status: 200,
-        headers: {},
-        body: JSON.stringify(
-          url.endsWith("/exchange")
-            ? { session_credential: "private-token" }
-            : url.endsWith("/me")
-              ? {
-                  subject: "user",
-                  capabilities: { can_use_remote_agents: capability },
-                }
-              : { status: 1, agents: [] },
-        ),
-      };
-    });
+    native.invoke.mockResolvedValue(undefined);
+    const identity = fiBuild(async (url) =>
+      reply(
+        url.endsWith("/me")
+          ? {
+              subject: "user",
+              capabilities: { can_use_remote_agents: capability },
+            }
+          : { status: 1, agents: [] },
+      ),
+    );
     const root = new Context();
-    const runtime = new PluginRuntime(root, async () => builderlab);
+    const runtime = new PluginRuntime(root, fiPlugin);
     new HostService(root);
     provideApps(root);
     const cards = new SettingsCardsService(root);
@@ -224,6 +299,7 @@ it.each([undefined, false, true])(
     const community = communityFixture(null);
     root.provide("relay", community.relay as never);
     root.provide("navigation", { open: vi.fn() } as never);
+    root.provide("federatedIdentity", identity.service);
     provideKnownCommunities(root, community.viewer);
     const agents = provideAgents(root, community);
     try {
@@ -250,9 +326,30 @@ it.each([undefined, false, true])(
       );
       const user = userEvent.setup();
       await user.click(
-        screen.getByRole("button", { name: "Sign in with Builderlab" }),
+        screen.getByRole("button", { name: "Log in to Builderlab, attention" }),
       );
-      await screen.findByRole("button", { name: "Sign out" });
+      const dialog = await screen.findByRole("dialog", { name: "Builderlab" });
+      await user.click(
+        within(dialog).getByRole("button", { name: "Sign in with Builderlab" }),
+      );
+      await within(dialog).findByRole("button", {
+        name: "Identity → Organization sign-in",
+      });
+      if (capability !== true) {
+        expect(
+          within(dialog).getByText(
+            "Builderlab remote agents are unavailable for this account.",
+          ),
+        ).toBeVisible();
+      }
+      await user.keyboard("{Escape}");
+      if (capability !== true) {
+        const status = screen.getByText("Unavailable for this account", {
+          selector: ".buzz-preference-row-description span",
+        });
+        await waitFor(() => expect(status).toHaveFocus());
+        expect(status).toHaveAttribute("tabindex", "-1");
+      }
       const type = agents.types()[0];
       if (!type?.remote) throw new Error("Missing Builderlab agent type");
       if (capability === true) {
@@ -262,43 +359,38 @@ it.each([undefined, false, true])(
         expect(type.provider?.snapshot().readiness).toBe("ready");
       } else {
         expect(
-          screen.getByRole("heading", { name: "Coming soon" }),
+          screen.getByRole("heading", { name: "Remote agents" }),
         ).toBeInTheDocument();
-        expect(
-          screen.getByRole("button", { name: "Coming soon, attention" }),
-        ).toBeEnabled();
+        const row = screen
+          .getByText("Builderlab", { selector: ".buzz-preference-row-label" })
+          .closest(".buzz-preference-row");
+        expect(row).toHaveTextContent("Unavailable for this account");
+        expect(row?.querySelector("button")).toBeNull();
         await expect(
           type.remote.provision({
             name: "Helper",
             community: "wss://community.example",
             signal: new AbortController().signal,
           }),
-        ).rejects.toThrow("coming soon");
+        ).rejects.toThrow("unavailable for this account");
         // The known-communities sync follows sign-in, not the remote agents gate.
         expect(
-          native.invoke.mock.calls.filter(
-            ([command, input]) =>
-              command === "plugin_host_request" &&
-              !/\/(exchange|me)$/.test(input.request.url) &&
-              !input.request.url.includes("/known-communities/"),
-          ),
+          identity.forwarded().filter(({ url }) => url.includes("/beekeeper/")),
         ).toHaveLength(0);
         expect(localStorage.length).toBe(0);
-        await user.click(
-          screen.getByRole("button", { name: "Coming soon, attention" }),
-        );
-        const dialog = screen.getByRole("dialog", { name: "Builderlab" });
-        expect(
-          within(dialog).getByText(/remote agents are coming soon/),
-        ).toBeVisible();
-        await user.keyboard("{Escape}");
       }
       capability = capability !== true;
-      await user.click(screen.getByRole("button", { name: "Sign out" }));
-      await user.click(
-        screen.getByRole("button", { name: "Sign in with Builderlab" }),
-      );
-      await screen.findByRole("button", { name: "Sign out" });
+      const accountReads = () =>
+        identity.forwarded().filter(({ url }) => url.endsWith("/me")).length;
+      const before = accountReads();
+      now += 59_999;
+      await act(() => type.provider?.check());
+      expect(accountReads()).toBe(before);
+      now += 1;
+      await act(() => type.provider?.check());
+      expect(accountReads()).toBe(before + 1);
+      expect(identity.service.signIn).toHaveBeenCalledOnce();
+      expect(identity.service.signOut).not.toHaveBeenCalled();
       if (capability) {
         expect(
           await screen.findByText("No remote agents yet."),
@@ -306,11 +398,12 @@ it.each([undefined, false, true])(
         expect(type.provider?.snapshot().readiness).toBe("ready");
       } else {
         expect(
-          screen.getByRole("heading", { name: "Coming soon" }),
+          screen.getByRole("heading", { name: "Remote agents" }),
         ).toBeInTheDocument();
         expect(type.provider?.snapshot().readiness).toBe("attention");
       }
     } finally {
+      clock.mockRestore();
       cleanup();
       await runtime.dispose();
       await root.fiber.dispose();
@@ -322,7 +415,6 @@ it.each([undefined, false, true])(
 it.each([true, false])(
   "desktop login respects native identity ownership with remote agents=%s",
   async (canUseRemoteAgents) => {
-    vi.stubEnv("VITE_BUZZ_LIVE", "0");
     // Without the development broker, its communities report unavailable.
     vi.stubGlobal(
       "fetch",
@@ -330,25 +422,15 @@ it.each([true, false])(
     );
     const viewer = "01".repeat(32);
     const linkFinished = deferred<void>();
-    native.invoke.mockImplementation(async (command, input) => {
+    native.invoke.mockImplementation(async (command) => {
       if (command === "nsec_backup_session" || command === "nsec_backup_retry")
         return;
       if (command === "identity_restore") return viewer;
-      if (command === "oauth_callback_begin")
-        return {
-          id: "synthetic-attempt",
-          callbackUrl: "http://127.0.0.1:12345/callback",
-        };
-      if (command === "oauth_callback_wait")
-        return { parameters: [["code", "synthetic-code"]] };
-      if (command === "oauth_callback_cancel") return;
-      if (command !== "plugin_host_request")
-        throw new Error(`Unexpected command ${command}`);
-      const { url } = input.request;
+      throw new Error(`Unexpected command ${command}`);
+    });
+    const identity = fiBuild(async (url) => {
       let result: unknown;
-      if (url.endsWith("/exchange"))
-        result = { session_credential: "synthetic-credential" };
-      else if (url.endsWith("/me"))
+      if (url.endsWith("/me"))
         result = {
           subject: "synthetic-account",
           expires_at: "2030",
@@ -357,14 +439,16 @@ it.each([true, false])(
       else if (url.endsWith("/list-agents")) result = { status: 1, agents: [] };
       else if (url.endsWith("/v1/buzz/communities/list"))
         result = { communities: [], can_create: true };
+      else if (url.endsWith("/v1/buzz/known-communities/list"))
+        result = { communities: [] };
       else if (url.endsWith("/nostr-identities/current")) {
         result = { identity: { pubkey_hex: viewer } };
         linkFinished.resolve();
       } else throw new Error(`Unexpected request ${url}`);
-      return { status: 200, headers: {}, body: JSON.stringify(result) };
+      return reply(result);
     });
     const root = new Context();
-    const runtime = new PluginRuntime(root, async () => builderlab);
+    const runtime = new PluginRuntime(root, fiPlugin);
     new HostService(root);
     provideApps(root);
     const cards = new SettingsCardsService(root);
@@ -372,6 +456,7 @@ it.each([true, false])(
     const community = communityFixture(null);
     root.provide("relay", community.relay as never);
     root.provide("navigation", { open: vi.fn() } as never);
+    root.provide("federatedIdentity", identity.service);
     provideKnownCommunities(root, community.viewer);
     provideAgents(root, community);
     const backupCalls = () =>
@@ -400,11 +485,15 @@ it.each([true, false])(
         screen.getByRole("button", { name: "Sign in with Builderlab" }),
       );
       expect(
-        await screen.findByRole("button", { name: "Sign out" }),
+        await screen.findByRole("button", {
+          name: "Identity → Organization sign-in",
+        }),
       ).toBeEnabled();
       expect(
         await screen.findByText(
-          canUseRemoteAgents ? "No remote agents yet." : "Coming soon",
+          canUseRemoteAgents
+            ? "No remote agents yet."
+            : "Unavailable for this account",
         ),
       ).toBeInTheDocument();
       // Communities share the one sign-in and its identity link.
@@ -412,28 +501,27 @@ it.each([true, false])(
         await screen.findByText("No hosted communities yet"),
       ).toBeInTheDocument();
       expect(screen.getByText(/Buzz identity connected/)).toBeVisible();
-      expect(screen.getAllByRole("button", { name: "Sign out" })).toHaveLength(
-        1,
-      );
+      expect(
+        screen.getAllByRole("button", {
+          name: "Identity → Organization sign-in",
+        }),
+      ).toHaveLength(1);
       expect(fetch).not.toHaveBeenCalled();
       await linkFinished.promise;
       await waitFor(() =>
-        expect(native.invoke).toHaveBeenCalledWith("nsec_backup_retry", {
-          source: "builderlab",
-        }),
+        expect(native.invoke).toHaveBeenCalledWith("nsec_backup_retry"),
       );
       expect(native.invoke).toHaveBeenCalledWith("nsec_backup_session", {
-        source: "builderlab",
         generation: expect.any(Number),
-        credential: "synthetic-credential",
+        federated: "user:1",
       });
-      await user.click(screen.getByRole("button", { name: "Sign out" }));
+      await act(() => identity.service.signOut());
       expect(
         await screen.findByRole("button", { name: "Sign in with Builderlab" }),
       ).toBeEnabled();
-      expect(backupCalls().at(-1)?.[1]).toMatchObject({ credential: null });
+      expect(backupCalls().at(-1)?.[1]).toMatchObject({ federated: null });
       await runtime.dispose();
-      expect(backupCalls().at(-1)?.[1]).toMatchObject({ credential: null });
+      expect(backupCalls().at(-1)?.[1]).toMatchObject({ federated: null });
     } finally {
       cleanup();
       await runtime.dispose();
@@ -544,9 +632,7 @@ it("signs in through the native NIP-FI session in an FI build, with no OAuth or 
     });
     await waitFor(() =>
       expect(native.invoke).toHaveBeenCalledWith("nsec_backup_session", {
-        source: "builderlab",
         generation: expect.any(Number),
-        credential: null,
         federated: "user:1",
       }),
     );
@@ -571,9 +657,7 @@ it("signs in through the native NIP-FI session in an FI build, with no OAuth or 
       await screen.findByRole("button", { name: "Sign in with Builderlab" }),
     ).toBeEnabled();
     expect(native.invoke).toHaveBeenLastCalledWith("nsec_backup_session", {
-      source: "builderlab",
       generation: expect.any(Number),
-      credential: null,
       federated: null,
     });
   } finally {
@@ -584,12 +668,18 @@ it("signs in through the native NIP-FI session in an FI build, with no OAuth or 
   }
 });
 
-it.each([
+it.for([
   "shared login and re-enable",
   "creation sign-in recovery",
   "creation setup recovery",
   "instructions and deletion",
-])("coordinates hosted agents: %s", async (flow) => {
+])("coordinates hosted agents: %s", async (flow, { signal }) => {
+  let phase = "initialize plugin";
+  const reportTimeout = () => {
+    console.error(`Hosted-agent journey aborted: ${flow}; phase: ${phase}`);
+    screen.debug(document.body, 20_000);
+  };
+  signal.addEventListener("abort", reportTimeout, { once: true });
   const user = userEvent.setup();
   const hostedKey = "de".repeat(32);
   const browserKey = "09".repeat(32);
@@ -602,41 +692,21 @@ it.each([
     subject: "user",
   };
   let instructionsSave: ReturnType<typeof deferred<HostResponse>> | undefined;
-  let loginCallback: ReturnType<typeof deferred<OAuthCallback>> | undefined;
+  let catalogLoad: ReturnType<typeof deferred<void>> | undefined;
+  /** Holds the next native sign-in open in the browser until it settles. */
+  let signInGate: ReturnType<typeof deferred<void>> | undefined;
   const backupHandoff = deferred<void>();
-  const hostRequests = () =>
-    native.invoke.mock.calls
-      .filter(([command]) => command === "plugin_host_request")
-      .map(([, input]) => input);
-  const requestsTo = (endpoint: string) =>
-    hostRequests().filter((input) =>
-      input.request.url.endsWith(`/${endpoint}`),
-    );
-  const loginWaits = () =>
-    native.invoke.mock.calls.filter(
-      ([command]) => command === "oauth_callback_wait",
-    );
-  native.invoke.mockImplementation(async (command, input) => {
+  native.invoke.mockImplementation(async (command) => {
     if (command === "nsec_backup_session") return backupHandoff.promise;
     if (command === "nsec_backup_retry") return;
-    if (command === "oauth_callback_begin")
-      return {
-        id: "native-attempt-id",
-        callbackUrl: `http://127.0.0.1:12345${input.callbackPath}`,
-      };
-    if (command === "oauth_callback_wait")
-      return loginCallback?.promise ?? { parameters: [["code", "one-time"]] };
-    if (command === "oauth_callback_cancel") return;
     if (command === "identity_restore") return community.viewer;
     if (command === "identity_prepare_remote_agent_authorization")
       return ["auth", community.viewer, "", "ef".repeat(64)];
-    if (command !== "plugin_host_request")
-      throw new Error(`Unexpected command ${command}`);
-    const { url, body } = input.request;
+    throw new Error(`Unexpected command ${command}`);
+  });
+  const identity = fiBuild(async (url, body) => {
     let result: unknown;
-    if (url.endsWith("/exchange")) {
-      result = { session_credential: "private-token" };
-    } else if (url.endsWith("/me")) {
+    if (url.endsWith("/me")) {
       result = {
         subject: "user",
         email: "a@example.com",
@@ -662,6 +732,7 @@ it.each([
           : [],
       };
     } else if (url.endsWith("/get-model-catalog")) {
+      await catalogLoad?.promise;
       result = {
         models: [
           {
@@ -704,10 +775,30 @@ it.each([
     } else {
       throw new Error(`Unexpected Builderlab request ${url}`);
     }
-    return { status: 200, headers: {}, body: JSON.stringify(result) };
+    return reply(result);
+  });
+  const requestsTo = (endpoint: string) =>
+    identity.forwarded().filter(({ url }) => url.endsWith(`/${endpoint}`));
+  const signIns = vi.mocked(identity.service.signIn);
+  const signIn = signIns.getMockImplementation();
+  signIns.mockImplementation(async () => {
+    const gate = signInGate;
+    if (gate) {
+      identity.publish({ status: "signing-in", failure: null });
+      try {
+        await gate.promise;
+      } catch {
+        identity.publish({ status: "signed-out", failure: "browser" });
+        return identity.service.snapshot();
+      }
+      if (identity.service.snapshot().status !== "signing-in")
+        return identity.service.snapshot();
+    }
+    if (!signIn) throw new Error("Missing fixture sign-in");
+    return signIn();
   });
   const root = new Context();
-  const runtime = new PluginRuntime(root, async () => builderlab);
+  const runtime = new PluginRuntime(root, fiPlugin);
   new HostService(root);
   provideApps(root);
   const cards = new SettingsCardsService(root);
@@ -715,6 +806,7 @@ it.each([
   const community = communityFixture();
   root.provide("relay", community.relay as never);
   root.provide("navigation", { open: vi.fn() } as never);
+  root.provide("federatedIdentity", identity.service);
   const knownCommunities = provideKnownCommunities(root, community.viewer);
   const agents = provideAgents(root, community);
   const plugin: PluginInfo = {
@@ -754,13 +846,12 @@ it.each([
       );
       expect(
         await within(providerDialog).findByRole("button", {
-          name: "Sign out",
+          name: "Identity → Organization sign-in",
         }),
       ).toBeEnabled();
       expect(native.invoke).toHaveBeenCalledWith("nsec_backup_session", {
-        source: "builderlab",
         generation: expect.any(Number),
-        credential: "private-token",
+        federated: "user:1",
       });
       picker.unmount();
       const card = cards.snapshot()[0];
@@ -769,7 +860,9 @@ it.each([
       const Card = card.component;
       const mounted = render(<Card active={() => true} />);
       expect(
-        await screen.findByRole("button", { name: "Sign out" }),
+        await screen.findByRole("button", {
+          name: "Identity → Organization sign-in",
+        }),
       ).toBeEnabled();
       expect(
         await screen.findByText("No remote agents yet."),
@@ -777,7 +870,6 @@ it.each([
       expect(screen.getByText("Signed in as a@example.com.")).toHaveRole(
         "status",
       );
-      expect(document.body).not.toHaveTextContent("private-token");
       // A sign-in Builderlab allows decisions for offers Builderlab as a
       // decision provider. It answers, since the user chose no other.
       const [provider] = decisions.providers();
@@ -785,23 +877,20 @@ it.each([
       expect(provider?.status()).toBe("ready");
       expect(decisions.backend()).toBe("block.builderlab/builderlab");
       expect(decisions.status()).toBe("ready");
-      expect(native.invoke).toHaveBeenCalledWith("oauth_callback_wait", {
-        id: "native-attempt-id",
-      });
       // Sign-in also checks the account's linked Buzz identity, and the
-      // account's community list follows through the same wiring: the complete
-      // list is read under the session credential. The card's Communities
-      // section reads the account, its identity and its hosted communities.
+      // account's community list follows through the same native session:
+      // the complete list is read once. The card's Communities section reads
+      // the account's identity and its hosted communities.
       await waitFor(() => expect(knownCommunities.apply).toHaveBeenCalled());
       await waitFor(() =>
         expect(
-          hostRequests()
-            .map((input) => input.request.url.split("/").at(-1))
+          identity
+            .forwarded()
+            .map(({ url }) => url.split("/").at(-1))
             .sort(),
         ).toEqual([
           "current",
           "current",
-          "exchange",
           "list",
           "list",
           "list-agents",
@@ -809,31 +898,13 @@ it.each([
           "me",
         ]),
       );
-      const requests = hostRequests();
-      const [account, sync] = [
-        requests.filter((input) => !input.request.url.includes("/v1/buzz/")),
-        requests.filter((input) =>
-          input.request.url.includes("/v1/buzz/known-communities/"),
-        ),
-      ];
-      expect(account).toHaveLength(4);
-      expect(
-        requests.every(
-          (input) =>
-            input.id === "block.builderlab" && input.revision === "bundled",
-        ),
-      ).toBe(true);
-      // Prove the account login supplies this consumer's credential through the real plugin wiring.
-      expect(account.at(-1).request.headers["X-BB-Session-Credential"]).toBe(
-        "private-token",
-      );
-      expect(sync.map((input) => input.request.url)).toEqual([
+      const sync = identity
+        .forwarded()
+        .filter(({ url }) => url.includes("/v1/buzz/known-communities/"));
+      expect(sync.map(({ url }) => url)).toEqual([
         "https://builderlab.example/api/goose/v1/buzz/known-communities/list",
       ]);
-      expect(sync[0].request.headers["X-BB-Session-Credential"]).toBe(
-        "private-token",
-      );
-      expect(sync[0].request.body).toBe("{}");
+      expect(sync[0]?.body).toBe("{}");
       // Both writes happen after Beekeeper has returned the identity. Neither
       // failure may turn a retry into a second backend creation.
       for (const failedKey of [
@@ -883,9 +954,10 @@ it.each([
         "runtime",
         "block.builderlab/builderlab",
       ]);
-      const hostedRequests = hostRequests()
-        .filter((input) => /\/(register|attest)-agent$/.test(input.request.url))
-        .map((input) => JSON.parse(input.request.body));
+      const hostedRequests = identity
+        .forwarded()
+        .filter(({ url }) => /\/(register|attest)-agent$/.test(url))
+        .map(({ body }) => JSON.parse(body));
       const provisions = hostedRequests.filter(
         (body) => body.agent_name === "Hosted",
       );
@@ -910,7 +982,7 @@ it.each([
       });
       expect(
         requestsTo("update-agent-profile").map((input) =>
-          JSON.parse(input.request.body),
+          JSON.parse(input.body),
         ),
       ).toEqual([
         {
@@ -949,8 +1021,14 @@ it.each([
     if (!fresh) throw new Error("Missing reactivated Builderlab login card");
     const FreshCard = fresh.component;
     render(<FreshCard active={() => true} />);
+    if (flow === "shared login and re-enable") {
+      // The native session outlives the plugin, so re-enabling keeps it.
+      expect(await screen.findByText("Signed in as a@example.com.")).toHaveRole(
+        "status",
+      );
+      return;
+    }
     expect(screen.getByRole("status")).toHaveTextContent("Sign in securely");
-    if (flow === "shared login and re-enable") return;
     if (flow === "instructions and deletion") {
       await act(async () => {
         await agents.create({
@@ -967,56 +1045,91 @@ it.each([
       flow === "creation sign-in recovery" ||
       flow === "creation setup recovery"
     ) {
+      phase = "open creation form";
       await user.click(
         screen.getByRole("button", { name: "Create your first agent" }),
       );
       const createDialog = screen.getByRole("dialog", { name: "Create agent" });
       expect(
         within(createDialog).getByRole("combobox", { name: "Harness" }),
-      ).toHaveTextContent("Builderlab (hosted)");
+      ).toHaveTextContent(/^Builderlab$/);
       expect(
         within(createDialog).getByRole("textbox", {
           name: "Instructions Optional",
         }),
       ).toBeVisible();
       const name = within(createDialog).getByRole("textbox", { name: "Name" });
-      const create = within(createDialog).getByRole("button", {
-        name: "Create agent",
-      });
+      // The introduction retains the hidden form. Query only its action
+      // footer so role/name lookups do not walk those unrelated controls.
+      const footer = createDialog.querySelector("footer");
+      if (!footer) throw new Error("Missing creation actions");
+      const actions = within(footer);
+      let create = actions.getByRole("button", { name: "Create agent" });
       expect(create).toBeDisabled();
-      await user.type(name, "Browser");
+      // Fixed setup values; this journey exercises provisioning and recovery,
+      // rather than the individual keystrokes already covered by the form.
+      fireEvent.change(name, { target: { value: "Browser" } });
       expect(create).toBeDisabled();
+      expect(
+        within(createDialog).getByRole("button", {
+          name: "Model: Choose a model",
+        }),
+      ).toBeDisabled();
+      expect(
+        within(createDialog).getByRole("combobox", { name: "Thinking" }),
+      ).toBeDisabled();
       const signIn = () =>
         within(createDialog).getByRole("button", {
-          name: "Sign in with Builderlab",
+          name: "Sign in to Builderlab",
         });
       if (flow === "creation sign-in recovery") {
-        const beforeCreateLogin = loginWaits().length;
-        loginCallback = deferred();
+        const beforeCreateLogin = signIns.mock.calls.length;
+        signInGate = deferred();
         try {
           await user.click(signIn());
           await waitFor(() =>
-            expect(loginWaits()).toHaveLength(beforeCreateLogin + 1),
+            expect(signIns).toHaveBeenCalledTimes(beforeCreateLogin + 1),
           );
           expect(create).toBeDisabled();
           expect(name).toHaveValue("Browser");
-          loginCallback.reject(new Error("Browser could not open."));
+          signInGate.reject(new Error("Browser could not open."));
           expect(
             await within(createDialog).findByRole("alert"),
-          ).toHaveTextContent("Browser could not open.");
+          ).toHaveTextContent("Builderlab sign-in did not finish. Try again.");
           expect(create).toBeDisabled();
           expect(name).toHaveValue("Browser");
-          // The wait itself can be abandoned from the dialog.
-          loginCallback = deferred();
+          // Pending native sign-in shows a cancellable spinner.
+          signInGate = deferred();
           await user.click(signIn());
-          await user.click(
-            await within(createDialog).findByRole("button", {
-              name: "Cancel sign-in",
+          const progress = await within(createDialog).findByRole("button", {
+            name: "Cancel sign-in",
+          });
+          expect(progress).toHaveAttribute("aria-busy", "true");
+          expect(
+            progress.querySelector('[class~="motion-safe:animate-spin"]'),
+          ).toBeInTheDocument();
+          expect(create).toBeDisabled();
+          await waitFor(() =>
+            expect(signIns).toHaveBeenCalledTimes(beforeCreateLogin + 2),
+          );
+          expect(progress).toBeEnabled();
+          // Browser cancellation still returns to a retryable form.
+          await act(async () => {
+            await identity.service.cancelSignIn();
+            signInGate?.resolve();
+            await signInGate?.promise;
+          });
+          await within(createDialog).findByRole("button", {
+            name: "Sign in to Builderlab",
+          });
+          expect(
+            within(createDialog).getByRole("button", {
+              name: "Model: Choose a model",
             }),
-          );
-          expect(within(createDialog).getByRole("status")).toHaveTextContent(
-            "Sign in to choose a model and thinking level.",
-          );
+          ).toBeDisabled();
+          expect(
+            within(createDialog).getByRole("combobox", { name: "Thinking" }),
+          ).toBeDisabled();
           expect(within(createDialog).queryByRole("alert")).toBeNull();
           expect(create).toBeDisabled();
           expect(
@@ -1026,27 +1139,38 @@ it.each([
           ).not.toBeInTheDocument();
           expect(
             requestsTo("register-agent").filter(
-              (input) =>
-                JSON.parse(input.request.body).agent_name === "Browser",
+              (input) => JSON.parse(input.body).agent_name === "Browser",
             ),
           ).toHaveLength(0);
         } finally {
-          loginCallback.resolve({ parameters: [["code", "one-time"]] });
-          loginCallback = undefined;
+          signInGate.resolve();
+          signInGate = undefined;
         }
         await user.click(signIn());
-        expect(
-          await within(createDialog).findByRole("button", {
-            name: "Model: Choose a model",
-          }),
-        ).toBeEnabled();
+        await waitFor(() =>
+          expect(
+            within(createDialog).getByRole("button", {
+              name: "Model: Choose a model",
+            }),
+          ).toBeEnabled(),
+        );
         expect(name).toHaveValue("Browser");
         return;
       }
+      const catalogsBeforeLogin = requestsTo("get-model-catalog").length;
+      catalogLoad = deferred();
+      phase = "sign in for creation";
       await user.click(signIn());
+      await waitFor(() =>
+        expect(requestsTo("get-model-catalog").length).toBeGreaterThan(
+          catalogsBeforeLogin,
+        ),
+      );
+      phase = "catalog requested";
       const model = await within(createDialog).findByRole("button", {
         name: "Model: Choose a model",
       });
+      expect(model).toBeDisabled();
       const createAgent = vi.spyOn(agents, "create");
       await user.click(create);
       expect(createAgent).not.toHaveBeenCalled();
@@ -1064,23 +1188,29 @@ it.each([
           name: "Instructions Optional",
         }),
       );
+      // Sign-in makes the control visible before its catalog is ready.
+      phase = "release catalog";
+      catalogLoad.resolve();
+      await waitFor(() => expect(model).toBeEnabled());
+      phase = "choose model";
       await user.click(model);
       (await screen.findByRole("menuitem", { name: "Other" })).focus();
       await user.keyboard("{ArrowRight}");
       await user.click(
         await screen.findByRole("menuitemradio", { name: "Model One" }),
       );
+      phase = "choose thinking";
       await user.click(
         within(createDialog).getByRole("combobox", {
           name: "Thinking",
         }),
       );
       await user.click(await screen.findByRole("option", { name: "High" }));
-      await user.type(
+      fireEvent.change(
         within(createDialog).getByRole("textbox", {
           name: "Instructions Optional",
         }),
-        "Be concise.",
+        { target: { value: "Be concise." } },
       );
       const beforeListing = community.events.filter(
         (event) => event.kind === 30177,
@@ -1096,21 +1226,37 @@ it.each([
       expect(create).toBeEnabled();
       instructionsSave = deferred();
       try {
+        phase = "open introduction";
         await user.click(create);
+        const introduction = await screen.findByRole("dialog", {
+          name: "Meet your remote agent",
+        });
+        expect(introduction).toHaveTextContent("Builderlab");
+        phase = "submit first attempt";
+        await user.click(actions.getByRole("button", { name: "Let’s go" }));
         await waitFor(() =>
           expect(
             requestsTo("update-agent").filter(
-              (input) =>
-                JSON.parse(input.request.body).agent_pubkey === browserKey,
+              (input) => JSON.parse(input.body).agent_pubkey === browserKey,
             ),
           ).toHaveLength(1),
         );
-        expect(create).toBeDisabled();
+        expect(
+          screen.getByRole("dialog", { name: "Meet your remote agent" }),
+        ).toBe(introduction);
+        expect(
+          actions.getByRole("button", { name: "Let’s go" }),
+        ).toHaveAttribute("aria-busy", "true");
+        expect(actions.getByRole("button", { name: "Back" })).toBeDisabled();
         for (const control of controls) expect(control).toBeDisabled();
+        phase = "reject first attempt";
         instructionsSave.reject(new Error("offline"));
         expect(
           await within(createDialog).findByRole("alert"),
         ).toHaveTextContent("Could not reach Builderlab");
+        phase = "return to retained draft";
+        await user.click(actions.getByRole("button", { name: "Back" }));
+        create = actions.getByRole("button", { name: "Create agent" });
         for (const control of controls) expect(control).toBeEnabled();
         expect(create).toBeEnabled();
         expect(agents.find(browserKey)?.unfinished).toBe(true);
@@ -1126,46 +1272,57 @@ it.each([
         instructionsSave.resolve({ status: 200, headers: {}, body: "{}" });
         instructionsSave = undefined;
       }
+      phase = "retry creation";
       await user.click(create);
+      await user.click(
+        await actions.findByRole("button", { name: "Let’s go" }),
+      );
+      phase = "await created agent";
       await waitFor(() =>
         expect(agents.find(browserKey)).toMatchObject({
           name: "Browser",
           place: "hosted",
         }),
       );
+      phase = "await introduction dismissal";
       await waitFor(() =>
         expect(
-          screen.queryByRole("dialog", { name: "Create agent" }),
+          screen.queryByRole("dialog", { name: "Meet your remote agent" }),
         ).not.toBeInTheDocument(),
       );
       expect(agents.find(browserKey)?.unfinished).toBeUndefined();
       expect(JSON.stringify(community.events)).not.toContain("Be concise.");
       expect(
         requestsTo("register-agent").filter(
-          (input) => JSON.parse(input.request.body).agent_name === "Browser",
+          (input) => JSON.parse(input.body).agent_name === "Browser",
         ),
       ).toHaveLength(1);
+      expect(JSON.parse(requestsTo("update-agent").at(-1)?.body ?? "")).toEqual(
+        {
+          agent_pubkey: browserKey,
+          agent_instructions: "Be concise.",
+          model_id: "one",
+          reasoning_effort: "high",
+        },
+      );
+      expect(identity.service.snapshot().status).toBe("signed-in");
+      phase = "await created agent Identity";
       expect(
-        JSON.parse(requestsTo("update-agent").at(-1).request.body),
-      ).toEqual({
-        agent_pubkey: browserKey,
-        agent_instructions: "Be concise.",
-        model_id: "one",
-        reasoning_effort: "high",
-      });
-      expect(screen.getByRole("button", { name: "Sign out" })).toBeEnabled();
-      expect(screen.getByRole("tab", { name: "Identity" })).toBeInTheDocument();
+        await screen.findByRole("tab", { name: "Identity" }),
+      ).toBeInTheDocument();
       return;
     }
+    phase = "open existing agent";
     await user.click(await screen.findByRole("gridcell", { name: /^Browser/ }));
-    await user.click(screen.getByRole("tab", { name: "Identity" }));
-    const instructions = await screen.findByRole("textbox", {
+    phase = "await existing agent Identity";
+    await user.click(await screen.findByRole("tab", { name: "Identity" }));
+    let instructions = await screen.findByRole("textbox", {
       name: "Instructions",
     });
     await waitFor(() => expect(instructions).toHaveValue("Be concise."));
     await user.clear(instructions);
     await user.type(instructions, "New direction.");
-    const save = screen.getByRole("button", { name: "Save" });
+    let save = screen.getByRole("button", { name: "Save" });
     instructionsSave = deferred();
     const updatesBeforeEdit = requestsTo("update-agent").length;
     try {
@@ -1189,25 +1346,20 @@ it.each([
       });
       instructionsSave = undefined;
     }
-    const logouts = requestsTo("v1/auth/logout").length;
-    await user.click(screen.getByRole("button", { name: "Sign out" }));
-    await waitFor(() =>
-      expect(requestsTo("v1/auth/logout")).toHaveLength(logouts + 1),
-    );
-    expect(requestsTo("v1/auth/logout").at(-1)?.request).toMatchObject({
-      method: "POST",
-      headers: { "X-BB-Session-Credential": "private-token" },
-    });
+    // The shared native session ends from Identity, not from Builderlab.
+    await act(() => identity.service.signOut());
     // Sign-in stays user-started and the failed instructions draft survives it.
     expect(screen.queryByRole("button", { name: "Save" })).toBeNull();
+    expect(screen.queryByRole("textbox", { name: "Instructions" })).toBeNull();
     await user.click(
-      within(
-        screen.getByRole("region", { name: "Sign in to Builderlab" }),
-      ).getByRole("button", { name: "Sign in to Builderlab" }),
+      screen.getByRole("button", { name: "Sign in to Builderlab" }),
     );
     await waitFor(() =>
-      expect(screen.getByRole("button", { name: "Sign out" })).toBeEnabled(),
+      expect(identity.service.snapshot().status).toBe("signed-in"),
     );
+    instructions = await screen.findByRole("textbox", { name: "Instructions" });
+    expect(instructions).toHaveValue("New direction.");
+    save = screen.getByRole("button", { name: "Save" });
     await user.click(save);
     await waitFor(() => expect(instructions).toBeEnabled());
     expect(save).toHaveAttribute("aria-disabled", "true");
@@ -1222,42 +1374,51 @@ it.each([
     expect(screen.queryByRole("button", { name: /^Model:/ })).toBeNull();
     expect(screen.getByText("Workspace")).toBeVisible();
     // Confirmed deletion waits for login before provider or community removal.
-    await user.click(screen.getByRole("button", { name: "Sign out" }));
+    await act(() => identity.service.signOut());
     await user.click(screen.getByRole("button", { name: "Delete agent" }));
     const deletion = screen.getByRole("dialog", { name: "Delete Browser?" });
     const remove = within(deletion).getByRole("button", { name: "Delete" });
     const beforeDelete = requestsTo("delete-agent").length;
-    const beforeDeleteLogin = loginWaits().length;
-    loginCallback = deferred();
+    const beforeDeleteLogin = signIns.mock.calls.length;
+    signInGate = deferred();
     try {
       await user.click(remove);
       await waitFor(() =>
-        expect(loginWaits()).toHaveLength(beforeDeleteLogin + 1),
+        expect(signIns).toHaveBeenCalledTimes(beforeDeleteLogin + 1),
       );
       expect(remove).toHaveAttribute("aria-disabled", "true");
       expect(requestsTo("delete-agent")).toHaveLength(beforeDelete);
       expect(agents.find(browserKey)).toBeDefined();
     } finally {
       await act(async () => {
-        loginCallback?.resolve({ parameters: [["code", "one-time"]] });
-        await loginCallback?.promise;
+        signInGate?.resolve();
+        await signInGate?.promise;
       });
-      loginCallback = undefined;
+      signInGate = undefined;
     }
     await waitFor(() => expect(agents.find(browserKey)).toBeUndefined());
     expect(requestsTo("delete-agent")).toHaveLength(beforeDelete + 1);
   } finally {
+    catalogLoad?.resolve();
     backupHandoff.resolve();
+    phase = "unmount UI";
     cleanup();
+    phase = "dispose plugin runtime";
     await runtime.dispose();
+    phase = "dispose root context";
     await root.fiber.dispose();
+    phase = "dispose community";
     await community.dispose();
+    signal.removeEventListener("abort", reportTimeout);
   }
 });
 
 it("opens Manage plugins from its agents' Activity tab while Agent Activity is off", async () => {
+  const identity = fiBuild(async () => {
+    throw new Error("No request expected");
+  });
   const root = new Context();
-  const runtime = new PluginRuntime(root, async () => builderlab);
+  const runtime = new PluginRuntime(root, fiPlugin);
   new HostService(root);
   provideApps(root);
   new SettingsCardsService(root);
@@ -1282,6 +1443,7 @@ it("opens Manage plugins from its agents' Activity tab while Agent Activity is o
   } as never);
   const navigation = { open: vi.fn() };
   root.provide("navigation", navigation as never);
+  root.provide("federatedIdentity", identity.service);
   provideKnownCommunities(root, community.viewer);
   const agents = provideAgents(root, community);
   try {

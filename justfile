@@ -17,7 +17,8 @@ install:
 web *args: install
     if [ "${1:-}" = "profile" ]; then shift; set -m; node scripts/profile-dev.mjs web "$@"; else exec pnpm dev "$@"; fi
 
-# Run Tauri; --port selects Vite's port, other arguments pass through to Tauri.
+# Run Tauri; `me` first signs in with your installed Buzz's key, --port selects
+# Vite's port, other arguments pass through to Tauri.
 [positional-arguments]
 desktop *args: install
     if [ "${1:-}" = "profile" ]; then shift; set -m; node scripts/profile-dev.mjs desktop "$@"; else exec node scripts/desktop-dev.mjs "$@"; fi

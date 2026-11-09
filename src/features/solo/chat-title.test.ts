@@ -6,9 +6,9 @@ const link = `buzz://message?channel=design&id=${"c".repeat(64)}`;
 it("uses readable channel labels before truncating the title", () => {
   expect(
     startingChatTitle(
-      "what is this about [\\#buzz-bb-block-and-bb-public-work](buzz://channel/b17e217e-1234-4567-8901-123456789abc)",
+      "what is this about [\\#design-and-research-work](buzz://channel/b17e217e-1234-4567-8901-123456789abc)",
     ),
-  ).toBe("what is this about #buzz-bb-block-and-bb-public-work");
+  ).toBe("what is this about #design-and-research-work");
   expect(
     startingChatTitle(
       `Read [guide](https://example.com/${"x".repeat(120)}) then discuss`,

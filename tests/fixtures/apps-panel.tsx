@@ -3,8 +3,12 @@ import { Context } from "@deepseek-ai/cordis";
 import { useState } from "react";
 import { createRoot } from "react-dom/client";
 import { applyApps } from "../../src/bundled/builderlab/apps";
-import { createOAuthSession } from "../../src/bundled/builderlab/oauth/session";
+import { createNativeSession } from "../../src/bundled/builderlab/session";
 import { BrowserService } from "../../src/features/browser/service";
+import type {
+  FederatedIdentity,
+  SessionSnapshot,
+} from "../../src/features/federated-identity/service";
 import type { BrowserPlatform } from "../../src/features/browser/platform";
 import { PanelsService } from "../../src/features/panels/service";
 import { PanelWorkspace } from "../../src/features/panels/PanelWorkspace";
@@ -57,15 +61,55 @@ ctx.provide("pluginStatus", {
 ctx.provide("agents", { addTool() {} });
 new BrowserService(ctx, platform);
 const panels = new PanelsService(ctx);
-const session = createOAuthSession(async () => ({
-  value: "synthetic-fixture-credential",
-  account: {
-    subject: "fixture|viewer",
-    email: "viewer@example.test",
-    canUseRemoteAgents: false,
+// The native NIP-FI session is modeled as signed in; the real Builderlab
+// session reads its account from it and derives the viewer session.
+const snapshot: SessionSnapshot = {
+  status: "signed-in",
+  authority: {
+    id: "fixture",
+    identityOrigin: "https://builderlab.example.test",
+    apiBasePath: "/api/goose/",
+    signIn: "on-demand",
+    organization: null,
+    communityHosts: [],
   },
-}));
-await session.signIn();
+  revision: "fixture:1",
+  email: "viewer@example.test",
+  failure: null,
+  expiresAt: null,
+  expiring: false,
+};
+const identity: FederatedIdentity = {
+  apiAvailable: true,
+  snapshot: () => snapshot,
+  subscribe: () => () => {},
+  signIn: async () => snapshot,
+  async cancelSignIn() {},
+  async signOut() {},
+  async request({ method, path }) {
+    return method === "GET" && path === "/api/goose/v1/auth/me"
+      ? {
+          status: 200,
+          headers: {},
+          body: JSON.stringify({
+            subject: "fixture|viewer",
+            email: "viewer@example.test",
+          }),
+        }
+      : { status: 404, headers: {}, body: "" };
+  },
+};
+const session = createNativeSession(identity);
+// The first attach is the authenticated one: wait for the account read.
+await new Promise<void>((resolve) => {
+  const signedIn = () => session.snapshot().status === "signed-in";
+  if (signedIn()) return resolve();
+  const stop = session.subscribe(() => {
+    if (!signedIn()) return;
+    stop();
+    resolve();
+  });
+});
 applyApps(
   ctx.extend({ pluginOwner: { id: "fixture.apps", revision: "one" } }) as never,
   session,

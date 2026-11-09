@@ -28,12 +28,21 @@ export type MentionDraft = {
   pending?: readonly PendingMention[];
   document?: ComposerSnapshot;
 };
-// The timeline binds a signed name up to the next non-name character, so the
-// inline Markdown delimiters *, ~ and ` end a mention here as well: typing a
-// closing delimiter after a chip keeps its recipient. An underscore remains a
-// name suffix, as it does on the timeline.
+// A name ends at the next character that is not a letter, mark, digit or
+// underscore. The timeline also ends a signed name at punctuation, quotes and
+// the inline Markdown delimiters *, ~ and `, so typing `’s` or a closing
+// delimiter after a chip keeps its recipient here, however the character
+// arrives, and an underscore continues the name in both. A combining mark
+// differs: it changes the name's last letter, so it continues the name here,
+// while the timeline matches only letters, digits and underscores and ends the
+// name before the mark.
 export const mentionBoundary = (text: string, end: number) =>
-  end === text.length || /[\s.,!?;:()[\]{}*~`]/u.test(text[end] ?? "");
+  end === text.length ||
+  !/[\p{L}\p{M}\p{N}_]/u.test(String.fromCodePoint(text.codePointAt(end) ?? 0));
+/** A key typed straight after a name that selects it as Space does (mentions
+ * README §5): Space, or closing punctuation, which stays after the mention in
+ * place of the space. Tab, Enter and a click select the highlighted row. */
+export const mentionTerminator = (key: string) => /^[ .,!?;:)'’"”]$/u.test(key);
 export const MAX_DRAFT_GIFS = 10;
 /** The lone image Markdown a staged GIF keeps, as the picker writes it. */
 export function stageableGif(value: unknown): value is string {

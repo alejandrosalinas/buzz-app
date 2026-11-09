@@ -141,3 +141,69 @@ for (const count of [1, 3, 5, 7, 9]) {
     },
   );
 }
+
+// Agents-only updates fold into one row, so a head of them paints less than a
+// screen and leaves nothing to scroll. Opening fills it without reader input.
+const activityHead = test.extend({ historyCounts: { alpha: 30, beta: 1 } });
+activityHead(
+  "a head of folded agent activity fills the screen at the bottom",
+  async ({ page, app }) => {
+    // One author's burst, five a second, sent in parallel: ms order is not
+    // event-ID order. A newer public message follows it.
+    for (let i = 0; i < 23; i++)
+      app.append(
+        "primary",
+        "alpha",
+        `Agent update ${i + 1}`,
+        false,
+        true,
+        undefined,
+        undefined,
+        [
+          ["audience", "agents"],
+          ["ms", String((i * 397) % 1000)],
+        ],
+        1700000500 + Math.floor(i / 5),
+      );
+    app.append("primary", "alpha", "Latest public message", false);
+    const latest = history(page).getByText("Latest public message");
+    const filled = async (visit) => {
+      await expect
+        .poll(() =>
+          history(page).evaluate((e) => e.scrollHeight - e.clientHeight),
+        )
+        .toBeGreaterThan(0);
+      await bottom(page, app, `${visit} filled activity head`);
+      await expect(latest).toBeInViewport();
+      expect(
+        app.pending,
+        `${visit} filled screen reads no further`,
+      ).toHaveLength(0);
+    };
+    for (const visit of ["cold", "reloaded"]) {
+      if (visit === "cold") await open(page, app);
+      else {
+        await page.reload();
+        await openPage(page, "Messages");
+      }
+      await expect(latest).toBeVisible();
+      await expect
+        .poll(() => app.pending.length, {
+          message: `${visit} underfilled head reads older history unasked`,
+        })
+        .toBe(1);
+      const read = app.pending.shift();
+      expect(read.channel).toBe("alpha");
+      expect(
+        await history(page).evaluate((e) => e.scrollHeight - e.clientHeight),
+        `${visit} head alone leaves nothing to scroll`,
+      ).toBeLessThanOrEqual(0);
+      read.release();
+      await filled(visit);
+      // A return in the same session keeps the filled rows: no page is reread.
+      await select(page, "Beta");
+      await select(page, "Alpha");
+      await filled(`${visit} returned`);
+    }
+  },
+);

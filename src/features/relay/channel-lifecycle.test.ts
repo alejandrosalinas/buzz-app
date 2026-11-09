@@ -1391,6 +1391,27 @@ describe("channel owner-agent Archive and Delete eligibility", () => {
     });
     h.owner.dispose();
   });
+  it("judges channel records the caller already read, not a lagging replica", async () => {
+    const h = ownedAgent("member");
+    // The caller's writer-backed read saw the archive; the replica has not.
+    const records = [
+      h.metadata(true),
+      ...h.getEvents().filter((event) => [39001, 39002].includes(event.kind)),
+    ];
+    expect(await h.owner.capability.load(id, undefined, records)).toMatchObject(
+      {
+        canArchive: false,
+        canUnarchive: true,
+        canDelete: false,
+      },
+    );
+    expect(
+      h.read.mock.calls.flatMap(([filters]) =>
+        filters.flatMap((filter) => filter.kinds ?? []),
+      ),
+    ).toEqual([0]);
+    h.owner.dispose();
+  });
   it("a direct admin archives without owner-profile reads", async () => {
     const h = ownedAgent("admin");
     await h.owner.capability.run("archive", id);

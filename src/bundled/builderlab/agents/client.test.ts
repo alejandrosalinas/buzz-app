@@ -1,7 +1,6 @@
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import type { Host, HostResponse } from "../../../features/host/service";
-import { createOAuthSession } from "../oauth/session";
-import { deferred } from "../test-helpers";
+import { deferred, createTestSession } from "../test-helpers";
 import { createAgentClient } from "./client";
 
 beforeEach(() => {
@@ -31,9 +30,9 @@ const response = (value: unknown, status = 200): HostResponse => ({
 const viewer = "cd".repeat(32);
 const bound = (pubkey_hex = viewer) => response({ identity: { pubkey_hex } });
 async function fixture(subject = "user", canUseRemoteAgents = true) {
-  const session = createOAuthSession(
+  const session = createTestSession(
     async () => ({
-      value: "secret",
+      revision: "secret",
       account: {
         subject,
         email: "a@example.com",
@@ -66,12 +65,52 @@ async function fixture(subject = "user", canUseRemoteAgents = true) {
 }
 it("refuses remote reads and creation before sending requests or retaining replay state", async () => {
   const h = await fixture("user", false);
-  await expect(h.client.list(h.signal)).rejects.toThrow("coming soon");
+  await expect(h.client.list(h.signal)).rejects.toThrow(
+    "unavailable for this account",
+  );
   await expect(h.client.register("Helper", h.signal, h.retain)).rejects.toThrow(
-    "coming soon",
+    "unavailable for this account",
   );
   expect(h.host.request).not.toHaveBeenCalled();
   expect(h.retain).not.toHaveBeenCalled();
+});
+it("reads terminal task status only for the requested task IDs", async () => {
+  const h = await fixture();
+  vi.mocked(h.host.request).mockResolvedValueOnce(
+    response({
+      outcomes: {
+        done: "completed",
+        failed: "failed",
+        stopped: "cancelled",
+        terminated: "terminated",
+      },
+    }),
+  );
+  expect(
+    await h.client.turnStatus(
+      "session",
+      ["done", "failed", "stopped", "terminated"],
+      h.signal,
+    ),
+  ).toEqual(
+    new Map([
+      ["done", "ended"],
+      ["failed", "error"],
+      ["stopped", "stopped"],
+      ["terminated", "error"],
+    ]),
+  );
+  for (const outcomes of [
+    { other: "completed" },
+    { done: "new-status" },
+    { done: null },
+    [],
+  ]) {
+    vi.mocked(h.host.request).mockResolvedValueOnce(response({ outcomes }));
+    await expect(
+      h.client.turnStatus("session", ["done"], h.signal),
+    ).rejects.toThrow("invalid turn status");
+  }
 });
 it("lists the authenticated account through the configured native host", async () => {
   const h = await fixture();
@@ -96,7 +135,6 @@ it("lists the authenticated account through the configured native host", async (
     headers: {
       Accept: "application/json",
       "Content-Type": "application/json",
-      "X-BB-Session-Credential": "secret",
     },
     body: JSON.stringify({ include_instructions: true }),
   });
@@ -160,9 +198,8 @@ it.each([401, 403, 500])(
     }
     expect(error).toBeInstanceOf(Error);
     expect(String(error)).not.toContain("private-secret");
-    expect(h.session.snapshot().status).toBe(
-      status === 401 ? "signed-out" : "signed-in",
-    );
+    // A 401 refuses only this call: the native session decides when it ends.
+    expect(h.session.snapshot().status).toBe("signed-in");
   },
 );
 it.each(["sign-out", "new-login", "cancel", "dispose"])(
@@ -170,22 +207,33 @@ it.each(["sign-out", "new-login", "cancel", "dispose"])(
   async (action) => {
     const h = await fixture();
     const held = deferred<HostResponse>();
-    vi.mocked(h.host.request).mockReturnValue(held.promise);
+    const started = deferred<void>();
+    vi.mocked(h.host.request).mockImplementation(() => {
+      started.resolve();
+      return held.promise;
+    });
     const controller = new AbortController();
     const pending = h.client.list(controller.signal);
-    if (action === "cancel") controller.abort();
-    else if (action === "dispose") h.session.dispose();
-    else {
-      h.session.signOut();
-      if (action === "new-login") await h.session.signIn();
+    const rejected = expect(pending).rejects.toMatchObject({
+      name: "AbortError",
+    });
+    await started.promise;
+    try {
+      if (action === "cancel") controller.abort();
+      else if (action === "dispose") h.session.dispose();
+      else {
+        h.session.signOut();
+        if (action === "new-login") await h.session.signIn();
+      }
+    } finally {
+      held.resolve(
+        response(
+          { status: 1, agents: [row] },
+          action === "new-login" ? 401 : 200,
+        ),
+      );
     }
-    held.resolve(
-      response(
-        { status: 1, agents: [row] },
-        action === "new-login" ? 401 : 200,
-      ),
-    );
-    await expect(pending).rejects.toMatchObject({ name: "AbortError" });
+    await rejected;
     if (action === "new-login")
       expect(h.session.snapshot().status).toBe("signed-in");
   },
@@ -219,20 +267,63 @@ it("loads the standalone catalog with model-specific effort identifiers", async 
           display_name: "Friendly Model",
           supported_reasoning_efforts: ["none", "max"],
         },
+        {
+          id: "model-two",
+          display_name: "Fast Model",
+          supported_reasoning_efforts: ["low"],
+          fast: true,
+        },
       ],
     }),
   );
-  expect(await h.client.modelCatalog(h.signal)).toEqual([
-    {
-      id: "model-one",
-      displayName: "Friendly Model",
-      supportedReasoningEfforts: ["none", "max"],
-    },
-  ]);
+  expect(await h.client.modelCatalog(h.signal)).toEqual({
+    models: [
+      {
+        id: "model-one",
+        displayName: "Friendly Model",
+        supportedReasoningEfforts: ["none", "max"],
+        fast: false,
+      },
+      {
+        id: "model-two",
+        displayName: "Fast Model",
+        supportedReasoningEfforts: ["low"],
+        fast: true,
+      },
+    ],
+  });
   expect(vi.mocked(h.host.request).mock.calls[0]?.[0].url).toBe(
     "https://builderlab.example/api/goose/v3/beekeeper/get-model-catalog",
   );
 });
+it.each([
+  [{ model_id: "model-one", reasoning_effort: "max" }, true],
+  [{ model_id: "model-one", reasoning_effort: "high" }, false],
+  [{ model_id: "missing", reasoning_effort: "max" }, false],
+  [{ model_id: "model-one" }, false],
+  ["model-one", false],
+  [null, false],
+])(
+  "keeps only a recommendation the catalog offers: %j",
+  async (recommended_selection, kept) => {
+    const h = await fixture();
+    vi.mocked(h.host.request).mockResolvedValueOnce(
+      response({
+        models: [
+          {
+            id: "model-one",
+            display_name: "Friendly Model",
+            supported_reasoning_efforts: ["none", "max"],
+          },
+        ],
+        recommended_selection,
+      }),
+    );
+    expect((await h.client.modelCatalog(h.signal)).recommended).toEqual(
+      kept ? { modelId: "model-one", reasoningEffort: "max" } : undefined,
+    );
+  },
+);
 it.each([
   null,
   [null],
@@ -242,7 +333,7 @@ it.each([
   const h = await fixture();
   vi.mocked(h.host.request).mockResolvedValueOnce(response({ models }));
   if (models === null)
-    expect(await h.client.modelCatalog(h.signal)).toEqual([]);
+    expect(await h.client.modelCatalog(h.signal)).toEqual({ models: [] });
   else
     await expect(h.client.modelCatalog(h.signal)).rejects.toThrow(
       "invalid model catalog",
@@ -296,7 +387,6 @@ it("replaces instructions verbatim through the authenticated host", async () => 
     headers: {
       Accept: "application/json",
       "Content-Type": "application/json",
-      "X-BB-Session-Credential": "secret",
     },
     body: JSON.stringify({
       agent_pubkey: row.agent_pubkey,
@@ -356,7 +446,6 @@ it("deletes through the configured authenticated host", async () => {
     headers: {
       Accept: "application/json",
       "Content-Type": "application/json",
-      "X-BB-Session-Credential": "secret",
     },
     body: JSON.stringify({ agent_id: row.agent_id }),
   });
@@ -650,7 +739,6 @@ it("links an unbound Buzz key to the account before attesting", async () => {
   expect(calls[1]?.headers).toEqual({
     Accept: "application/json",
     "Content-Type": "application/json",
-    "X-BB-Session-Credential": "secret",
     Origin: "https://builderlab.example",
   });
   expect(JSON.parse(calls[1]?.body ?? "")).toEqual({
@@ -716,13 +804,13 @@ it("refuses to link without a local Buzz identity", async () => {
   );
   expect(h.host.request).not.toHaveBeenCalled();
 });
-it("signs out when the identity check finds the session expired", async () => {
+it("refuses activation, keeping the session, when the identity check finds it expired", async () => {
   const h = await fixture();
   vi.mocked(h.host.request).mockResolvedValueOnce(response({}, 401));
   await expect(
     h.client.activate(row.agent_pubkey, proof, undefined, h.signal),
   ).rejects.toThrow("session expired");
-  expect(h.session.snapshot().status).toBe("signed-out");
+  expect(h.session.snapshot().status).toBe("signed-in");
   expect(h.host.request).toHaveBeenCalledTimes(1);
 });
 it("attests without linking when there is no native identity", async () => {

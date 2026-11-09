@@ -415,6 +415,21 @@ export const ROLE_GROUPS: RoleGroup[] = [
         status: "core",
       },
       {
+        token: "--affordance-reaction-self",
+        variable: "--affordance-reaction-self",
+        pointsAt: "surface-message-own at Buzzin’; accent-9 at Chillin’",
+        use: "A reaction you made, on received bubbles and the panel: your own bubble's fill, paired with text-reaction-self.",
+        status: "core",
+      },
+      {
+        token: "--affordance-reaction-self-own",
+        variable: "--affordance-reaction-self-own",
+        pointsAt:
+          "surface-message at Buzzin’; neutral-1 at Chillin’ (neutral-7 in dark mode)",
+        use: "A reaction you made inside your own bubble: the received bubble's fill, paired with text-reaction-self-own.",
+        status: "core",
+      },
+      {
         token: "bg-surface-message-highlight",
         variable: "--surface-message-highlight",
         pointsAt: "accent step 3",
@@ -569,7 +584,7 @@ export const ROLE_GROUPS: RoleGroup[] = [
       {
         token: "text-danger",
         variable: "--text-danger",
-        pointsAt: "red-12 light / red-12 dark",
+        pointsAt: "red-text light / red-12 dark",
         use: "Error text and destructive action labels.",
         status: "core",
       },
@@ -591,7 +606,7 @@ export const ROLE_GROUPS: RoleGroup[] = [
       {
         token: "text-success",
         variable: "--text-success",
-        pointsAt: "green-12 light / green-12 dark",
+        pointsAt: "green-text light / green-12 dark",
         use: "Success text.",
         status: "core",
       },
@@ -657,6 +672,20 @@ export const ROLE_GROUPS: RoleGroup[] = [
         variable: "--text-message-link-own",
         pointsAt: "accent link at Chillin’; accent ink at Buzzin’",
         use: "Links on the selected outgoing message surface.",
+        status: "core",
+      },
+      {
+        token: "text-reaction-self",
+        variable: "--text-reaction-self",
+        pointsAt: "text-message-own at Buzzin’; accent ink at Chillin’",
+        use: "Count of a reaction you made on received bubbles and the panel, paired with bg-affordance-reaction-self.",
+        status: "core",
+      },
+      {
+        token: "text-reaction-self-own",
+        variable: "--text-reaction-self-own",
+        pointsAt: "text-standard",
+        use: "Count of a reaction you made inside your own bubble, paired with bg-affordance-reaction-self-own.",
         status: "core",
       },
       {
@@ -1163,6 +1192,34 @@ export const ROLE_GROUPS: RoleGroup[] = [
         variable: "--affordance-warning",
         pointsAt: "amber-3 light / amber-3 dark",
         use: "A warning fill.",
+        status: "core",
+      },
+      {
+        token: "surface-status-success",
+        variable: "--surface-status-success",
+        pointsAt: "citrus step 9",
+        use: "Completed task fill, paired with text-on-status-success.",
+        status: "core",
+      },
+      {
+        token: "surface-status-danger",
+        variable: "--surface-status-danger",
+        pointsAt: "red light step 11",
+        use: "Failed task fill, paired with text-on-status.",
+        status: "core",
+      },
+      {
+        token: "text-on-status-success",
+        variable: "--text-on-status-success",
+        pointsAt: "citrus ink",
+        use: "Foreground on solid Citrus completed task status.",
+        status: "core",
+      },
+      {
+        token: "text-on-status",
+        variable: "--text-on-status",
+        pointsAt: "white",
+        use: "Foreground on solid failed task status.",
         status: "core",
       },
       {
@@ -1715,10 +1772,6 @@ export const TYPE_FAMILIES = [
     use: "Code, keys and identifiers, set in the xsmall detail role at 12/16.",
   },
 ];
-
-/** Source for the primitive ladder and resolved roles displayed below. */
-export const TYPE_SOURCE =
-  "https://github.com/squareup/design-blockinterface/blob/eff766161ba8aaee3258ca107f0d904dd542c708/blockUI/docs/type.resolution.draft.json";
 
 /** Active size primitives, with xsmall sharing the 12px step. */
 export const TYPE_RAMPS = [

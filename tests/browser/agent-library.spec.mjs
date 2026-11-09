@@ -878,7 +878,7 @@ test("team imports explain scope before running and restore the trigger on cance
       exact: true,
     });
     await expect(
-      dialog.getByRole("button", { name: "Cancel", exact: true }),
+      dialog.getByRole("button", { name: "Import", exact: true }),
     ).toBeFocused();
     await expect(
       dialog.getByRole("figure", { name: /^From community-/ }),

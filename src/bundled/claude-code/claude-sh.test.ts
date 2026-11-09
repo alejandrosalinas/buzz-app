@@ -409,131 +409,56 @@ it("refuses a checksum that is not 64 hex digits before reusing or downloading",
   );
 });
 
-/** Security reviews' own Claude folder in a new home, and its two steps:
- * `save` sends a token on stdin, as Buzz does. Their folder is macOS-only. */
+/** claude.sh's review step in a new home. */
 async function reviewHome() {
   const { home } = await disk([]);
-  const folder = join(
+  const review = join(
     home,
     "Library/Application Support/Buzz/claude-code-review-home",
   );
-  const steps = (args: string[], input?: string) => {
-    const running = run("bash", ["-c", script, "claude.sh", ...args], {
-      env: { PATH: process.env.PATH ?? "", HOME: home },
-    });
-    running.child.stdin?.end(input);
-    return running as Promise<{ stdout: string; stderr: string }>;
-  };
   return {
     home,
-    folder,
-    save: (token: string) => steps(["review-token"], `${token}\n`),
-    read: () => steps(["review"]),
+    review,
+    reviewFolder: () => {
+      const running = run("bash", ["-c", script, "claude.sh", "review"], {
+        env: { PATH: process.env.PATH ?? "", HOME: home },
+      });
+      running.child.stdin?.end();
+      return running as Promise<{ stdout: string; stderr: string }>;
+    },
   };
 }
-const TOKEN = "sk-ant-oat01-Abc_123-xyz";
 
 it.skipIf(process.platform !== "darwin")(
-  "saves reviews' sign-in from stdin, privately, and only `review` prints it",
+  "makes reviews' own folder privately on first use and prints it",
   async () => {
-    const { folder, save, read } = await reviewHome();
-    // No folder yet: nothing, so reviews fail closed.
-    await expect(read()).resolves.toEqual({ stdout: "", stderr: "" });
-    const saved = await save(TOKEN);
-    expect(saved).toEqual({
-      stdout: "Saved the sign-in for Claude security reviews.\n",
+    const { review, reviewFolder } = await reviewHome();
+    await expect(reviewFolder()).resolves.toEqual({
+      stdout: `${review}\n`,
       stderr: "",
     });
-    expect((await lstat(folder)).mode & 0o777).toBe(0o700);
-    expect((await lstat(join(folder, "token"))).mode & 0o777).toBe(0o600);
-    await expect(read()).resolves.toEqual({
-      stdout: `${folder}\n${TOKEN}\n`,
-      stderr: "",
-    });
-    // A link in the token's place is replaced, not written through.
-    const target = join(folder, "elsewhere");
-    await rm(join(folder, "token"));
-    await symlink(target, join(folder, "token"));
-    await save(`${TOKEN}2`);
-    expect((await lstat(join(folder, "token"))).isSymbolicLink()).toBe(false);
-    await expect(lstat(target)).rejects.toThrow("ENOENT");
-  },
-);
-
-it.skipIf(process.platform !== "darwin")(
-  "prints only the review folder until it holds a sign-in",
-  async () => {
-    const { folder, read } = await reviewHome();
-    await mkdir(folder, { recursive: true });
-    await expect(read()).resolves.toEqual({
-      stdout: `${folder}\n`,
+    expect((await lstat(review)).mode & 0o777).toBe(0o700);
+    await expect(reviewFolder()).resolves.toEqual({
+      stdout: `${review}\n`,
       stderr: "",
     });
   },
 );
 
 it.skipIf(process.platform !== "darwin")(
-  "refuses a review folder that is a link, for saving and reading",
+  "refuses a review folder that is a link",
   async () => {
-    const { home, folder, save, read } = await reviewHome();
+    const { home, review, reviewFolder } = await reviewHome();
     const target = join(home, "elsewhere");
     await mkdir(target);
-    await writeFile(join(target, "token"), `${TOKEN}\n`);
-    await mkdir(dirname(folder), { recursive: true });
-    await symlink(target, folder);
-    const saving = save(`${TOKEN}2`);
-    await expect(saving).rejects.toThrow(
-      "The Claude review folder is not a folder",
-    );
-    await saving.catch((error: { stdout: string; stderr: string }) =>
-      expect(error.stdout + error.stderr).not.toContain(TOKEN),
-    );
-    expect(await readFile(join(target, "token"), "utf8")).toBe(`${TOKEN}\n`);
-    const reading = read();
+    await mkdir(dirname(review), { recursive: true });
+    await symlink(target, review);
+    const reading = reviewFolder();
     await expect(reading).rejects.toThrow(
       "The Claude review folder is not a folder",
     );
     await reading.catch((error: { stdout: string }) =>
       expect(error.stdout).toBe(""),
     );
-  },
-);
-
-it.skipIf(process.platform !== "darwin")(
-  "refuses what is not a Claude token without printing it",
-  async () => {
-    const { folder, save } = await reviewHome();
-    for (const pasted of [
-      "",
-      "sk-ant-",
-      `${TOKEN} more`,
-      `x${TOKEN}`,
-      `${TOKEN}é`,
-    ]) {
-      const saving = save(pasted);
-      await expect(saving).rejects.toThrow("That is not a Claude token");
-      await saving.catch((error: { stdout: string; stderr: string }) => {
-        expect(error.stdout).toBe("");
-        expect(error.stderr).toBe(
-          "That is not a Claude token. Paste what claude setup-token printed.\n",
-        );
-      });
-    }
-    await expect(lstat(folder)).rejects.toThrow("ENOENT");
-  },
-);
-
-it.skipIf(process.platform !== "darwin")(
-  "reads no sign-in through a link in the token's place",
-  async () => {
-    const { home, folder, read } = await reviewHome();
-    await mkdir(folder, { recursive: true });
-    const target = join(home, "elsewhere");
-    await writeFile(target, `${TOKEN}\n`);
-    await symlink(target, join(folder, "token"));
-    await expect(read()).resolves.toEqual({
-      stdout: `${folder}\n`,
-      stderr: "",
-    });
   },
 );

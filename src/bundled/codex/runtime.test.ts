@@ -1,8 +1,11 @@
+import { openVoice } from "./voice";
+import { huddleDescription } from "../../features/huddle/lifecycle";
 import type { AgentExecution } from "../../features/agents/execution";
 import { createHash } from "node:crypto";
 import { schnorr } from "@noble/curves/secp256k1.js";
 import { bytesToHex } from "nostr-tools/utils";
 import { apply } from "./index";
+import { CodexSetup } from "./setup";
 import { describe, afterEach, expect, it, vi } from "vitest";
 import { pubkeyOf } from "../../features/agents/membership";
 import { ownerReads } from "../../features/agents/reads";
@@ -15,6 +18,7 @@ import { RESUMED_PROMPT } from "../../buzz-mcp/prompt";
 import type {
   Agent,
   AgentHandle,
+  AgentVoiceSeat,
   Delivery,
 } from "../../features/agents/service";
 import {
@@ -37,6 +41,10 @@ import { config } from "./config";
 import type { AddedTool } from "../../buzz-mcp/session-tools";
 import { wake } from "../../features/agent-harness/wakes";
 import type { Wire } from "./rpc";
+
+vi.mock("./voice", () => ({
+  openVoice: vi.fn(async () => ({ input: vi.fn(), close: vi.fn() })),
+}));
 
 // The plugin registers only in the Mac/Linux desktop app.
 vi.mock("@tauri-apps/api/core", () => ({ isTauri: () => true }));
@@ -86,7 +94,6 @@ function fixture(
   let terminals = remainingTerminals;
   let options: HostProcessOptions | undefined;
   let thread = 0;
-  let turn = 0;
   const sent: Wire[] = [];
   const modelIds: [string, string] = ["test-model", "deep-model"];
   /** Methods the server answers with a JSON-RPC error instead of a result. */
@@ -194,8 +201,9 @@ function fixture(
         result = { thread: { id: `thread-${++thread}`, cwd: params.cwd } };
       if (request.method === "thread/resume")
         result = { thread: { id: params.threadId, cwd: params.cwd } };
+      // Ids follow `complete`'s index, so a refused start still takes one.
       if (request.method === "turn/start")
-        result = { turn: { id: `turn-${++turn}` } };
+        result = { turn: { id: `turn-${starts().indexOf(request) + 1}` } };
       if (request.method === "turn/interrupt")
         emit({
           method: "turn/completed",
@@ -310,12 +318,14 @@ function fixture(
   const memoryOpen = vi.fn(() => memoryView);
   // The owner's view, with no channel an own Solo chat unless a test does so.
   const soloChannels = new Set<string>();
+  const huddleChannels = new Set<string>();
   const snapshot = {
     status: "ready",
     scope: scope as string | undefined,
     viewer: owner,
     session: {
       workflowAuthority: undefined as string | undefined,
+      names: { resolve: () => "Owner" },
       profiles: {
         ensure: vi.fn(async () => {}),
         snapshot: vi.fn(() => new Map<string, Profile>()),
@@ -332,6 +342,13 @@ function fixture(
             {
               id: "channel",
               name: "test",
+              ...(huddleChannels.has("channel")
+                ? {
+                    description: huddleDescription(
+                      "00000000-0000-0000-0000-000000000001",
+                    ),
+                  }
+                : {}),
               channelType: soloChannels.has("channel") ? "solo" : "stream",
             },
           ],
@@ -507,6 +524,7 @@ function fixture(
   let runPlugin: (delivery: Delivery) => Promise<void> = (delivery) =>
     runtime.run(delivery);
   let pluginDispose = () => {};
+  let voicePlugin: ((seat: AgentVoiceSeat) => Promise<unknown>) | undefined;
   if (plugin) {
     vi.stubGlobal("localStorage", local);
     vi.stubGlobal("navigator", { platform: "MacIntel" });
@@ -525,8 +543,12 @@ function fixture(
           listeners.push(listener);
           return () => {};
         },
-        register: (type: { run: typeof runPlugin }) => {
+        register: (type: {
+          run: typeof runPlugin;
+          voice: typeof voicePlugin;
+        }) => {
           runPlugin = type.run;
+          voicePlugin = type.voice;
         },
       },
       effect: (effect: () => () => void) => {
@@ -643,6 +665,10 @@ function fixture(
         listener();
       }),
     pluginDispose: () => pluginDispose(),
+    voicePlugin: (seat: AgentVoiceSeat) => {
+      if (!voicePlugin) throw new Error("Voice hook was not registered");
+      return voicePlugin(seat);
+    },
     spawn,
     home,
     adopted,
@@ -663,6 +689,7 @@ function fixture(
     interrupt,
     snapshot,
     soloChannels,
+    huddleChannels,
     exits,
   };
 }
@@ -2854,6 +2881,38 @@ it("ends a turn without a reply silently, and publishes an unexpected exit", asy
     error: expect.stringContaining("Codex exited"),
   });
 });
+it("reports a failed threaded DM mention at its thread root", async () => {
+  const f = fixture();
+  vi.spyOn(f.snapshot.session.channels, "list").mockReturnValue({
+    status: "ready",
+    channels: [{ id: "channel", name: "test", channelType: "dm" }],
+  });
+  await f.runtime.run(f.delivery("@Codex work", root));
+  await vi.waitFor(() => expect(f.starts()).toHaveLength(1));
+  f.exits.resolve(3);
+  await vi.waitFor(() => expect(f.publish).toHaveBeenCalledTimes(1));
+  expect(f.publish.mock.calls[0]?.[0]).toMatchObject({
+    tags: [
+      ["h", "channel"],
+      ["e", root, "", "reply"],
+      ["p", owner],
+    ],
+  });
+});
+it("reports a failed huddle text mention without a reply tag", async () => {
+  const f = fixture();
+  f.huddleChannels.add("channel");
+  await f.runtime.run(f.delivery("@Codex work", root));
+  await vi.waitFor(() => expect(f.starts()).toHaveLength(1));
+  f.exits.resolve(3);
+  await vi.waitFor(() => expect(f.publish).toHaveBeenCalledTimes(1));
+  expect(f.publish.mock.calls[0]?.[0]).toMatchObject({
+    tags: [
+      ["h", "channel"],
+      ["p", owner],
+    ],
+  });
+});
 /** A plugin's wake; its id is its own, which nothing may publish. */
 const WAKE_ID = "8".repeat(64);
 const pluginWake = (
@@ -3420,6 +3479,9 @@ it.each(["v2", "v3", "v5", "v6", "v7", "v15", "v16"])(
         "agent_types",
         "agent_create",
         "agent_update",
+        "agent_read",
+        "team_read",
+        "team_update",
       ]),
     );
     f.complete();
@@ -3811,6 +3873,41 @@ it("uses the launched workspace for shared file tools and the owner view for enc
   });
 });
 
+it("reads a file outside its turns in its resolved saved workspace, but not on an execution target", async () => {
+  type Saved = Parameters<CodexRuntime["workspaceFile"]>[0];
+  const agent = {
+    key: pubkey,
+    pubkey,
+    config: { workspace: "~/.buzz", model: "test-model" },
+  } as unknown as Saved;
+  const f = fixture();
+  const bytes = await f.runtime.workspaceFile(
+    agent,
+    "notes.txt",
+    new AbortController().signal,
+  );
+  expect(new TextDecoder().decode(bytes)).toBe("FILE CONTENT");
+  expect(f.fileReads).toEqual([{ cwd: "/home/test/.buzz", path: "notes.txt" }]);
+  const remote = fixture(
+    [],
+    undefined,
+    false,
+    {},
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    async () => ({ provider: "test/guest" }),
+  );
+  await expect(
+    remote.runtime.workspaceFile(
+      agent,
+      "notes.txt",
+      new AbortController().signal,
+    ),
+  ).rejects.toThrow("only in a conversation on its execution target");
+  expect(remote.fileReads).toEqual([]);
+});
 it("returns a failed send to Codex for correction without ending its turn", async () => {
   const f = fixture();
   await f.runtime.run(f.delivery("work"));
@@ -3939,13 +4036,29 @@ it.each([false, true])(
   },
 );
 
-it.each(["accepted", "rejected"] as const)(
-  "moves same-thread activity only after steering is accepted: %s",
-  async (outcome) => {
+it.each([
+  { outcome: "accepted", dm: false },
+  { outcome: "rejected", dm: false },
+  { outcome: "accepted", dm: true },
+  { outcome: "rejected", dm: true },
+])(
+  "moves activity only after steering is accepted: $outcome, dm=$dm",
+  async ({ outcome, dm }) => {
     const f = fixture();
+    if (dm)
+      f.snapshot.session.channels.list = () => ({
+        status: "ready",
+        channels: [{ id: "channel", name: "DM", channelType: "dm" }],
+      });
+    const delivery = (text: string) => {
+      const request = f.delivery(text);
+      if (dm && request.trigger.type === "mention")
+        request.trigger.event.tags = [["h", "channel"]];
+      return request;
+    };
     const first = { step: vi.fn(), acknowledged: vi.fn(), superseded: vi.fn() };
     const next = { step: vi.fn(), acknowledged: vi.fn(), superseded: vi.fn() };
-    await f.runtime.run({ ...f.delivery("first"), ...first });
+    await f.runtime.run({ ...delivery("first"), ...first });
     await vi.waitFor(() => expect(first.acknowledged).toHaveBeenCalledOnce());
     const started = f.starts()[0];
     if (!started) throw new Error("Expected started turn");
@@ -3976,7 +4089,7 @@ it.each(["accepted", "rejected"] as const)(
       await write(data);
     };
     try {
-      await f.runtime.run({ ...f.delivery("follow-up"), ...next });
+      await f.runtime.run({ ...delivery("follow-up"), ...next });
       await requested.promise;
       step("ls");
       expect(first.step).toHaveBeenLastCalledWith("Shell", "ls");
@@ -4026,74 +4139,89 @@ it.each(["accepted", "rejected"] as const)(
   },
 );
 
-it("keeps each thread's activity in a shared session and does not move it to watches", async () => {
-  const f = fixture();
-  const first = { step: vi.fn(), acknowledged: vi.fn(), superseded: vi.fn() };
-  const second = { step: vi.fn(), acknowledged: vi.fn(), superseded: vi.fn() };
-  const delivery = (text: string, threadRoot: string) => {
-    const d = f.delivery(text, threadRoot);
-    return { ...d, config: { ...(d.config as object), scope: "channel" } };
-  };
-  await f.runtime.run({ ...delivery("first thread", root), ...first });
-  await vi.waitFor(() => expect(first.acknowledged).toHaveBeenCalledOnce());
-  await f.runtime.run({
-    ...delivery("second thread", "e".repeat(64)),
-    ...second,
-  });
-  await vi.waitFor(() => expect(second.acknowledged).toHaveBeenCalledOnce());
-  expect(first.superseded).not.toHaveBeenCalled();
-  const watch = delivery("watched message", root);
-  if (watch.trigger.type !== "mention") throw new Error("Expected mention");
-  const watched = { step: vi.fn(), acknowledged: vi.fn(), superseded: vi.fn() };
-  f.wake({
-    ...watch,
-    ...watched,
-    trigger: {
-      type: "watch",
-      event: watch.trigger.event,
-      slug: "watch/test",
-      watch: {
-        type: "event",
-        enabled: true,
-        interest_id: "test",
-        since: 0,
-        channels: "all",
-        kinds: [9],
+it.each(["stream", "dm"])(
+  "keeps each thread's activity in a shared %s session and does not move it to watches",
+  async (channelType) => {
+    const f = fixture();
+    f.snapshot.session.channels.list = () => ({
+      status: "ready",
+      channels: [{ id: "channel", name: "test", channelType }],
+    });
+    const first = { step: vi.fn(), acknowledged: vi.fn(), superseded: vi.fn() };
+    const second = {
+      step: vi.fn(),
+      acknowledged: vi.fn(),
+      superseded: vi.fn(),
+    };
+    const delivery = (text: string, threadRoot: string) => {
+      const d = f.delivery(text, threadRoot);
+      return { ...d, config: { ...(d.config as object), scope: "channel" } };
+    };
+    await f.runtime.run({ ...delivery("first thread", root), ...first });
+    await vi.waitFor(() => expect(first.acknowledged).toHaveBeenCalledOnce());
+    await f.runtime.run({
+      ...delivery("second thread", "e".repeat(64)),
+      ...second,
+    });
+    await vi.waitFor(() => expect(second.acknowledged).toHaveBeenCalledOnce());
+    expect(first.superseded).not.toHaveBeenCalled();
+    const watch = delivery("watched message", root);
+    if (watch.trigger.type !== "mention") throw new Error("Expected mention");
+    const watched = {
+      step: vi.fn(),
+      acknowledged: vi.fn(),
+      superseded: vi.fn(),
+    };
+    f.wake({
+      ...watch,
+      ...watched,
+      trigger: {
+        type: "watch",
+        event: watch.trigger.event,
+        slug: "watch/test",
+        watch: {
+          type: "event",
+          enabled: true,
+          interest_id: "test",
+          since: 0,
+          channels: "all",
+          kinds: [9],
+        },
       },
-    },
-  });
-  // The watch runs as a one-off turn of its own, never steered into a
-  // conversation; this one has no saved watch, so it does not run at all.
-  const wakeDone = f.workingUntil.mock.calls.at(-1)?.[0];
-  await expect(wakeDone).resolves.toEqual({ ok: true });
-  await vi.waitFor(() =>
-    expect(f.sent.filter((w) => w.method === "turn/steer")).toHaveLength(1),
-  );
-  expect(f.sent.filter((w) => w.method === "thread/start")).toHaveLength(1);
-  // A tool call waits for the steering chain, establishing that it was taken.
-  await f.tool("send", {
-    audience: "everyone",
-    text: "Progress",
-    final: false,
-  });
-  const started = f.starts()[0];
-  if (!started) throw new Error("Expected started turn");
-  const threadId = (started.params as { threadId: string }).threadId;
-  f.emit({
-    method: "item/started",
-    params: { threadId, item: { type: "reasoning" } },
-  });
-  expect(first.step).toHaveBeenLastCalledWith("Thinking", undefined);
-  expect(second.step).toHaveBeenLastCalledWith("Thinking", undefined);
-  expect(first.superseded).not.toHaveBeenCalled();
-  expect(second.superseded).not.toHaveBeenCalled();
-  expect(watched.acknowledged).not.toHaveBeenCalled();
-  expect(watched.step).not.toHaveBeenCalled();
-  await f.complete();
-  await vi.waitFor(() =>
-    expect(f.runtime.sessions(pubkey)[0]?.status).toBe("Idle"),
-  );
-});
+    });
+    // The watch runs as a one-off turn of its own, never steered into a
+    // conversation; this one has no saved watch, so it does not run at all.
+    const wakeDone = f.workingUntil.mock.calls.at(-1)?.[0];
+    await expect(wakeDone).resolves.toEqual({ ok: true });
+    await vi.waitFor(() =>
+      expect(f.sent.filter((w) => w.method === "turn/steer")).toHaveLength(1),
+    );
+    expect(f.sent.filter((w) => w.method === "thread/start")).toHaveLength(1);
+    // A tool call waits for the steering chain, establishing that it was taken.
+    await f.tool("send", {
+      audience: "everyone",
+      text: "Progress",
+      final: false,
+    });
+    const started = f.starts()[0];
+    if (!started) throw new Error("Expected started turn");
+    const threadId = (started.params as { threadId: string }).threadId;
+    f.emit({
+      method: "item/started",
+      params: { threadId, item: { type: "reasoning" } },
+    });
+    expect(first.step).toHaveBeenLastCalledWith("Thinking", undefined);
+    expect(second.step).toHaveBeenLastCalledWith("Thinking", undefined);
+    expect(first.superseded).not.toHaveBeenCalled();
+    expect(second.superseded).not.toHaveBeenCalled();
+    expect(watched.acknowledged).not.toHaveBeenCalled();
+    expect(watched.step).not.toHaveBeenCalled();
+    await f.complete();
+    await vi.waitFor(() =>
+      expect(f.runtime.sessions(pubkey)[0]?.status).toBe("Idle"),
+    );
+  },
+);
 
 it("delivers pending owner steering after a final send and posts its own answer", async () => {
   const f = fixture();
@@ -5717,6 +5845,442 @@ it("keeps interrupting an idle existing conversation a no-op", async () => {
   ).resolves.toBeUndefined();
 });
 
+describe("voice seats", () => {
+  async function seated(overrides: Partial<AgentVoiceSeat> = {}) {
+    vi.stubGlobal("RTCPeerConnection", class {});
+    const f = fixture();
+    f.huddleChannels.add("channel");
+    const delivery = f.delivery("hello");
+    const abort = new AbortController();
+    const ended = vi.fn();
+    const seat = {
+      config: delivery.config,
+      transcript: vi.fn(async () => {}),
+      agent: { ...delivery.agent, config: delivery.config } as unknown as Agent,
+      conversation: { channelId: "channel" },
+      signal: abort.signal,
+      output: vi.fn(async () => {}),
+      ended,
+      ...overrides,
+    };
+    const connection = await f.runtime.voice(seat, delivery.agent);
+    return { ...f, initial: delivery, abort, ended, connection, seat };
+  }
+  it("reports thinking for a huddle work turn and clears it on completion", async () => {
+    const thinking = vi.fn();
+    const f = await seated({ thinking });
+    f.emit({
+      method: "turn/started",
+      params: { threadId: "thread-1", turn: { id: "voice-thinking" } },
+    });
+    expect(thinking).toHaveBeenLastCalledWith(true);
+    f.emit({
+      method: "turn/completed",
+      params: {
+        threadId: "thread-1",
+        turn: { id: "voice-thinking", status: "completed" },
+      },
+    });
+    expect(thinking).toHaveBeenLastCalledWith(false);
+    await f.connection.close();
+    thinking.mockClear();
+    f.emit({
+      method: "turn/started",
+      params: { threadId: "thread-1", turn: { id: "late" } },
+    });
+    expect(thinking).not.toHaveBeenCalled();
+  });
+  it("uses resolved seat config and team instead of the local agent config", async () => {
+    const f = await seated({
+      config: { workspace: "/tmp/resolved-voice", model: "test-model" },
+      team: "<team>Resolved voice crew</team>",
+    });
+    const started = f.sent.find(
+      (wire) => wire.method === "thread/start",
+    )?.params;
+    expect(started).toMatchObject({
+      cwd: "/tmp/resolved-voice",
+      model: "test-model",
+    });
+    expect((started as Record<string, unknown>).developerInstructions).toEqual(
+      expect.stringContaining("Resolved voice crew"),
+    );
+    expect(vi.mocked(openVoice).mock.calls.at(-1)?.[5]).toContain(
+      "Resolved voice crew",
+    );
+    // A fresh thread already has the context as its developer message.
+    expect(f.sent.some((wire) => wire.method === "thread/inject_items")).toBe(
+      false,
+    );
+    await f.connection.close();
+  });
+  it("gives a resumed room thread the seat's current context", async () => {
+    vi.stubGlobal("RTCPeerConnection", class {});
+    const f = fixture();
+    f.huddleChannels.add("channel");
+    await f.runtime.run(f.delivery("@Codex typed first"));
+    await vi.waitFor(() => expect(f.starts()).toHaveLength(1));
+    f.complete(0, "DONE");
+    f.core.mockResolvedValueOnce("NEW CORE");
+    const d = f.delivery("unused");
+    const connection = await f.runtime.voice(
+      {
+        config: d.config,
+        agent: { ...d.agent, config: d.config } as unknown as Agent,
+        conversation: { channelId: "channel" },
+        signal: new AbortController().signal,
+        async output() {},
+        async transcript() {},
+        ended() {},
+      },
+      d.agent,
+    );
+    const methods = f.sent.map((wire) => wire.method);
+    const injected = methods.indexOf("thread/inject_items");
+    expect(injected).toBeGreaterThan(methods.lastIndexOf("thread/resume"));
+    // Codex keeps a resumed thread's first developer message, so the
+    // seat's context reaches the model only as an injected item.
+    expect(f.sent[injected]?.params).toMatchObject({
+      threadId: "thread-1",
+      items: [
+        {
+          type: "message",
+          role: "developer",
+          content: [
+            { type: "input_text", text: expect.stringContaining("NEW CORE") },
+          ],
+        },
+      ],
+    });
+    expect(vi.mocked(openVoice).mock.calls.at(-1)?.[5]).toContain("NEW CORE");
+    await connection.close();
+  });
+  it("refuses a protected agent before setup, server or media", async () => {
+    vi.stubGlobal("RTCPeerConnection", class {});
+    const f = fixture([], undefined, true);
+    const d = f.delivery("hello");
+    vi.mocked(openVoice).mockClear();
+    const installed = vi.spyOn(CodexSetup.prototype, "installed");
+    const seat = {
+      config: d.config,
+      agent: {
+        ...d.agent,
+        protection: {},
+        config: d.config,
+      } as unknown as Agent,
+      conversation: { channelId: "channel" },
+      signal: new AbortController().signal,
+      async output() {},
+      async transcript() {},
+      ended() {},
+    };
+    await expect(f.voicePlugin(seat)).rejects.toThrow("protected agents");
+    // The runtime refuses on its own too, for any other caller.
+    await expect(f.runtime.voice(seat, d.agent)).rejects.toThrow(
+      "protected agents",
+    );
+    // Nothing was started for the seat: no setup, thread or media.
+    expect(installed).not.toHaveBeenCalled();
+    expect(f.sent.some((wire) => wire.method === "thread/start")).toBe(false);
+    expect(openVoice).not.toHaveBeenCalled();
+  });
+  it("preserves the mention path's synced-effort refusal", async () => {
+    await expect(
+      seated({
+        config: {
+          workspace: "/tmp/resolved-voice",
+          model: "test-model",
+          effort: "xhigh",
+        },
+        synced: { effort: "xhigh" },
+      }),
+    ).rejects.toThrow('synced effort "xhigh"');
+  });
+  it("adopts voice tools with owner mention authority and steers room mentions", async () => {
+    const f = await seated();
+    f.emit({
+      method: "turn/started",
+      params: { threadId: "thread-1", turn: { id: "voice-1" } },
+    });
+    const result = await f.tool(
+      "send",
+      { text: "voice work", audience: "everyone" },
+      0,
+      { threadId: "thread-1", turnId: "voice-1" },
+    );
+    expect(result?.result).toMatchObject({ success: true });
+    expect(f.publish).toHaveBeenLastCalledWith(
+      expect.objectContaining({ tags: [["h", "channel"]] }),
+      expect.any(Function),
+    );
+    await f.runtime.run(f.delivery("change that"));
+    await vi.waitFor(() =>
+      expect(f.sent.some((w) => w.method === "turn/steer")).toBe(true),
+    );
+    expect(f.starts()).toHaveLength(0);
+    const steer = f.sent.find((w) => w.method === "turn/steer");
+    expect(steer?.params).toMatchObject({
+      threadId: "thread-1",
+      expectedTurnId: "voice-1",
+    });
+    f.abort.abort();
+    await f.connection.close();
+    expect(f.sent.some((w) => w.method === "turn/interrupt")).toBe(true);
+    expect(f.sent.some((w) => w.method === "thread/unsubscribe")).toBe(true);
+    expect(f.process.end).not.toHaveBeenCalled();
+    const late = await f.tool(
+      "send",
+      { text: "late", audience: "everyone" },
+      0,
+      { threadId: "thread-1", turnId: "voice-1" },
+    );
+    expect(late?.result).toMatchObject({ success: false });
+  });
+  it("posts only nonempty final transcripts without notifying or replying", async () => {
+    const f = await seated();
+    for (const [method, text] of [
+      ["thread/realtime/transcript/done", "hello @someone"],
+      ["thread/realtime/transcript/done", "  "],
+      ["item/completed", "duplicate"],
+    ] as const)
+      f.emit({ method, params: { threadId: "thread-1", role: "user", text } });
+    await vi.waitFor(() => expect(f.seat.transcript).toHaveBeenCalledTimes(1));
+    expect(f.seat.transcript).toHaveBeenCalledWith("owner", "hello @someone");
+    await f.connection.close();
+    f.emit({
+      method: "thread/realtime/transcript/done",
+      params: { threadId: "thread-1", role: "assistant", text: "late" },
+    });
+    expect(f.seat.transcript).toHaveBeenCalledTimes(1);
+  });
+  it("rejects unsupported devices at registration before opening media", async () => {
+    vi.stubGlobal("RTCPeerConnection", undefined);
+    const f = fixture([], undefined, true);
+    const d = f.delivery("hello");
+    vi.mocked(openVoice).mockClear();
+    await expect(
+      f.voicePlugin({
+        config: d.config,
+        transcript: vi.fn(async () => {}),
+        agent: { ...d.agent, config: d.config } as unknown as Agent,
+        conversation: { channelId: "channel" },
+        signal: new AbortController().signal,
+        output: async () => {},
+        ended() {},
+      }),
+    ).rejects.toThrow("Voice is unsupported");
+    expect(openVoice).not.toHaveBeenCalled();
+  });
+  it("runs a mention arriving while the aborted seat is still closing", async () => {
+    const stopped = deferred<void>();
+    const closing = deferred<void>();
+    vi.mocked(openVoice).mockResolvedValueOnce({
+      input() {},
+      close: () => {
+        closing.resolve();
+        return stopped.promise;
+      },
+    });
+    const f = await seated();
+    f.abort.abort();
+    await closing.promise;
+    await f.runtime.run(f.delivery("after hangup"));
+    expect(f.starts()).toHaveLength(0);
+    stopped.resolve();
+    await f.connection.close();
+    await vi.waitFor(() => expect(f.starts()).toHaveLength(1));
+    f.complete(0, "DONE");
+    await vi.waitFor(() => expect(f.publish).toHaveBeenCalled());
+  });
+  it("keeps a running typed turn alive when its seat aborts", async () => {
+    vi.mocked(openVoice).mockImplementationOnce(async (rpc, threadId) => ({
+      input() {},
+      close: async () => {
+        await rpc.request("thread/realtime/stop", { threadId });
+      },
+    }));
+    const f = await seated();
+    await f.runtime.run(f.delivery("typed work"));
+    await vi.waitFor(() => expect(f.starts()).toHaveLength(1));
+    f.abort.abort();
+    expect(f.sent.some((wire) => wire.method === "thread/realtime/stop")).toBe(
+      true,
+    );
+    await expect(
+      f.runtime.voice(
+        { ...f.seat, signal: new AbortController().signal },
+        f.initial.agent,
+      ),
+    ).rejects.toThrow("already has a voice seat");
+    const result = await f.tool(
+      "send",
+      { text: "still working", audience: "everyone" },
+      0,
+      { threadId: "thread-1", turnId: "turn-1" },
+    );
+    expect(result?.result).toMatchObject({ success: true });
+    expect(f.sent.some((wire) => wire.method === "turn/interrupt")).toBe(false);
+    f.complete(0, "DONE");
+    await f.connection.close();
+  });
+  it("runs a typed turn on its own picks while a seat is open, idle or queued", async () => {
+    const f = await seated();
+    const settings = () =>
+      f.starts().map((wire) => {
+        const { threadId, model, effort } = wire.params as Record<
+          string,
+          string
+        >;
+        return { threadId, model, effort };
+      });
+    // Idle: the seat's thread, the pick's model and effort.
+    await f.runtime.run({
+      ...f.delivery("@Codex deeper"),
+      model: "deep-model",
+      effort: "xhigh",
+    });
+    await vi.waitFor(() => expect(f.starts()).toHaveLength(1));
+    f.complete(0, "DONE");
+    await vi.waitFor(() => expect(f.publish).toHaveBeenCalledTimes(1));
+    // Queued behind adopted voice work: still its own pick once it drains.
+    f.emit({
+      method: "turn/started",
+      params: { threadId: "thread-1", turn: { id: "voice-1" } },
+    });
+    // The voice turn is adopted (its tools run) before the typed one queues.
+    const adopted = await f.tool(
+      "send",
+      { text: "voice work", audience: "everyone" },
+      0,
+      { threadId: "thread-1", turnId: "voice-1" },
+    );
+    expect(adopted?.result).toMatchObject({ success: true });
+    await f.runtime.run({ ...f.delivery("@Codex harder"), effort: "high" });
+    expect(f.starts()).toHaveLength(1);
+    f.emit({
+      method: "turn/completed",
+      params: {
+        threadId: "thread-1",
+        turn: { id: "voice-1", status: "completed" },
+      },
+    });
+    await vi.waitFor(() => expect(f.starts()).toHaveLength(2));
+    expect(settings()).toEqual([
+      { threadId: "thread-1", model: "deep-model", effort: "xhigh" },
+      { threadId: "thread-1", model: "test-model", effort: "high" },
+    ]);
+    f.complete(1, "DONE");
+    await f.connection.close();
+  });
+  it("does not let queued text overwrite a backend turn arriving during media open", async () => {
+    const pending = deferred<Awaited<ReturnType<typeof openVoice>>>();
+    const entered = deferred<void>();
+    vi.mocked(openVoice).mockImplementationOnce(() => {
+      entered.resolve();
+      return pending.promise;
+    });
+    const f = fixture();
+    f.huddleChannels.add("channel");
+    const d = f.delivery("hello");
+    const opening = f.runtime.voice(
+      {
+        config: d.config,
+        agent: { ...d.agent, config: d.config } as unknown as Agent,
+        conversation: { channelId: "channel" },
+        signal: new AbortController().signal,
+        async output() {},
+        async transcript() {},
+        ended() {},
+      },
+      d.agent,
+    );
+    await entered.promise;
+    await f.runtime.run(f.delivery("queued text"));
+    f.emit({
+      method: "turn/started",
+      params: { threadId: "thread-1", turn: { id: "voice-1" } },
+    });
+    pending.resolve({ input() {}, close() {} });
+    const connection = await opening;
+    const result = await f.tool(
+      "send",
+      { text: "voice result", audience: "everyone" },
+      0,
+      { threadId: "thread-1", turnId: "voice-1" },
+    );
+    expect(result?.result).toMatchObject({ success: true });
+    expect(f.starts()).toHaveLength(0);
+    f.emit({
+      method: "turn/completed",
+      params: {
+        threadId: "thread-1",
+        turn: { id: "voice-1", status: "completed" },
+      },
+    });
+    await vi.waitFor(() => expect(f.starts()).toHaveLength(1));
+    f.complete(0, "DONE");
+    await connection.close();
+  });
+  it("closes a late media open after the seat was aborted", async () => {
+    const pending = deferred<Awaited<ReturnType<typeof openVoice>>>();
+    const entered = deferred<void>();
+    vi.mocked(openVoice).mockImplementationOnce(() => {
+      entered.resolve();
+      return pending.promise;
+    });
+    vi.stubGlobal("RTCPeerConnection", class {});
+    const f = fixture();
+    const d = f.delivery("hello");
+    const abort = new AbortController();
+    const opening = f.runtime.voice(
+      {
+        config: d.config,
+        transcript: vi.fn(async () => {}),
+        agent: { ...d.agent, config: d.config } as unknown as Agent,
+        conversation: { channelId: "channel" },
+        signal: abort.signal,
+        output: async () => {},
+        ended() {},
+      },
+      d.agent,
+    );
+    await entered.promise;
+    abort.abort();
+    const close = vi.fn();
+    pending.resolve({ close, input() {} });
+    await expect(opening).rejects.toThrow();
+    expect(close).toHaveBeenCalledTimes(1);
+  });
+  it("rejects foreign turns and adopts consecutive backend turns before cleanup yields", async () => {
+    const f = await seated();
+    const notify = (method: string, id: string) =>
+      f.emit({
+        method,
+        params: { threadId: "thread-1", turn: { id, status: "completed" } },
+      });
+    notify("turn/started", "voice-1");
+    const wrong = await f.tool(
+      "send",
+      { text: "wrong", audience: "everyone" },
+      0,
+      { threadId: "thread-1", turnId: "foreign" },
+    );
+    expect(wrong?.result).toMatchObject({ success: false });
+    notify("turn/completed", "voice-1");
+    notify("turn/started", "voice-2");
+    const right = await f.tool(
+      "send",
+      { text: "second", audience: "everyone" },
+      0,
+      { threadId: "thread-1", turnId: "voice-2" },
+    );
+    expect(right?.result).toMatchObject({ success: true });
+    notify("turn/completed", "voice-2");
+    await f.connection.close();
+    expect(f.publish).toHaveBeenCalledTimes(1);
+  });
+});
+
 it("rejects an execution open that completes after the agent retires", async () => {
   const opened = deferred<AgentExecution>();
   const started = deferred<void>();
@@ -6465,5 +7029,69 @@ it.each(["conversation", "standalone", "preview"])(
     await rejected;
     expect(f.spawn).not.toHaveBeenCalled();
     expect(execution).not.toHaveBeenCalled();
+  },
+);
+
+it.each([true, false])(
+  "lists and runs the owner tools only for a run with owner access: %s",
+  async (owned) => {
+    const f = fixture();
+    const executedAs = { agent: "agent", owner: "owner", community: "c" };
+    const ownerAccess = {
+      channels: vi.fn(async () => ({
+        execution: executedAs,
+        channels: [],
+        partial: false,
+      })),
+      channel: vi.fn(),
+      members: vi.fn(),
+      messages: vi.fn(),
+      canvas: vi.fn(),
+      canvasHistory: vi.fn(),
+      held: vi.fn(),
+    };
+    const delivery = f.delivery("@Codex list my channels");
+    await f.runtime.run({
+      ...delivery,
+      agent: {
+        ...delivery.agent,
+        ...(owned ? { ownerAccess } : {}),
+      } as typeof delivery.agent,
+    });
+    await vi.waitFor(() => expect(f.starts()).toHaveLength(1));
+    const thread = f.sent.find((wire) => wire.method === "thread/start")
+      ?.params as {
+      dynamicTools: {
+        description: string;
+        tools: { name: string; deferLoading?: boolean }[];
+      }[];
+    };
+    const listed = thread.dynamicTools[0]?.tools.filter((tool) =>
+      tool.name.startsWith("owner_"),
+    );
+    expect(listed).toEqual(
+      owned
+        ? [
+            "owner_channel_list",
+            "owner_channel_get",
+            "owner_member_list",
+            "owner_read",
+            "owner_canvas_get",
+            "owner_canvas_history",
+          ].map((name) => expect.objectContaining({ name, deferLoading: true }))
+        : [],
+    );
+    // A name the model remembers or guesses is checked against the run's
+    // own access on every call.
+    const reply = (await f.tool("owner_channel_list", {}))?.result as {
+      success: boolean;
+      contentItems: { text: string }[];
+    };
+    expect(reply.success).toBe(owned);
+    expect(reply.contentItems[0]?.text).toContain(
+      owned ? '"executedAs"' : "nothing was read",
+    );
+    expect(ownerAccess.channels).toHaveBeenCalledTimes(owned ? 1 : 0);
+    await f.complete();
   },
 );

@@ -1,3 +1,4 @@
+import { interestPaused } from "./attention";
 // Lifecycle for plugin producers. The host owns registration, cancellation and delivery;
 // plugins own execution. A resolved run is terminal until its watch is edited.
 import type { ComponentType } from "react";
@@ -87,6 +88,7 @@ export class AttentionSources {
           value.type === "source" &&
           value.provider === provider &&
           value.enabled &&
+          !interestPaused(agent.attention, value.interest_id) &&
           agent.attention[`interest/${value.interest_id}`]?.value.type ===
             "interest"
         )

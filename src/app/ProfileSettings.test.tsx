@@ -138,8 +138,9 @@ function verifiedProfileSettings(
     profiles.set(viewer, {
       name: "Verified Name",
       verified: {
-        displayName: "Verified Name",
+        displayName: "verified",
         username: "verified",
+        fullName: "Verified Name",
         issuerLabel: "Block",
         verifiedAt: 1,
         status: next,
@@ -196,7 +197,7 @@ it("shows the verified name read-only and keeps the signed name when saving", as
   const name = await screen.findByLabelText("Display name");
   await waitFor(() => expect(name).toHaveValue("Verified Name"));
   expect(name).toHaveAttribute("readonly");
-  expect(screen.getByText("Name verified by Block")).toBeVisible();
+  expect(screen.getByText("Name verified by Block · @verified")).toBeVisible();
   expect(ensure).toHaveBeenCalledWith([viewer]);
   await user.type(
     screen.getByLabelText("Profile description (optional)"),
@@ -227,7 +228,9 @@ it("keeps the signed name when verification arrives after a name edit", async ()
 
   expect(name).toHaveValue("Verified Name");
   expect(name).toHaveAttribute("readonly");
-  expect(screen.getByText("Cached verification from Block")).toBeVisible();
+  expect(
+    screen.getByText("Cached verification from Block · @verified"),
+  ).toBeVisible();
   await user.click(screen.getByRole("button", { name: "Save" }));
   await waitFor(() =>
     expect(publish).toHaveBeenCalledWith(
@@ -564,11 +567,12 @@ it("rejects profile image URLs with embedded credentials", async () => {
     await screen.findByLabelText("Picture URL (optional)"),
     "https://user:secret@example.test/profile.png",
   );
+  // Done reveals the error instead of applying the URL.
+  await user.click(screen.getByRole("button", { name: "Done" }));
 
   expect(
     screen.getByLabelText("Picture URL (optional)"),
   ).toHaveAccessibleDescription(/Use an HTTPS image URL without credentials/);
-  expect(screen.getByRole("button", { name: "Done" })).toBeDisabled();
   expect(
     screen.queryByRole("button", { name: "Save" }),
   ).not.toBeInTheDocument();

@@ -126,7 +126,7 @@ test("Canvas history previews and restores without losing the editor draft", asy
     exact: true,
   });
   await expect(
-    confirmation.getByRole("button", { name: "Cancel", exact: true }),
+    confirmation.getByRole("button", { name: "Restore version", exact: true }),
   ).toBeFocused();
   await page.mouse.click(8, 8);
   await expect(confirmation).toHaveCount(0);

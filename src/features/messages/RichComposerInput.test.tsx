@@ -50,7 +50,11 @@ function mount(initial?: MentionDraft) {
   let commits = 0;
   let profiles: ReadonlyMap<string, Profile> = new Map();
   const profileListeners = new Set<() => void>();
-  const channels = { status: "ready", channels: [] };
+  let channels: { status: string; channels: { id: string; name: string }[] } = {
+    status: "ready",
+    channels: [],
+  };
+  const channelListeners = new Set<() => void>();
   const library = { status: "ready", identities: [], definitions: [] };
   // A catalog snapshot, as MessageComposer passes it.
   const emoji: readonly CustomEmoji[] = [];
@@ -70,7 +74,13 @@ function mount(initial?: MentionDraft) {
       refresh: async () => {},
       retain: () => () => {},
     },
-    channels: { list: () => channels, subscribeList: () => () => {} },
+    channels: {
+      list: () => channels,
+      subscribeList: (listener: () => void) => {
+        channelListeners.add(listener);
+        return () => channelListeners.delete(listener);
+      },
+    },
   };
   const session = {
     ...source,
@@ -131,6 +141,15 @@ function mount(initial?: MentionDraft) {
       ].map(
         (chip) => `${chip.dataset.kind}: ${chip.getAttribute("aria-label")}`,
       ),
+    setChannels(names: string[]) {
+      act(() => {
+        channels = {
+          status: "ready",
+          channels: names.map((name) => ({ id: name, name })),
+        };
+        for (const listener of channelListeners) listener();
+      });
+    },
     setProfiles(next: ReadonlyMap<string, Profile>) {
       act(() => {
         profiles = next;
@@ -139,6 +158,15 @@ function mount(initial?: MentionDraft) {
     },
   };
 }
+
+it("decorates a channel reference once its channel arrives or leaves, not from a stale scan", () => {
+  const h = mount(mentionDraft("see #general now"));
+  expect(h.chips()).toEqual([]);
+  h.setChannels(["general"]);
+  expect(h.chips().map(([source]) => source)).toEqual(["#general"]);
+  h.setChannels([]);
+  expect(h.chips()).toEqual([]);
+});
 
 const label = (source = "") => source.match(/^\[(.*)\]\(/)?.[1];
 

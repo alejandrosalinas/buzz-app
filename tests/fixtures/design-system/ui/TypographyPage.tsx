@@ -1,6 +1,5 @@
 import {
   TYPE_FAMILIES,
-  TYPE_SOURCE,
   TYPE_RAMPS,
   TYPE_ROLES,
   type TypeRole,
@@ -98,8 +97,7 @@ export function TypographyPage() {
       <Note>
         Values are shown at 100% text size and scale with the text-size
         preference. A role supplies its own line height; section titles use 24px
-        type with a 1.1 line height. Reference:{" "}
-        <a href={TYPE_SOURCE}>Typography source specification</a>.
+        type with a 1.1 line height.
       </Note>
     </>
   );

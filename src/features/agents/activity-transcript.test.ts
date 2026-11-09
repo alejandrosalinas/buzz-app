@@ -49,6 +49,30 @@ const update = (sessionUpdate: string, fields: object) => ({
   method: "session/update",
   params: { sessionId: "S", update: { sessionUpdate, ...fields } },
 });
+
+it.each([
+  [undefined, "ended"],
+  ["completed", "ended"],
+  ["failed", "error"],
+  ["terminated", "error"],
+  ["cancelled", "stopped"],
+  ["new-outcome", "unknown"],
+])(
+  "projects remote terminal outcome %s without reporting success",
+  (outcome, expected) => {
+    const transcript = activityTranscript(
+      [
+        record([
+          event("remote", "turn_started"),
+          event("remote", "turn_completed", { outcome }),
+        ]),
+      ],
+      { agent },
+    );
+    expect(transcript.turns[0]?.outcome).toBe(expected);
+    expect(transcript.turns[0]?.endedAt).toBeDefined();
+  },
+);
 const prompt = (id: number, context: string, content: string) => ({
   jsonrpc: "2.0",
   id,
@@ -551,10 +575,11 @@ it("reads an event sent as an exact record, in its own or a steer's section", ()
   for (const tag of ["buzz-event", STEER])
     expect(
       promptMessage(promptSections(`<${tag}>\n${body}\n</${tag}>`), name),
-    ).toEqual({ text: "<b>", author: "Sam" });
+    ).toEqual({ text: "<b>", author: "Sam", authorPubkey: event.pubkey });
   expect(promptMessage([{ tag: "buzz-event", body }])).toEqual({
     text: "<b>",
     author: undefined,
+    authorPubkey: event.pubkey,
   });
   // A steer before records wrapped a whole turn, which is not an event.
   expect(
@@ -627,7 +652,7 @@ it("reads an event sent before exact records as one escaped JSON object", () => 
       promptMessage(
         promptSections(`<${tag} type="@mention">\n${body}\n</${tag}>`),
       ),
-    ).toEqual({ text: content, author: "Sam" });
+    ).toEqual({ text: content, author: "Sam", authorPubkey: "a".repeat(64) });
 });
 
 it("reuses a transcript for the same frozen records and scope", () => {
@@ -647,4 +672,97 @@ it("reuses a transcript for the same frozen records and scope", () => {
   expect(
     activityTranscript([...records], { agent, channelId: "alpha" }),
   ).not.toBe(first);
+});
+
+it("shows a Buzz message a remote tool posted as the agent's reply", () => {
+  const call = (id: string, title: string, status: string, text?: string) =>
+    update("tool_call_update", {
+      toolCallId: id,
+      title,
+      kind: "other",
+      status,
+      ...(text === undefined
+        ? {}
+        : { rawInput: { text, audience: "everyone" } }),
+    });
+  const turn = activityTranscript(
+    [
+      record([event("remote", "turn_started")]),
+      // kgoose sends the running row without arguments, then the completion.
+      record([
+        event(
+          "remote",
+          "acp_read",
+          update("tool_call", {
+            toolCallId: "send",
+            title: "buzz__send",
+            kind: "other",
+            status: "in_progress",
+          }),
+        ),
+        event(
+          "remote",
+          "acp_read",
+          call("send", "buzz__send", "completed", "Done"),
+        ),
+      ]),
+      record([
+        event(
+          "remote",
+          "acp_read",
+          call("sub", "mcp__buzz__reply_in_subthread", "completed", "Nested"),
+        ),
+      ]),
+      record([
+        event(
+          "remote",
+          "acp_read",
+          call("failed", "buzz__send", "failed", "Lost"),
+        ),
+      ]),
+      record([
+        event(
+          "remote",
+          "acp_read",
+          call("read", "buzz__read", "completed", "q"),
+        ),
+      ]),
+      // buzz-agent reports an MCP application error as a completed call.
+      record([
+        event(
+          "remote",
+          "acp_read",
+          update("tool_call", {
+            toolCallId: "rejected",
+            title: "buzz__send",
+            status: "in_progress",
+            rawInput: { text: "Rejected" },
+          }),
+        ),
+        event(
+          "remote",
+          "acp_read",
+          update("tool_call_update", {
+            toolCallId: "rejected",
+            status: "completed",
+            rawOutput: { isError: true, content: "not a member" },
+          }),
+        ),
+      ]),
+    ],
+    { agent },
+  ).turns[0];
+  expect(
+    turn?.items.map((item) =>
+      item.type === "message"
+        ? [item.type, item.text, item.posted]
+        : [item.type, item.type === "tool" ? item.title : ""],
+    ),
+  ).toEqual([
+    ["message", "Done", true],
+    ["message", "Nested", true],
+    ["tool", "buzz__send"],
+    ["tool", "buzz__read"],
+    ["tool", "buzz__send"],
+  ]);
 });

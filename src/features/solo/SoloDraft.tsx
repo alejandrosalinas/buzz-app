@@ -1,4 +1,4 @@
-import { linkedDraftKey, type LinkedChat } from "./linked-chat";
+import { linkedDraftKey, readLinkedChat, type LinkedChat } from "./linked-chat";
 import {
   canonicalDetailsName,
   detailsDraftErrors,
@@ -16,7 +16,7 @@ import {
   parseChatSetup,
   type ChatSetup,
 } from "./workspace";
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import type { RelaySession } from "../relay/session";
 import {
   readView,
@@ -37,6 +37,7 @@ import {
 import type { DraftPicks } from "../messages/ComposerModels";
 import type { MentionPicks } from "../relay/messages";
 import { useDefaultAgent } from "./default-agent";
+import { draftLifetime } from "./default-lifetime";
 import { WorkspaceControl } from "./WorkspaceControl";
 import { rememberedMentions } from "../messages/remembered-mentions";
 import { composerMarkdown } from "../messages/composer-markdown";
@@ -56,6 +57,8 @@ import {
   type AttachmentDraft,
 } from "../messages/attachment-draft";
 import type { ConversationExtensions } from "../conversation/contracts";
+import { usePassThroughUntilDrafted } from "../messages/draft-visit";
+import type { PageNavigation } from "../navigation/service";
 import styles from "./Solo.module.css";
 
 /** Starting a new chat from a project starts it in that project, even when an
@@ -73,6 +76,11 @@ function readDraftSettings(scope: string, draftKey: string) {
     ttlSeconds: ("ttlSeconds" in settings ? settings.ttlSeconds : undefined) as
       | number
       | undefined,
+    // A chosen Ongoing saves no ttlSeconds, which older builds also read as
+    // Ongoing. Without either, the draft follows the default for new chats.
+    ...("lifetimeChosen" in settings && settings.lifetimeChosen === true
+      ? { lifetimeChosen: true as const }
+      : {}),
   };
 }
 
@@ -165,7 +173,10 @@ export function SoloDraft({
   agent,
   linkedId,
   source,
+  visit,
 }: {
+  /** The visit presenting this draft, a Back stop only once drafted. */
+  visit?: PageNavigation | undefined;
   linkedId?: string | undefined;
   source?: LinkedChat | undefined;
   /** Start with this agent chosen, as when search opens a new chat with it. */
@@ -193,7 +204,21 @@ export function SoloDraft({
   // Before the composer reads it: a named agent replaces a saved draft that
   // only tags another agent, since that tag was the earlier default.
   useState(() => dropOtherAgentTag(scope, `${draftKey}:new-draft`, agent));
+  // Read the source live: starting the chat consumes it.
+  const linkedSource = useCallback(
+    () => (source ? readLinkedChat(scope, draftKey)?.link : undefined),
+    [source, scope, draftKey],
+  );
+  const draftEdited = usePassThroughUntilDrafted(
+    visit,
+    session,
+    scope,
+    `${draftKey}:new-draft`,
+    { initialDraft: linkedSource },
+  );
   const [settingsOpen, setSettingsOpen] = useState(false);
+  // The lifetime Chat settings opened with.
+  const [settingsLifetime, setSettingsLifetime] = useState<number>();
   // New chats tag their agent in the draft: the one the route names, else the
   // default.
   const defaultAgent = useDefaultAgent(session, scope, agent);
@@ -315,7 +340,7 @@ export function SoloDraft({
       typeof draftSettings.name === "string"
         ? canonicalDetailsName(draftSettings.name) || startingChatTitle(draft)
         : draftSettings.name;
-    const { ttlSeconds } = draftSettings;
+    const ttlSeconds = draftLifetime(scope, draftSettings);
     const project = selectedProject;
     const canvas = draftCanvas;
     const draftModelPicksKey = soloModelPicksKey(`${draftKey}:new-draft`);
@@ -487,6 +512,7 @@ export function SoloDraft({
       } catch {
         // Delivery retains its frozen choices; neither shared map is changed unlocked.
       }
+      draftEdited(undefined);
       if (mounted.current) onStarted(channelId);
       if (clearedPicks === "failed")
         notify(
@@ -685,6 +711,9 @@ export function SoloDraft({
                 const next = {
                   name: draftSettings.name,
                   ttlSeconds: draftSettings.ttlSeconds,
+                  ...(draftSettings.lifetimeChosen
+                    ? { lifetimeChosen: true as const }
+                    : {}),
                   canvas: undefined,
                 };
                 setDraftSettings(next);
@@ -705,6 +734,7 @@ export function SoloDraft({
           unsaved: (held) => {
             unsaved.current = held;
           },
+          onDraftChange: draftEdited,
           submit: (draft, files, addressed, picks, draftPicks, revision) => {
             void start(draft, files, addressed, picks, draftPicks, revision);
           },
@@ -729,7 +759,10 @@ export function SoloDraft({
           title="Chat settings"
           icon={<GearIcon size="1rem" aria-hidden="true" />}
           disabled={busy}
-          onClick={() => setSettingsOpen(true)}
+          onClick={() => {
+            setSettingsLifetime(draftLifetime(scope, draftSettings));
+            setSettingsOpen(true);
+          }}
         />
       }
     >
@@ -741,10 +774,21 @@ export function SoloDraft({
           projectId={selectedProject || undefined}
           canvas={draftCanvas}
           name={draftSettings.name}
-          ttlSeconds={draftSettings.ttlSeconds}
+          ttlSeconds={settingsLifetime}
           close={() => setSettingsOpen(false)}
           save={(canvas, ttlSeconds, name) => {
-            const next = { canvas, ttlSeconds, name: name ?? "" };
+            // A lifetime changed here, or chosen before, stays chosen; an
+            // unchanged one keeps following the default.
+            const chosen =
+              !!draftSettings.lifetimeChosen ||
+              draftSettings.ttlSeconds !== undefined ||
+              ttlSeconds !== settingsLifetime;
+            const next = {
+              canvas,
+              ttlSeconds: chosen ? ttlSeconds : undefined,
+              ...(chosen ? { lifetimeChosen: true as const } : {}),
+              name: name ?? "",
+            };
             if (!writeView(scope, `${draftKey}:settings`, next))
               throw new Error(
                 "Settings couldn’t be saved on this device. Try again.",

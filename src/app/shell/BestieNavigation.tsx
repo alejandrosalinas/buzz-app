@@ -1,12 +1,8 @@
 import { useContext, useSyncExternalStore, type ReactNode } from "react";
 import { agentAvatars } from "../../features/agents/avatar-packs";
 import { bestieChat } from "../../bundled/bestie/chat";
-import {
-  UnreadBadge,
-  useUnreadState,
-} from "../../bundled/channels/UnreadBadge";
+import { UnreadBadge } from "../../bundled/channels/UnreadBadge";
 import channelStyles from "../../bundled/channels/Channels.module.css";
-import type { RelaySession } from "../../features/relay/session";
 import { useAgentChoices } from "../../features/agents/use-choices";
 import type { RegisteredPage } from "../../features/pages/service";
 import { useRelayConnection } from "../../features/relay/react";
@@ -82,27 +78,6 @@ export function BestieNavigationProvider({
         {children}
       </BestieConversationContext>
     </BestieNavigationContext>
-  );
-}
-
-export function BestieUnreadLabel({ label }: { label: string }) {
-  const conversation = useContext(BestieConversationContext);
-  return conversation ? <UnreadLabel {...conversation} label={label} /> : label;
-}
-function UnreadLabel({
-  session,
-  channelId,
-  label,
-}: {
-  session: RelaySession;
-  channelId: string;
-  label: string;
-}) {
-  const { ordinary } = useUnreadState(session, channelId, true);
-  return (
-    <span className={styles.label} data-bestie-unread={ordinary || undefined}>
-      {label}
-    </span>
   );
 }
 

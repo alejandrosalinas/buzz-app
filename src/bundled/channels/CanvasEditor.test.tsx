@@ -994,7 +994,7 @@ it("loads history only on demand and preserves draft/base through preview and ca
     });
     await waitFor(() =>
       expect(
-        within(confirm).getByRole("button", { name: "Cancel" }),
+        within(confirm).getByRole("button", { name: "Restore version" }),
       ).toHaveFocus(),
     );
     if (dismissal === "cancel")
