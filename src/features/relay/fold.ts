@@ -464,6 +464,18 @@ export function foldMessages(
         ...(projected.content !== content ? { sourceContent: content } : {}),
         ...(event.kind === 40002 ? { agentEnvelope: true as const } : {}),
         ...(agentAudience(event) ? { audience: "agents" as const } : {}),
+        ...(() => {
+          // One exact id, or none: conflicting claims bind no request.
+          const ids = new Set(
+            event.tags
+              .filter(([name]) => name === "buzz:request")
+              .map(([, id]) => id),
+          );
+          const [request] = ids;
+          return ids.size === 1 && request && HEX64.test(request)
+            ? { request }
+            : {};
+        })(),
         ...(event.kind === 9 &&
         event.tags.some(
           (tag) =>

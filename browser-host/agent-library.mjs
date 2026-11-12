@@ -1,3 +1,4 @@
+import { relayOrigin } from "../src/features/communities/destination.ts";
 import { avatarSource } from "../src/shared/avatar-source.ts";
 // Read-only display projection of installed Buzz 1.0 agents. Explicit legacy
 // input remains supported for compatibility tests/import readers; never discover
@@ -95,7 +96,7 @@ export function projectAgentLibrary(raw) {
 
 /** The app's current custody store; only display metadata crosses the broker.
  * It is versioned once an agent is in several communities, one row in each. */
-export function projectAgentIdentities(raw) {
+export function projectAgentIdentities(raw, scope) {
   if (!Array.isArray(raw)) {
     if (raw?.version !== 2 && raw?.version !== 3 && raw?.version !== 4)
       throw failure();
@@ -107,11 +108,21 @@ export function projectAgentIdentities(raw) {
     for (const state of [row.deleted, row.joining])
       if (state !== undefined && typeof state !== "boolean") throw failure();
   }
+  const community = scope ? relayOrigin(scope.community) : undefined;
   return projectAgentLibrary({
     version: 1,
     agents: raw
-      // A row still being added is no membership yet.
-      .filter((row) => !row.deleted && !row.joining)
+      // Filter membership before pubkey deduplication: artwork is per community.
+      .filter((row) => {
+        if (row.deleted || row.joining) return false;
+        if (!scope) return true;
+        if (row.owner !== scope.owner) return false;
+        try {
+          return relayOrigin(row.relay) === community;
+        } catch {
+          return false;
+        }
+      })
       .map((row) => ({
         ...row,
         name: row.name === undefined ? "" : row.name,
@@ -144,7 +155,7 @@ const exists = (path) =>
     () => true,
     () => false,
   );
-export async function readAgentLibrary(path) {
+export async function readAgentLibrary(path, scope) {
   const current = path === undefined;
   path ??= await (async () => {
     const dir = installedBuzzDataDir();
@@ -177,13 +188,14 @@ export async function readAgentLibrary(path) {
     }
     if (size > MAX_BYTES) throw failure();
     // No raw contents or parser errors escape this host-only function.
-    return (current ? projectAgentIdentities : projectAgentLibrary)(
-      JSON.parse(
-        new TextDecoder("utf-8", { fatal: true }).decode(
-          buffer.subarray(0, size),
-        ),
+    const raw = JSON.parse(
+      new TextDecoder("utf-8", { fatal: true }).decode(
+        buffer.subarray(0, size),
       ),
     );
+    return current || scope
+      ? projectAgentIdentities(raw, scope)
+      : projectAgentLibrary(raw);
   } catch (error) {
     // No saved library yet (or none since the store moved) is an empty one.
     if (!file && error?.code === "ENOENT")

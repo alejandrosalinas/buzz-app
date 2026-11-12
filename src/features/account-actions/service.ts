@@ -9,6 +9,8 @@ export type AccountAction = Readonly<{
   id: string;
   title: string;
   icon?: ReactNode;
+  /** Default actions stay in the plugin section after Settings. */
+  placement?: "default" | "before-settings";
   component: ComponentType<{
     open: boolean;
     onOpenChange(open: boolean): void;
@@ -31,6 +33,12 @@ export class AccountActionsService extends Service {
       typeof action.component !== "function"
     )
       throw new Error("An account action needs an id, title and component");
+    if (
+      action.placement !== undefined &&
+      action.placement !== "default" &&
+      action.placement !== "before-settings"
+    )
+      throw new Error("Unknown account action placement");
     this.actions.register(this.ctx, action);
   }
 }

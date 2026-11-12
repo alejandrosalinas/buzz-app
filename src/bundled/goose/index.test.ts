@@ -120,3 +120,33 @@ it("lists no review models for the providers Goose reviews refuse", async () => 
     { provider: "openai", id: "model", label: "openai · Model" },
   ]);
 });
+
+it("links a failed turn's refused key to Goose's own Agent setup, quoting goose", () => {
+  vi.spyOn(navigator, "platform", "get").mockReturnValue("Win32");
+  // The runtime the plugin made, as its sessions list reads it.
+  let runtime: GooseRuntime | undefined;
+  vi.spyOn(GooseRuntime.prototype, "conversations").mockImplementation(
+    function (this: GooseRuntime) {
+      runtime = this;
+      return [];
+    },
+  );
+  vi.spyOn(GooseRuntime.prototype, "sessions").mockReturnValue([]);
+  let type: AgentType | undefined;
+  apply({
+    pluginOwner: { id: "buzz.goose", revision: "r1" },
+    host: { request: vi.fn() },
+    agentProtection: { registerModels: vi.fn() },
+    agents: {
+      register: (registered: AgentType) => {
+        type = registered;
+      },
+      relay: () => undefined,
+    },
+    effect: vi.fn(),
+  } as never);
+  type?.sessions?.list("a".repeat(64));
+  expect(runtime?.explain("Authentication required")).toBe(
+    "Goose's provider rejected its API key or sign-in. Head to [Settings](buzz://settings?section=agents&provider=buzz.goose%2Fgoose) to check its provider.\n\ngoose said:\n> Authentication required",
+  );
+});

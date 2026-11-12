@@ -36,6 +36,7 @@ test("candidate version embeds the updater only when both values are set, never 
           ...updater,
           RUNNER_TEMP: directory,
           GITHUB_ENV: output,
+          GITHUB_OUTPUT: join(directory, "outputs"),
           GITHUB_RUN_NUMBER: "42",
           GITHUB_RUN_ATTEMPT: "2",
         },
@@ -55,21 +56,49 @@ test("candidate version embeds the updater only when both values are set, never 
 });
 
 // These job guards use the common Actions/JavaScript boolean-expression subset.
+const format = (template, ...values) =>
+  template.replace(/\{(\d+)\}/g, (_, index) => values[index]);
 function selected(
   job,
   inputs = {},
   ref = "refs/heads/main",
   repository = "block/buzz-app",
 ) {
-  return new Function("github", "inputs", `return (${job.if})`)(
+  return new Function("github", "inputs", "format", `return (${job.if})`)(
     { ref, repository },
     inputs,
+    format,
   );
 }
 
 test("all-platform releases preserve candidate isolation and read-only installer jobs", () => {
-  const workflow = parse(read(".github/workflows/release.yml"));
-  assert.equal(workflow.on.workflow_dispatch.inputs.candidates.default, false);
+  const caller = parse(read(".github/workflows/release.yml"));
+  assert.equal(caller.on.workflow_dispatch.inputs.candidates.default, false);
+  assert.equal(caller.permissions.contents, "read");
+  // The preview caller builds main, or Windows/Linux candidates from any branch.
+  const { desktop } = caller.jobs;
+  assert.equal(desktop.uses, "./.github/workflows/desktop-build.yml");
+  assert.equal(desktop.with.candidates, `\${{ inputs.candidates == true }}`);
+  assert.equal(selected(desktop), true);
+  assert.equal(
+    selected(desktop, { candidates: false, promote_version: "" }),
+    true,
+  );
+  assert.equal(
+    selected(desktop, { promote_version: "0.0.0-preview.42.2" }),
+    false,
+  );
+  assert.equal(
+    selected(desktop, {}, "refs/heads/main", "fork/buzz-app"),
+    false,
+  );
+  assert.equal(
+    selected(desktop, { candidates: true }, "refs/heads/feature"),
+    true,
+  );
+  assert.equal(selected(desktop, {}, "refs/heads/feature"), false);
+
+  const workflow = parse(read(".github/workflows/desktop-build.yml"));
   assert.equal(workflow.permissions.contents, "read");
   const { jobs } = workflow;
   for (const job of [
@@ -80,32 +109,54 @@ test("all-platform releases preserve candidate isolation and read-only installer
   ]) {
     assert.equal(selected(job), true);
     assert.equal(
-      selected(job, { candidates: false, promote_version: "" }),
+      selected(job, { candidates: false, release_version: "" }),
       true,
     );
     assert.equal(
-      selected(job, { promote_version: "0.0.0-preview.42.2" }),
-      false,
+      selected(job, { release_version: "1.0.0" }, "refs/tags/v1.0.0"),
+      true,
     );
     assert.equal(selected(job, {}, "refs/heads/main", "fork/buzz-app"), false);
   }
   for (const job of [jobs.build, jobs.updater_signatures])
     assert.equal(selected(job, { candidates: true }), false);
-  assert.equal(
-    selected(jobs.updater_signatures, {}, "refs/heads/feature"),
-    false,
-  );
+  // The only job holding the updater key signs only main or the release's own tag.
+  for (const [inputs, ref] of [
+    [{}, "refs/heads/feature"],
+    [{}, "refs/tags/v1.0.0"],
+    [{ release_version: "1.0.0" }, "refs/heads/main"],
+    [{ release_version: "1.0.0" }, "refs/tags/v1.0.1"],
+  ])
+    assert.equal(selected(jobs.updater_signatures, inputs, ref), false);
   assert.deepEqual(jobs.updater_signatures.needs, ["windows", "linux"]);
-  // Candidate-only runs omit the updater; every other run embeds the feed.
-  for (const name of ["BUZZ_UPDATER_PUBLIC_KEY", "BUZZ_UPDATER_ENDPOINT"]) {
-    const value = (inputs) =>
-      new Function(
-        "inputs",
-        `return (${workflow.env[name].replace(/^\$\{\{(.*)\}\}$/s, "$1")})`,
-      )(inputs);
-    assert.equal(value({ candidates: true }), "");
-    assert.ok(value({}).startsWith(name.endsWith("KEY") ? "dW50" : "https://"));
-  }
+  // Candidate-only runs omit the updater; previews check the preview feed and
+  // stable or beta releases the stable feed, with the same key.
+  const value = (name, inputs) =>
+    new Function(
+      "inputs",
+      `return (${workflow.env[name].replace(/^\$\{\{(.*)\}\}$/s, "$1")})`,
+    )(inputs);
+  for (const name of ["BUZZ_UPDATER_PUBLIC_KEY", "BUZZ_UPDATER_ENDPOINT"])
+    assert.equal(value(name, { candidates: true }), "");
+  const key = value("BUZZ_UPDATER_PUBLIC_KEY", {});
+  assert.ok(key.startsWith("dW50"));
+  assert.equal(
+    value("BUZZ_UPDATER_PUBLIC_KEY", { release_version: "1.0.0" }),
+    key,
+  );
+  const feed = (name) =>
+    `https://github.com/block/buzz-app/releases/download/${name}/latest.json`;
+  assert.equal(value("BUZZ_UPDATER_ENDPOINT", {}), feed("preview-feed"));
+  assert.equal(
+    value("BUZZ_UPDATER_ENDPOINT", { release_version: "" }),
+    feed("preview-feed"),
+  );
+  for (const release_version of ["1.0.0", "1.0.0-beta.1"])
+    assert.equal(
+      value("BUZZ_UPDATER_ENDPOINT", { release_version }),
+      feed("stable-feed"),
+    );
+  assert.equal(workflow.env.RELEASE_VERSION, `\${{ inputs.release_version }}`);
 
   const downloads = jobs.publish.steps.filter((step) =>
     step.uses?.startsWith("actions/download-artifact@"),
@@ -187,7 +238,6 @@ test("all-platform releases preserve candidate isolation and read-only installer
       selected(job, { candidates: true }, "refs/heads/feature"),
       true,
     );
-    assert.equal(selected(job, {}, "refs/heads/feature"), false);
     assert.equal(job.permissions, undefined);
     assert.ok(
       job.steps.some((step) =>
@@ -199,7 +249,7 @@ test("all-platform releases preserve candidate isolation and read-only installer
 });
 
 test("Huddle release provisioning passes microphone entitlements to the actual signer and installs Opus", () => {
-  const workflow = parse(read(".github/workflows/release.yml"));
+  const workflow = parse(read(".github/workflows/desktop-build.yml"));
   const signer = workflow.jobs.build.steps.find((step) =>
     step.uses?.startsWith("block/apple-codesign-action@"),
   );

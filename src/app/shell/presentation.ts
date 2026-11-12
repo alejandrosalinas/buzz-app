@@ -29,7 +29,6 @@ const bundledOrder = [
 ];
 const dockOrder = [
   "buzz.bestie/bestie",
-  "buzz.inbox/inbox",
   "buzz.channels/channels",
   "buzz.reminders/reminders",
 ];
@@ -65,8 +64,10 @@ const bundledIcons = new Map<string, typeof BrowserIcon>([
 export function pagePlacement(page: RegisteredPage) {
   if (!page.primary) return undefined;
   switch (page.key) {
-    case "buzz.channels/channels":
+    // Activity is a row at the top of the Messages sidebar.
     case "buzz.inbox/inbox":
+      return "sidebar";
+    case "buzz.channels/channels":
     case "buzz.bestie/bestie":
     case "buzz.reminders/reminders":
     case "buzz.agents/agents":

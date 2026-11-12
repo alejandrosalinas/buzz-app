@@ -40,12 +40,13 @@ export function useBestieChoice(
   session: RelaySession,
   scope: string,
   placeOf?: (pubkey: string) => AgentPlace | undefined,
+  onMade?: (pubkey: string) => void,
 ) {
   // Bestie names only the explicit account-saved choice.
   const saved = useSavedAgent(session, scope);
   const choices = useAgentChoices(session, true, true);
   const [error, setError] = useState("");
-  const [savingBestie, setSavingBestie] = useState(false);
+  const [savingBestie, setSavingBestie] = useState<string>();
   const [replacement, setReplacement] = useState<{
     current: BestieAgent;
     replacing: BestieAgent;
@@ -87,11 +88,12 @@ export function useBestieChoice(
     if (!eligible(pubkey)) return;
     const choice = ++latest.current;
     setError("");
-    setSavingBestie(true);
+    setSavingBestie(pubkey);
     chooseDefaultAgent(session, scope, pubkey)
       .then(() => {
         for (const listener of made) listener(pubkey);
         if (choice !== latest.current) return;
+        if (!gone.current) onMade?.(pubkey);
         setReplacement(undefined);
         setRemote(undefined);
       })
@@ -102,7 +104,7 @@ export function useBestieChoice(
         else setError(failure.message);
       })
       .finally(() => {
-        if (choice === latest.current) setSavingBestie(false);
+        if (choice === latest.current) setSavingBestie(undefined);
       });
   };
   const make = (pubkey: string) => {
@@ -121,7 +123,7 @@ export function useBestieChoice(
         <BestieReplacement
           {...replacement}
           remote={remoteAgent(placeOf?.(replacement.replacing.pubkey))}
-          pending={savingBestie}
+          pending={savingBestie !== undefined}
           error={error}
           onClose={() => {
             if (error) {
@@ -145,7 +147,7 @@ export function useBestieChoice(
       {remote && (
         <RemoteBestieConfirm
           name={bestieName(remote)}
-          pending={savingBestie}
+          pending={savingBestie !== undefined}
           error={error}
           onClose={() => {
             setRemote(undefined);
@@ -177,7 +179,7 @@ export function useBestieChoice(
         if (pubkey === saved) setRemoving({ name, pubkey });
       }
     : undefined;
-  return { saved, choices, make, remove, view };
+  return { saved, savingBestie, choices, make, remove, view };
 }
 
 export const bestieName = (agent: BestieAgent) =>

@@ -124,6 +124,13 @@ test("a remote failure shares its expandable history and preserves its message a
   toggle = thread.getByRole("button", {
     name: /^(Show|Collapse) activity history:/,
   });
+  // The thread holds the geometry that moves here. At 800 px the thread
+  // covers the conversation, whose history is inert and hidden from role
+  // queries, so the default channel scroller would match nothing.
+  const threadHistory = thread.getByRole("region", {
+    name: "Thread messages",
+    exact: true,
+  });
   await expect(toggle).toHaveCount(1);
   await expect(thread.locator("[data-message-activity]")).toHaveCount(0);
   await expect(toggle).toContainText("Couldn’t finish");
@@ -158,7 +165,7 @@ test("a remote failure shares its expandable history and preserves its message a
       const box = await group.boundingBox();
       expect(box.x).toBeGreaterThanOrEqual(0);
       expect(box.x + box.width).toBeLessThanOrEqual(width);
-      await settle(page);
+      await settle(page, threadHistory);
       await toggle.click();
       await expect(
         group.getByText(failure.content, { exact: true }),

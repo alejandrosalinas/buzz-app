@@ -133,7 +133,7 @@ function BestieDestination({
           }
           action={
             connection.status === "error" ? (
-              <Button onClick={relay.retry}>Retry connection</Button>
+              <Button onClick={relay.tryAgain}>Retry connection</Button>
             ) : undefined
           }
         />

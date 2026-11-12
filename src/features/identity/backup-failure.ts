@@ -14,8 +14,10 @@ const SIGNED_OUT =
  * them all on its next wake; `unavailable`, `interrupted`, `timeout` and
  * `unknown` are the renderer's. A `cause` is what Settings shows before saying
  * a later Builderlab sign-in tries again: every retryable kind's, and
- * `signed_out`'s, which a new sign-in clears though first run's Try again,
- * sending the same credential, cannot. No message carries a service or IPC
+ * `signed_out`'s, which a new sign-in clears though a retry sending the same
+ * credential cannot. `retryable` is that default; first run's backup step
+ * overrides it for `signed_out`, since its Try again signs in again first
+ * (`backupKey` in Welcome.tsx). No message carries a service or IPC
  * answer. A leaf module: vite.config.ts validates the development seed
  * against it through Node's native loader.
  */
@@ -43,7 +45,7 @@ export const BACKUP_FAILURES = {
   },
   other_key_linked: {
     message:
-      "Your Builderlab account is linked to a different key, so this one can’t be backed up.",
+      "Your Builderlab account is linked to a different key, so this one can’t be backed up. This key may also be refused when you use this Builderlab account to sign in to a community.",
     retryable: false,
   },
   invalid_service: {
@@ -57,7 +59,7 @@ export const BACKUP_FAILURES = {
     "Check your connection and try again.",
   ),
   // A retry re-sends the same encrypted bytes, which kgoose treats as stored.
-  unconfirmed: retry("Builderlab didn’t confirm your backup."),
+  unconfirmed: retry("Builderlab couldn’t confirm your backup."),
   storage: retry("Buzz couldn’t save backup progress on this device."),
   unknown: { message: "Your key wasn’t backed up.", retryable: false },
 } as const satisfies Record<

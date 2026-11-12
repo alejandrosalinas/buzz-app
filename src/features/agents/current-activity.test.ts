@@ -1,6 +1,6 @@
 import { expect, it } from "vitest";
 import type { RelaySession } from "../relay/session";
-import { currentActivity } from "./current-activity";
+import { currentActivity, workingRequests } from "./current-activity";
 
 type Snapshot = ReturnType<RelaySession["agentActivity"]["snapshot"]>;
 const agent = "a".repeat(64),
@@ -310,4 +310,66 @@ it("moves channel-started local work into its observed reply thread", () => {
       new Set([root]),
     ).has(agent),
   ).toBe(true);
+});
+
+it("lists each working request here by its exact triggers, local work superseding remote turns", () => {
+  const turn = (turnId: string, triggers: string[], threadRootId = root) => ({
+    agent,
+    turnId,
+    channelId: "channel",
+    threadRootId,
+    timestamp: now,
+    state: "working" as const,
+    triggeringEventIds: triggers,
+  });
+  const remote: Snapshot = {
+    ...base,
+    turns: [
+      // One batched turn answers both of its triggers.
+      turn("batch", ["h1", "h2"]),
+      turn("next", ["h3"]),
+      turn("elsewhere", ["h4"], otherRoot),
+      { ...turn("done", ["h5"]), state: "ended" },
+    ],
+  };
+  expect(workingRequests(remote, agent, "channel", root)).toEqual([
+    ["h1", "h2"],
+    ["h3"],
+  ]);
+  expect(workingRequests(remote, "other", "channel", root)).toEqual([]);
+  expect(
+    workingRequests(
+      { ...remote, status: "connecting" },
+      agent,
+      "channel",
+      root,
+    ),
+  ).toEqual([]);
+  const local = (messageId: string, state: "working" | "done") => ({
+    scope: "test",
+    agent,
+    channelId: "channel",
+    messageId,
+    threadRootId: root,
+    thread: true as const,
+    state,
+    startedAt: 1,
+  });
+  // A settled local request is not resurrected by an older remote turn.
+  expect(
+    workingRequests(
+      { ...remote, local: [local("l1", "done")] },
+      agent,
+      "channel",
+      root,
+    ),
+  ).toEqual([]);
+  expect(
+    workingRequests(
+      { ...remote, local: [local("l1", "working"), local("l2", "working")] },
+      agent,
+      "channel",
+      root,
+    ),
+  ).toEqual([["l1"], ["l2"]]);
 });

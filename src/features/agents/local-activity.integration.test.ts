@@ -89,6 +89,7 @@ it("carries a verified mention through host handover into all three scopes witho
     forget: vi.fn(),
     publish: vi.fn(),
     query: vi.fn(async () => []),
+    effectiveEdit: vi.fn(),
     searchProfiles: vi.fn(async () => undefined),
     upload: vi.fn(),
     remember: vi.fn(),

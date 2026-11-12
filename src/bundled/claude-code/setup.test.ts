@@ -277,7 +277,7 @@ it("finds Claude missing when Buzz has no copy", async () => {
   await setup.check();
   expect(setup.providerSnapshot()).toEqual({
     readiness: "attention",
-    attentionLabel: "Install Claude Code",
+    attentionLabel: "Install Claude integration",
   });
 });
 

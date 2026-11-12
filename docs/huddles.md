@@ -221,7 +221,17 @@ cards use the existing relay protocol; no server changes are part of this slice.
 This is a client-only implementation. It uses the existing private ephemeral
 channel creation event (9007, TTL 3600), parent announcement (48100), authenticated
 `/huddle/{room}/audio` endpoint and v2 Opus wire format. The relay owns participant
-join/leave and last-person teardown. Before an announcement is attempted, a failed
+join/leave and disconnected-call teardown. On explicit desktop hangup, the client
+ends and archives a creator-owned room when the native audio roster identifies
+the viewer as its sole human, with exactly one admission for that viewer. Fresh
+relay membership classifies bot roles; connected legacy agents are recognized by
+verified kind-30177 records from the viewer or room owners. Retained membership
+for a human who left audio does not count as attendance. Known additional devices,
+other connected humans, unknown peers,
+and unavailable membership evidence preserve the room. This is a snapshot check,
+not an atomic relay admission fence; concurrent joins still depend on relay cleanup.
+It retains room membership for transcript View. Non-creators rely on relay ending
+because only the creator or relay may publish the ended event. Before an announcement is attempted, a failed
 creation is rolled back by archiving its temporary room. After the announcement
 may be visible, the client never archives the room on a failed connection: others
 may already have joined, so existing relay socket/TTL cleanup owns it.
@@ -248,8 +258,11 @@ Seats follow the owner's connected human call on this desktop. Each running
 local agent with a voice hook must belong to the room itself, according to its
 current relay roster, and have the signed-in viewer as owner. Pending, cached,
 read-only and archived room projections cannot seat agents. Parent membership
-alone does not qualify. Multiple agents can sit independently; owner calls on
-other devices do not create seats here. Room resolution runs only when a local,
+alone does not qualify. Multiple agents can sit independently; an owner joining a marked Codex DM room on mobile can also activate its Codex
+peer here. Mobile explicitly adds that peer to a new room before joining. Signed
+relay participation tracks each owner-device admission; the desktop microphone
+stays closed. The desktop and Codex agent must remain running. Other remote
+call types do not create seats here. Room resolution runs only when a local,
 owner-matched voice candidate exists. Until it succeeds, no seat opens; a failed
 read stays silent and can retry on the next roster or agent update.
 
@@ -264,8 +277,9 @@ not fence such packets; a strict owner-only guarantee requires a media epoch or
 an equivalent relay ordering guarantee. The filter also cannot identify people
 speaking near the owner's microphone. Eligibility loss or plugin shutdown
 aborts both audio directions and closes the harness and socket, including late
-open completions. A five-second heartbeat renews the native lease. A failed seat
-shows an error in both the compact player and companion window; leave and rejoin
+open completions. A five-second heartbeat renews the native lease. A failed local seat
+shows an error in both the compact player and companion window; a failed mobile
+seat reports through the desktop Huddle error notice (not yet on the phone); leave and rejoin
 to retry. The public plugin-author barrel export remains deferred; bundled harnesses use the service
 type directly. Platform support depends on the harness and native audio host.
 

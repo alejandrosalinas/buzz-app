@@ -1,5 +1,5 @@
 // The Solo worker tools: an agent its owner has authorized asks the owner's
-// Buzz to start, message, read, stop and archive Nexus workers in their Solo
+// Buzz to start, message, read, stop and archive workers in their Solo
 // chats. Each call is one protocol request (see solo-worker-protocol.ts),
 // signed by this agent and posted in its private control channel with the
 // owner; the answer counts only when the owner's Buzz signs it there. The
@@ -88,7 +88,7 @@ const workerTool = (
 export const SOLO_WORKER_TOOLS = [
   workerTool(
     "solo_worker_connections",
-    "The owners whose Nexus workers you may run, each with the workers and actions they allow. None means no owner has authorized you yet; only the owner can, in Buzz.",
+    "The owners whose Solo workers you may run, each with the workers and actions they allow. None means no owner has authorized you yet; only the owner can, in Buzz.",
     {},
     [],
     { readOnlyHint: true },

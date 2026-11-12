@@ -35,9 +35,11 @@ import { createPortal, flushSync } from "react-dom";
 import type { PageNavigation } from "../../features/navigation/service";
 import type { Navigation } from "../../features/navigation/controller";
 import { useChannelPanels } from "./useChannelPanels";
+import { focusDock } from "./useCoveredByDock";
 import {
   entryPane,
   panelContentTarget,
+  profileContentPanel,
   panelTabId,
   rootOfTab,
   selectedTabId,
@@ -52,8 +54,7 @@ import tabStyles from "./ChannelTabs.module.css";
 /** The content-tab families whose visits follow explicit dismissal. */
 export const historyPanel = (entry: PanelOpening) =>
   !entry.channelContext &&
-  (entry.panel.key === "buzz.profiles/profile" ||
-    entry.panel.key === "buzz.github/object");
+  (profileContentPanel(entry) || entry.panel.key === "buzz.github/object");
 
 /** Shared secondary workspace. Pages retain their main reader and route semantics. */
 export function useConversationTabs({
@@ -80,6 +81,7 @@ export function useConversationTabs({
   mainPane = false,
   anyMainThread = false,
   threadPane,
+  hostPanes,
   visits = true,
   navigation,
   routed,
@@ -122,6 +124,9 @@ export function useConversationTabs({
   anyMainThread?: boolean | undefined;
   /** Where new thread tabs open; by default, per the thread placement setting. */
   threadPane?: TabPane | undefined;
+  /** Panes whose thread content renders now; by default both. A page withholds
+   * a pane's threads while something covers them; they mount afresh after. */
+  hostPanes?: readonly TabPane[] | undefined;
   /** Showing a tab visits its conversation; a page may only reveal it. */
   visits?: boolean | undefined;
   /** Opens another conversation's tab where it lives, from the tab's menu. */
@@ -163,13 +168,24 @@ export function useConversationTabs({
   );
   const splitTrigger = useRef<HTMLButtonElement>(null);
   const focusSplit = useRef(false);
-  // The opening control remounts in the main header when the pane closes.
+  // An opener under a floating pane is inert until the close commits, so its
+  // target resolves then. A pane that still covers it keeps focus instead.
+  const focusUncovered =
+    useRef<() => HTMLElement | null | undefined>(undefined);
+  // The opening control remounts in the main header when the pane closes,
+  // under a dock that stays open, such as the companion.
   useLayoutEffect(() => {
-    if (focusSplit.current) {
-      const target = splitTrigger.current ?? fallbackFocus?.current;
-      target?.focus({ preventScroll: true });
-      focusSplit.current = false;
-    }
+    const resolve = focusUncovered.current;
+    focusUncovered.current = undefined;
+    const uncovered = resolve?.();
+    if (resolve && !uncovered?.isConnected) focusSplit.current = true;
+    const target = focusSplit.current
+      ? (splitTrigger.current ?? fallbackFocus?.current)
+      : uncovered;
+    focusSplit.current = false;
+    const cover = target?.closest("[inert]");
+    if (cover) focusDock(cover.parentElement);
+    else target?.focus({ preventScroll: true });
   });
   const panelTrigger = useRef<HTMLElement | null>(null);
   const mounted = useRef(false);
@@ -513,8 +529,11 @@ export function useConversationTabs({
       false,
     );
     if (!remaining.length) {
-      const target = trigger?.isConnected ? trigger : fallbackFocus?.current;
-      if (target) target.focus({ preventScroll: true });
+      const resolve = () =>
+        trigger?.isConnected ? trigger : fallbackFocus?.current;
+      const target = resolve();
+      if (target?.closest("[inert]")) focusUncovered.current = resolve;
+      else if (target) target.focus({ preventScroll: true });
       else focusSplit.current = true;
     }
   };
@@ -983,6 +1002,7 @@ export function useConversationTabs({
     // Thread content renders here once and is attached to whichever pane holds it.
     hosts: tabState.tabs.flatMap((tab) => {
       if (tab.kind !== "thread") return [];
+      if (hostPanes && !hostPanes.includes(tabPane(tab))) return [];
       const node = nodes.get(tab.id);
       const target = tabChannel(tab);
       if (!node || !target) return [];

@@ -2,7 +2,13 @@ import type { Attachment } from "../../features/relay/contracts";
 import { MAX_MARKDOWN_LENGTH } from "../../features/relay/message-content";
 
 type MediaKind = Exclude<Attachment["kind"], "file">;
-type Descriptor = { kind: MediaKind; name?: string | undefined };
+/** `src` is a signed media URL from the rendered HTML, which loads without a
+ * GitHub sign-in but expires within minutes. */
+type Descriptor = {
+  kind: MediaKind;
+  name?: string | undefined;
+  src?: string | undefined;
+};
 const uuid = "[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}";
 const assetPath = new RegExp(`^/user-attachments/assets/(${uuid})$`, "i");
 const legacyPath = new RegExp(`^/[^/]+/[^/]+/assets/\\d+/(${uuid})$`, "i");
@@ -88,7 +94,13 @@ export function attachmentMetadata(html = ""): ReadonlyMap<string, Descriptor> {
           : tag === "video" || tag === "audio"
             ? tag
             : filenameKind(name ?? url.pathname);
-      if (kind) descriptors.set(assetKey(url), { kind, name });
+      if (!kind) continue;
+      const key = assetKey(url);
+      const src =
+        url.hostname === "private-user-images.githubusercontent.com"
+          ? url.href
+          : descriptors.get(key)?.src;
+      descriptors.set(key, { kind, name, src });
     }
   }
   return descriptors;
@@ -115,4 +127,14 @@ export function attachmentFor(
     kind,
     ...(descriptor?.name ? { name: descriptor.name } : {}),
   };
+}
+
+/** `value`'s signed link in the rendered HTML, for a private repository's
+ * media whose own link needs a GitHub sign-in. */
+export function signedUrl(
+  value: string,
+  metadata: ReadonlyMap<string, Descriptor>,
+): string | undefined {
+  const url = githubMediaUrl(value);
+  return url && metadata.get(assetKey(url))?.src;
 }

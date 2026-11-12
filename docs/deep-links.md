@@ -51,10 +51,17 @@ Plugin install links open **Settings > Plugins > Manage plugins** and fetch a
 preview from the Git repository and optional branch or tag. The repository accepts
 HTTPS, `ssh://`, `git@host:path`, `github.com/owner/repo`, or `owner/repo`.
 Percent-encode each query value. `path` selects the plugin folder inside the
-repository (relative, `/`-separated; no `..`, backslashes or absolute paths). `commit`
-pins the install to that exact commit: nothing installs unless the fetched repository
-matches it. Repeating any of the four keys makes the link invalid. Review the plugin
+repository (relative, `/`-separated; no `..`, backslashes or absolute paths). Buzz
+lists only that folder of the commit, so files elsewhere in a very large repository
+do not count against the import limits, and it refuses a folder that does not exist.
+`commit` pins the install to that exact commit: Buzz fetches it directly and checks that
+it is on `ref` (the repository default branch when `ref` is omitted); nothing installs
+unless it is. A commit older than the branch tip installs as long as it is still part
+of that branch's history. Repeating any of the four keys makes the link invalid. Review the plugin
 and computer access, then select **Install plugin**. Opening the link does not install, enable, or grant access.
+A link with both `path` and `commit` for a plugin already installed from that repository and
+folder opens an **Update** review instead. The review says when the link's `ref` changes the branch
+or tag that later updates follow. Other links to an installed plugin offer **Open in Buzz**.
 You can close a linked preview while Git loads; its late result is discarded.
 An omitted `ref` uses the repository default. Duplicate known parameters and
 repository credentials are rejected.

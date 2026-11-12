@@ -23,6 +23,7 @@ import {
   LIVE_RECOVERY_INTERVAL,
   liveChannels,
   liveReconnectDelay,
+  LIVE_RESUME_LAG,
   liveResumeSince,
   SETUP_TIMEOUT_MS,
   liveSlowRetryDelay,
@@ -38,6 +39,8 @@ import {
   scriptedTransport,
 } from "./testing";
 import type { SignatureVerifier } from "./events";
+import type { ReadTransport } from "./transport";
+import type { SidebarDecoder } from "./sidebar-preferences";
 import { yieldToHost } from "./yield";
 import { createRelaySession } from "./session";
 import { liveRecoveryStatus } from "./live-recovery";
@@ -408,6 +411,13 @@ it("uses independent explicit channel routes and self-p globals; equal interests
     "#t": ["system"],
     since: expect.any(Number),
     limit: 500,
+  });
+  const membershipRequest = h.first.requests()[1];
+  assert(membershipRequest);
+  expect(filtersOf(membershipRequest)).toContainEqual({
+    kinds: [13534],
+    since: expect.any(Number),
+    limit: 1,
   });
   const before = h.first.sent.length;
   h.owner.update(["b", "a", "a"]);
@@ -6727,5 +6737,249 @@ it("shows authentication state without counting a handshake started before captu
     h.owner.dispose();
     networkMetrics.setEnabled(false);
     networkMetrics.reset();
+  }
+});
+
+it("gives a profile sync that reached EOSE its resume point, and resends its cursor", async () => {
+  vi.useFakeTimers();
+  const h = setup([]);
+  try {
+    await establish(h.first);
+    assert.exists(h.owner.syncVerifiedProfiles);
+    assert.exists(h.owner.syncArtifacts);
+    const live = vi.fn();
+    const pending = vi.fn();
+    const artifacts = vi.fn();
+    h.owner.syncVerifiedProfiles(
+      verifiedProfileFilter("a".repeat(64), ["b".repeat(64)]),
+      { event() {}, eose() {}, closed: live },
+    );
+    h.owner.syncVerifiedProfiles(
+      verifiedProfileFilter("a".repeat(64), ["c".repeat(64)]),
+      { event() {}, eose() {}, closed: pending },
+    );
+    h.owner.syncArtifacts(
+      { artifact: "current", "#h": ["11111111-1111-4111-8111-111111111111"] },
+      { event() {}, eose() {}, closed: artifacts },
+    );
+    await Promise.resolve();
+    const sent = h.first
+      .requests()
+      .filter((request) => request[1].startsWith("sync-"));
+    expect(sent).toHaveLength(3);
+    await h.first.receive(["EOSE", sent[0]?.[1]]);
+    await h.first.receive(["EOSE", sent[2]?.[1]]);
+    const heard = Math.floor(Date.now() / 1000);
+    renew(h.first);
+    expect(live).toHaveBeenCalledOnce();
+    const [reason, resume] = live.mock.calls[0] ?? [];
+    expect(reason).toBe("disconnected: live connection lost");
+    // The routes' overlap, from when the socket last proved it heard the relay.
+    expect(resume?.since).toBeLessThanOrEqual(heard - LIVE_RESUME_LAG);
+    expect(resume?.since).toBeGreaterThanOrEqual(heard - LIVE_RESUME_LAG - 60);
+    // No EOSE on that socket: no evidence that it was ever live.
+    expect(pending).toHaveBeenCalledExactlyOnceWith(
+      "disconnected: live connection lost",
+    );
+    // NIP-AR sync has no resume (NIP-AR Sync rule 7).
+    expect(artifacts).toHaveBeenCalledExactlyOnceWith(
+      "disconnected: live connection lost",
+    );
+    // The owner's resumed filter goes out as given.
+    const second = h.sockets[1];
+    assert.exists(second);
+    h.owner.syncVerifiedProfiles(
+      verifiedProfileFilter("a".repeat(64), ["b".repeat(64)], 1234),
+      { event() {}, eose() {}, closed() {} },
+    );
+    await second.auth();
+    await vi.advanceTimersByTimeAsync(750);
+    const resumed = second
+      .requests()
+      .find((request) => request[1].startsWith("sync-"));
+    assert.exists(resumed);
+    expect(resumed[2]).toEqual({
+      kinds: [30382],
+      authors: ["a".repeat(64)],
+      "#d": ["b".repeat(64)],
+      limit: 1,
+      since: 1234,
+    });
+  } finally {
+    h.owner.dispose();
+  }
+});
+
+it("gives no resume point to a profile sync whose EOSE is still being verified", async () => {
+  vi.useFakeTimers();
+  let release!: () => void;
+  const held = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  let holding = false;
+  const check = vi.fn<SignatureVerifier>(async (claims) => {
+    if (holding) await held;
+    return nativeSignatureChecks({ claims });
+  });
+  const h = setup([], undefined, undefined, undefined, check);
+  try {
+    await establish(h.first);
+    assert.exists(h.owner.syncVerifiedProfiles);
+    const closed = vi.fn();
+    h.owner.syncVerifiedProfiles(
+      verifiedProfileFilter(h.key.pubkey, ["b".repeat(64)]),
+      { event() {}, eose() {}, closed },
+    );
+    await Promise.resolve();
+    const sync = h.first
+      .requests()
+      .find((request) => request[1].startsWith("sync-"));
+    assert.exists(sync);
+    // A frame waiting for its native check holds the EOSE behind it.
+    holding = true;
+    const frames = [
+      h.first.receive(["EVENT", sync[1], message(h.key, "a", "held", 1)]),
+      h.first.receive(["EOSE", sync[1]]),
+    ];
+    await vi.waitFor(() => expect(check).toHaveBeenCalled());
+    renew(h.first);
+    expect(closed).toHaveBeenCalledExactlyOnceWith(
+      "disconnected: live connection lost",
+    );
+    release();
+    await Promise.all(frames);
+  } finally {
+    release();
+    h.owner.dispose();
+  }
+});
+
+it("subscribes to own sidebar coordinates alongside read state and verifies delivery", async () => {
+  vi.useFakeTimers();
+  const h = setup([]);
+  try {
+    await h.first.auth();
+    const event = signed(h.key, {
+      kind: 30078,
+      created_at: Math.floor(Date.now() / 1000),
+      content: "encrypted",
+      tags: [
+        ["d", "channel-sections"],
+        ["t", "channel-sections"],
+      ],
+    });
+    const route = h.first
+      .requests()
+      .find((request) =>
+        filtersOf(request).some((filter) => matchesEvent(event, filter)),
+      );
+    assert.exists(route);
+    expect(
+      filtersOf(route).some((filter) =>
+        matchesEvent({ ...event, pubkey: keypair().pubkey }, filter),
+      ),
+    ).toBe(false);
+    expect(
+      filtersOf(route).some((filter) =>
+        matchesEvent({ ...event, tags: [["d", "other"]] }, filter),
+      ),
+    ).toBe(false);
+    const readState = signed(h.key, {
+      kind: 30078,
+      created_at: event.created_at,
+      content: "marker",
+      tags: [
+        ["d", `read-state:${"ab".repeat(16)}`],
+        ["t", "read-state"],
+      ],
+    });
+    expect(
+      filtersOf(route).some((filter) => matchesEvent(readState, filter)),
+    ).toBe(true);
+    await h.first.receive([
+      "EVENT",
+      route[1],
+      { ...event, sig: "0".repeat(128) },
+    ]);
+    expect(h.callbacks.receive).not.toHaveBeenCalled();
+    await h.first.receive(["EVENT", route[1], event]);
+    expect(h.callbacks.receive).toHaveBeenCalledWith([event], {
+      phase: "replay",
+    });
+  } finally {
+    h.owner.dispose();
+  }
+});
+
+it("delivers a canonical sidebar event through the emitted wire into the real session store", async () => {
+  vi.useFakeTimers();
+  const h = setup([]);
+  const relay = keypair();
+  const read = vi.fn<ReadTransport["query"]>(async () => []);
+  const data = {
+    sections: [{ id: "work", name: "Work", order: 0 }],
+    assignments: { alpha: "work" },
+    starred: ["beta"],
+    muted: [],
+  };
+  const decode = vi.fn<SidebarDecoder>(async () => data);
+  const owner = createRelaySession({
+    viewer: h.key.pubkey,
+    relayAuthor: relay.pubkey,
+    media: () => undefined,
+    query: read,
+    decodeSidebarPreferences: decode,
+    subscribe(callbacks) {
+      h.callbacks.receive.mockImplementation(callbacks.receive);
+      return h.owner;
+    },
+  });
+  try {
+    await owner.session.sidebarPreferences.ensure();
+    await h.first.auth();
+    const event = signed(h.key, {
+      kind: 30078,
+      created_at: Math.floor(Date.now() / 1000),
+      content: "encrypted",
+      tags: [
+        ["d", "channel-sections"],
+        ["t", "channel-sections"],
+      ],
+    });
+    const route = h.first
+      .requests()
+      .find((request) =>
+        filtersOf(request).some((filter) => matchesEvent(event, filter)),
+      );
+    assert.exists(route);
+    await h.first.receive(["EOSE", route[1]]);
+    decode.mockResolvedValueOnce({
+      ...data,
+      assignments: { alpha: "work", gamma: "work" },
+    });
+    await h.first.receive(["EVENT", route[1], event]);
+    await owner.session.sidebarPreferences.ensure();
+    expect(
+      owner.session.sidebarPreferences.snapshot().data?.assignments,
+    ).toEqual({ alpha: "work", gamma: "work" });
+    expect(read).toHaveBeenCalledTimes(2);
+    expect(read.mock.calls[1]?.[0]).toEqual(
+      [
+        "channel-sections",
+        "channel-stars",
+        "channel-mutes",
+        "channel-sort",
+        "channel-filter",
+      ].map((coordinate) => ({
+        kinds: [30078],
+        authors: [h.key.pubkey],
+        "#d": [coordinate],
+        limit: 1,
+        consistency: "strong",
+      })),
+    );
+    expect(decode).toHaveBeenCalledTimes(2);
+  } finally {
+    owner.dispose();
   }
 });

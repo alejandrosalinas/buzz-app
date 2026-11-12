@@ -22,6 +22,16 @@
         ]
       },
       {
+        "id": "transcript-protected",
+        "program": "buzz-agent-command",
+        "bundled": true,
+        "args": [
+          "--shell",
+          "exec /usr/bin/python3 -IS -c \"$1\" \"$2\"",
+          "buzz-transcript"
+        ]
+      },
+      {
         "id": "claude-sh",
         "program": "bash",
         "args": ["-c"]

@@ -286,7 +286,7 @@ export class ClaudeSetup {
               ...blocking,
               attentionLabel:
                 status.state === "missing"
-                  ? "Install Claude Code"
+                  ? "Install Claude integration"
                   : status.state === "outdated"
                     ? "Update Claude Code"
                     : status.state === "signed-out"

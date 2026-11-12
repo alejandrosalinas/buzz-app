@@ -4,6 +4,7 @@ import {
   hoverMessage,
 } from "./message-actions.mjs";
 import { open, settle, virtuaIdle, wheel } from "./timeline.mjs";
+import { animationsSettled } from "./animations.mjs";
 
 test.use({
   productionBroker: true,
@@ -116,11 +117,7 @@ for (const own of [true, false]) {
         await row.getByText("Hi", { exact: true }).hover();
         await above(actions);
         await expect(bubble).not.toHaveCSS("background-color", restingFill);
-        await actions.evaluate((bar) =>
-          Promise.all(
-            bar.getAnimations().map((animation) => animation.finished),
-          ),
-        );
+        await animationsSettled(actions);
         // A slow diagonal from a short bubble must reach both toolbar ends.
         for (const label of ["Add reaction", "More message actions"]) {
           await hoverMessage(row);
@@ -243,9 +240,7 @@ test("actions clear a short received message's name and stay reachable beside it
   await settle(page);
   await hoverMessage(row);
   await shown(actions);
-  await actions.evaluate((bar) =>
-    Promise.all(bar.getAnimations().map((animation) => animation.finished)),
-  );
+  await animationsSettled(actions);
   const [nameBox, bar] = await Promise.all([
     name.boundingBox(),
     actions.boundingBox(),
@@ -314,9 +309,7 @@ for (const own of [false, true]) {
     await attachment.hover();
     await shown(actions);
     await above(actions);
-    await actions.evaluate((bar) =>
-      Promise.all(bar.getAnimations().map((animation) => animation.finished)),
-    );
+    await animationsSettled(actions);
     const target = actions.getByRole("button", {
       name: "More message actions",
     });
@@ -363,9 +356,7 @@ for (const own of [false, true]) {
     await attachment.hover();
     await shown(actions);
     await above(actions);
-    await actions.evaluate((bar) =>
-      Promise.all(bar.getAnimations().map((animation) => animation.finished)),
-    );
+    await animationsSettled(actions);
     const reference = row.getByRole("link", { name: "Caption reference" });
     // The hovered media's toolbar must not take hits from the caption above it.
     expect(
@@ -553,9 +544,7 @@ test("thread actions and growing reactions paint beyond the scroller without mov
     .toEqual({ anchored: true, crosses: true, hit: true });
   expect((await row.boundingBox()).height).toBe(restingHeight);
   // Wait for the entrance transform before choosing a pointer hit coordinate.
-  await actions.evaluate((bar) =>
-    Promise.all(bar.getAnimations().map((animation) => animation.finished)),
-  );
+  await animationsSettled(actions);
   const toolbarBounds = await actions.boundingBox();
   // A real padding click switches to pointer input without invoking an action.
   const padding = {

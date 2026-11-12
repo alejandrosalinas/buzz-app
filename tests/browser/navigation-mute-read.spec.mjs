@@ -2,6 +2,7 @@ import { openPage } from "./navigation.mjs";
 import { test, expect } from "./fixture.mjs";
 import { open } from "./timeline.mjs";
 import { holdReadingFocus, readJournal } from "./reading.mjs";
+import { animationsSettled } from "./animations.mjs";
 
 // Browser-only boundary: real shared-menu focus/dismissal, production broker,
 // IndexedDB reload and app-global preference startup. Policy matrices live in Vitest.
@@ -338,13 +339,7 @@ function holdResponse(page, pattern) {
 // Capture the real built app menu, without unrelated conversation content.
 async function captureActions(page, menu, path) {
   // Page screenshots do not wait for the menu's entrance transition to finish.
-  await menu.evaluate(async (element) => {
-    await Promise.all(
-      element
-        .getAnimations({ subtree: true })
-        .map((animation) => animation.finished),
-    );
-  });
+  await animationsSettled(menu, { subtree: true });
   const first = await menu.getByRole("menuitem").first().boundingBox();
   const last = await menu
     .getByRole("menuitem", { name: /^Mark as (read|unread)$/ })

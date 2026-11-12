@@ -36,7 +36,6 @@ import {
   SessionFailed,
   section,
   UsageDoc,
-  watchEvents,
 } from "@earendil-works/pi-durable";
 import { NodeExecutionEnv } from "@earendil-works/pi-durable/env/node";
 import { openNodeSqliteStorage } from "@earendil-works/pi-durable/storage/sqlite/node";
@@ -46,7 +45,7 @@ import lockfile from "proper-lockfile";
 
 /** Protected Pi uses the same snapshots for review and execution. The model
  * barrier is inside Models.applyAuth, before every provider dispatch, including
- * compaction and retry/recovery paths. Unsupported payload hooks fail closed. */
+ * compaction and retry/recovery paths. Payload hooks that replace a request fail closed. */
 export function protectModels(models, inspect, conversationFor) {
   const requests = new Set([
     "stream",
@@ -74,7 +73,6 @@ export function protectModels(models, inspect, conversationFor) {
         return typeof method === "function" ? method.bind(target) : method;
       return (model, input, options = {}) => {
         if (
-          options.onPayload ||
           options.transformHeaders ||
           options.samplingParams ||
           options.deferred ||
@@ -87,12 +85,24 @@ export function protectModels(models, inspect, conversationFor) {
         const selected = structuredClone(model),
           content = structuredClone(input);
         // Telemetry spans hold functions and only observe the request.
-        const { signal, apiKey, headers, env, telemetry, ...data } = options;
+        const { signal, apiKey, headers, env, telemetry, onPayload, ...data } =
+          options;
         const settings = structuredClone(data);
         return method.call(target, selected, content, {
           ...settings,
           signal,
           telemetry,
+          // Pi passes its payload hooks to every request: one that replaces
+          // the reviewed request fails it.
+          ...(onPayload && {
+            onPayload: async (payload, model) => {
+              const replaced = await onPayload(payload, model);
+              if (replaced !== undefined && replaced !== payload)
+                throw new Error(
+                  "Protected Pi cannot review this provider payload override",
+                );
+            },
+          }),
           apiKey,
           headers: structuredClone(headers),
           env: structuredClone(env),
@@ -251,13 +261,24 @@ const Replies = defineDoc({
   initial: () => ({}),
   checkpointWhen,
 });
-/** Why a request in a conversation Pi parked a task of is unanswered. */
-const PARKED = {
-  status: "unanswered",
-  reason: "restart_limit",
-  detail:
+/** Why a run Pi cut off is unanswered, in words: Pi's detail is technical. */
+const CUT_OFF = {
+  restart_limit:
     "Pi stopped this turn because it crashed partway through it several times in a row.",
+  interrupted:
+    "Pi stopped this turn because it was cut off while the model was answering, and it had no retries left.",
 };
+/** The diagnostic codes of the results Pi writes itself, for a tool call
+ * that did not run, or did not finish because Pi stopped it. */
+const UNRUN = new Set([
+  "tool_unavailable",
+  "invalid_arguments",
+  "blocked",
+  "interrupted",
+  "restart_limit",
+  "aborted",
+  "abandoned",
+]);
 /** Messages that arrive while Pi works join its run at the next boundary. */
 const SETTINGS = { steeringMode: "all" };
 /** Pi's own default thinking level, for a model that thinks. */
@@ -578,6 +599,52 @@ const targetOf = (args) => {
     : value;
 };
 
+/** Serialize native Pi values without making a second whole JSON string. */
+async function* evidenceJSON(value) {
+  if (typeof value === "string") {
+    yield '"';
+    for (let at = 0; at < value.length; ) {
+      let end = Math.min(value.length, at + 16384);
+      if (end < value.length && /[\uD800-\uDBFF]/.test(value[end - 1])) end--;
+      yield JSON.stringify(value.slice(at, end)).slice(1, -1);
+      at = end;
+    }
+    yield '"';
+  } else if (Array.isArray(value)) {
+    yield "[";
+    for (let i = 0; i < value.length; i++) {
+      if (i) yield ",";
+      yield* evidenceJSON(value[i] ?? null);
+    }
+    yield "]";
+  } else if (value && typeof value === "object") {
+    yield "{";
+    let first = true;
+    for (const [key, item] of Object.entries(value)) {
+      if (item === undefined) continue;
+      if (!first) yield ",";
+      first = false;
+      yield* evidenceJSON(key);
+      yield ":";
+      yield* evidenceJSON(item);
+    }
+    yield "}";
+  } else {
+    const text = JSON.stringify(value);
+    if (text === undefined) throw new Error("Invalid evidence");
+    yield text;
+  }
+}
+
+/** The arguments the model gave a tool call, from its answer in `entries`. */
+const argumentsOf = (entries, callId) => {
+  for (const entry of entries.toReversed())
+    for (const message of entry.model ?? [])
+      for (const part of Array.isArray(message.content) ? message.content : [])
+        if (part.type === "toolCall" && part.id === callId)
+          return part.arguments;
+};
+
 /** Serves the plugin on `input` and `output` until `input` closes. */
 export function serve({
   data,
@@ -703,9 +770,60 @@ export function serve({
             session: action.session,
             content: null,
           };
-        const result = await call("security", { agent, action }, signal);
-        if (result !== true)
-          throw new Error("Pi action denied by its protection policy");
+        const rpc = (op, params) =>
+          call(`buzz/security/evidence/${op}`, params, signal);
+        const id = crypto.randomUUID();
+        try {
+          const opened = await rpc("begin", {
+            id,
+            kind: action.kind,
+            session: action.session,
+          });
+          if (opened?.skipped === true) return;
+          if (
+            opened?.id !== id ||
+            !Number.isSafeInteger(opened.chunkBytes) ||
+            opened.chunkBytes <= 0
+          )
+            throw new Error("Invalid security transfer");
+          const chunk = Math.min(opened.chunkBytes, 65536);
+          let sequence = 0,
+            bytes = 0,
+            buffer = Buffer.alloc(0);
+          const send = async (data) => {
+            if (
+              (
+                await rpc("chunk", {
+                  id,
+                  sequence,
+                  data: data.toString("base64"),
+                })
+              )?.accepted !== true
+            )
+              throw new Error("Security evidence was not accepted");
+            sequence++;
+            bytes += data.length;
+          };
+          for await (const text of evidenceJSON(action.content)) {
+            const data = Buffer.from(text);
+            for (let at = 0; at < data.length; ) {
+              const take = Math.min(chunk - buffer.length, data.length - at);
+              buffer = Buffer.concat([buffer, data.subarray(at, at + take)]);
+              at += take;
+              if (buffer.length === chunk) {
+                await send(buffer);
+                buffer = Buffer.alloc(0);
+              }
+            }
+          }
+          if (buffer.length) await send(buffer);
+          if ((await rpc("finish", { id, sequence, bytes }))?.allowed !== true)
+            throw new Error("Pi action denied by its protection policy");
+        } catch (error) {
+          // The cancellation message is independent of the cancelled run signal.
+          void call("buzz/security/evidence/cancel", { id }).catch(() => {});
+          throw error;
+        }
       };
       const install = (extension) => {
         if (
@@ -761,8 +879,6 @@ export function serve({
       // Loads the Buzz tools that are deferred when the model asks for them.
       install(createToolSearchExtension());
       for (const extension of packages.extensions) install(extension);
-      /** Conversations with a task Pi parked, which the next wait stops. */
-      const parked = new Set();
       const storage = await openNodeSqliteStorage(path);
       harness = await Harness.open(
         storage,
@@ -782,13 +898,8 @@ export function serve({
               }),
             });
           },
-          onReport: (error, info) => {
-            console.error(`Pi reported ${info.type}`, error);
-            // Cut off by crashes too often, a task waits for a retry that
-            // Buzz has no way to ask for, and its run would never end.
-            if (info.type === "task_parked")
-              parked.add(info.task.conversationId);
-          },
+          onReport: ({ kind, error }) =>
+            console.error(`Pi reported ${kind}`, error),
         },
         context,
       );
@@ -807,13 +918,16 @@ export function serve({
         cores: new Map(),
         /** Each conversation's tool context, for runs resumed after a restart. */
         contexts: new Map(),
-        /** Each watched conversation, and whether a run is in it. */
+        /** Each watched conversation, once its watch has started, and
+         * whether a run is in it. */
         watched: new Map(),
+        /** The arguments each conversation's tool calls run with, after the
+         * hooks, by call. */
+        arguments: new Map(),
         /** Deliveries to each conversation key, one after another. */
         queues: new Map(),
         /** Why each request withdrawn with a failed run is unanswered. */
         failed: new Map(),
-        parked,
         closing: false,
       };
       const places = (await harness.snapshot(Places, context)) ?? {};
@@ -862,7 +976,7 @@ export function serve({
       void opened.then(
         (ready) =>
           ready.harness.closed.then((end) => {
-            if (end.reason !== "failed") return;
+            if (end.kind !== "failed") return;
             console.error("Pi's storage failed for an agent", end.error);
             if (agents.get(agent) === opened) failed.add(agent);
             forget();
@@ -922,17 +1036,32 @@ export function serve({
                     input,
                   }),
                   context,
-                ).then((value) => value ?? undefined),
+                ).then((value) => {
+                  // Its step shows the call as it runs, not as the model
+                  // asked for it. Only a watched conversation sends steps,
+                  // and its watch lets go of them.
+                  if (opened.watched.has(api.conversationId)) {
+                    const calls =
+                      opened.arguments.get(api.conversationId) ?? new Map();
+                    opened.arguments.set(api.conversationId, calls);
+                    calls.set(input.id, value?.arguments ?? input.arguments);
+                  }
+                  return value ?? undefined;
+                }),
+              // Pi also runs afterTool on results it writes for calls that
+              // never ran or were cut off; Buzz's hooks see executed calls.
               afterTool: (input, result, api, context) =>
-                awaitWithContext(
-                  call("hook", {
-                    agent: opened.agent,
-                    conversation: api.conversationId,
-                    event: "afterTool",
-                    input: { call: input, result },
-                  }),
-                  context,
-                ).then((value) => value ?? undefined),
+                result.diagnostics?.some(({ code }) => UNRUN.has(code))
+                  ? undefined
+                  : awaitWithContext(
+                      call("hook", {
+                        agent: opened.agent,
+                        conversation: api.conversationId,
+                        event: "afterTool",
+                        input: { call: input, result },
+                      }),
+                      context,
+                    ).then((value) => value ?? undefined),
             }),
           ],
       tools: tools.map((tool) =>
@@ -976,54 +1105,129 @@ export function serve({
   }
 
   /** Watches a conversation for its steps, whether it is working, and when
-   * each request joins its run. */
-  async function watch(opened, conversation) {
-    const watched = opened.watched.get(conversation);
-    if (watched) return watched;
-    const stream = await watchEvents(opened.harness, conversation, context);
-    const state = { busy: Boolean(stream.snapshot.run), stream };
-    opened.watched.set(conversation, state);
-    const send = (event) =>
-      notify("event", { agent: opened.agent, conversation, ...event });
-    stream.start(async (events) => {
-      for (const event of events)
-        if (event.type === "run_start") state.busy = true;
-        else if (event.type === "run_end") state.busy = false;
-        else if (
-          event.type === "submission" &&
-          event.record.status === "placed" &&
-          event.record.requestId
-        )
-          send({
-            type: "placed",
-            request: event.record.requestId,
-            entry: event.record.entry,
-          });
-        else if (event.type === "tool_execution_start")
-          send({
-            type: "step",
-            tool: event.toolName.startsWith(PREFIX)
-              ? event.toolName.slice(PREFIX.length)
-              : event.toolName,
-            target: targetOf(event.args),
-          });
-        else if (event.type === "message_update")
-          for (const change of event.changes)
-            if (change.type === "thinking_start")
-              send({ type: "step", tool: "Thinking" });
-            else if (change.type === "text_start")
-              send({ type: "step", tool: "Writing reply" });
-    });
+   * each request joins its run. Pi's observer sees every commit, so a step
+   * that starts and ends between two reads is still sent. */
+  function watch(opened, conversation) {
+    let watched = opened.watched.get(conversation);
+    if (!watched) {
+      watched = observe(opened, conversation);
+      opened.watched.set(conversation, watched);
+      watched.catch(() => opened.watched.delete(conversation));
+    }
+    return watched;
+  }
+
+  async function observe(opened, conversation) {
+    let queue = Promise.resolve();
+    /** `sent`: once every event so far has gone out. */
+    const state = { busy: false, observation: undefined, sent: () => queue };
+    // Events go out in order, each after the reads it needs. The observer
+    // must not wait or call the Session, so a read is queued as a function
+    // and starts only when its turn comes.
+    const send = (event) => {
+      queue = queue
+        .then(async () => {
+          const ready = await (typeof event === "function" ? event() : event);
+          if (ready)
+            notify("event", { agent: opened.agent, conversation, ...ready });
+        })
+        .catch((error) => console.error("Pi could not send a step", error));
+    };
+    /** Sent already: the run's inputs and tool calls, and reply parts. */
+    const inputs = new Set();
+    const calls = new Set();
+    let attempt;
+    let parts = 0;
+    const look = (view, initial) => {
+      const live = view.docs["pi.live"] ?? {};
+      // A run that answered keeps `run` while its `afterRun` tasks finish; a
+      // new request then starts the next run, not steers this one.
+      state.busy = Boolean(live.run && !live.run.afterRun);
+      if (!live.run) {
+        inputs.clear();
+        calls.clear();
+        opened.arguments.delete(conversation);
+      }
+      for (const id of live.run?.inputs ?? []) {
+        if (inputs.has(id)) continue;
+        inputs.add(id);
+        if (!initial) send(() => placed(opened, id));
+      }
+      for (const slot of [...(live.tools ?? []), ...(live.nestedTools ?? [])]) {
+        // A step is a start: Pi shows each run of a call running, in a commit
+        // of its own, and a call it blocked goes from pending to done. The
+        // same call ID may come again in a later answer, as another task.
+        if (slot.status !== "running" || calls.has(slot.taskId)) continue;
+        calls.add(slot.taskId);
+        const ran = opened.arguments.get(conversation)?.get(slot.callId);
+        opened.arguments.get(conversation)?.delete(slot.callId);
+        if (initial) continue;
+        const { name } = slot;
+        send({
+          type: "step",
+          tool: name.startsWith(PREFIX) ? name.slice(PREFIX.length) : name,
+          target: targetOf(
+            // A nested call shows the arguments it runs with. A call the
+            // model made runs with what the hooks left of its arguments.
+            "parentCallId" in slot
+              ? slot.arguments
+              : (ran ?? argumentsOf(view.entries, slot.callId)),
+          ),
+        });
+      }
+      const generation = live.generation;
+      const content = generation?.message?.content ?? [];
+      if (generation?.attempt !== attempt || content.length < parts) {
+        attempt = generation?.attempt;
+        parts = 0;
+      }
+      for (; parts < content.length; parts++)
+        if (initial) continue;
+        else if (content[parts].type === "thinking")
+          send({ type: "step", tool: "Thinking" });
+        else if (content[parts].type === "text")
+          send({ type: "step", tool: "Writing reply" });
+    };
+    // Pi may deliver commits before it hands over the value they follow:
+    // they wait for it.
+    let early = [];
+    state.observation = await opened.harness.observeConversation(
+      conversation,
+      {
+        advance: (call) => {
+          if (call.kind !== "value") return;
+          if (early) early.push(call.value);
+          else look(call.value, false);
+        },
+        end: () => undefined,
+      },
+      context,
+    );
+    // What was there before the watch is not sent again.
+    look(state.observation.value, true);
+    for (const view of early) look(view, false);
+    early = undefined;
     return state;
+  }
+
+  /** A request that joined its run, as Buzz is told of it. */
+  async function placed(opened, id) {
+    const submission = await opened.harness.submission(id, context);
+    const record = await submission?.status(context);
+    return record?.requestId && record.entry
+      ? { type: "placed", request: record.requestId, entry: record.entry }
+      : undefined;
   }
 
   async function settle(opened, id) {
     let record;
     try {
-      await unpark(opened);
       const submission = await opened.harness.submission(id, context);
       if (!submission) throw new Error("Pi has no record of this request");
       record = await submission.wait(context);
+      // What Buzz was told of the request's run comes before its answer.
+      const watched = opened.watched.get(record.conversationId);
+      await (await watched?.catch(() => undefined))?.sent();
     } catch (error) {
       // Storage that failed closed the Harness, with the run in it: the
       // plugin opens the agent again, and waits for the run there.
@@ -1038,10 +1242,11 @@ export function serve({
     if (!opened.contexts.has(record.conversationId))
       opened.cores.delete(record.conversationId);
     if (record.status !== "done") {
+      const detail = CUT_OFF[record.reason] ?? record.detail;
       const failed = opened.failed.get(id) ?? {
         status: "unanswered",
         reason: record.reason,
-        ...(record.detail ? { detail: String(record.detail) } : {}),
+        ...(detail ? { detail: String(detail) } : {}),
       };
       opened.failed.delete(id);
       if (record.reason !== "aborted")
@@ -1057,27 +1262,6 @@ export function serve({
       answer: record.answer,
       text: textOf(entry?.model?.at(-1)),
     };
-  }
-
-  /** Stops the conversations Pi parked a task of: each of their requests
-   * fails, saying why. Not waited for, as their tasks run only once a wait
-   * asks Pi for progress. */
-  async function unpark(opened) {
-    if (!opened.parked.size) return;
-    const conversations = [...opened.parked];
-    opened.parked.clear();
-    const { submissions } = await opened.harness.inspect(context);
-    for (const { id, conversationId } of submissions)
-      if (conversations.includes(conversationId)) opened.failed.set(id, PARKED);
-    for (const id of conversations)
-      void opened.harness
-        .conversation(id, context)
-        .then((conversation) =>
-          conversation?.abort(context, { background: true }),
-        )
-        .catch((error) =>
-          console.error("Pi could not stop a parked run", error),
-        );
   }
 
   /** A failed run leaves what was queued for it waiting for a later request:
@@ -1183,8 +1367,7 @@ export function serve({
         reviews.size >= 16 ||
         !turn.prompt ||
         typeof turn.prompt.system !== "string" ||
-        typeof turn.prompt.input !== "string" ||
-        Buffer.byteLength(JSON.stringify(turn.prompt)) > 768 * 1024
+        typeof turn.prompt.input !== "string"
       )
         throw new Error("Invalid security review request");
       const controller = new AbortController();
@@ -1600,7 +1783,8 @@ export function serve({
     if (!opened) return;
     if (!opened.closing)
       opened.closing = (async () => {
-        for (const { stream } of opened.watched.values()) await stream.stop();
+        for (const watched of opened.watched.values())
+          (await watched.catch(() => undefined))?.observation.detach();
         await opened.harness.close(context);
         // A compromised lock may already be released. Native execution has
         // ended above; releasing ownership is cleanup, not its acknowledgement.

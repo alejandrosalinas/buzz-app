@@ -38,9 +38,43 @@ One file serves every local profile (`BUZZODZ_PROFILE`) under that folder. A too
 wants both an installed and a development Buzz to see the policy writes both paths.
 The pre-1.0 `dev.local.buzz.foundation` folder is not read.
 
-A missing file means no policy. Buzz never creates, edits or deletes the file; the
+A missing file means no policy, unless the build carries a
+[packaged policy](#packaged-policy). Buzz never creates, edits or deletes the file; the
 writer creates the folder if needed. "Sign out and erase local data" clears the whole
 app data folder, including this file, so a writer should restore it on its next run.
+
+### Packaged policy
+
+An internal packager can point its build at a policy it publishes, so every install
+recommends the same plugins without anything writing the file, and picks up new pins
+as the packager re-releases them:
+
+```sh
+BUZZ_BUILD_MANAGED_PLUGINS_URL=https://plugins.example/managed-plugins.json bin/pnpm tauri build
+```
+
+The value is read from the build process environment or repository-root `.env.local`.
+The build fails unless it is an `https` URL without credentials or a fragment. Leave it
+unset for OSS builds.
+
+The desktop app fetches the URL when it starts and every 6 hours, or 15 minutes after a
+failed attempt. It follows redirects only to `https` URLs, gives up after 30 seconds,
+and accepts at most 256 KiB. A response that is not a usable version 1 document (the
+rules below) is discarded, and Buzz keeps the last good copy in
+`packaged-managed-plugins-<hash of the URL>.json` beside the profile folders. A copy belongs to its URL: a build that names another URL never shows it, and the first usable policy from the new URL deletes it. Entries the copy ignores
+are reported as they are for the file. Serve the policy with short-lived or no edge
+caching: a stale copy keeps recommending a commit its reference no longer points to.
+
+Until the first fetch succeeds there is no copy to recommend from. Settings → Plugins
+then says the list is loading or, after a failure, that it is unavailable, with the
+reason and a **Retry** button. Opening Settings after a failure also retries once.
+Later failures keep showing the last good copy.
+
+Buzz uses the packaged policy only when no file exists at the resolved location, and
+never when `BUZZ_MANAGED_PLUGINS` names a file. A file written by a machine manager
+therefore replaces it completely; the two are not merged. "Sign out and erase local
+data" deletes the stored copy, and the next fetch restores it. It recommends, exactly
+like the file.
 
 ### Writing the file safely
 
@@ -79,8 +113,8 @@ app data folder, including this file, so a writer should restore it on its next 
 | `plugins[].id` | yes | The plugin manifest ID: lowercase letters, digits, dots and hyphens, starting with a letter. Not a plugin included with Buzz. |
 | `plugins[].repository` | yes | An HTTPS or SSH Git URL, or GitHub `owner/repository`, as the Add dialog accepts. No credentials, query or fragment. Buzz stores the normalized HTTPS or SSH URL. |
 | `plugins[].reference` | yes | A branch or tag name: letters, digits, `.`, `_`, `/`, `-`, at most 200 characters, not starting with `-`. |
-| `plugins[].commit` | yes | The full 40 digit (SHA-1) or 64 digit (SHA-256) hexadecimal object ID the reference must resolve to. Matching ignores case. Abbreviated IDs are rejected. |
-| `plugins[].path` | no | Relative folder of the built plugin (containing `manifest.json` and `plugin.js`, or a signed release pair) inside the repository. Default `.`. Written canonically: `.` alone, or plain segments joined by single `/` (`plugins/notes/dist`). No empty, `.` or `..` segments, so no leading or trailing `/`, `//` or `./`, and no `\`, `:` or control characters. A path that is not written this way is rejected, because it could never match the folder Buzz finds. |
+| `plugins[].commit` | yes | The full 40 digit (SHA-1) or 64 digit (SHA-256) hexadecimal object ID to install. It must be on `reference`: the tip or an earlier commit of that branch or tag. Matching ignores case. Abbreviated IDs are rejected. |
+| `plugins[].path` | no | Relative folder of the built plugin (containing `manifest.json` and `plugin.js`, or a signed release pair) inside the repository. Default `.`. Buzz reads only this folder of the commit, so a repository with more than 20,000 files elsewhere still works. Written canonically: `.` alone, or plain segments joined by single `/` (`plugins/notes/dist`). No empty, `.` or `..` segments, so no leading or trailing `/`, `//` or `./`, and no `\`, `:` or control characters. A path that is not written this way is rejected, because it could never match the folder Buzz finds. |
 
 ### URL entries
 
@@ -156,8 +190,8 @@ other.
 - **Pending recommendations** show as a small count beside **Plugins** in the profile
   menu and beside **Manage plugins** in Settings. There is no startup prompt or modal.
 - **Shell update notices** also check installed Git plugins. For a managed plugin,
-  the check and update use the recommended reference, path, and commit pin. A
-  reference at another commit cannot install. Missing recommendations keep their
+  the check and update use the recommended reference, path, and commit pin, and read
+  only that folder. A commit that is not on the reference cannot install. Missing recommendations keep their
   existing review flow. The Plugins menu keeps updates available after **Later**.
 - **Details of a managed plugin** do not offer the generic update check, which would
   install the reference's tip instead of the pinned commit. They show the same
@@ -171,13 +205,21 @@ other.
 
 ## Pinned commit behavior
 
-The Git import resolves `reference` with a shallow clone, then requires `HEAD` to be
-exactly `commit`, and the app checks again that the commit it received is the pinned one.
-If the reference has moved, the review shows the two commits and refuses to continue;
-there is no fallback to the new commit. If the policy entry changes while a review is
-open, the review reads the new entry again, and it closes if the entry is removed. Pin a tag, or rewrite the
-entry's `commit` when you intend a branch to advance. Because only the reference's tip is
-fetched, a commit that is no longer the tip of its reference cannot be installed.
+The Git import fetches `commit` directly, without its history or file contents, and
+reads the recommended `path` at that commit. It then fetches the reference's commit
+history and requires `commit` to be an ancestor of (or equal to) the reference's tip, so
+the review's "pinned to commit X on *reference*" is true. A commit that is on the
+reference but no longer its tip installs; a commit that is not on the reference, such as
+one from another branch or a rewritten history, is refused. Because the commit is read
+directly, merging more commits to the reference does not break an existing pin.
+
+Some Git hosts refuse to serve a commit by its ID. For those, Buzz falls back to reading
+the reference's tip, which must then equal `commit`; if the reference has moved, the
+review shows the two commits, says the commit could not be fetched directly, and refuses
+to continue. There is no fallback to the new commit. If the policy entry changes while a
+review is open, the review reads the new entry again, and it closes if the entry is
+removed. Pin a tag, or rewrite the entry's `commit` when you intend a branch to advance.
+The app also checks again that the commit it received is the pinned one.
 
 Only an install or update from a recommendation or an agent's request records `commit`
 in the plugin's saved source in the profile registry. Older Buzz versions reject that field and offer settings
@@ -201,6 +243,9 @@ BUZZ_MANAGED_PLUGINS=/tmp/policy.json buzzodz plugin managed
 The command prints the file path, the source name, each valid entry with its state for
 the selected profile, and the reason for each ignored entry. `buzzodz` and the desktop
 share one implementation, so a writer can use it to check a file it wrote.
+
+To check a packaged policy before publishing it, write it to a scratch file and point
+`BUZZ_MANAGED_PLUGINS` at that file.
 
 ## Writer checklist
 

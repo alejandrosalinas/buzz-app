@@ -508,6 +508,11 @@ export function BrowserHostView({
       ) : status.notice ? (
         <div className={styles.notice} role="status">
           {status.notice}
+          {status.held ? (
+            <Button type="button" size="sm" onClick={() => action("open")}>
+              Open in browser
+            </Button>
+          ) : null}
         </div>
       ) : null}
       <div className={styles.viewport} ref={viewport}>

@@ -1,3 +1,7 @@
+import {
+  remoteDmVoiceCalls,
+  withRemoteDmVoiceCalls,
+} from "../../features/huddle/remote-dm-voice";
 import { dmVoiceAgent } from "../../features/huddle/dm-agent";
 import { createHuddleVoices } from "../../features/huddle/voice";
 import { buzzLinkTarget } from "../../features/navigation/buzz-links";
@@ -31,12 +35,16 @@ export const apply: PluginModule["apply"] = (ctx) => {
     (connection, destination) =>
       dmVoiceAgent(connection, destination, ctx.agents)?.pubkey,
   );
+  const remoteVoices = remoteDmVoiceCalls(ctx.relay, ctx.agents);
   const stopVoices = createHuddleVoices(
-    huddles,
+    withRemoteDmVoiceCalls(huddles, remoteVoices),
     ctx.agents,
     ctx.relay,
     nativeHuddles,
-    huddles.voiceError,
+    (call, error) => {
+      if (remoteVoices.snapshot().id === call) huddles.remoteVoiceError(error);
+      else huddles.voiceError(call, error);
+    },
   );
   provideHuddleStatus(ctx, huddles);
   const stopRing = createHuddleRing(huddles);
@@ -84,6 +92,7 @@ export const apply: PluginModule["apply"] = (ctx) => {
   });
   ctx.effect(() => async () => {
     stopRing();
+    remoteVoices.dispose();
     await Promise.all([stopVoices(), companion.dispose(), huddles.dispose()]);
   });
   ctx.conversation.registerChatMenu((props) => (

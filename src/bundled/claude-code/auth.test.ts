@@ -11,6 +11,7 @@ const state = vi.hoisted(() => ({
   saved: true,
   asked: 0,
   saves: [] as string[],
+  clears: 0,
   refusals: [] as string[],
 }));
 vi.mock("@tauri-apps/api/core", () => ({
@@ -19,6 +20,13 @@ vi.mock("@tauri-apps/api/core", () => ({
     if (command === "claude_api_key_status") {
       state.asked += 1;
       return state.saved;
+    }
+    if (command === "claude_api_key_clear") {
+      state.clears++;
+      const refusal = state.refusals.shift();
+      if (refusal) throw refusal;
+      state.saved = false;
+      return null;
     }
     if (command !== "claude_api_key_set" || !args) return null;
     const refusal = state.refusals.shift();
@@ -30,7 +38,13 @@ vi.mock("@tauri-apps/api/core", () => ({
 }));
 /** Starts with a key saved or not. */
 function store(saved = true) {
-  Object.assign(state, { saved, asked: 0, saves: [], refusals: [] });
+  Object.assign(state, {
+    saved,
+    asked: 0,
+    saves: [],
+    clears: 0,
+    refusals: [],
+  });
 }
 beforeEach(() => void store());
 
@@ -70,7 +84,7 @@ it("asks native code to start every claude, the protected release included, with
       env: { ...ENV, A: "1" },
       secrets: ["anthropic-api-key"],
     });
-    // The key itself never reaches the app.
+    // Process launches never read or forward the key through JavaScript.
     expect(JSON.stringify(options)).not.toContain("sk-ant-");
   }
   expect(started[2]?.options).toEqual({ env: { ...ENV } });
@@ -148,6 +162,41 @@ it("gives a review its own folder, the key coming from native code", async () =>
   await expect(new ClaudeAuth(spawn).review()).rejects.toThrow(
     "Claude needs an Anthropic API key.",
   );
+});
+
+it("clears the native key, invalidates cached authorization, and notifies sessions", async () => {
+  const { spawn, started } = host();
+  const auth = new ClaudeAuth(spawn);
+  const told = vi.fn();
+  auth.subscribe(told);
+  await auth.authorize(spawn, true)("claude");
+  await auth.clear();
+  expect(state.clears).toBe(1);
+  expect(told).toHaveBeenCalledOnce();
+  await expect(auth.authorize(spawn, true)("claude")).rejects.toThrow(
+    "Claude needs an Anthropic API key.",
+  );
+  await expect(auth.review()).rejects.toThrow(
+    "Claude needs an Anthropic API key.",
+  );
+  expect(started).toHaveLength(1);
+  await auth.save(KEY);
+  await auth.authorize(spawn, true)("claude");
+  expect(started).toHaveLength(2);
+});
+
+it("preserves authorization on a failed removal and notifies only after retry succeeds", async () => {
+  const { spawn } = host();
+  const auth = new ClaudeAuth(spawn);
+  const told = vi.fn();
+  auth.subscribe(told);
+  state.refusals.push("Keychain access was denied.");
+  await expect(auth.clear()).rejects.toBe("Keychain access was denied.");
+  expect(told).not.toHaveBeenCalled();
+  await expect(auth.check()).resolves.toEqual({});
+  await auth.clear();
+  expect(told).toHaveBeenCalledOnce();
+  await expect(auth.check()).resolves.toBeUndefined();
 });
 
 it("links a turn that failed for want of a working key to Settings", async () => {

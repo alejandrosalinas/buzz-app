@@ -12,13 +12,16 @@ use std::{
     collections::HashSet,
     ffi::OsString,
     fs,
-    io::Read,
+    io::{Read, Write},
     path::{Path, PathBuf},
 };
 
 pub const FILE_NAME: &str = "managed-plugins.json";
 pub const PATH_ENV: &str = "BUZZ_MANAGED_PLUGINS";
-const MAX_BYTES: u64 = 256 * 1024;
+/// Where the packager publishes its policy; the desktop keeps the last usable copy.
+pub const PACKAGED_URL: &str = env!("BUZZ_BUILD_MANAGED_PLUGINS_URL");
+const PACKAGED_FILE_PREFIX: &str = "packaged-managed-plugins";
+pub const MAX_BYTES: u64 = 256 * 1024;
 const MAX_PLUGINS: usize = 64;
 const MAX_PROBLEMS: usize = 16;
 const MAX_SOURCE_CHARS: usize = 80;
@@ -79,6 +82,10 @@ pub enum Managed {
     Absent,
     /// The file as a whole cannot be used; nothing is recommended.
     Invalid { path: String, reason: String },
+    /// The build names a packaged policy that Buzz has not fetched yet.
+    Loading { url: String },
+    /// The packaged policy could not be fetched and there is no earlier copy.
+    Unavailable { url: String, reason: String },
     /// Usable entries, plus a report for each one that was ignored.
     Ready {
         path: String,
@@ -148,6 +155,84 @@ pub fn status(path: Result<PathBuf>, catalog: &Catalog) -> Managed {
             reason,
         },
     }
+}
+
+/// Where the last good copy of the policy at `url` is kept, so a copy from another
+/// URL is never shown for this one.
+pub fn packaged_file_name(url: &str) -> String {
+    format!(
+        "{PACKAGED_FILE_PREFIX}-{}.json",
+        &crate::hash(url.as_bytes())[..16]
+    )
+}
+
+/// The outcome of the latest attempt to fetch the packaged policy.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub enum PackagedFetch {
+    #[default]
+    Pending,
+    Fetched,
+    Failed(String),
+}
+
+/// The file's status, or the last fetched packaged policy when the file is absent
+/// and `BUZZ_MANAGED_PLUGINS` does not name one. `packaged` is `None` when the
+/// build has no packaged policy URL.
+pub fn effective(
+    home: &Path,
+    env: Option<OsString>,
+    packaged: Option<(&str, &PackagedFetch)>,
+    catalog: &Catalog,
+) -> Managed {
+    let explicit = env.as_ref().is_some_and(|value| !value.is_empty());
+    match (status(path(home, env), catalog), packaged) {
+        (Managed::Absent, Some((url, fetch))) if !explicit => {
+            match (
+                status(Ok(home.join(packaged_file_name(url))), catalog),
+                fetch,
+            ) {
+                (Managed::Absent, PackagedFetch::Failed(reason)) => Managed::Unavailable {
+                    url: url.into(),
+                    reason: reason.clone(),
+                },
+                (Managed::Absent, _) => Managed::Loading { url: url.into() },
+                (managed, _) => managed,
+            }
+        }
+        (managed, _) => managed,
+    }
+}
+
+/// Keeps `bytes` as the packaged policy from `url` if Buzz can use it; otherwise the
+/// last good copy stays. A usable policy replaces copies kept for other URLs.
+/// Returns whether the stored copy changed.
+pub fn store_packaged(home: &Path, url: &str, bytes: &[u8]) -> Result<bool> {
+    if bytes.len() as u64 > MAX_BYTES {
+        return Err("Managed plugin policy exceeds 256 KiB".into());
+    }
+    let text =
+        std::str::from_utf8(bytes).map_err(|_| "Managed plugin policy must be UTF-8".to_owned())?;
+    parse(text)?;
+    let name = packaged_file_name(url);
+    let path = home.join(&name);
+    let changed = !fs::read(&path).is_ok_and(|current| current == bytes);
+    if changed {
+        fs::create_dir_all(home).map_err(err)?;
+        let mut file = tempfile::NamedTempFile::new_in(home).map_err(err)?;
+        file.write_all(bytes).map_err(err)?;
+        file.persist(&path).map_err(|e| err(e.error))?;
+    }
+    for stale in fs::read_dir(home).map_err(err)?.flatten() {
+        let stale_name = stale.file_name();
+        let stale_name = stale_name.to_string_lossy();
+        if stale_name != name
+            && stale_name.starts_with(PACKAGED_FILE_PREFIX)
+            && stale_name.ends_with(".json")
+        {
+            let _ = fs::remove_file(stale.path());
+        }
+    }
+    Ok(changed)
 }
 
 /// Reads a small policy file. `None` when it does not exist; `label` names it in errors.
@@ -295,7 +380,7 @@ fn entry_plugin(entry: Value) -> Result<ManagedPlugin> {
     Ok(ManagedPlugin { id, source })
 }
 
-fn canonical_path(path: &str) -> Result<()> {
+pub(crate) fn canonical_path(path: &str) -> Result<()> {
     if path != "." {
         let canonical = path.split('/').all(|segment| {
             !segment.is_empty()
@@ -950,6 +1035,159 @@ mod tests {
             plugins.iter().map(|entry| entry.state).collect::<Vec<_>>(),
             [Missing, Current, Outdated, Outdated, Outdated, Other, Other, Other]
         );
+    }
+
+    #[test]
+    fn falls_back_to_the_stored_packaged_policy_only_without_a_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join(FILE_NAME);
+        let empty = catalog(vec![]);
+        let url = "https://plugins.example/policy.json";
+        let stored = dir.path().join(packaged_file_name(url));
+        let fetched = Some((url, &PackagedFetch::Fetched));
+        assert_eq!(effective(dir.path(), None, None, &empty), Managed::Absent);
+
+        fs::write(&stored, policy(&[entry("acme.packaged")])).unwrap();
+        assert_eq!(effective(dir.path(), None, None, &empty), Managed::Absent);
+        let Managed::Ready { path, plugins, .. } = effective(dir.path(), None, fetched, &empty)
+        else {
+            panic!("expected the packaged policy");
+        };
+        assert_eq!(path, stored.display().to_string());
+        assert_eq!(plugins[0].plugin.id, "acme.packaged");
+        assert_eq!(plugins[0].state, ManagedState::Missing);
+        assert_eq!(
+            effective(dir.path(), Some("".into()), fetched, &empty),
+            effective(dir.path(), None, fetched, &empty)
+        );
+
+        fs::write(&file, policy(&[entry("acme.file")])).unwrap();
+        let Managed::Ready { plugins, .. } = effective(dir.path(), None, fetched, &empty) else {
+            panic!("expected the file");
+        };
+        assert_eq!(plugins[0].plugin.id, "acme.file");
+        fs::write(&file, "{").unwrap();
+        assert!(matches!(
+            effective(dir.path(), None, fetched, &empty),
+            Managed::Invalid { path, .. } if path == file.display().to_string()
+        ));
+
+        #[cfg(unix)]
+        {
+            let missing = dir.path().join("missing.json");
+            assert_eq!(
+                effective(dir.path(), Some(missing.into()), fetched, &empty),
+                Managed::Absent
+            );
+        }
+    }
+
+    #[test]
+    fn reports_a_packaged_policy_that_has_not_arrived() {
+        let dir = tempfile::tempdir().unwrap();
+        let empty = catalog(vec![]);
+        let url = "https://plugins.example/policy.json";
+        let failed = PackagedFetch::Failed("HTTP 503".into());
+        assert_eq!(
+            effective(
+                dir.path(),
+                None,
+                Some((url, &PackagedFetch::Pending)),
+                &empty
+            ),
+            Managed::Loading { url: url.into() }
+        );
+        assert_eq!(
+            effective(dir.path(), None, Some((url, &failed)), &empty),
+            Managed::Unavailable {
+                url: url.into(),
+                reason: "HTTP 503".into()
+            }
+        );
+        let json = serde_json::to_value(effective(dir.path(), None, Some((url, &failed)), &empty))
+            .unwrap();
+        assert_eq!(json["status"], "unavailable");
+        assert_eq!(json["url"], url);
+
+        fs::write(
+            dir.path().join(packaged_file_name(url)),
+            policy(&[entry("acme.kept")]),
+        )
+        .unwrap();
+        let Managed::Ready { plugins, .. } =
+            effective(dir.path(), None, Some((url, &failed)), &empty)
+        else {
+            panic!("a failed refresh keeps the last good copy");
+        };
+        assert_eq!(plugins[0].plugin.id, "acme.kept");
+
+        fs::write(dir.path().join(FILE_NAME), policy(&[])).unwrap();
+        assert!(matches!(
+            effective(dir.path(), None, Some((url, &failed)), &empty),
+            Managed::Ready { .. }
+        ));
+    }
+
+    #[test]
+    fn stores_only_usable_packaged_policies() {
+        let dir = tempfile::tempdir().unwrap();
+        let home = dir.path().join("app");
+        let url = "https://plugins.example/policy.json";
+        let stored = home.join(packaged_file_name(url));
+        let good = policy(&[entry("acme.one")]);
+        assert_eq!(store_packaged(&home, url, good.as_bytes()), Ok(true));
+        assert_eq!(fs::read_to_string(&stored).unwrap(), good);
+        assert_eq!(store_packaged(&home, url, good.as_bytes()), Ok(false));
+
+        let oversized = format!("{good}{}", " ".repeat(MAX_BYTES as usize));
+        for bad in [
+            b"{".as_slice(),
+            br#"{"version":2,"source":"Acme IT","plugins":[]}"#,
+            &[0xff, 0xfe],
+            oversized.as_bytes(),
+        ] {
+            assert!(store_packaged(&home, url, bad).is_err());
+            assert_eq!(fs::read_to_string(&stored).unwrap(), good);
+        }
+
+        let next = policy(&[entry("acme.two")]);
+        assert_eq!(store_packaged(&home, url, next.as_bytes()), Ok(true));
+        assert_eq!(fs::read_to_string(&stored).unwrap(), next);
+        assert_eq!(fs::read_dir(&home).unwrap().count(), 1);
+    }
+
+    #[test]
+    fn keeps_each_packaged_copy_for_its_own_url() {
+        let dir = tempfile::tempdir().unwrap();
+        let home = dir.path();
+        let empty = catalog(vec![]);
+        let (old_url, new_url) = (
+            "https://plugins.example/old.json",
+            "https://plugins.example/new.json",
+        );
+        assert_ne!(packaged_file_name(old_url), packaged_file_name(new_url));
+        fs::write(home.join("packaged-managed-plugins.json"), policy(&[])).unwrap();
+        store_packaged(home, old_url, policy(&[entry("acme.old")]).as_bytes()).unwrap();
+        assert!(!home.join("packaged-managed-plugins.json").exists());
+
+        let failed = PackagedFetch::Failed("HTTP 404".into());
+        assert_eq!(
+            effective(home, None, Some((new_url, &failed)), &empty),
+            Managed::Unavailable {
+                url: new_url.into(),
+                reason: "HTTP 404".into()
+            }
+        );
+        assert!(home.join(packaged_file_name(old_url)).exists());
+
+        store_packaged(home, new_url, policy(&[entry("acme.new")]).as_bytes()).unwrap();
+        assert!(!home.join(packaged_file_name(old_url)).exists());
+        let Managed::Ready { plugins, .. } =
+            effective(home, None, Some((new_url, &PackagedFetch::Fetched)), &empty)
+        else {
+            panic!("expected the new URL's copy");
+        };
+        assert_eq!(plugins[0].plugin.id, "acme.new");
     }
 
     #[test]

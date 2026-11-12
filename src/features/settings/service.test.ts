@@ -122,4 +122,7 @@ it("refuses a Personal-space card that also claims a group or section", () => {
   expect(() => cards.register({ ...card, section: "administration" })).toThrow(
     "Settings cards need an id, title and component",
   );
+  expect(() => cards.register({ ...card, identityRow: true as never })).toThrow(
+    "Settings cards need an id, title and component",
+  );
 });

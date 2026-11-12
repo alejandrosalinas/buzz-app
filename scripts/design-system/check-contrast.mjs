@@ -194,6 +194,7 @@ const PAIRS = [
   ].map((role) => [role, "--affordance-navigation-selected"]),
   // Small status/count badges on a selected row keep their own readable pair.
   ["--text-row-selected-detail", "--surface-row-selected-detail"],
+  ["--text-dock-count", "--surface-dock-count"],
   ["--text-subtle", "--affordance-popover-selected"],
   ...["control", "control-hover", "control-pressed", "selected"].map(
     (state) => ["--text-standard", `--affordance-floating-${state}`],
@@ -534,6 +535,7 @@ const accentFamilies = [
   ),
 ];
 const ACCENT_PAIRS = [
+  ["--text-dock-count", "--surface-dock-count"],
   ["--text-on-selection", "--surface-text-selection"],
   ["--text-on-selection-own", "--surface-text-selection-own"],
   ["--text-sidebar-selected", "--surface-sidebar-selected"],

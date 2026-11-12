@@ -74,6 +74,8 @@ export type FakeSession = Readonly<{
   cwd: string;
   updatedAt: string;
   conversation: readonly Record<string, unknown>[];
+  /** The tags it was opened with, which `session/list` filters by. */
+  tags?: Readonly<Record<string, string>>;
 }>;
 
 /** A loopback MCP server `serve` started, as the app's host would. */
@@ -411,14 +413,15 @@ export function fakeSpawn(
             models: options.supported ?? [],
           });
         case "session/list": {
-          const query = String(
-            (params._meta as { query?: string } | undefined)?.query ?? "",
-          );
-          const mentions = (session: FakeSession) =>
-            JSON.stringify(session.conversation).includes(query);
+          const tags = (params._meta as { tags?: Record<string, string> })
+            ?.tags;
+          // A session carries every tag asked for, as goose's index filters.
           const listed = (options.history ?? []).filter(
             (session) =>
-              session.cwd === params.cwd && (!query || mentions(session)),
+              session.cwd === params.cwd &&
+              Object.entries(tags ?? {}).every(
+                ([key, value]) => session.tags?.[key] === value,
+              ),
           );
           const from = Number(params.cursor ?? 0);
           const to = from + (options.page ?? listed.length);

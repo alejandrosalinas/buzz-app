@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import type { EventData } from "../../features/relay/events";
 import { steerPrompt, turnPrompt } from "../claude-code/prompt";
 import { type FakeSession, fakeSpawn } from "./goose-testing";
-import { GooseHistory, gooseTurns, startedFor } from "./transcript";
+import { GooseHistory, gooseTurns } from "./transcript";
 
 const alice = "a".repeat(64);
 const agent = "c".repeat(64);
@@ -215,32 +215,20 @@ describe("gooseTurns", () => {
   });
 });
 
-describe("startedFor", () => {
-  it("matches the agent, channel and thread its first prompt names", () => {
-    const messages = conversation();
-    const place = { channelId: CHANNEL, root: root.id };
-    expect(startedFor(messages, agent, place)).toBe(true);
-    expect(startedFor(messages, other, place)).toBe(false);
-    expect(
-      startedFor(messages, agent, { ...place, root: "f".repeat(64) }),
-    ).toBe(false);
-    expect(startedFor(messages, agent, { channelId: CHANNEL })).toBe(false);
-    expect(startedFor([user([text("hi")])], agent, place)).toBe(false);
-  });
-});
-
 describe("GooseHistory", () => {
   const session = (
     sessionId: string,
     title: string,
     messages: readonly Record<string, unknown>[],
     cwd = "/home/test/.buzz",
+    tags?: Readonly<Record<string, string>>,
   ): FakeSession => ({
     sessionId,
     title,
     cwd,
     updatedAt: "2027-01-15T08:00:00Z",
     conversation: messages,
+    ...(tags ? { tags } : {}),
   });
   const history = (sessions: FakeSession[]) =>
     new GooseHistory(fakeSpawn({ history: sessions, home: "/home/test" }));
@@ -251,7 +239,7 @@ describe("GooseHistory", () => {
       .flatMap((goose) => goose.received)
       .filter((message) => message.method === "session/list");
 
-  it("reads a place's saved sessions by id, without searching goose", async () => {
+  it("reads a place's saved sessions by id, without listing goose's sessions", async () => {
     const fake = fakeSpawn({
       home: "/home/test",
       history: [
@@ -270,40 +258,48 @@ describe("GooseHistory", () => {
       "s2",
     ]);
     expect(listed(fake)).toEqual([]);
-    expect(
-      await new GooseHistory(fake).transcript(
-        { agent, workspace: "~/.buzz", place },
-        signal,
-      ),
-    ).toBeUndefined();
-    expect(listed(fake)).toEqual([]);
   });
 
-  it("searches goose for every session the agent ran for a place only when asked", async () => {
+  it("finds the agent's sessions for a place by their tags when it saved none", async () => {
+    const thread = `${CHANNEL}/${root.id}`;
     const fake = fakeSpawn({
       home: "/home/test",
       history: [
-        session("theirs", "Goosey · #general", [user([text(ask(other))])]),
-        session("s1", "Gander · #general", conversation()),
-        session("s2", "Gander · #general", conversation()),
+        session("tagged", "Gander · #general", conversation(), undefined, {
+          "buzz.agent": agent,
+          "buzz.conversation": thread,
+        }),
+        session("channel", "Gander · #general", conversation(), undefined, {
+          "buzz.agent": agent,
+          "buzz.conversation": CHANNEL,
+        }),
+        session("theirs", "Goosey · #general", conversation(), undefined, {
+          "buzz.agent": other,
+          "buzz.conversation": thread,
+        }),
+        session("untagged", "Gander · #general", conversation()),
       ],
     });
     const goose = new GooseHistory(fake);
     const place = { channelId: CHANNEL, root: root.id };
     const read = await goose.transcript(
-      { agent, workspace: "~/.buzz", place, search: true },
+      { agent, workspace: "~/.buzz", place, sessions: ["gone"] },
       signal,
     );
-    expect(read?.turns.map((turn) => turn.sessionId)).toEqual(["s1", "s2"]);
-    expect(listed(fake)).toHaveLength(1);
+    expect(read?.turns.map((turn) => turn.sessionId)).toEqual(["tagged"]);
+    expect(listed(fake).map((message) => message.params)).toEqual([
+      {
+        cwd: "/home/test/.buzz",
+        _meta: {
+          types: ["acp"],
+          tags: { "buzz.agent": agent, "buzz.conversation": thread },
+        },
+      },
+    ]);
+    // None is tagged with this place.
     expect(
       await goose.transcript(
-        {
-          agent,
-          workspace: "~/.buzz",
-          place: { channelId: "elsewhere" },
-          search: true,
-        },
+        { agent, workspace: "~/.buzz", place: { channelId: "elsewhere" } },
         signal,
       ),
     ).toBeUndefined();

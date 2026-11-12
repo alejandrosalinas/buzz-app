@@ -28,6 +28,24 @@ afterEach(() => {
 });
 
 describe("navigation attempts over one history driver", () => {
+  it("keeps sidebar intent through resolution and retry, and clears it for an explicit open or history", async () => {
+    const { host, navigation: nav } = setup();
+    void nav.open(page, { sidebar: "preserve" });
+    expect(nav.snapshot().attempt.sidebar).toBe("preserve");
+    expect(host.resolve(nav.snapshot().attempt, settings)).toBe(true);
+    expect(nav.snapshot().attempt.sidebar).toBe("preserve");
+    const retry = nav.retry();
+    expect(nav.snapshot().attempt.sidebar).toBe("preserve");
+    host.complete(nav.snapshot().attempt, { status: "opened" });
+    await expect(retry).resolves.toEqual({ status: "opened" });
+    void nav.open(settings);
+    expect(nav.snapshot().attempt.sidebar).toBeUndefined();
+    void nav.open(page, { sidebar: "preserve" });
+    nav.back();
+    expect(nav.snapshot().attempt.sidebar).toBeUndefined();
+    nav.forward();
+    expect(nav.snapshot().attempt.sidebar).toBeUndefined();
+  });
   it("dismissing an inactive visit preserves the selected attempt and its signal", () => {
     const { navigation: nav } = setup();
     void nav.open(settings);

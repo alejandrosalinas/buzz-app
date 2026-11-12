@@ -3,7 +3,7 @@ mod relay;
 
 use buzz_pairing::{AbortReason, PairingSession, PayloadType, SessionState};
 use futures_util::FutureExt;
-use nostr_pairing::Event;
+use nostr::event::Event;
 use serde::Serialize;
 use std::{
     sync::{

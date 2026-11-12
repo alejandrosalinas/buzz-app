@@ -1,10 +1,14 @@
 import { assert, expect, it, vi } from "vitest";
 import { profileMentionParts } from "../messages/profile-mentions";
 import { createMessages } from "./messages";
+import {
+  messageTokenTags,
+  signMessageTokens,
+} from "../messages/message-tokens";
 import { createOutbox } from "./outbox";
 import { foldMessages } from "./fold";
 import { keypair, message, signed } from "./testing";
-import type { EventData } from "./events";
+import type { EventData, RelayEvent } from "./events";
 
 const author = keypair();
 const other = keypair();
@@ -19,7 +23,7 @@ function setup(events: EventData[] = [root, reply], allowed = true) {
   const writer = {
     kinds: [9, 5, 40003],
     sign: vi.fn(async (event) => signed(author, event)),
-    publish: vi.fn(async () => {}),
+    publish: vi.fn(async (_event: RelayEvent) => {}),
   };
   const { outbox } = createOutbox(author.pubkey, writer, {
     load: () => [],
@@ -371,6 +375,93 @@ it("deleting the reply or either copy removes every linked copy", async () => {
   const next = outbox.snapshot().length;
   messages.remove([reply.id]);
   expect(targets(next, 5)).toEqual([a.id, b.id, reply.id].sort());
+});
+it("a host reply signs its chips once and retries the exact bytes; the public API cannot add chips", async () => {
+  const token = {
+    kind: "skill" as const,
+    id: JSON.stringify({ path: "/skills/review/SKILL.md", name: "Review" }),
+    label: "/review",
+    target: author.pubkey,
+  };
+  const h = setup();
+  await h.outbox.ready();
+  h.writer.publish.mockRejectedValueOnce(new Error("network cut"));
+  const id = signMessageTokens([token], () =>
+    h.messages.reply("channel", root.id, "Review", [author.pubkey]),
+  );
+  await vi.waitFor(() =>
+    expect(
+      h.outbox.snapshot().find((item) => item.event.id === id)?.delivery,
+    ).toBe("unknown"),
+  );
+  const saved = h.outbox
+    .snapshot()
+    .find((item) => item.event.id === id)?.signed;
+  assert.exists(saved);
+  expect(saved.tags).toContainEqual(messageTokenTags([token])[0]);
+  h.outbox.retry(id);
+  await vi.waitFor(() => expect(h.writer.publish).toHaveBeenCalledTimes(2));
+  expect(JSON.stringify(h.writer.publish.mock.calls[1]?.[0])).toBe(
+    JSON.stringify(saved),
+  );
+  expect(h.writer.sign).toHaveBeenCalledTimes(1);
+  // Outside the host scope, extra arguments are ignored.
+  const send = h.messages.send as (...args: unknown[]) => string;
+  const plain = send("channel", "Plain", [], [], undefined, [], {}, [token]);
+  await vi.waitFor(() =>
+    expect(h.writer.publish.mock.calls.at(-1)?.[0].id).toBe(plain),
+  );
+  expect(
+    h.writer.publish.mock.calls
+      .at(-1)?.[0]
+      .tags.some(([name]) => name === "buzz-tokens-v1"),
+  ).toBe(false);
+});
+it("only the host's own send carries its chips, not a send an outbox subscriber makes while it is queued", async () => {
+  const token = {
+    kind: "folder" as const,
+    id: "/private/source",
+    label: "source",
+  };
+  const tokens = (event?: { tags: string[][] }) =>
+    event?.tags.filter(([name]) => name === "buzz-tokens-v1") ?? [];
+  const h = setup(),
+    other = setup();
+  await Promise.all([h.outbox.ready(), other.outbox.ready()]);
+  const reentrant: string[] = [];
+  let entered = false;
+  const stop = h.outbox.subscribe(() => {
+    if (entered || !h.outbox.snapshot().length) return;
+    entered = true;
+    reentrant.push(
+      h.messages.send("other-task", "subscriber send"),
+      h.messages.reply("channel", root.id, "subscriber reply"),
+      other.messages.send("other-session", "other session send"),
+    );
+  });
+  const id = signMessageTokens([token], () =>
+    h.messages.send("task", "intended", [author.pubkey]),
+  );
+  stop();
+  expect(reentrant).toHaveLength(3);
+  const queued = [...h.outbox.snapshot(), ...other.outbox.snapshot()];
+  const event = (key: string) =>
+    queued.find((item) => item.event.id === key)?.event;
+  expect(tokens(event(id))).toEqual(messageTokenTags([token]));
+  for (const key of reentrant) {
+    expect(event(key)).toBeDefined();
+    expect(tokens(event(key))).toEqual([]);
+  }
+  // A publish that throws restores the unsigned state.
+  expect(() =>
+    signMessageTokens([token], () => {
+      throw new Error("refused");
+    }),
+  ).toThrow("refused");
+  const plain = h.messages.send("task", "plain");
+  expect(
+    tokens(h.outbox.snapshot().find((item) => item.event.id === plain)?.event),
+  ).toEqual([]);
 });
 it("deletes a reply and its channel copy with one target per deletion", async () => {
   const { messages, outbox, send } = linkedSetup();

@@ -1,24 +1,24 @@
-// An agent card as a picture: rainbow foil around a white panel, the Buzz
+// An agent card as a picture: avatar-colored foil around a white panel, the Buzz
 // mark, the agent's picture, its name, and its harness and model as stats.
 // It is the same in either theme, as a thing handed to someone else.
+
+import foilTextureUrl from "./assets/card-foil.webp";
+import { fallbackAgentCardColor } from "./agent-card-color";
 
 export const CARD_WIDTH = 820;
 export const CARD_HEIGHT = 1230;
 /** The card's outer corner, which the preview clips to. */
 export const CARD_RADIUS = 56;
 const PANEL = { inset: 22, radius: 40 };
+export const CARD_BORDER = PANEL.inset;
 const EDGE = 70;
-const PICTURE = { x: 110, y: 170, size: 600, radius: 48 };
+export const CARD_PICTURE = { x: 110, y: 170, size: 600, radius: 48 };
 const INK = "#121214";
 const MUTED = "#6e6e76";
 /** `public/buzz-mark.svg`, traced here since an SVG image may not draw on a
  * canvas everywhere. */
 const MARK =
   "M18 9a8 8 0 0 1 8-8h12a8 8 0 0 1 8 8v3h4a12 12 0 1 1 0 24h-4v3a8 8 0 0 1-8 8H26a8 8 0 0 1-8-8v-3h-4a12 12 0 1 1 0-24h4V9Z";
-/** The foil's colours. Artwork, so the same in either theme; the preview's
- * sheen reuses them so it matches what is drawn. */
-const FOIL = ["#ff9ad5", "#ffd27a", "#a8f0a0", "#7fd4ff", "#b69cff"] as const;
-export const FOIL_SHEEN = `linear-gradient(115deg, transparent 30%, ${FOIL[0]} 42%, ${FOIL[3]} 50%, ${FOIL[2]} 58%, transparent 70%)`;
 const FONT = `"Inter Variable", Inter, ui-sans-serif, system-ui, -apple-system, sans-serif`;
 
 const word = (text: string) => (text[0]?.toUpperCase() ?? "") + text.slice(1);
@@ -113,12 +113,29 @@ function spaced(context: CanvasRenderingContext2D, spacing: string) {
   if ("letterSpacing" in context) context.letterSpacing = spacing;
 }
 
-function foil(context: CanvasRenderingContext2D, seed: string) {
-  const rainbow = context.createLinearGradient(0, 0, CARD_WIDTH, CARD_HEIGHT);
-  for (const [index, color] of [...FOIL, FOIL[0]].entries())
-    rainbow.addColorStop(index / FOIL.length, color);
-  context.fillStyle = rainbow;
+function foil(
+  context: CanvasRenderingContext2D,
+  seed: string,
+  accent: string,
+  texture?: HTMLImageElement,
+) {
+  context.fillStyle = accent;
   context.fillRect(0, 0, CARD_WIDTH, CARD_HEIGHT);
+  if (texture) {
+    context.save();
+    // The original template mirrors this metallic texture horizontally.
+    context.translate(CARD_WIDTH, 0);
+    context.scale(-1, 1);
+    context.drawImage(texture, 0, 0, CARD_WIDTH, CARD_HEIGHT);
+    context.restore();
+    context.save();
+    context.globalCompositeOperation = "color";
+    context.globalAlpha = 0.62;
+    context.fillStyle = accent;
+    context.fillRect(0, 0, CARD_WIDTH, CARD_HEIGHT);
+    context.restore();
+    return;
+  }
   const shine = context.createLinearGradient(0, CARD_HEIGHT, CARD_WIDTH, 0);
   shine.addColorStop(0.35, "rgba(255,255,255,0)");
   shine.addColorStop(0.5, "rgba(255,255,255,0.55)");
@@ -147,13 +164,6 @@ function panel(context: CanvasRenderingContext2D) {
   rounded(context, inset, inset, width, height, radius);
   context.fillStyle = "#ffffff";
   context.fill();
-  // A faint iridescent wash, so the panel reads as card stock, not paper.
-  const wash = context.createLinearGradient(0, 0, CARD_WIDTH, CARD_HEIGHT);
-  wash.addColorStop(0, "rgba(255,190,230,0.16)");
-  wash.addColorStop(0.5, "rgba(190,225,255,0.14)");
-  wash.addColorStop(1, "rgba(255,235,190,0.16)");
-  context.fillStyle = wash;
-  context.fill();
 }
 
 function picture(
@@ -161,7 +171,7 @@ function picture(
   name: string,
   image: HTMLImageElement | undefined,
 ) {
-  const { x, y, size, radius } = PICTURE;
+  const { x, y, size, radius } = CARD_PICTURE;
   context.save();
   rounded(context, x, y, size, size, radius);
   context.clip();
@@ -254,6 +264,7 @@ export async function drawShareCard(card: {
   harness: string;
   model: string;
   picture?: HTMLImageElement | undefined;
+  accentColor?: string | undefined;
 }): Promise<Blob> {
   const canvas = document.createElement("canvas");
   canvas.width = CARD_WIDTH;
@@ -272,10 +283,35 @@ export async function drawShareCard(card: {
     ),
     new Promise((resolve) => setTimeout(resolve, 1000)),
   ]);
+  let texture: HTMLImageElement | undefined;
+  let textureTimer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    texture = new Image();
+    texture.src = foilTextureUrl;
+    await Promise.race([
+      texture.decode(),
+      new Promise((_, reject) => {
+        textureTimer = setTimeout(
+          () => reject(new Error("Foil texture unavailable")),
+          1000,
+        );
+      }),
+    ]);
+  } catch {
+    if (texture) texture.src = "";
+    texture = undefined;
+  } finally {
+    clearTimeout(textureTimer);
+  }
   context.save();
   rounded(context, 0, 0, CARD_WIDTH, CARD_HEIGHT, CARD_RADIUS);
   context.clip();
-  foil(context, card.name);
+  foil(
+    context,
+    card.name,
+    card.accentColor ?? fallbackAgentCardColor(card.name),
+    texture,
+  );
   panel(context);
   mark(context);
   context.fillStyle = INK;

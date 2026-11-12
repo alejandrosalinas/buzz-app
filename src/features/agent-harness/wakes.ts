@@ -9,6 +9,7 @@ import {
   watchPrompt,
 } from "./attention-prompt";
 import type { AgentHandle, Trigger, TurnResult } from "../agents/service";
+import { pluginInstructions } from "./plugin-instructions";
 
 export type WakeTrigger = Exclude<
   Trigger,
@@ -39,7 +40,7 @@ export async function wake(
   if (!current()) return { ok: true };
   try {
     const result = await runOnce(`${trigger.type}/${id}`, () =>
-      wakePrompt(agent, trigger, id, current),
+      wakePrompt(agent, trigger, id, current, { standalone: true }),
     );
     if (!result.ok)
       console.warn(
@@ -54,12 +55,15 @@ export async function wake(
 }
 
 /** The prompt for a wake as its watch or timer now is, with the end-of-turn
- * review, or undefined when it should no longer run. */
+ * review, or undefined when it should no longer run. A `standalone` turn's
+ * prompt is the whole turn, so it also has the instructions plugins give the
+ * agent; a conversation's turn adds them itself. */
 export async function wakePrompt(
   agent: AgentHandle,
   trigger: WakeTrigger,
   id: string,
   stillCurrent: () => boolean,
+  { standalone = false }: Readonly<{ standalone?: boolean }> = {},
 ) {
   const { attention } = agent;
   if (!stillCurrent()) return undefined;
@@ -115,5 +119,12 @@ export async function wakePrompt(
               conversation: current.type === "timer" && !!current.channel,
             });
   // Asked again: the attention can change while it is read.
-  return stillCurrent() ? `${text}\n\n${ATTENTION_REVIEW}` : undefined;
+  if (!stillCurrent()) return undefined;
+  return [
+    text,
+    standalone ? pluginInstructions(agent.instructions?.()) : undefined,
+    ATTENTION_REVIEW,
+  ]
+    .filter(Boolean)
+    .join("\n\n");
 }

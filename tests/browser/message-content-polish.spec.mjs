@@ -1,6 +1,7 @@
 import { test, expect } from "./source-fixture.mjs";
 import { ACCENTS } from "../../src/shared/theme/accent.ts";
 import { apcaContrast, wcagRatio } from "../../scripts/design-system/apca.mjs";
+import { animationsSettled } from "./animations.mjs";
 
 const specimen = (page, id) => page.locator(`[aria-labelledby="label-${id}"]`);
 // macOS WebKit follows the host preference: Option-Tab includes every control.
@@ -81,11 +82,7 @@ test("reactions under an unboxed own table stay contained and readable", async (
           { theme, level, color },
         );
         // Theme changes fade the chip's colors; measure the settled pair.
-        await page.evaluate(() =>
-          Promise.all(
-            document.getAnimations().map((motion) => motion.finished),
-          ),
-        );
+        await animationsSettled(page.locator("html"), { subtree: true });
         await expectReadable(count);
       }
 });

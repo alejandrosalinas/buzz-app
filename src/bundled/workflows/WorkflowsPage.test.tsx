@@ -1632,3 +1632,85 @@ it("describes an unreadable workflow outside its row button", async () => {
     screen.getByText("Unreadable configuration").closest("button"),
   ).toBeNull();
 });
+
+it("offers only live channels to New workflow and disables it when only archived channels remain", async () => {
+  const fixture = mount();
+  const user = userEvent.setup();
+  const archived = {
+    id: fixtureChannel,
+    name: "Fixture channel",
+    archived: true as const,
+  };
+  act(() =>
+    fixture.setChannels({
+      status: "ready",
+      channels: [archived, { id: "live-channel", name: "Live channel" }],
+    }),
+  );
+  await user.click(screen.getByRole("button", { name: "New workflow" }));
+  const create = await screen.findByRole("dialog", { name: "Create workflow" });
+  expect(
+    (await screen.findAllByRole("option")).map((option) => option.textContent),
+  ).toEqual(["Live channel"]);
+  // Escape closes the open channel list, which hides the dialog's other controls.
+  await user.keyboard("{Escape}");
+  await user.click(
+    within(create).getByRole("button", { name: "Close editor" }),
+  );
+  expect(screen.queryByRole("dialog", { name: "Create workflow" })).toBeNull();
+  act(() => fixture.setChannels({ status: "ready", channels: [archived] }));
+  expect(screen.getByRole("button", { name: "New workflow" })).toBeDisabled();
+  // Its workflows stay listed, so they can still be turned off or deleted.
+  expect(
+    screen.getByRole("button", { name: /^Open Message helper:/ }),
+  ).toBeVisible();
+  act(() =>
+    fixture.definitions.update({
+      status: "ready",
+      data: { partial: false, items: [] },
+    }),
+  );
+  await screen.findByText("Automations that keep your community moving.");
+  expect(screen.getAllByRole("button", { name: "New workflow" })).toEqual([
+    screen.getByRole("button", { name: "New workflow" }),
+  ]);
+});
+
+it("keeps an open editor and its draft when its channel is archived, and blocks saving it enabled and Run now", async () => {
+  const fixture = mount(fixtureYaml.replace("enabled: false", "enabled: true"));
+  const user = userEvent.setup();
+  await user.click(
+    await screen.findByRole("button", { name: /^Open Message helper:/ }),
+  );
+  await user.click(detailPane().getByRole("button", { name: "Edit workflow" }));
+  const editor = screen.getByRole("dialog", { name: "Message helper" });
+  await user.type(
+    within(editor).getByRole("textbox", { name: "Description" }),
+    "Draft note",
+  );
+  act(() =>
+    fixture.setChannels({
+      status: "ready",
+      channels: [
+        { id: fixtureChannel, name: "Fixture channel", archived: true },
+      ],
+    }),
+  );
+  expect(screen.getByRole("dialog", { name: "Message helper" })).toBe(editor);
+  expect(
+    within(editor).getByRole("textbox", { name: "Description" }),
+  ).toHaveValue("Draft note");
+  expect(
+    within(editor).getByText(
+      "This channel is archived, so its workflows can't run. Turn this workflow off to save it.",
+      { selector: "[role=status]" },
+    ),
+  ).toBeVisible();
+  expect(
+    within(editor).getByRole("button", { name: "Save changes" }),
+  ).toBeDisabled();
+  expect(
+    within(editor).getByRole("button", { name: "Run now" }),
+  ).toHaveAttribute("aria-disabled", "true");
+  expect(fixture.calls.save).toBe(0);
+});

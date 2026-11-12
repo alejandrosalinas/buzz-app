@@ -26,6 +26,8 @@ export type Community = {
   slug?: string;
   normalized_host?: string;
   archived_at?: string | null;
+  owner_pubkey?: string;
+  created_at?: string;
 };
 export type DeletionRequest = {
   community_id: string;

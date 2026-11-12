@@ -74,6 +74,7 @@ it.each(["claude", "codex", "pi"] as const)(
         snapshot: () => ({ status: "ready", running: [] }),
         dispatchHook,
       },
+      settingsCards: { register: vi.fn() },
       agentProtection: { registerModels: vi.fn() },
       effect: vi.fn(),
     } as never);

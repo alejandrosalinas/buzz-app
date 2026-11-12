@@ -1,6 +1,6 @@
 import { invoke } from "@tauri-apps/api/core";
 import { communityDestination } from "./destination";
-import { avatarPictureError } from "../profiles/avatar-upload";
+import { profilePictureError } from "../profiles/avatar-upload";
 import {
   connectNativeTransport,
   nativeRelayInfo,
@@ -172,7 +172,7 @@ export async function nativeCommunityRequest(
       !profile.name.trim() ||
       profile.name.length > 100 ||
       typeof profile.picture !== "string" ||
-      avatarPictureError(profile.picture) ||
+      profilePictureError(profile.picture) ||
       (profile.about !== undefined &&
         (typeof profile.about !== "string" || profile.about.length > 500))
     )

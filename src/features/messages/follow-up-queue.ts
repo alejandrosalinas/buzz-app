@@ -1,5 +1,5 @@
 import type { RelaySession } from "../relay/session";
-import type { OutboxRecovery } from "../relay/outbox";
+import type { OutboxRecovery, OutgoingEvent } from "../relay/outbox";
 import { followUpMessage } from "./follow-up-message";
 import {
   followUpStorage,
@@ -372,6 +372,22 @@ function createQueue(session: RelaySession) {
     const id = entry.publish(recovery);
     waitForMessage(entry, id);
     return id;
+  }
+  // A sent follow-up keeps its recovery after its queue record is removed. With
+  // the record gone, nothing here can resend it, so its send may be discarded.
+  function orphaned(item: OutgoingEvent | undefined) {
+    const recovery = item?.recovery;
+    if (
+      !storage ||
+      !recovery ||
+      recovery.key !== followUpRecovery(recovery.value).key
+    )
+      return false;
+    try {
+      return !storage.has(recovery.value);
+    } catch {
+      return false;
+    }
   }
   // Recovery metadata bridges the durable queue to the durable Outbox. Keep it
   // until the queue record is removed, then release accepted delivery receipts.
@@ -1070,6 +1086,24 @@ function createQueue(session: RelaySession) {
       remove(id);
       reconcileDelivery();
       pump();
+    },
+    discardable: orphaned,
+    /** Discard an unconfirmed send whose queue record is gone. */
+    async discard(id: string) {
+      const outbox = session.outbox;
+      const current = () =>
+        outbox?.snapshot().find((item) => item.event.id === id);
+      const recovery = current()?.recovery;
+      const changed = () =>
+        new Error(
+          "This message’s delivery changed. Cancel to see its current status.",
+        );
+      if (!storage || !outbox || !recovery || !orphaned(current()))
+        throw changed();
+      await storage.lock(recovery.value, async () => {
+        if (!orphaned(current())) throw changed();
+        await outbox.dismiss(id, recovery);
+      });
     },
   };
 }

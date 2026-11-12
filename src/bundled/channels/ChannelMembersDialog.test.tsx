@@ -19,6 +19,7 @@ import { npubEncode } from "nostr-tools/nip19";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, afterEach, expect, it, vi } from "vitest";
 import { useEffect } from "react";
+import { formatPublicKey } from "../../shared/identity/public-key";
 import type { LiveCallbacks } from "../../features/relay/live";
 import { createRelaySession } from "../../features/relay/session";
 import type { VerifiedProfileAuthority } from "../../features/relay/verified-profile";
@@ -105,6 +106,8 @@ async function setup(
   agents?: Agents,
   options: {
     archivedAgent?: boolean;
+    archivedMembers?: string[];
+    pendingArchives?: Promise<void>;
     extraMembers?: number;
     memberProfiles?: RelayEvent[];
     pendingMemberNames?: Promise<void>;
@@ -181,7 +184,13 @@ async function setup(
     signed(relay, {
       kind: 13535,
       content: "",
-      tags: [["-"], ...(options.archivedAgent ? [["p", agent.pubkey]] : [])],
+      tags: [
+        ["-"],
+        ...[
+          ...(options.archivedAgent ? [agent.pubkey] : []),
+          ...(options.archivedMembers ?? []),
+        ].map((key) => ["p", key]),
+      ],
     }),
     ...(options.memberProfiles ?? []),
     profile(viewer, { name: "Carl" }),
@@ -207,6 +216,8 @@ async function setup(
       await nameRetry;
       throw new Error("Names unavailable");
     }
+    if (filters.some((filter) => filter.kinds?.includes(13535)))
+      await options.pendingArchives;
     if (filters.some((filter) => filter.kinds?.includes(0)))
       await options.pendingMemberNames;
     if (filters.some((filter) => filter.kinds?.includes(39002)))
@@ -3850,6 +3861,134 @@ it("loads another member page after a previous page fails", async () => {
   ).not.toBeInTheDocument();
 });
 
+it("lists known-archived members in a marked Archived group after the others", async () => {
+  let release!: () => void;
+  const pendingArchives = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  const [alice, zed, ann, zoe] = [
+    profile(keypair(), { name: "Alice" }),
+    profile(keypair(), { name: "Zed" }),
+    profile(keypair(), { name: "Ann Bot", is_agent: true }),
+    profile(keypair(), { name: "Zoe Bot", is_agent: true }),
+  ] as [RelayEvent, RelayEvent, RelayEvent, RelayEvent];
+  await setup("stream", false, false, undefined, undefined, {
+    memberProfiles: [alice, zed, ann, zoe],
+    archivedMembers: [alice.pubkey, ann.pubkey],
+    pendingArchives,
+  });
+  const sections = () =>
+    within(memberData())
+      .getAllByRole("region")
+      .map((section) => [
+        section.getAttribute("aria-label"),
+        within(section)
+          .getAllByRole("listitem")
+          // Each row starts with its avatar's one-letter fallback.
+          .map((row) => row.textContent?.slice(1)),
+      ]);
+  // Archive state unknown: nobody counts as archived.
+  await vi.waitFor(() =>
+    expect(sections()).toEqual([
+      ["People", ["Alice", "Carl (you)", "Zed"]],
+      ["Agents", ["Ann Bot", "Zoe Bot"]],
+    ]),
+  );
+  await act(async () => release());
+  await vi.waitFor(() =>
+    expect(sections()).toEqual([
+      ["People", ["Carl (you)", "Zed"]],
+      ["Agents", ["Zoe Bot"]],
+      ["Archived", ["AliceArchived", "Ann BotArchived"]],
+    ]),
+  );
+  expect(
+    within(memberData()).getByRole("heading", { name: "Archived · 2" }),
+  ).toBeVisible();
+});
+
+it("keeps archived members in their group in a paged roster when archives load late and members join", async () => {
+  let release!: () => void;
+  const pendingArchives = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  // 61 people page. Even-numbered members are archived, so the paging order,
+  // frozen when the list first shows, interleaves them.
+  const people = Array.from({ length: 60 }, (_, i) =>
+    profile(keypair(), { name: `Member ${String(i).padStart(2, "0")}` }),
+  );
+  const t = await setup("stream", false, false, undefined, undefined, {
+    memberProfiles: people,
+    archivedMembers: people
+      .filter((_, i) => i % 2 === 0)
+      .map((event) => event.pubkey),
+    pendingArchives,
+  });
+  const list = screen.getByRole("region", { name: "Member list" });
+  const rows = (group: string) =>
+    within(within(list).getByRole("region", { name: group }))
+      .getAllByRole("listitem")
+      .map((row) => row.textContent ?? "");
+  const archived = (row: string) =>
+    Number(/Member (\d\d)/.exec(row)?.[1] ?? 1) % 2 === 0;
+  const named = () =>
+    [...rows("People"), ...rows("Archived")].every(
+      (row) => !row.includes("npub"),
+    );
+  await act(async () => release());
+  // People: you and the 30 live members. Archived: the other 30.
+  await vi.waitFor(() => {
+    expect(named()).toBe(true);
+    expect(rows("People").map(archived)).toEqual(Array(31).fill(false));
+    expect(rows("Archived").map(archived)).toEqual(Array(30).fill(true));
+  });
+  // A live member who joins later goes in People, not Archived.
+  await act(async () =>
+    t.replaceRoster([
+      t.viewer.pubkey,
+      ...people.map((event) => event.pubkey),
+      (20000).toString(16).padStart(64, "0"),
+    ]),
+  );
+  await vi.waitFor(() => expect(rows("People")[31]).toContain("npub"));
+  expect(rows("Archived")).toHaveLength(30);
+});
+
+it("moves focus to the group heading when late archives move its row to Archived", async () => {
+  let release!: () => void;
+  const pendingArchives = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  const alice = profile(keypair(), { name: "Alice" });
+  const t = await setup("stream", false, false, undefined, undefined, {
+    memberProfiles: [alice],
+    archivedMembers: [alice.pubkey],
+    pendingArchives,
+  });
+  const list = screen.getByRole("region", { name: "Member list" });
+  const action = () =>
+    within(list).getByRole("button", { name: /^Actions for Alice/ });
+  const focused = await vi.waitFor(action);
+  focused.focus();
+  await act(async () => release());
+  await vi.waitFor(() =>
+    expect(
+      within(within(list).getByRole("region", { name: "Archived" })).getByRole(
+        "button",
+        { name: /^Actions for Alice/ },
+      ),
+    ).toBeInTheDocument(),
+  );
+  expect(focused).not.toBeInTheDocument();
+  const heading = within(list).getByRole("heading", { name: /^People ·/ });
+  expect(heading).toHaveFocus();
+  // The next Tab stays in the list.
+  await t.user.tab();
+  expect(document.activeElement?.closest("li")).toBe(
+    within(list).getAllByRole("listitem")[0],
+  );
+});
+
 it("keeps the visible member page and focus stable while names arrive", async () => {
   let release!: () => void;
   const pending = new Promise<void>((resolve) => {
@@ -3897,6 +4036,27 @@ it("keeps the visible member page and focus stable while names arrive", async ()
   } finally {
     await act(async () => release());
   }
+});
+
+it("re-sorts members by name when their names arrive", async () => {
+  // Named against their key order, so the rows must change once names load.
+  const keys = [keypair(), keypair(), keypair()].sort((a, b) =>
+    (formatPublicKey(b.pubkey) ?? "").localeCompare(
+      formatPublicKey(a.pubkey) ?? "",
+    ),
+  );
+  await setup("stream", false, false, undefined, undefined, {
+    memberProfiles: keys.map((key, i) =>
+      profile(key, { name: ["Amy", "Kim", "Zed"][i] }),
+    ),
+  });
+  await vi.waitFor(() =>
+    expect(
+      within(memberData())
+        .getAllByText(/^(Amy|Kim|Zed)$/)
+        .map((name) => name.textContent),
+    ).toEqual(["Amy", "Kim", "Zed"]),
+  );
 });
 
 const retainedMemberProfiles = Array.from({ length: 1100 }, (_, i) =>

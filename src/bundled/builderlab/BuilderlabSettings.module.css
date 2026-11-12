@@ -1,0 +1,127 @@
+.managementHeader {
+  display: flex;
+  align-items: start;
+  gap: var(--space-2);
+  padding-block-start: var(--space-1);
+}
+
+.heading {
+  min-inline-size: 0;
+  flex: 1;
+}
+
+.navigation {
+  display: flex;
+  min-block-size: var(--size-control);
+  align-items: center;
+}
+
+.managementTitle {
+  display: block;
+  padding-block: calc((var(--size-control) - 1lh) / 2);
+}
+
+.account {
+  margin-block-end: var(--space-4);
+}
+
+.grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(min(100%, 18rem), 1fr));
+  gap: var(--space-4);
+}
+
+.card {
+  position: relative;
+  display: flex;
+  inline-size: 100%;
+  min-width: 0;
+  min-block-size: 13.4375rem;
+  flex-direction: column;
+  gap: var(--space-2);
+  padding: var(--space-5);
+  border: 0;
+  border-radius: var(--radius-panel);
+  background: var(--affordance-subtle);
+  color: var(--text-standard);
+  text-align: start;
+}
+
+.card:hover {
+  background: var(--interaction-fill);
+}
+
+.card:active {
+  background: var(--interaction-pressed);
+}
+
+.top {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+  min-block-size: var(--size-control-sm);
+}
+
+.title {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: var(--space-3);
+  margin: 0;
+}
+
+.title > svg {
+  flex-shrink: 0;
+}
+
+.body {
+  display: flex;
+  min-inline-size: 0;
+  flex: 1 1 auto;
+  flex-direction: column;
+  justify-content: flex-end;
+  gap: var(--space-2);
+}
+
+.card[data-state="filled"] .body {
+  justify-content: flex-start;
+}
+
+.prompt {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: var(--space-4);
+}
+
+.action {
+  display: inline-flex;
+}
+
+.action > * {
+  position: static;
+}
+
+.action > *::after {
+  position: absolute;
+  inset: 0;
+  border-radius: var(--radius-panel);
+  content: "";
+}
+
+.list {
+  display: flex;
+  flex-direction: column;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.line {
+  overflow: hidden;
+  padding-block: var(--space-1h);
+  border-block-end: 1px solid var(--border-standard);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}

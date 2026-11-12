@@ -21,6 +21,7 @@ type ButtonVariant =
   | "primary"
   | "quiet";
 type ButtonSize =
+  | "text"
   | "caption"
   | "inline"
   | "row"
@@ -39,6 +40,8 @@ export type ButtonProps = Omit<
   variant?: ButtonVariant;
   size?: ButtonSize;
   loading?: boolean;
+  /** Use disabled colors while retaining the loading spinner and geometry. */
+  loadingAppearance?: "default" | "disabled";
   /** How long the `title` hint waits; see DESIGN.md "Hover timing". */
   hint?: HintTiming;
 } & (
@@ -55,6 +58,7 @@ export function Button({
   shape = "capsule",
   type = "button",
   loading = false,
+  loadingAppearance,
   disabled,
   onClick,
   title,
@@ -97,6 +101,7 @@ export function Button({
       data-size={size === "compact" ? "sm" : size === "default" ? "md" : size}
       data-button-shape={shape}
       data-loading={loading || undefined}
+      data-loading-appearance={loading ? loadingAppearance : undefined}
     >
       {variant === "attention" && (
         <svg

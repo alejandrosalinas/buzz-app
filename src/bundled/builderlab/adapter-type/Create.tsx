@@ -13,11 +13,14 @@ import { focusWithKeyboard } from "../../../shared/design-system/useKeyboardFocu
 import { Button } from "../../../shared/design-system/ui/Button";
 import { Select } from "../../../shared/design-system/ui/Select";
 import { SettingsGroup } from "../../../shared/design-system/ui/SettingsGroup";
+import inlineStyles from "../../../shared/InlineReference.module.css";
 import {
   type AgentClient,
+  MAX_INSTRUCTIONS_LENGTH,
   type RemoteAgentModelCatalog,
   validInstructions,
 } from "../agents/client";
+import { oauthTarget } from "../oauth/browser";
 import type { BuilderlabSession } from "../session";
 import { SignInAction } from "./SignInAction";
 import { effortLabel, modelChoice } from "./models";
@@ -81,6 +84,10 @@ export function createCreationFields(
     const [error, setError] = useState("");
     const [revision, setRevision] = useState(0);
     const controls = useRef<HTMLDivElement>(null);
+    // The account's own site: the configured Builderlab server, deployment
+    // path kept. oauthTarget validates it as the server creation signs in to.
+    oauthTarget();
+    const portal = new URL(import.meta.env.VITE_BUZZ_BUILDERLAB_URL ?? "");
     // biome-ignore lint/correctness/useExhaustiveDependencies: revision retries catalog loading without changing the draft.
     useEffect(() => {
       if (login.status !== "signed-in") return;
@@ -206,6 +213,18 @@ export function createCreationFields(
             }}
           />
         </SettingsGroup>
+        <p className="m-0 text-body-sm text-secondary">
+          Runs on your Builderlab account. Usage and billing are at{" "}
+          <a
+            className={inlineStyles.link}
+            href={portal.href}
+            target="_blank"
+            rel="noopener noreferrer"
+          >
+            {`${portal.host}${portal.pathname.replace(/\/$/, "")}`}
+          </a>
+          .
+        </p>
         {signedIn && wrongAccount && (
           <p role="status" className="m-0 text-body-sm text-secondary">
             These choices belong to another Builderlab account. Choose a model
@@ -241,6 +260,7 @@ export function createCreationFields(
     return (
       <AgentInstructions
         creation
+        description={`Up to ${MAX_INSTRUCTIONS_LENGTH.toLocaleString("en-US")} characters.`}
         value={draft.instructions}
         disabled={disabled}
         onChange={(instructions) => onChange({ ...draft, instructions })}

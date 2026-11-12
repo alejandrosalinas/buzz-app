@@ -139,7 +139,7 @@ mod platform {
             }
             Error::Denied => "Secure storage access was denied. Allow access and retry",
             Error::Busy => "Another Buzz app is using secure storage. Retry shortly",
-            Error::Corrupt => "The saved key is damaged",
+            Error::Corrupt | Error::Ambiguous => "The saved key is damaged",
             _ if cfg!(target_os = "macos") => "The Keychain is unavailable",
             _ => "Secure storage is unavailable. Unlock it and retry",
         }

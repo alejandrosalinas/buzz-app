@@ -649,11 +649,6 @@ html[data-keyboard-navigation]
     outline: 2px solid var(--border-focus);
     outline-offset: 2px;
   }
-  .buzz-toast:has(.buzz-toast-open)
-    :is(.buzz-toast-dismiss, .buzz-toast-actions > *) {
-    position: relative;
-    z-index: 1;
-  }
   .buzz-toast-heading {
     display: flex;
     align-items: start;
@@ -670,6 +665,14 @@ html[data-keyboard-navigation]
     flex-shrink: 0;
     margin-block: calc(-1 * var(--space-1));
     margin-inline-end: calc(-1 * var(--space-2));
+  }
+  .buzz-toast
+    > .buzz-toast-open
+    ~ :where(.buzz-toast-heading)
+    > .buzz-toast-dismiss,
+  .buzz-toast > .buzz-toast-open ~ .buzz-toast-actions > * {
+    position: relative;
+    z-index: 1;
   }
   .buzz-toast-message > p {
     margin: 0;

@@ -49,12 +49,15 @@ export type NavigationOpenOptions = {
    * resolves, so the resolved result describes the visit being left. */
   dismiss?: boolean;
   focus?: NavigationFocus;
+  /** Keep sidebar scope, scroll and disclosure state. The caller owns row selection. */
+  sidebar?: "preserve";
 };
 export type OpenAttempt = Readonly<{
   id: string;
   entry: NavigationEntry;
   signal: AbortSignal;
   focus?: NavigationFocus;
+  sidebar?: "preserve";
   /** History traversal returned to a visit it already held; not opened again. */
   traversal?: true;
 }>;
@@ -238,7 +241,7 @@ export function createNavigationController(
         operation.reauthorizing = reauthorize(() =>
           transaction(() => {
             if (active === operation && !disposed)
-              start(operation.attempt.focus);
+              start(operation.attempt.focus, false, operation.attempt.sidebar);
           }),
         );
       });
@@ -247,6 +250,7 @@ export function createNavigationController(
   function start(
     focus: NavigationFocus = "content",
     traversal = false,
+    sidebar?: "preserve",
   ): Promise<OpenResult> {
     if (disposed) return Promise.resolve({ status: "cancelled" });
     ingressRetry = undefined;
@@ -264,6 +268,7 @@ export function createNavigationController(
       entry: state.current,
       signal: controller.signal,
       focus,
+      ...(sidebar && { sidebar }),
       ...(traversal && { traversal }),
     });
     let resolve: (result: OpenResult) => void = () => {};
@@ -313,8 +318,10 @@ export function createNavigationController(
   let resolving: Operation | undefined;
   // Both host drivers publish pushes synchronously; consume this opening only.
   let openingFocus: NavigationFocus | undefined;
+  let openingSidebar: "preserve" | undefined;
   // A dismissal's traversal may publish after open() returns; it keeps its focus.
   let returningFocus: NavigationFocus | undefined;
+  let returningSidebar: "preserve" | undefined;
   const unsubscribe = history.attach(() => {
     transaction(() => {
       if (resolving && active === resolving) {
@@ -382,13 +389,16 @@ export function createNavigationController(
           return;
         }
         const focus = openingFocus ?? returningFocus;
+        const sidebar = openingSidebar ?? returningSidebar;
         openingFocus = returningFocus = undefined;
+        openingSidebar = returningSidebar = undefined;
         // A return lands on a visit history already held. open() publishes
         // while opening, and a driver mints a new visit for an edited address
         // or a dismissal's fallback; none of those returns.
         start(
           focus,
           !opening && !!snapshot.retainedVisits?.includes(state.current.id),
+          sidebar,
         );
       }
     });
@@ -450,10 +460,12 @@ export function createNavigationController(
             !history.snapshot().invalidAddress &&
             targetKey(target) === targetKey(history.snapshot().current.target)
           )
-            return start(options?.focus);
+            return start(options?.focus, false, options?.sidebar);
           opening = true;
           openingFocus = options?.focus;
+          openingSidebar = options?.sidebar;
           returningFocus = undefined;
+          returningSidebar = undefined;
           // A passing visit leaves as a dismissal does: back to its opener when
           // that is the page opening, else replaced by it. Settings returns to
           // that visit, so it never replaces it. Any forward entries stay.
@@ -469,6 +481,7 @@ export function createNavigationController(
             history.returnTo(previous.id)
           ) {
             if (openingFocus) returningFocus = openingFocus;
+            if (openingSidebar) returningSidebar = openingSidebar;
             return active.promise;
           }
           if (options?.replace || dismiss) history.replace(target);
@@ -504,6 +517,7 @@ export function createNavigationController(
         } finally {
           opening = false;
           openingFocus = undefined;
+          openingSidebar = undefined;
         }
       });
     },
@@ -533,7 +547,9 @@ export function createNavigationController(
           })
         );
       }
-      return transaction(() => start(snapshot.attempt.focus));
+      return transaction(() =>
+        start(snapshot.attempt.focus, false, snapshot.attempt.sidebar),
+      );
     },
   });
   return {

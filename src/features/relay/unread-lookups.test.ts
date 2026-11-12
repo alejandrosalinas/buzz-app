@@ -80,6 +80,7 @@ async function setup(initial?: ReadJournal) {
     reader,
     host: undefined,
     storage: {
+      capture: async () => structuredClone(journal),
       async update(change) {
         journal = readJournal(change(journal), viewer);
         return journal;

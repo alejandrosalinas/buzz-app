@@ -26,6 +26,8 @@ export type ActivityPresentation = ActivityRun & {
   liveParticipants: string[];
   /** Agents whose current work or outcome this group can actually present. */
   presentedParticipants: string[];
+  /** Agents whose current work this group presents as their working cue. */
+  workingParticipants: string[];
   working: boolean;
   /** Latest recorded update belonging to a participant still working here. */
   workingUpdate: ChannelMessage | undefined;
@@ -35,6 +37,8 @@ export type ActivityRowPresentation = {
   requestId: string | undefined;
   active: boolean;
   ownsLive: boolean;
+  /** A newer message follows this row's run, so the conversation keeps its cue. */
+  followed?: boolean;
   /** Keep a failure's author visible in history shared with other agents. */
   showAuthor?: boolean;
   container: "history" | "bubble" | "standalone";
@@ -86,12 +90,34 @@ export function useChannelActivitySnapshot(
   return useSyncExternalStore(activity?.subscribe ?? noSubscribe, read, read);
 }
 
+/** Requests whose local run published each row: exact causal evidence that
+ * the root-flattened reply link of a thread reply cannot carry. */
+function publishedRequests(
+  rows: readonly ChannelMessage[],
+  snapshot: Snapshot | undefined,
+) {
+  const local = snapshot?.local ?? [];
+  const published = new Map<string, string>();
+  if (!local.length) return published;
+  for (const row of rows) {
+    const work = local.find(
+      (entry) =>
+        entry.agent === row.authorId &&
+        entry.channelId === row.channelId &&
+        entry.publishedMessageIds?.includes(row.id),
+    );
+    if (work) published.set(row.id, work.messageId);
+  }
+  return published;
+}
+
 /** Status belongs to the triggering request, never to all work in its thread. */
 function activityStatus(
   group: ActivityRun,
   snapshot: Snapshot | undefined,
   agents: ReadonlySet<string> | undefined,
   requests: ReadonlyMap<string, string>,
+  causes: ReadonlyMap<string, string>,
 ) {
   const { latest, participants, followingMessage: response, requestId } = group;
   const followedByReply =
@@ -107,17 +133,17 @@ function activityStatus(
       // the coordinator having authored a message in this activity run.
       ((response.agentEnvelope || agents?.has(response.authorId)) &&
         latest.mentions.includes(response.authorId)));
-  // Only signed immediate reply links and activity IDs bind lifecycle evidence.
-  // The preceding human message/thread root is useful for layout, not proof
-  // that these updates came from that request's turn.
+  // Only causal evidence, signed immediate reply links and activity IDs bind
+  // lifecycle evidence. The preceding human message/thread root is useful for
+  // layout, not proof that these updates came from that request's turn.
   const work = snapshot
     ? participants.flatMap((agent) => {
         const ids = group.history
           .filter((row) => row.authorId === agent)
-          .flatMap((row) => [
-            row.id,
-            ...(row.replyParentId ? [row.replyParentId] : []),
-          ]);
+          .flatMap((row) => {
+            const link = causes.get(row.id) ?? row.replyParentId;
+            return [row.id, ...(link ? [link] : [])];
+          });
         return requestWork(snapshot, latest.channelId, ids).filter(
           (entry) => entry.agent === agent,
         );
@@ -174,6 +200,9 @@ export function activityPresentation(
   agents: ReadonlySet<string> | undefined,
   rootId?: string,
   canAbsorbFailure: (failure: ChannelMessage) => boolean = () => true,
+  /** The whole loaded conversation, when rows are one displayed level of it:
+   * a signed claim may name a request loaded at another level. */
+  loaded: readonly ChannelMessage[] = rows,
 ) {
   const following = new Map(
     rows.map((row, index) => [row.id, rows[index + 1]]),
@@ -181,36 +210,63 @@ export function activityPresentation(
   const preceding = new Map(
     rows.map((row, index) => [row.id, rows[index - 1]]),
   );
+  // Each agent row's exact request: its publishing run, else a signed claim
+  // naming a loaded human request in the same conversation.
+  const causes = publishedRequests(rows, snapshot);
   const requests = new Map<string, string>();
   if (rootId) requests.set(rootId, rootId);
   const representedAgents = new Map<string, string[]>();
   // Each request's latest public reply row per agent.
   const publicReplies = new Map<string, Map<string, string>>();
-  const activityAuthors = new Set(
-    rows
-      .filter((row) => row.audience === "agents" || row.agentEnvelope)
-      .map((row) => row.authorId),
+  const authorsOf = (list: readonly ChannelMessage[]) =>
+    new Set(
+      list
+        .filter((row) => row.audience === "agents" || row.agentEnvelope)
+        .map((row) => row.authorId),
+    );
+  const activityAuthors = authorsOf(rows);
+  const isAgent = (row: ChannelMessage) =>
+    activityAuthors.has(row.authorId) || agents?.has(row.authorId);
+  const isRequest = (row: ChannelMessage) =>
+    row.audience !== "agents" &&
+    !isAgent(row) &&
+    !row.membership &&
+    !!agents &&
+    !agents.has(row.authorId);
+  // Indexed up front: a skewed clock can order a claim before its request.
+  // An author is an agent if loaded evidence anywhere shows it acting as one.
+  const loadedAuthors = loaded === rows ? activityAuthors : authorsOf(loaded);
+  const humanRequests = new Map(
+    loaded
+      .filter((row) => isRequest(row) && !loadedAuthors.has(row.authorId))
+      .map((row) => [row.id, row]),
   );
   let request = rootId;
   for (const row of rows) {
-    const isAgent =
-      activityAuthors.has(row.authorId) || agents?.has(row.authorId);
+    const isAgentRow = isAgent(row);
+    if (isRequest(row)) request = row.id;
+    const claimed = row.request && humanRequests.get(row.request);
     if (
-      row.audience !== "agents" &&
-      !isAgent &&
-      !row.membership &&
-      agents &&
-      !agents.has(row.authorId)
+      isAgentRow &&
+      claimed &&
+      !causes.has(row.id) &&
+      claimed.channelId === row.channelId &&
+      // The same thread, the thread's own root, or both top-level.
+      (claimed.threadRootId === row.threadRootId ||
+        claimed.id === row.threadRootId)
     )
-      request = row.id;
+      causes.set(row.id, claimed.id);
     // A thread root is a scope, not necessarily the latest triggering request.
-    // Preserve explicit reply links; otherwise follow the preceding request.
-    const parentRequest = row.replyParentId
-      ? (requests.get(row.replyParentId) ?? row.replyParentId)
-      : undefined;
-    const rowRequest = isAgent ? (parentRequest ?? request) : request;
+    // Prefer causal evidence, then explicit reply links; otherwise follow the
+    // preceding request.
+    const parentRequest =
+      causes.get(row.id) ??
+      (row.replyParentId
+        ? (requests.get(row.replyParentId) ?? row.replyParentId)
+        : undefined);
+    const rowRequest = isAgentRow ? (parentRequest ?? request) : request;
     if (rowRequest) requests.set(row.id, rowRequest);
-    if (rowRequest && !row.membership && isAgent) {
+    if (rowRequest && !row.membership && isAgentRow) {
       const represented = representedAgents.get(rowRequest) ?? [];
       if (!represented.includes(row.authorId)) represented.push(row.authorId);
       representedAgents.set(rowRequest, represented);
@@ -284,6 +340,7 @@ export function activityPresentation(
       snapshot,
       agents,
       requests,
+      causes,
     );
     const anchor = preceding.get(first.id);
     const standalone =
@@ -308,6 +365,7 @@ export function activityPresentation(
           liveParticipants.includes(row.authorId) &&
           !retired &&
           (working.has(row.authorId) || !group.followingMessage),
+        followed: !!group.followingMessage,
         container: row.id === first.id && standalone ? "standalone" : "bubble",
         showAuthor:
           participants.length > 1 && row.notice === "execution-failure",
@@ -323,6 +381,9 @@ export function activityPresentation(
       presentedParticipants: liveParticipants.filter(
         (agent) =>
           working.has(agent) || outcomes.some((entry) => entry.agent === agent),
+      ),
+      workingParticipants: liveParticipants.filter((agent) =>
+        working.has(agent),
       ),
       working: liveParticipants.some((agent) => working.has(agent)),
       workingUpdate: history
@@ -384,6 +445,7 @@ export function useStableRowActivity() {
           prior.requestId === next.requestId &&
           prior.active === next.active &&
           prior.ownsLive === next.ownsLive &&
+          prior.followed === next.followed &&
           prior.showAuthor === next.showAuthor &&
           prior.container === container
         )

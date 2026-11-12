@@ -1,0 +1,89 @@
+.member {
+  display: flex;
+  align-items: center;
+  min-width: 0;
+  min-height: calc(var(--size-control-lg) - var(--space-1));
+  gap: var(--space-row-gap);
+  padding: var(--space-half) var(--space-control-inset);
+  border-radius: var(--radius-row);
+}
+
+.member:is(:hover, :focus-within) {
+  background: var(--affordance-subtle);
+}
+
+.tabs > :first-child {
+  margin-inline: calc(-1 * var(--settings-content-inset, var(--space-1)));
+}
+
+.searchControls {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.members {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+  margin-inline-start: calc(-1 * var(--space-control-inset));
+}
+
+@media (hover: hover) and (pointer: fine) {
+  .memberAction {
+    opacity: 0;
+  }
+
+  .member:is(:hover, :focus-within) .memberAction,
+  .memberAction:has([aria-expanded="true"]) {
+    opacity: 1;
+  }
+}
+
+.invitePanel {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  align-items: center;
+  gap: calc(2 * var(--space-6));
+  width: 40rem;
+  max-width: 100%;
+  margin-inline: auto;
+}
+
+.invitePanel > :first-child {
+  flex: 0 1 15rem;
+}
+
+.invitePanel > :last-child {
+  flex: 1 1 18rem;
+}
+
+.inviteQr {
+  position: relative;
+  min-width: 0;
+  border-radius: var(--radius-panel);
+  overflow: hidden;
+}
+
+.qrShare {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding-block: var(--space-2);
+}
+
+@media (hover: hover) and (pointer: fine) {
+  .qrShare {
+    position: absolute;
+    inset: 0;
+    background: var(--bg-scrim);
+    opacity: 0;
+    pointer-events: none;
+  }
+
+  .inviteQr:is(:hover, :focus-within) .qrShare {
+    opacity: 1;
+    pointer-events: auto;
+  }
+}

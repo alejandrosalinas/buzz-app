@@ -22,6 +22,36 @@ type Row = {
 };
 type StoredPreference = { value: JsonValue };
 
+function sameStoredValue(left: unknown, right: unknown): boolean {
+  if (Object.is(left, right)) return true;
+  if (
+    left === null ||
+    right === null ||
+    typeof left !== "object" ||
+    typeof right !== "object" ||
+    Array.isArray(left) !== Array.isArray(right)
+  )
+    return false;
+  if (
+    Array.isArray(left) &&
+    Array.isArray(right) &&
+    left.length !== right.length
+  )
+    return false;
+  const keys = Object.keys(left);
+  return (
+    keys.length === Object.keys(right).length &&
+    keys.every(
+      (key) =>
+        Object.hasOwn(right, key) &&
+        sameStoredValue(
+          (left as Record<string, unknown>)[key],
+          (right as Record<string, unknown>)[key],
+        ),
+    )
+  );
+}
+
 function sameRefresh(
   left: ArtifactRefresh | undefined,
   right: ArtifactRefresh,
@@ -370,6 +400,8 @@ export function createArtifactStore(viewer: string, relay: string) {
         then(
           tx.objectStore("preferences").get(key(id)),
           (pref: StoredPreference | undefined) => {
+            // A preference callback can edit its input before it returns.
+            const previousPreference = structuredClone(pref?.value);
             const result = change(
               saved ?? {
                 record: { id, availability: { state: "unknown" } },
@@ -379,6 +411,16 @@ export function createArtifactStore(viewer: string, relay: string) {
               },
               pref?.value,
             );
+            const preference =
+              result.preference !== undefined ? result.preference : pref?.value;
+            if (
+              saved &&
+              sameStoredValue(saved.record, result.row.record) &&
+              sameStoredValue(previousPreference, preference)
+            ) {
+              next();
+              return;
+            }
             tx.objectStore("records").put(result.row);
             if (result.preference !== undefined)
               tx.objectStore("preferences").put({
@@ -387,13 +429,7 @@ export function createArtifactStore(viewer: string, relay: string) {
                 id,
                 value: result.preference,
               });
-            reindex(
-              tx,
-              then,
-              result.row,
-              result.preference !== undefined ? result.preference : pref?.value,
-              next,
-            );
+            reindex(tx, then, result.row, preference, next);
           },
         );
       });

@@ -2,6 +2,7 @@
 // Pack avatars play their animation; any other picture shows still.
 import type { ComponentProps, ReactNode } from "react";
 import { agentAvatars } from "../../features/agents/avatar-packs";
+import { StarFilledIcon } from "../../shared/design-system/icons";
 import { SurfaceButton } from "../../shared/design-system/ui/SurfaceButton";
 import { useAvatarPreview } from "../../features/profiles/use-avatar-preview";
 import { ProfileBackdrop } from "../../features/profiles/ProfileBackdrop";
@@ -73,13 +74,17 @@ export function AgentCard({
   community,
   detail,
   icon,
-  tag,
+  isBestie,
+  celebrateBestie,
+  onBestieCelebrated,
   children,
   menu,
   ...props
 }: Omit<ComponentProps<"div">, "className" | "children"> & {
-  /** A noninteractive accent pill above the name, such as "Bestie". */
-  tag?: ReactNode;
+  /** Marks the explicitly saved Bestie without adding another card action. */
+  isBestie?: boolean;
+  celebrateBestie?: boolean;
+  onBestieCelebrated?: (() => void) | undefined;
   agent: Portrayed;
   community?: string | undefined;
   /** One line under the name, such as its model. */
@@ -92,12 +97,71 @@ export function AgentCard({
   return (
     <div {...props} className={`${styles.card} ${styles.agentCard}`}>
       <AgentCardBackdrop agent={agent} community={community} />
+      {isBestie && (
+        <span
+          className={`${styles.bestie} buzz-button`}
+          data-variant="glass-clear"
+          data-size="sm"
+          aria-hidden="true"
+          data-celebrating={celebrateBestie || undefined}
+        >
+          <span className="buzz-button-label">
+            <span
+              className={styles.bestieStars}
+              data-accent="bee"
+              data-color-mode="light"
+            >
+              <span
+                className={styles.bestieStar}
+                onAnimationEnd={(event) => {
+                  if (event.target === event.currentTarget)
+                    onBestieCelebrated?.();
+                }}
+              >
+                <StarFilledIcon size={16} />
+              </span>
+              {celebrateBestie && (
+                <>
+                  <StarFilledIcon className={styles.bestieSpark} size={10} />
+                  <StarFilledIcon className={styles.bestieSpark} size={9} />
+                  <span
+                    className={`${styles.bestieSpark} ${styles.bestieDot}`}
+                  />
+                  <span
+                    className={`${styles.bestieSpark} ${styles.bestieDot}`}
+                  />
+                  <svg
+                    className={`${styles.bestieSpark} ${styles.bestieTriangle}`}
+                    viewBox="0 0 12 12"
+                    aria-hidden="true"
+                  >
+                    <path
+                      d="M5.1 1.5Q6 0 6.9 1.5L11 9Q12 11 10 11H2Q0 11 1 9Z"
+                      fill="currentColor"
+                    />
+                  </svg>
+                  <svg
+                    className={`${styles.bestieSpark} ${styles.bestieTriangle}`}
+                    viewBox="0 0 12 12"
+                    aria-hidden="true"
+                  >
+                    <path
+                      d="M5.1 1.5Q6 0 6.9 1.5L11 9Q12 11 10 11H2Q0 11 1 9Z"
+                      fill="currentColor"
+                    />
+                  </svg>
+                </>
+              )}
+            </span>
+            Bestie
+          </span>
+        </span>
+      )}
       {menu && <div className={styles.menu}>{menu}</div>}
       <span className={styles.portrait} aria-hidden="true">
         <AgentPortrait agent={agent} community={community} />
       </span>
       <span className={styles.identity}>
-        {tag && <span className={styles.tag}>{tag}</span>}
         <span className={`${styles.name} text-label`}>{agent.name}</span>
         {detail && (
           <span className={styles.detail}>

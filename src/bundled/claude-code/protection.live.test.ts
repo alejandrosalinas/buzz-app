@@ -191,6 +191,9 @@ it.skipIf(!binary)(
             throw new Error("Unused protected runtime");
           },
           assertAvailable() {},
+          checkEvidence: async () => {
+            throw new Error("Unexpected streamed check in this fixture");
+          },
           async check(action: ProtectionAction, signal: AbortSignal) {
             checks.push(action);
             if (

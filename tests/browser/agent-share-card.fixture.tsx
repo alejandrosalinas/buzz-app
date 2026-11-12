@@ -1,3 +1,4 @@
+import { agentAvatars } from "../../src/features/agents/avatar-packs";
 import { createRoot } from "react-dom/client";
 import { AgentShareDialog } from "../../src/bundled/agents/AgentShareDialog";
 import type {
@@ -17,10 +18,28 @@ document.documentElement.classList.toggle(
 );
 if (params.has("large")) document.documentElement.style.fontSize = "150%";
 const owner = "f".repeat(64);
+// A real decoded portrait exercises palette sampling and canvas export together.
+let picture: string | undefined;
+if (params.has("portrait")) {
+  const canvas = document.createElement("canvas");
+  canvas.width = canvas.height = 96;
+  const context = canvas.getContext("2d");
+  if (!context) throw new Error("Missing portrait canvas");
+  context.fillStyle = "white";
+  context.fillRect(0, 0, 96, 96);
+  context.fillStyle =
+    params.get("portrait") === "red" ? "rgb(210, 50, 70)" : "rgb(48, 178, 76)";
+  context.beginPath();
+  context.arc(48, 48, 40, 0, Math.PI * 2);
+  context.fill();
+  picture = canvas.toDataURL();
+}
+if (params.has("pack")) picture = agentAvatars[0].url;
 const agent = {
   key: "a".repeat(64),
   pubkey: "a".repeat(64),
   name: "Ada",
+  picture,
   type: "test/echo",
   owner,
   relay: "wss://relay.example",

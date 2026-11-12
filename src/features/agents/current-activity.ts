@@ -1,4 +1,4 @@
-import { localActivity, localWorkLabel } from "./local-activity";
+import { localActivity, localWorkLabel, localWorkRoot } from "./local-activity";
 import type { RelaySession } from "../relay/session";
 import type { TypingEntry } from "../relay/typing";
 import { activityTranscript, type ToolItem } from "./activity-transcript";
@@ -168,7 +168,7 @@ export function currentActivity(
               (!threadRootId || row.threadRootId === threadRootId) &&
               (row.state === "working" || row.state === "waiting"),
           )
-          .map((row) => row.threadRootId),
+          .map((row) => localWorkRoot(row) ?? null),
       ),
     ];
     agents.set(agent, {
@@ -178,4 +178,40 @@ export function currentActivity(
     });
   }
   return agents;
+}
+
+/** Each request an agent is working on in one conversation, as its exact
+ * trigger IDs. As in currentActivity, the agent's local requests here
+ * supersede its remote turns. */
+export function workingRequests(
+  snapshot: Snapshot | undefined,
+  agent: string,
+  channelId: string,
+  threadRootId?: string,
+  includeThreads = true,
+): string[][] {
+  const local = (snapshot?.local ?? []).filter(
+    (row) =>
+      row.agent === agent &&
+      row.channelId === channelId &&
+      (threadRootId
+        ? row.threadRootId === threadRootId
+        : includeThreads || !row.thread),
+  );
+  if (local.length)
+    return local
+      .filter((row) => row.state === "working" || row.state === "waiting")
+      .map((row) => [row.messageId]);
+  if (snapshot?.status !== "listening") return [];
+  return snapshot.turns
+    .filter(
+      (turn) =>
+        turn.agent === agent &&
+        turn.state === "working" &&
+        turn.channelId === channelId &&
+        (threadRootId
+          ? turn.threadRootId === threadRootId
+          : includeThreads || !turn.threadRootId),
+    )
+    .map((turn) => [...(turn.triggeringEventIds ?? [])]);
 }

@@ -142,7 +142,9 @@ export type DecisionProvider = Readonly<{
   ): Promise<DecisionReply>;
   /** Its settings, shown under Settings > Decisions API while it is
    * selected. */
-  Settings?: ComponentType<{ active(): boolean }>;
+  Settings?: ComponentType<{ active(): boolean; grouped?: boolean }>;
+  /** Whether Settings adds a heading above the contribution. Defaults to true. */
+  showSettingsHeading?: boolean;
   /** Lower comes first in Settings. Default 0. */
   order?: number;
 }>;
@@ -160,6 +162,9 @@ export interface Decisions {
    * function removes it. `Decisions` exposes no way to choose the provider;
    * the user does in Settings. */
   registerProvider(provider: DecisionProvider): () => void;
+  /** Clears a saved choice for a retired provider owned by this plugin.
+   * The host then uses its default providers. Other choices stay in effect. */
+  retireProvider(id: string): void;
 }
 declare module "@deepseek-ai/cordis" {
   interface Context {
@@ -261,6 +266,17 @@ export class DecisionsService extends Service implements Decisions {
     // Registered under the calling plugin's scope, which `this.ctx` is when
     // a plugin calls through its injected `ctx.decisions`.
     return this.registry.register(this.ctx, provider);
+  }
+  retireProvider(id: string): void {
+    const owner = this.ctx.pluginOwner;
+    if (!owner)
+      throw new Error("Only an installed plugin can retire a provider");
+    if (!id || id.includes("/"))
+      throw new Error("Invalid decision provider ID");
+    if (this.chosen !== `${owner.id}/${id}`) return;
+    this.storage?.removeItem(DECISION_BACKEND_KEY);
+    this.chosen = undefined;
+    this.notify();
   }
   /** Host-only: every registered provider, in Settings order. */
   providers = (): readonly RegisteredProvider[] => this.sorted;

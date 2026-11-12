@@ -4,9 +4,24 @@ import hostSource from "./host.mjs?raw";
 import manifest from "./manifest.json";
 import type { AgentProtection } from "../../features/agent-protection/service";
 import { Pi, PiStopped } from "./pi";
-import { deferred, fakeHost } from "./pi-testing";
+import { deferred, fakeHost, type FakeProcess } from "./pi-testing";
 
 const handlers = () => ({ tool: vi.fn(), event: vi.fn() });
+const evidence = (worker: FakeProcess, operation: string, params: object) =>
+  worker.tool(params, `buzz/security/evidence/${operation}`);
+/** Sends one action over the evidence protocol, as host.mjs does. */
+async function review(worker: FakeProcess, action: Record<string, unknown>) {
+  const { content, ...metadata } = action;
+  const id = crypto.randomUUID();
+  const data = Buffer.from(JSON.stringify(content));
+  await evidence(worker, "begin", { id, ...metadata });
+  await evidence(worker, "chunk", {
+    id,
+    sequence: 0,
+    data: data.toString("base64"),
+  });
+  return evidence(worker, "finish", { id, sequence: 1, bytes: data.length });
+}
 
 it("declares file reads through the bundled helper with a positional path", () => {
   expect(
@@ -216,11 +231,20 @@ it.each(["dispose", "exit", "retire", "policy"])(
   "retires completed protection checks with their Pi connection (%s)",
   async (retirement) => {
     const agent = "a".repeat(64);
-    const check = vi.fn<AgentProtection["check"]>().mockResolvedValue();
+    const checkEvidence = vi.fn<AgentProtection["checkEvidence"]>(
+      async (_action, source) => {
+        for await (const _part of source.read()) {
+          /* consume */
+        }
+      },
+    );
     let gate: AgentProtection = {
       key: "a:1",
       stateKey: "a:1",
-      check,
+      checkEvidence,
+      check: async () => {
+        throw new Error("Unexpected object check in this fixture");
+      },
       assertAvailable() {},
       processProtection: { readOnlyPaths: [], hiddenPaths: [] },
       spawn: async () => {
@@ -256,10 +280,10 @@ it.each(["dispose", "exit", "retire", "policy"])(
         (process) => process.options.protection,
       );
       if (!worker) throw new Error("Missing protected worker");
-      await expect(
-        worker.tool({ agent, action }, "security"),
-      ).resolves.toMatchObject({ result: true });
-      const signal = check.mock.calls[0]?.[1];
+      await expect(review(worker, action)).resolves.toMatchObject({
+        result: { allowed: true },
+      });
+      const signal = checkEvidence.mock.calls[0]?.[2];
       expect(signal?.aborted).toBe(false);
       if (retirement === "dispose") await pi.dispose();
       else {
@@ -273,10 +297,11 @@ it.each(["dispose", "exit", "retire", "policy"])(
           .filter((process) => process.options.protection)
           .at(-1);
         expect(next).not.toBe(worker);
-        await expect(
-          next?.tool({ agent, action }, "security"),
-        ).resolves.toMatchObject({ result: true });
-        expect(check.mock.calls[1]?.[1].aborted).toBe(false);
+        if (!next) throw new Error("Missing replacement worker");
+        await expect(review(next, action)).resolves.toMatchObject({
+          result: { allowed: true },
+        });
+        expect(checkEvidence.mock.calls[1]?.[2].aborted).toBe(false);
       }
       expect(signal?.aborted).toBe(true);
     } finally {
@@ -285,7 +310,7 @@ it.each(["dispose", "exit", "retire", "policy"])(
   },
 );
 
-it("isolates protected agents, contains their runtime code and rejects crossed native checks", async () => {
+it("isolates protected agents, contains their runtime code and cancels a native check", async () => {
   const entered = deferred();
   let waiting: AbortSignal | undefined;
   const gates = new Map<string, AgentProtection>();
@@ -300,7 +325,7 @@ it("isolates protected agents, contains their runtime code and rejects crossed n
     spawn: async () => {
       throw new Error("Unused protected runtime");
     },
-    check: vi.fn(async (_action, signal) => {
+    checkEvidence: vi.fn(async (_action, _source, signal) => {
       waiting = signal;
       entered.resolve();
       await new Promise<void>((_resolve, reject) => {
@@ -309,6 +334,9 @@ it("isolates protected agents, contains their runtime code and rejects crossed n
         });
       });
     }),
+    check: async () => {
+      throw new Error("Unexpected object check in this fixture");
+    },
   });
   const a = "a".repeat(64),
     b = "b".repeat(64);
@@ -365,15 +393,17 @@ it("isolates protected agents, contains their runtime code and rejects crossed n
       readOnlyPaths: ["/security/provider", "/runtime/deps", "/runtime/node"],
       hiddenPaths: ["/security/approvals"],
     });
-    const action = { kind: "tool", session: "1", content: { title: "write" } };
+    const id = crypto.randomUUID();
     await expect(
-      worker.tool({ agent: b, action }, "security"),
-    ).resolves.toMatchObject({ result: false });
-    const pending = worker.tool({ agent: a, action }, "security");
+      evidence(worker, "begin", { id, kind: "tool", session: "1" }),
+    ).resolves.toMatchObject({ result: { id } });
     await entered.promise;
-    worker.send({ method: "security_cancel", params: { id: "h2" } });
-    await expect(pending).resolves.toMatchObject({ result: false });
+    await expect(evidence(worker, "cancel", { id })).resolves.toMatchObject({
+      result: { allowed: false },
+    });
     expect(waiting?.aborted).toBe(true);
+    // Each worker's evidence reaches only its own agent's provider.
+    expect(gates.get(b)?.checkEvidence).not.toHaveBeenCalled();
     gates.set(a, make("a:2"));
     await pi.request("open", { agent: a });
     expect(worker.ended).toBe(true);

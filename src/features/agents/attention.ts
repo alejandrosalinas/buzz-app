@@ -90,7 +90,7 @@ const PUBKEY = /^[0-9a-f]{64}$/;
 const MAX_INT = 2 ** 53 - 1;
 const BODY_LIMIT = 65_535;
 /** At most this many Interests, and this many watches and timers together. */
-export const OBJECT_LIMIT = 100;
+export const OBJECT_LIMIT = 250;
 const TEXT_LIMIT = 16_384;
 
 export function parseSlug(slug: string) {

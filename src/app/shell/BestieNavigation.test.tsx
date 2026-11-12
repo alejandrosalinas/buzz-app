@@ -84,22 +84,26 @@ const page: RegisteredPage = {
   component: () => null,
 };
 
-async function fixture() {
+async function fixture(firstAgent = false) {
   const owner = createRelaySession(null);
   const libraryRead = vi.fn(async () => ({
     definitions: [],
-    identities: [{ pubkey: fizz, name: "Fizz" }],
+    identities: firstAgent ? [] : [{ pubkey: fizz, name: "Fizz" }],
   }));
   const library = createAgentLibrary(libraryRead);
-  const native = localAgentsFixture([
-    {
-      pubkey: pollen,
-      name: "Pollen",
-      picture: portrait.url,
-      owner: viewer,
-      relayUrl: "wss://example.test",
-    },
-  ]);
+  const native = localAgentsFixture(
+    firstAgent
+      ? []
+      : [
+          {
+            pubkey: pollen,
+            name: "Pollen",
+            picture: portrait.url,
+            owner: viewer,
+            relayUrl: "wss://example.test",
+          },
+        ],
+  );
   const lifetime = new AbortController();
   const choices = createAgentChoices({
     scope,
@@ -126,6 +130,7 @@ async function fixture() {
       };
     },
     retry() {},
+    tryAgain() {},
     disconnect() {},
     async clearCache() {},
   };
@@ -145,7 +150,7 @@ async function fixture() {
   };
 }
 
-it("uses the configured Bestie avatar in the dock and follows selection changes", async () => {
+it("shows the creation invitation in the dock, then follows the configured Bestie avatar", async () => {
   const f = await fixture();
   render(
     <BestieNavigationProvider pages={[page]} relay={f.relay}>
@@ -157,6 +162,11 @@ it("uses the configured Bestie avatar in the dock and follows selection changes"
       />
     </BestieNavigationProvider>,
   );
+  const invitation = await screen.findByRole("tab", {
+    name: "Create an agent",
+  });
+  expect(invitation.querySelector("img")).not.toBeNull();
+  expect(invitation).toHaveAttribute("aria-selected", "true");
   act(() => setDefaultAgent(scope, pollen));
   const pollenTab = await screen.findByRole("tab", { name: "Pollen" });
   expect(pollenTab.querySelector("img")).toHaveAttribute(
@@ -169,8 +179,9 @@ it("uses the configured Bestie avatar in the dock and follows selection changes"
   expect(fizzTab).toHaveTextContent("F");
 });
 
-it("shows the exact choice as Bestie in navigation and search", async () => {
-  const f = await fixture();
+it("offers first-agent creation, then shows the exact Bestie in navigation and search", async () => {
+  const f = await fixture(true);
+
   const select = vi.fn();
   render(
     <StrictMode>
@@ -187,8 +198,30 @@ it("shows the exact choice as Bestie in navigation and search", async () => {
     </StrictMode>,
   );
   const nav = screen.getByRole("navigation", { name: "Pages" });
-  expect(within(nav).getByRole("button", { name: "Bestie" })).toBeVisible();
+  const placeholder = await within(nav).findByRole("button", {
+    name: "Create an agent",
+  });
+  expect(placeholder).toBeVisible();
+  await waitFor(() => expect(placeholder.querySelector("img")).not.toBeNull());
+  expect(select).not.toHaveBeenCalled();
   act(() => {
+    f.native.set({
+      agents: [
+        {
+          pubkey: pollen,
+          name: "Pollen",
+          picture: portrait.url,
+          owner: viewer,
+          relayUrl: "wss://example.test",
+        },
+        {
+          pubkey: fizz,
+          name: "Fizz",
+          owner: viewer,
+          relayUrl: "wss://example.test",
+        },
+      ],
+    });
     setDefaultAgent(scope, pollen);
   });
   const pollenRow = await within(nav).findByRole("button", { name: "Pollen" });
@@ -236,8 +269,10 @@ it("shows the exact choice as Bestie in navigation and search", async () => {
   act(() => {
     forgetDefaultAgent(fizz);
   });
+  // An unassigned shortcut is the creation invitation even while the shared
+  // library offers existing agents. Their presence does not make one Bestie.
   expect(
-    within(nav).getByRole("button", { name: "Bestie" }),
+    within(nav).getByRole("button", { name: "Create an agent" }),
   ).toBeInTheDocument();
   act(() => {
     setDefaultAgent(scope, "d".repeat(64));
@@ -292,7 +327,9 @@ it("follows roster changes and community replacement without remounting content 
   act(() => {
     f.update({ status: "ready", scope: `https://other.test:${viewer}` });
   });
-  expect(screen.getByRole("button", { name: "Bestie" })).toBeInTheDocument();
+  expect(
+    screen.getByRole("button", { name: "Create an agent" }),
+  ).toBeInTheDocument();
   expect(screen.getByRole("textbox", { name: "Draft" })).toHaveValue(
     "keep this",
   );
@@ -364,6 +401,7 @@ it("honors the promoted DM's mute and unread state through reads and Bestie repl
       readStateFloor: () => 0,
       readPublisherLock: async (_signal, work) => work(),
       readStateStorage: {
+        capture: async () => structuredClone(journal),
         async update(change) {
           journal = change(journal);
           return journal;
@@ -494,7 +532,7 @@ it("honors the promoted DM's mute and unread state through reads and Bestie repl
   });
   expect(
     screen
-      .getByRole("tab", { name: "Bestie" })
+      .getByRole("tab", { name: "Create an agent" })
       .querySelector("[data-channel-priority]"),
   ).toBeNull();
 });

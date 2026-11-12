@@ -11,7 +11,9 @@ import {
   clearView,
   draftCoordinates,
   listDraftViews,
+  parseDraftView,
   subscribeView,
+  viewRevision,
 } from "../../shared/view-state";
 import type { Entry } from "./model";
 
@@ -75,16 +77,88 @@ export function signature(text: string) {
   return `${text.length.toString(36)}.${(hash >>> 0).toString(36)}`;
 }
 
+const newestFirst = (a: DraftEntry, b: DraftEntry) =>
+  (b.createdAt ?? 0) - (a.createdAt ?? 0) || a.id.localeCompare(b.id);
+
+/** One listed draft's row; records in `activity` when its content changed. */
+function draftEntry(
+  session: Session,
+  key: string,
+  value: unknown,
+  activity: ActivityRecord,
+  nowSeconds: number,
+) {
+  const where = draftCoordinates(key);
+  if (!where) return undefined;
+  const draft = mentionDraft(value);
+  const count = attachmentDraftCount(
+    session as Parameters<typeof attachmentDraftCount>[0],
+    `${session.scope}:${key}`,
+  );
+  const text = draft.text.trim();
+  const fingerprint = signature(
+    `${count}:${draft.chatCards?.length ?? 0}:${draft.gifs?.length ?? 0}:${text}`,
+  );
+  const changed = activity[key]?.[0] !== fingerprint;
+  if (changed) activity[key] = [fingerprint, nowSeconds];
+  const entry: DraftEntry = {
+    id: key,
+    channelId: where.channelId,
+    ...(where.threadRootId ? { threadRootId: where.threadRootId } : {}),
+    text:
+      text ||
+      (count
+        ? `${count} attached file${count === 1 ? "" : "s"}`
+        : "Attached chat or GIF"),
+    ...(text ? {} : { placeholder: true as const }),
+    createdAt: activity[key]?.[1] ?? nowSeconds,
+    signature: fingerprint,
+  };
+  return { entry, changed };
+}
+
+/** `previous` with one listed draft re-read, or undefined when the change
+ * could add, drop or hide a draft and only a full `readDrafts` is exact. */
+export function rereadDraft(
+  session: Session,
+  previous: DraftSnapshot,
+  key: string,
+  nowSeconds = Math.floor(Date.now() / 1000),
+): DraftSnapshot | undefined {
+  if (previous.limited || previous.unavailable) return undefined;
+  const index = previous.entries.findIndex((entry) => entry.id === key);
+  if (index < 0) return undefined;
+  const draft = parseDraftView(viewRevision(session.scope, key));
+  if (typeof draft !== "object" || !draftCounts(session, key, draft.value))
+    return undefined;
+  const activity = readActivity(session.scope);
+  // The other rows keep their times only while the record holds exactly them,
+  // as a full read would leave it (it re-stamps lost rows and prunes others).
+  if (Object.keys(activity).length !== previous.entries.length)
+    return undefined;
+  for (const entry of previous.entries) {
+    const known = activity[entry.id];
+    if (
+      !known ||
+      (entry.id !== key &&
+        (known[0] !== entry.signature || known[1] !== entry.createdAt))
+    )
+      return undefined;
+  }
+  const next = draftEntry(session, key, draft.value, activity, nowSeconds);
+  if (!next) return undefined;
+  if (next.changed) writeActivity(session.scope, activity);
+  const entries = previous.entries.slice();
+  entries[index] = next.entry;
+  entries.sort(newestFirst);
+  return { ...previous, entries };
+}
+
 /** Read-only over the composer's own saved drafts: never clones or restores one. */
 export function readDrafts(
   session: Session,
   nowSeconds = Math.floor(Date.now() / 1000),
 ): DraftSnapshot {
-  const files = (key: string) =>
-    attachmentDraftCount(
-      session as Parameters<typeof attachmentDraftCount>[0],
-      `${session.scope}:${key}`,
-    );
   const listed = listDraftViews(session.scope, (value, key) =>
     draftCounts(session, key, value),
   );
@@ -93,33 +167,11 @@ export function readDrafts(
   let changed = false;
   const entries: DraftEntry[] = [];
   for (const { key, value } of listed.entries) {
-    const where = draftCoordinates(key);
-    if (!where) continue;
-    const draft = mentionDraft(value);
-    const count = files(key);
-    const text = draft.text.trim();
-    const fingerprint = signature(
-      `${count}:${draft.chatCards?.length ?? 0}:${draft.gifs?.length ?? 0}:${text}`,
-    );
+    const next = draftEntry(session, key, value, activity, nowSeconds);
+    if (!next) continue;
     seen.add(key);
-    const known = activity[key];
-    if (known?.[0] !== fingerprint) {
-      activity[key] = [fingerprint, nowSeconds];
-      changed = true;
-    }
-    entries.push({
-      id: key,
-      channelId: where.channelId,
-      ...(where.threadRootId ? { threadRootId: where.threadRootId } : {}),
-      text:
-        text ||
-        (count
-          ? `${count} attached file${count === 1 ? "" : "s"}`
-          : "Attached chat or GIF"),
-      ...(text ? {} : { placeholder: true as const }),
-      createdAt: activity[key]?.[1] ?? nowSeconds,
-      signature: fingerprint,
-    });
+    if (next.changed) changed = true;
+    entries.push(next.entry);
   }
   for (const key of Object.keys(activity))
     if (!seen.has(key)) {
@@ -127,10 +179,7 @@ export function readDrafts(
       changed = true;
     }
   if (changed) writeActivity(session.scope, activity);
-  entries.sort(
-    (a, b) =>
-      (b.createdAt ?? 0) - (a.createdAt ?? 0) || a.id.localeCompare(b.id),
-  );
+  entries.sort(newestFirst);
   return {
     entries,
     limited: listed.limited,
@@ -157,11 +206,20 @@ export function useDrafts(session: Session | undefined) {
       setSnapshot(EMPTY_DRAFTS);
       return;
     }
-    const refresh = () => setSnapshot(readDrafts(session));
+    // The listener needs the snapshot it last showed, outside React's queue.
+    let current = EMPTY_DRAFTS;
+    const show = (next: DraftSnapshot) => {
+      current = next;
+      setSnapshot(next);
+    };
+    const refresh = () => show(readDrafts(session));
     refresh();
-    // Other view keys (scroll places, panels) never change the draft list.
+    // Other view keys (scroll places, panels) never change the draft list, and
+    // a keystroke in a listed draft re-reads only that draft.
     const stopViews = subscribeView(session.scope, (key) => {
-      if (key === undefined || draftCoordinates(key)) refresh();
+      if (key === undefined) refresh();
+      else if (draftCoordinates(key))
+        show(rereadDraft(session, current, key) ?? readDrafts(session));
     });
     const stopFiles = subscribeAttachmentDraftCounts(
       session as Parameters<typeof subscribeAttachmentDraftCounts>[0],

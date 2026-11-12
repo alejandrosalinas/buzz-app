@@ -1,4 +1,5 @@
 import { assert, describe, expect, it, vi } from "vitest";
+import { huddleDescription } from "../huddle/lifecycle";
 import { ReadError } from "./errors";
 import { createRelaySession } from "./session";
 import type { LiveCallbacks } from "./live";
@@ -989,8 +990,12 @@ it.each([
 );
 
 describe("creator proof reads", () => {
-  const stream = (channel: string, creator = alice.pubkey) =>
-    metadata(relay, channel, channel, 1_700_000_000, [
+  const stream = (
+    channel: string,
+    creator = alice.pubkey,
+    createdAt = 1_700_000_000,
+  ) =>
+    metadata(relay, channel, channel, createdAt, [
       ["t", "stream"],
       ["P", creator],
     ]);
@@ -1063,6 +1068,192 @@ describe("creator proof reads", () => {
       }
     } finally {
       store.dispose();
+    }
+  });
+
+  /** A session fed live, with the creator-proof reads it has pending. */
+  function liveSession() {
+    const wire = scriptedTransport(viewer.pubkey, relay.pubkey);
+    let live!: LiveCallbacks;
+    const owner = createRelaySession({
+      ...wire.transport,
+      subscribe(callbacks) {
+        live = callbacks;
+        return { update() {}, retry() {}, dispose() {} };
+      },
+    });
+    const reads = () =>
+      wire.pending.filter((entry) =>
+        entry.filters.some((filter) => filter.kinds?.includes(9007)),
+      );
+    return {
+      owner,
+      reads,
+      receive: async (events: RelayEvent[]) => {
+        live.receive(events);
+        await flush();
+      },
+      take() {
+        const [read] = reads();
+        assert.exists(read);
+        wire.pending.splice(wire.pending.indexOf(read), 1);
+        return read;
+      },
+    };
+  }
+  const creation = (channel: string, extra: string[][] = []) =>
+    signed(alice, {
+      kind: 9007,
+      created_at: 1_700_000_000,
+      content: "",
+      tags: [["h", channel], ...extra],
+    });
+
+  /** Holds the monotonic clock at `at` ms, with no retry jitter. */
+  function clock() {
+    let at = 1_000;
+    const now = vi.spyOn(performance, "now").mockImplementation(() => at);
+    const random = vi.spyOn(Math, "random").mockReturnValue(0);
+    return {
+      advance(ms: number) {
+        at += ms;
+      },
+      restore() {
+        now.mockRestore();
+        random.mockRestore();
+      },
+    };
+  }
+
+  it("reads a channel's creation once as membership changes republish its metadata", async () => {
+    // Each membership change republishes 39000 to every online member. A read
+    // per version, times members, times a run of adds, was a relay-wide burst.
+    const time = clock();
+    const { owner, reads, receive, take } = liveSession();
+    const members = [viewer.pubkey];
+    const add = () => {
+      members.push(keypair().pubkey);
+      const at = 1_700_000_000 + members.length;
+      return receive([
+        roster(relay, "a", members, at),
+        stream("a", alice.pubkey, at),
+      ]);
+    };
+    try {
+      await receive([roster(relay, "a", members), stream("a")]);
+      take().fail(new Error("offline"));
+      await flush();
+      // A failed read backs off rather than retrying on every version.
+      await add();
+      expect(reads()).toEqual([]);
+      time.advance(60_000);
+      await add();
+      const first = take();
+      expect(first.filters).toMatchObject([
+        { kinds: [9007], authors: [alice.pubkey], "#h": ["a"] },
+      ]);
+      // A version arriving while that read is in flight shares it.
+      await add();
+      expect(reads()).toEqual([]);
+      first.respond([creation("a")]);
+      await flush();
+      for (let n = 0; n < 3; n++) await add();
+      time.advance(24 * 3_600_000);
+      await add();
+      // Every version was applied, so each one was a candidate for a read.
+      expect(owner.session.channels.list().channels[0]?.members).toHaveLength(
+        members.length,
+      );
+      expect(reads()).toEqual([]);
+    } finally {
+      owner.dispose();
+      time.restore();
+    }
+  });
+
+  it("lets the next version read again after a cancelled creation read", async () => {
+    // A cancelled read learned nothing, so it must not back off: a cancelled
+    // lookup would otherwise hold off the channel's proof for a minute or more.
+    const time = clock();
+    const { owner, reads, receive, take } = liveSession();
+    try {
+      await receive([roster(relay, "a", [viewer.pubkey]), stream("a")]);
+      take().fail(new DOMException("Cancelled", "AbortError"));
+      await flush();
+      const at = 1_700_000_001;
+      await receive([
+        roster(relay, "a", [viewer.pubkey, keypair().pubkey], at),
+        stream("a", alice.pubkey, at),
+      ]);
+      expect(reads()).toHaveLength(1);
+    } finally {
+      owner.dispose();
+      time.restore();
+    }
+  });
+
+  it("retries a missing creation with backoff until it arrives", async () => {
+    // A live 39000 can precede its creation on a read replica, and a channel
+    // first seen long after creation can still meet a lagging replica. No
+    // miss is final, or a Huddle could stay classified as an ordinary channel.
+    const parent = "00000000-0000-4000-8000-000000000001";
+    const room = "00000000-0000-4000-8000-000000000002";
+    const about = huddleDescription(parent);
+    let at = 1_700_000_000;
+    const version = () => {
+      at += 1;
+      return [
+        roster(relay, room, [viewer.pubkey], at),
+        metadata(relay, room, "Huddle", at, [
+          ["P", alice.pubkey],
+          ["private"],
+          ["t", "stream"],
+          ["created_at", String(1_600_000_000)],
+          ["ttl", "3600"],
+          ["about", about],
+        ]),
+      ];
+    };
+    const summary = () =>
+      owner.session.channels.list().channels.find(({ id }) => id === room);
+    const time = clock();
+    const { owner, reads, receive, take } = liveSession();
+    try {
+      await receive(version());
+      take().respond([]);
+      await flush();
+      expect(summary()?.parentChannelId).toBeUndefined();
+      time.advance(59_999);
+      await receive(version());
+      expect(reads()).toEqual([]);
+      time.advance(1);
+      await receive(version());
+      take().respond([]);
+      await flush();
+      // The second miss doubles the backoff.
+      time.advance(119_999);
+      await receive(version());
+      expect(reads()).toEqual([]);
+      time.advance(1);
+      await receive(version());
+      take().respond([
+        creation(room, [
+          ["visibility", "private"],
+          ["channel_type", "stream"],
+          ["about", about],
+        ]),
+      ]);
+      await flush();
+      expect(summary()).toMatchObject({
+        huddle: true,
+        parentChannelId: parent,
+      });
+      time.advance(24 * 3_600_000);
+      await receive(version());
+      expect(reads()).toEqual([]);
+    } finally {
+      owner.dispose();
+      time.restore();
     }
   });
 

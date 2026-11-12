@@ -132,6 +132,8 @@ type Pending = Readonly<{
   expires: number;
 }>;
 type Grant = Readonly<{
+  /** Identifies the approval; stable across phase changes, fresh per approval. */
+  id: number;
   client: string;
   agent: AgentKey;
   phase: "starting" | "waiting" | "connected" | "ended";
@@ -189,6 +191,7 @@ export function createExternalApps() {
     if (pending && host) await host.deny(nativeRequest(pending.request));
   };
   let generation = 0;
+  let grants = 0;
   let resuming: { request: ExternalAuthorization; viewer: string } | undefined;
   const closeSession = async () => {
     generation++;
@@ -211,7 +214,7 @@ export function createExternalApps() {
     } catch {
       update({
         ...state,
-        error: "Cannot revoke the saved approval. Retry in Buzz.",
+        error: "Could not remove the saved approval. Try again.",
       });
     }
   };
@@ -249,6 +252,7 @@ export function createExternalApps() {
         ...(!state.grant
           ? {
               grant: {
+                id: ++grants,
                 client: pairing.approval.client,
                 agent: pairing.approval.agent,
                 phase: "ended" as const,
@@ -295,6 +299,9 @@ export function createExternalApps() {
       await previous?.close();
       if (generation !== attemptGeneration || host !== bound) return;
       const grant: Grant = {
+        // The same saved approval the row already shows, so a confirmation
+        // opened on it stays valid when the app restores it.
+        id: state.grant?.id ?? ++grants,
         client: pairing.approval.client,
         agent: pairing.approval.agent,
         phase: connected ? "connected" : "waiting",
@@ -343,6 +350,7 @@ export function createExternalApps() {
               ...(pairing && !state.grant
                 ? {
                     grant: {
+                      id: ++grants,
                       client: pairing.approval.client,
                       agent: pairing.approval.agent,
                       phase: "ended" as const,
@@ -411,6 +419,7 @@ export function createExternalApps() {
       const attempt = new AbortController();
       controller = attempt;
       const grant: Grant = {
+        id: ++grants,
         client: pending.request.client,
         agent,
         phase: "starting",

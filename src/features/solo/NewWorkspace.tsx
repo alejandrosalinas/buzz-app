@@ -6,6 +6,7 @@ import { Button } from "../../shared/design-system/ui/Button";
 import { Dialog } from "../../shared/design-system/ui/Dialog";
 import { Field } from "../../shared/design-system/ui/Field";
 import { Input } from "../../shared/design-system/ui/Input";
+import { DiscardChanges } from "../agents/AgentSaveButton";
 import {
   emptyWorkspace,
   projectTemplate,
@@ -32,7 +33,7 @@ export function NewWorkspace({
   session: RelaySession;
   create(project: { id: string; name: string }): Promise<unknown>;
   close(): void;
-  onCreated(id: string): void;
+  onCreated(id: string): void | Promise<void>;
 }) {
   const [id] = useState(() => crypto.randomUUID());
   const [name, setName] = useState("");
@@ -42,6 +43,7 @@ export function NewWorkspace({
   // Once publication starts, retries must use the same project and defaults.
   const [submitted, setSubmitted] = useState(false);
   const [conflict, setConflict] = useState(false);
+  const [confirmDiscard, setConfirmDiscard] = useState(false);
   const pending = useRef(false);
   const defaults = useRef<Resume>({
     enqueued: (eventId) => {
@@ -98,7 +100,7 @@ export function NewWorkspace({
             defaults.current,
           );
       }
-      onCreated(id);
+      await onCreated(id);
       close();
     } catch (reason) {
       setError(
@@ -111,11 +113,22 @@ export function NewWorkspace({
       setBusy(false);
     }
   };
+  // Escape and Close ask before dropping typed fields or a partly created
+  // workspace's retry state; Cancel discards. A conflict leaves nothing to keep.
+  const dirty =
+    !conflict &&
+    (submitted ||
+      name.trim() !== "" ||
+      workspace.folders.length > 0 ||
+      workspace.worktree !== undefined ||
+      workspace.canvas.trim() !== "");
   return (
     <Dialog
       open
       onOpenChange={(open) => {
-        if (!open) close();
+        if (open) return;
+        if (dirty) setConfirmDiscard(true);
+        else close();
       }}
       preventClose={busy}
       // A partly created workspace keeps its retry state; never drop it on a stray click.
@@ -174,6 +187,13 @@ export function NewWorkspace({
         )}
         {error && <p role="alert">{error}</p>}
       </form>
+      {confirmDiscard && (
+        <DiscardChanges
+          description="Your new workspace has unsaved changes."
+          onKeep={() => setConfirmDiscard(false)}
+          onDiscard={close}
+        />
+      )}
     </Dialog>
   );
 }

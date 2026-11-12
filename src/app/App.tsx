@@ -384,6 +384,7 @@ function ConnectedAppContent({ services }: { services: AppServices }) {
             version: 1,
             kind: "settings",
             section: "block.builderlab/login",
+            route: { version: 1, params: "create-community" },
           })
         }
       />
@@ -442,7 +443,7 @@ function ConnectedAppContent({ services }: { services: AppServices }) {
         setRetriedEntry(route.state.entry.id);
         // Reopening against a refused connection would fail again at once.
         if (services.relay.snapshot().status === "error")
-          services.relay.retry();
+          services.relay.tryAgain();
         route.retry();
         // Retry can remove this control and briefly unmount the
         // shell; hand focus to main only once it has fallen away.

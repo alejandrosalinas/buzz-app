@@ -1,0 +1,38 @@
+/* Keep native presses on the stable control, not artwork replaced mid-press. */
+.portrait,
+.compact {
+  pointer-events: none;
+}
+
+.portrait {
+  display: block;
+  inline-size: var(--space-16);
+  block-size: var(--space-16);
+}
+
+.compact {
+  display: block;
+  inline-size: var(--space-6);
+  block-size: var(--space-6);
+}
+
+.character {
+  display: block;
+  inline-size: 100%;
+  block-size: 100%;
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .character {
+    animation: appear var(--duration-settle) var(--easing-enter);
+  }
+}
+
+@keyframes appear {
+  from {
+    transform: scale(0.9);
+  }
+  to {
+    transform: scale(1);
+  }
+}

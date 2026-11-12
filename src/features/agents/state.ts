@@ -40,6 +40,7 @@ export function isAgentKey(key: string) {
     key.startsWith(INTERRUPTED_PREFIX) ||
     key.startsWith(RECORD_PREFIX) ||
     key.startsWith("buzz.agent.execution.v1:") ||
+    key.startsWith("buzz.agents.session-admission.v1:") ||
     // The sessions the bundled agent types save.
     key.startsWith("buzz.claude-code.sessions.") ||
     key.startsWith("buzz.codex.sessions.") ||

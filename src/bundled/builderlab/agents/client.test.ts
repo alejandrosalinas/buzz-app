@@ -149,6 +149,44 @@ it.each([{}, { agents: [] }])(
     expect(await h.client.list(h.signal)).toEqual([]);
   },
 );
+it("normalizes optional creation dates from JSON without inventing dates", async () => {
+  const h = await fixture();
+  const millis = Date.UTC(2026, 6, 15, 12);
+  const values = [
+    millis,
+    millis / 1000,
+    String(millis),
+    String(millis / 1000),
+    "2026-07-15T12:00:00Z",
+    null,
+    "",
+    "bad date",
+    undefined,
+    true,
+    1e20,
+  ];
+  vi.mocked(h.host.request).mockResolvedValueOnce(
+    response({
+      status: 1,
+      agents: values.map((created_at) => ({ ...row, created_at })),
+    }),
+  );
+  expect(
+    (await h.client.list(h.signal)).map(({ createdAt }) => createdAt),
+  ).toEqual([
+    millis,
+    millis,
+    millis,
+    millis,
+    millis,
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+  ]);
+});
 it.each([
   ["AGENT_STATUS_UNATTESTED", "Unattested"],
   [1, "Unattested"],
@@ -804,12 +842,15 @@ it("refuses to link without a local Buzz identity", async () => {
   );
   expect(h.host.request).not.toHaveBeenCalled();
 });
-it("refuses activation, keeping the session, when the identity check finds it expired", async () => {
+it("refuses activation with a 401, keeping the session and claiming no expiry", async () => {
   const h = await fixture();
   vi.mocked(h.host.request).mockResolvedValueOnce(response({}, 401));
   await expect(
     h.client.activate(row.agent_pubkey, proof, undefined, h.signal),
-  ).rejects.toThrow("session expired");
+  ).rejects.toMatchObject({
+    message: "Builderlab didn’t accept this request. Try again.",
+    status: 401,
+  });
   expect(h.session.snapshot().status).toBe("signed-in");
   expect(h.host.request).toHaveBeenCalledTimes(1);
 });

@@ -16,7 +16,12 @@ use zeroize::Zeroizing;
 
 type Result<T> = std::result::Result<T, String>;
 const INVALID: &str = "Enter a valid nsec private key";
+// The renderer matches this text (`MALFORMED_IDENTITY` in
+// src/features/identity/service.ts) to offer removing the key.
 const MALFORMED: &str = "Saved identity is malformed; nothing was changed. Keep your key backup and contact support before changing secure storage.";
+// Keyring only. Not MALFORMED: deleting refuses too, so removing the key can't work here.
+#[cfg(not(test))]
+const AMBIGUOUS: &str = "More than one saved identity matches in secure storage, so Buzz can't tell which to use; nothing was changed. Remove the extra Buzz entries with your keyring app, then retry.";
 
 // Batch-local conversation keys avoid repeating ECDH for every self-encrypted slot.
 // Callers enforce their encoded-payload budget before reaching this helper.
@@ -182,9 +187,10 @@ fn read_saved(
     match read() {
         Ok(value) => Ok(Some(value)),
         Err(credentials::Error::Absent) => Ok(None),
-        Err(credentials::Error::Denied) => Err("Secure storage access was denied. Allow access and retry; no identity was created.".into()),
+        Err(credentials::Error::Denied) => Err("Secure storage access was denied. Allow access and retry; nothing was changed.".into()),
         Err(credentials::Error::Busy) => Err("Another Buzz app is accessing secure storage. Retry shortly.".into()),
         Err(credentials::Error::Corrupt) => Err(MALFORMED.into()),
+        Err(credentials::Error::Ambiguous) => Err(AMBIGUOUS.into()),
         Err(_) => Err("Your identity could not be accessed in secure storage. Unlock your credential store and retry without changing keys.".into()),
     }
 }
@@ -264,6 +270,7 @@ mod keyring_platform {
             Error::Denied => "Secure storage access was denied. Allow access and retry; no identity was created.",
             Error::Busy => "Another Buzz app is accessing secure storage. Retry shortly.",
             Error::Corrupt => MALFORMED,
+            Error::Ambiguous => AMBIGUOUS,
             _ => "Your identity could not be accessed in secure storage. Unlock your credential store and retry without changing keys.",
         }.into()
     }

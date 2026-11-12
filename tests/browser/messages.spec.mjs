@@ -213,51 +213,6 @@ test("inline video controls follow playback, hover and keyboard focus", async ({
       "Browser project does not expose a hover-capable fine pointer.",
     );
     await expect(timeline).toBeEnabled();
-    // Diagnostic for an undetermined CI failure (run 41331319960): the Pause
-    // click below left `paused` false for 10 s. Its trace showed the media
-    // clock restarting from 0 twice off the 2 s loop boundary and stalling
-    // after the click. Keep recent media events so a recurrence reports them;
-    // load events and the source mark a reload, isConnected a remount. Remove
-    // this once the CI failure is diagnosed.
-    const instrumented = await video.elementHandle();
-    await instrumented.evaluate((element) => {
-      const events = [];
-      element.mediaEvents = events;
-      for (const type of [
-        "loadstart",
-        "abort",
-        "play",
-        "pause",
-        "playing",
-        "waiting",
-        "stalled",
-        "seeking",
-        "seeked",
-        "ended",
-        "emptied",
-        "error",
-      ])
-        element.addEventListener(type, () => {
-          events.push(`${type}@${element.currentTime.toFixed(3)}`);
-          if (events.length > 24) events.shift();
-        });
-    });
-    // Reads the live video without waiting, so a removal without a successor
-    // still reports the held element (`live: []`).
-    const mediaState = (elements, instrumented) => ({
-      live: elements.map((element) => ({
-        paused: element.paused,
-        currentTime: element.currentTime,
-        readyState: element.readyState,
-        seeking: element.seeking,
-        ended: element.ended,
-        networkState: element.networkState,
-        error: element.error?.code ?? null,
-        currentSrc: element.currentSrc,
-      })),
-      isConnected: instrumented.isConnected,
-      events: instrumented.mediaEvents,
-    });
     await page.mouse.move(1, 1);
     await expect(play).toHaveCSS("opacity", "1");
     await expect(expand).toHaveCSS("opacity", "0");
@@ -276,9 +231,13 @@ test("inline video controls follow playback, hover and keyboard focus", async ({
       .first()
       .focus();
     await expect(expand).toHaveCSS("opacity", "0");
-    // Keep playback active throughout the visibility assertions, independent of clip length.
+    // Keep playback active throughout the visibility assertions, independent
+    // of clip length: a zero rate plays without advancing the clock. Not
+    // `loop`: on Linux WebKit, a seek back to 0 during playback leaves this
+    // clip re-seeking to 0 and stalling, and in CI the Pause click then left
+    // the video playing.
     await video.evaluate((element) => {
-      element.loop = true;
+      element.playbackRate = 0;
     });
     await play.click();
     await expect(video).toHaveJSProperty("paused", false);
@@ -306,15 +265,7 @@ test("inline video controls follow playback, hover and keyboard focus", async ({
       await expect(control).toHaveCSS("opacity", "0");
     await preview.hover({ position: { x: 8, y: 8 } });
     await preview.getByRole("button", { name: "Pause video" }).click();
-    await expect
-      .poll(() => video.evaluateAll(mediaState, instrumented), {
-        message: "the video pauses after Pause video",
-      })
-      .toEqual(
-        expect.objectContaining({
-          live: [expect.objectContaining({ paused: true })],
-        }),
-      );
+    await expect(video).toHaveJSProperty("paused", true);
     await page.mouse.move(1, 1);
     await expect(play).toHaveCSS("opacity", "1");
     await expect(controlRow.locator(":scope > span").first()).toHaveCSS(
@@ -572,7 +523,7 @@ test("shared thread UI auto-loads, follows live replies, retries and isolates re
     for (const surface of [feed, history]) {
       const paragraph = surface
         .locator("p")
-        .filter({ hasText: /^first\s+second$/ });
+        .filter({ hasText: /^first\s*second$/ });
       await expect(paragraph.locator("br")).toHaveCount(1);
       const geometry = await paragraph.evaluate((element) => {
         const walker = document.createTreeWalker(element, NodeFilter.SHOW_TEXT);

@@ -57,6 +57,8 @@ export type ActivityReceipt = Readonly<{
 export type ToolServer = (
   conversation: string | undefined,
   message: Readonly<{ id: string | number; method: string; params?: unknown }>,
+  /** Captured work lifetime; aborted while idle or before the session opens. */
+  signal?: AbortSignal,
 ) => Promise<unknown>;
 
 /** The provider, model and thinking level a session's turns run on; empty is
@@ -101,6 +103,7 @@ export type AcpHooks = Readonly<{
       title?: string;
       provider: string;
       platform?: PlatformTools;
+      tags?: Readonly<Record<string, string>>;
     }>,
   ): Record<string, unknown>;
   /** Appends `text` to a new session's system prompt; a throw closes it.

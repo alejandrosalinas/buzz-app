@@ -7,12 +7,9 @@ const { createPluginStorage } = await import("./storage");
 
 it("passes the pinned commit to the native Git import and the policy through the catalog", async () => {
   const storage = createPluginStorage(() => []);
-  await storage.imports?.git(
-    "https://example.com/plugins",
-    "v1",
-    undefined,
-    "a".repeat(40),
-  );
+  await storage.imports?.git("https://example.com/plugins", "v1", undefined, {
+    commit: "a".repeat(40),
+  });
   expect(invoke).toHaveBeenLastCalledWith("plugin_import_git", {
     repository: "https://example.com/plugins",
     reference: "v1",

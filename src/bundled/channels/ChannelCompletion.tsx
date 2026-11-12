@@ -1,10 +1,15 @@
-import { useLayoutEffect, useSyncExternalStore } from "react";
+import { useContext, useLayoutEffect, useSyncExternalStore } from "react";
 import { channelIcon } from "../../features/channels/channel-icon";
 import { usePublicChannelSearch } from "../../features/channels/usePublicChannelSearch";
 import type {
   CompletionSuggestion,
   ComposerCompletionProps,
 } from "../../features/conversation/contracts";
+import {
+  WorkspaceCompletion,
+  workspaceEdit,
+} from "../../features/conversation/workspace-completion";
+import { Cube3dSphereIcon } from "../../shared/design-system/icons";
 import type { ChannelSummary } from "../../features/relay/contracts";
 import { MatchRank, matchName } from "../../features/search/match";
 
@@ -67,6 +72,8 @@ export function ChannelCompletion({
   publish,
 }: ComposerCompletionProps) {
   const needle = query.query.toLowerCase();
+  // A new chat's workspaces come first; choosing one leaves no link.
+  const preferences = useContext(WorkspaceCompletion)?.preferences;
   const listReady = useSyncExternalStore(
     session.channels.subscribeList,
     () => session.channels.list().status === "ready",
@@ -82,6 +89,19 @@ export function ChannelCompletion({
       // Withdraw at the data boundary, not after a later React render.
       if (withdraw) withdraw();
       const list = session.channels.list();
+      const places = (preferences?.snapshot().data?.sections ?? [])
+        .flatMap((section) => {
+          const found = rank(section.name, needle);
+          return found === undefined ? [] : [{ section, rank: found }];
+        })
+        .sort(
+          (a, b) =>
+            a.rank - b.rank ||
+            a.section.name.localeCompare(b.section.name) ||
+            a.section.id.localeCompare(b.section.id),
+        )
+        .slice(0, LIMIT);
+      const room = LIMIT - places.length;
       const names = new Map<string, number>();
       const ranked = (channel: ChannelSummary) => {
         const name = channel.name.toLowerCase();
@@ -116,12 +136,12 @@ export function ChannelCompletion({
       // them when joined matches alone would fill the list.
       const shownMine = mine.slice(
         0,
-        LIMIT - Math.min(others.length, OPEN_SLOTS),
+        Math.max(0, room - Math.min(others.length, OPEN_SLOTS)),
       );
       const shown = [
         ...shownMine.map(({ channel }) => ({ channel, member: true })),
         ...others
-          .slice(0, LIMIT - shownMine.length)
+          .slice(0, room - shownMine.length)
           .map(({ channel }) => ({ channel, member: false })),
       ];
       const settling = list.status === "loading" || list.status === "idle";
@@ -171,7 +191,7 @@ export function ChannelCompletion({
             ? "Searching open channels…"
             : error
               ? "Could not search open channels."
-              : mine.length + others.length > LIMIT
+              : mine.length + others.length > room
                 ? "Keep typing to narrow the list."
                 : // Prose stays silent: the note joins rows already shown.
                   partial && shown.length && !others.length
@@ -184,19 +204,38 @@ export function ChannelCompletion({
           ? retrySearch
           : undefined;
       withdraw = publish({
-        items: shown.map(({ channel, member }) => item(channel, member)),
+        items: [
+          ...places.map(
+            ({ section }): CompletionSuggestion => ({
+              id: `workspace:${section.id}`,
+              label: section.name,
+              detail: "Workspace",
+              preview: <Cube3dSphereIcon size={22} />,
+              edit: workspaceEdit(section.id),
+              canSelect: () =>
+                !!preferences
+                  ?.snapshot()
+                  .data?.sections.some((entry) => entry.id === section.id),
+            }),
+          ),
+          ...shown.map(({ channel, member }) => item(channel, member)),
+        ],
         ...(status ? { status } : {}),
         ...(retry ? { retry } : {}),
       });
     };
     const unsubscribe = session.channels.subscribeList(update);
+    // Workspaces can load after `#` opens.
+    const unsubscribeWorkspaces = preferences?.subscribe(update);
     update();
     return () => {
       unsubscribe();
+      unsubscribeWorkspaces?.();
       if (withdraw) withdraw();
     };
   }, [
     session,
+    preferences,
     needle,
     publish,
     discovered,

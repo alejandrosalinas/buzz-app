@@ -1,0 +1,13 @@
+{
+  "id": "buzz.changesets",
+  "name": "Changesets",
+  "apiVersion": 1,
+  "description": "See the files a local agent changed on its reply, with a diff for each.",
+  "discovery": {
+    "category": "developer-tools-and-integrations",
+    "tags": ["code", "coding-agents"]
+  },
+  "host": {
+    "processes": [{ "id": "git", "program": "git" }]
+  }
+}

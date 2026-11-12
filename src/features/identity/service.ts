@@ -30,6 +30,12 @@ export type RecoveryState =
   | ({ status: "choosing" } & RecoveryResult)
   | { status: "error"; error: string };
 
+/**
+ * Native restore's answer for a saved key it can't read (`identity.rs`
+ * MALFORMED). No retry changes it: only removing the key does.
+ */
+export const MALFORMED_IDENTITY =
+  "Saved identity is malformed; nothing was changed. Keep your key backup and contact support before changing secure storage.";
 /** Native recovery's answer when this build or the tenant has no recovery (`nsec_backup.rs` UNAVAILABLE). */
 export const RECOVERY_UNAVAILABLE = "Backup recovery is unavailable.";
 /** Native recovery's refusal for this account (`nsec_backup.rs` REFUSED: a public org, or no Buzz access). */

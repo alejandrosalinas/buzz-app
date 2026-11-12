@@ -102,7 +102,7 @@ fn error(error: buzz_credential_store::Error) -> &'static str {
     use buzz_credential_store::Error;
     match error {
         Error::Denied => "storage-denied",
-        Error::Corrupt => "storage-corrupt",
+        Error::Corrupt | Error::Ambiguous => "storage-corrupt",
         Error::Busy => "storage-busy",
         Error::Changed | Error::Occupied => "session-changed",
         _ => "storage-unavailable",

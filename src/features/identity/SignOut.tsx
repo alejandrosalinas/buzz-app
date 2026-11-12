@@ -75,8 +75,8 @@ export function SignOutDialog({
   }
   return (
     <AlertDialog
-      title="Sign out of Buzz?"
-      description="Signing out removes your private key from this device. Your key is how you sign in, so save it before you continue. You’ll need it to sign back in as this identity."
+      title="Remove your key from this device?"
+      description="Your private key is how you sign in to Buzz. This removes it from this device’s secure storage and signs you out of your organization, Builderlab and hosted communities. Account backups and copies saved elsewhere stay. Save a copy so you can sign back in."
       onClose={onClose}
       pending={pending}
       actions={
@@ -89,7 +89,7 @@ export function SignOutDialog({
             disabled={!ready || pending}
             onClick={() => void confirm()}
           >
-            {wipe ? "Sign out and erase" : "Sign out"}
+            {wipe ? "Remove and erase data" : "Remove from device"}
           </Button>
         </>
       }

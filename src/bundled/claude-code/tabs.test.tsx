@@ -46,6 +46,7 @@ import { manifestProcesses } from "./claude-testing";
 import { apply, inject } from "./index";
 import { type Config, DEFAULT_CONFIG } from "./runtime";
 import { ClaudeSetup } from "./setup";
+import { ClaudeAuth } from "./auth";
 import { ClaudeDefaults } from "./defaults";
 
 const desktop = vi.hoisted(() => ({ tauri: true }));
@@ -307,6 +308,7 @@ function applied({
   const ctx = {
     pluginOwner: { id: "buzz.claude-code", revision: "r1" },
     navigation: { open: vi.fn(async () => ({ status: "opened" })) },
+    settingsCards: { register: vi.fn() },
     agentProtection: { registerModels: vi.fn() },
     host: {
       spawn,
@@ -825,7 +827,13 @@ it("shows the channel's current kind for a session another build started", async
 });
 
 it("is an agent type on the desktop app", () => {
-  expect(inject).toEqual(["agents", "host", "agentProtection", "navigation"]);
+  expect(inject).toEqual([
+    "agents",
+    "host",
+    "agentProtection",
+    "navigation",
+    "settingsCards",
+  ]);
   const { type } = installed();
   expect(type).toMatchObject({
     id: "claude-code",
@@ -1025,7 +1033,7 @@ it("asks for an API key and is ready once one is saved", async () => {
   const field = screen.getByLabelText("Anthropic API key");
   expect(field).toHaveAttribute("type", "password");
   await user.type(field, "sk-ant-api03-pasted");
-  await user.click(screen.getByRole("button", { name: "Save key" }));
+  await user.click(screen.getByRole("button", { name: "Save" }));
   expect(
     await screen.findByText("Claude runs with your Anthropic API key."),
   ).toBeVisible();
@@ -1078,14 +1086,12 @@ it("replaces generic installation copy with the latest installer state", async (
   const installedType = installed({ available: false }).type;
   const Setup = providerSetup(installedType);
   render(<Setup onClose={vi.fn()} />);
-  await waitFor(() =>
-    expect(screen.getByRole("status")).toHaveTextContent(
-      "Claude is not installed.",
-    ),
+  expect(await screen.findByRole("status")).toHaveTextContent(
+    "The Claude integration isn't installed yet.",
   );
   await userEvent
     .setup()
-    .click(screen.getByRole("button", { name: "Install Claude" }));
+    .click(screen.getByRole("button", { name: "Install integration" }));
   await waitFor(() =>
     expect(screen.getByRole("status")).toHaveTextContent(
       "Setting up Claude Code...",
@@ -1104,6 +1110,61 @@ it("opens its dialog for a missing key rather than running a step", async () => 
     }),
   );
   expect(type.provider?.attentionAction).toBeUndefined();
+});
+
+it("leaves a missing copy to the provider dialog", async () => {
+  // Without an attention action, Settings' Harness defaults row opens
+  // DialogBody, so the status line and download note precede the download.
+  const { type } = installed({ available: false });
+  await waitFor(() =>
+    expect(type.provider?.snapshot()).toMatchObject({
+      readiness: "attention",
+      attentionLabel: "Install Claude integration",
+    }),
+  );
+  expect(type.provider?.attentionAction).toBeUndefined();
+});
+
+it("updates an outdated copy from the Settings row directly", async () => {
+  // Startup's own update leaves a copy below Buzz's minimum outdated when
+  // no newer release is published, so the row offers the update again.
+  const { type } = installed({ version: "2.1.168" });
+  await waitFor(() =>
+    expect(type.provider?.snapshot()).toEqual({
+      readiness: "attention",
+      attentionLabel: "Update Claude Code",
+    }),
+  );
+  const action = type.provider?.attentionAction;
+  if (!action) throw new Error("Missing attention action");
+  action();
+  // The update runs at once; while it does, the row has nothing to start.
+  expect(type.provider?.snapshot()).toHaveProperty("blocking", true);
+  expect(type.provider?.attentionAction).toBeUndefined();
+  await waitFor(() =>
+    expect(type.provider?.snapshot()).not.toHaveProperty("blocking"),
+  );
+});
+
+it("signs in from the Settings row directly when the build has a sign-in", async () => {
+  interactive.signIn = true;
+  try {
+    const { type } = installed({ keySaved: false });
+    await waitFor(() =>
+      expect(type.provider?.snapshot()).toMatchObject({
+        readiness: "attention",
+        attentionLabel: "Add Claude API key",
+      }),
+    );
+    const action = type.provider?.attentionAction;
+    if (!action) throw new Error("Missing attention action");
+    action();
+    await waitFor(() =>
+      expect(type.provider?.snapshot()).toHaveProperty("readiness", "ready"),
+    );
+  } finally {
+    interactive.signIn = false;
+  }
 });
 
 it("saves settings as one config", async () => {
@@ -1788,8 +1849,7 @@ it("offers Set up Claude beside Harness when Claude is picked, then its models",
   expect(navigation.open).toHaveBeenCalledWith({
     version: 1,
     kind: "settings",
-    section: "agents",
-    provider: "buzz.claude-code/claude-code",
+    section: "buzz.claude-code/credentials",
   });
 });
 
@@ -2003,33 +2063,41 @@ it("still asks for the key to edit an agent that runs on this computer", async (
   expect(onReadyChange).toHaveBeenLastCalledWith(false);
 });
 
-it("sends a library card without a key to Claude's setup in Settings", async () => {
-  const { type, navigation } = installed({ keySaved: false });
-  const Model = type.CreateModel;
-  if (!Model) throw new Error("Missing model field");
-  render(
-    <Model
-      agent={agent()}
-      modelAppearance="glass-ghost"
-      config={DEFAULT_CONFIG}
-      disabled={false}
-      onChange={vi.fn()}
-    />,
-  );
-  expect(
-    await screen.findByText(/Claude is missing an API key\./),
-  ).toBeVisible();
-  expect(screen.queryByLabelText("Anthropic API key")).toBeNull();
-  await userEvent
-    .setup()
-    .click(screen.getByRole("button", { name: "Settings" }));
-  expect(navigation.open).toHaveBeenCalledWith({
-    version: 1,
-    kind: "settings",
-    section: "agents",
-    provider: "buzz.claude-code/claude-code",
-  });
-});
+it.each([true, false])(
+  "sends a library card to its auth setup (settings=%s)",
+  async (keySettings) => {
+    if (!keySettings)
+      vi.spyOn(ClaudeAuth.prototype, "Settings", "get").mockReturnValue(
+        undefined,
+      );
+    const { type, navigation } = installed({ keySaved: false });
+    const Model = type.CreateModel;
+    if (!Model) throw new Error("Missing model field");
+    render(
+      <Model
+        agent={agent()}
+        modelAppearance="glass-ghost"
+        config={DEFAULT_CONFIG}
+        disabled={false}
+        onChange={vi.fn()}
+      />,
+    );
+    expect(
+      await screen.findByText(/Claude is missing an API key\./),
+    ).toBeVisible();
+    expect(screen.queryByLabelText("Anthropic API key")).toBeNull();
+    await userEvent
+      .setup()
+      .click(screen.getByRole("button", { name: "Settings" }));
+    expect(navigation.open).toHaveBeenCalledWith({
+      version: 1,
+      kind: "settings",
+      ...(keySettings
+        ? { section: "buzz.claude-code/credentials" }
+        : { section: "agents", provider: "buzz.claude-code/claude-code" }),
+    });
+  },
+);
 
 it("opens setup from a Model row without a key and closes it once one is saved", async () => {
   const { type } = installed({ keySaved: false });
@@ -2096,7 +2164,11 @@ it("separates identity fields from runtime settings without changing the stored 
 });
 
 it.each([
-  { available: false, action: "Install Claude", title: "Set up Claude" },
+  {
+    available: false,
+    action: "Install integration",
+    title: "Claude integration",
+  },
 ])(
   "keeps failed Claude $action output in its open dialog",
   async ({ available, action, title }) => {
@@ -2439,7 +2511,7 @@ async function heldKeySaves() {
     saves,
     onClose,
     field: () => screen.getByLabelText("Replace API key"),
-    save: () => screen.getByRole("button", { name: "Save key" }),
+    save: () => screen.getByRole("button", { name: "Save" }),
   };
 }
 
@@ -2463,7 +2535,7 @@ it("keeps focus in the field through a save started there", async () => {
   expect(document.activeElement).toBe(field());
 });
 
-it("keeps focus on Save after a keyboard save clears the field", async () => {
+it("keeps focus on Save when a keyboard save clears the field", async () => {
   const { saves, field, save } = await heldKeySaves();
   const user = userEvent.setup();
   await user.type(field(), "sk-ant-api03-secret");
@@ -2474,8 +2546,6 @@ it("keeps focus on Save after a keyboard save clears the field", async () => {
   act(() => saves[0]?.settle());
   expect(await screen.findByText("Saved the Anthropic API key.")).toBeVisible();
   expect(field()).toHaveValue("");
-  // Empty again, Save stays focusable: a browser drops a disabled one's focus.
-  expect(save()).not.toBeDisabled();
   expect(save()).toHaveAttribute("aria-disabled", "true");
   expect(document.activeElement).toBe(save());
 });

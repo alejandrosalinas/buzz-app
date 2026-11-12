@@ -198,7 +198,7 @@ function ClaudeSignIn({
         }}
       >
         {missing
-          ? "Install Claude"
+          ? "Install integration"
           : outdated
             ? "Update Claude"
             : signedOut
@@ -207,7 +207,7 @@ function ClaudeSignIn({
       </Button>
       <Dialog
         open={open}
-        title="Set up Claude"
+        title={missing || outdated ? "Claude integration" : "Set up Claude"}
         onOpenChange={(next) => {
           setOpen(next);
           if (!next) void setup.cancel();
@@ -248,7 +248,7 @@ function ClaudeSetupPanel({
     !status || state.checking
       ? "Checking Claude…"
       : status.state === "missing"
-        ? "Claude is not installed."
+        ? "The Claude integration isn't installed yet."
         : status.state === "outdated"
           ? `Claude ${status.version} is older than Buzz needs.`
           : status.state === "signed-out"
@@ -259,7 +259,7 @@ function ClaudeSetupPanel({
   // One button per slot, so focus stays put as Install becomes Check again.
   const action =
     status?.state === "missing"
-      ? ({ step: "install", label: "Install Claude" } as const)
+      ? ({ step: "install", label: "Install integration" } as const)
       : status?.state === "outdated"
         ? ({ step: "install", label: "Update Claude" } as const)
         : undefined;
@@ -311,10 +311,9 @@ function ClaudeSetupPanel({
       </div>
       {status?.state === "missing" && (
         <p className="m-0 text-body-sm text-subtle">
-          Downloads Buzz's own copy of Claude (about 250 MB) from
-          downloads.claude.ai and keeps it on the latest release. It does not
-          change the <code>claude</code> in your terminal, and uses the same
-          settings.
+          Downloads Buzz's own copy of Claude (about 250 MB) and keeps it on the
+          latest release. Your own installation of Claude will be unaffected,
+          and uses the same settings.
         </p>
       )}
       {state.output && (
@@ -794,7 +793,7 @@ export function createTabs({
       !status || state.checking
         ? "Checking Claude…"
         : status.state === "missing"
-          ? "Claude is not installed."
+          ? "The Claude integration isn't installed yet."
           : status.state === "outdated"
             ? `Claude ${status.version} is older than Buzz needs.`
             : status.state === "signed-out"
@@ -804,7 +803,7 @@ export function createTabs({
                 : undefined;
     const action =
       status?.state === "missing"
-        ? ({ step: "install", label: "Install Claude" } as const)
+        ? ({ step: "install", label: "Install integration" } as const)
         : status?.state === "outdated"
           ? ({ step: "install", label: "Update Claude" } as const)
           : status?.state === "signed-out" && setup.auth.signIn
@@ -850,10 +849,9 @@ export function createTabs({
           )}
           {status?.state === "missing" && !state.running && (
             <p className="m-0 text-body-sm text-subtle">
-              Downloads Buzz's own copy of Claude (about 250 MB) from
-              downloads.claude.ai and keeps it on the latest release. It does
-              not change the <code>claude</code> in your terminal, and uses the
-              same settings.
+              Downloads Buzz's own copy of Claude (about 250 MB) and keeps it on
+              the latest release. Your own installation of Claude will be
+              unaffected, and uses the same settings.
             </p>
           )}
           {state.output && state.running !== "install" && (

@@ -4,6 +4,7 @@ import type {
   LocalWorkState,
 } from "../agents/local-activity";
 import type { OpenTarget } from "../navigation/targets";
+import { localWorkRoot } from "../agents/local-activity";
 
 const running = (state: LocalWorkState | undefined) =>
   state === "waiting" || state === "working";
@@ -21,13 +22,16 @@ export function completionTarget(
   scope: { viewer: string; communityOrigin: string } | undefined,
 ): OpenTarget | undefined {
   if (!scope) return;
+  const messageId = work.syntheticMessage
+    ? localWorkRoot(work)
+    : work.messageId;
   return {
     version: 1,
     kind: "conversation",
     scope,
     channelId: work.channelId,
     ...(work.thread ? { threadRootId: work.threadRootId } : {}),
-    messageId: work.messageId,
+    ...(messageId ? { messageId } : {}),
   };
 }
 

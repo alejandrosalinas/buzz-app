@@ -1,6 +1,7 @@
 import { test, expect } from "./source-fixture.mjs";
 import { readFile } from "node:fs/promises";
 import { watchPageErrors } from "./page-errors.mjs";
+import { animationsSettled } from "./animations.mjs";
 
 const maskedAncestors = (element) => {
   const masked = [];
@@ -418,15 +419,9 @@ test("custom color and footer resize together without reversing direction", asyn
   });
   await custom.waitFor({ state: "visible" });
   // Finish the initial tab transition before measuring the two custom-color states.
-  await page
-    .locator("[data-buzz-ui].popover-surface")
-    .evaluate(async (popup) => {
-      await Promise.all(
-        popup
-          .getAnimations({ subtree: true })
-          .map((animation) => animation.finished),
-      );
-    });
+  await animationsSettled(page.locator("[data-buzz-ui].popover-surface"), {
+    subtree: true,
+  });
   for (const name of ["Custom background color", "Use color"]) {
     const frames = await page
       .getByRole("button", { name, exact: true })

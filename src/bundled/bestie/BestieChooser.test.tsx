@@ -1,6 +1,7 @@
 // @vitest-environment jsdom
 import "@testing-library/jest-dom/vitest";
 import {
+  act,
   cleanup,
   render,
   screen,
@@ -9,8 +10,10 @@ import {
 } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, expect, it, vi } from "vitest";
+import type { AgentChoicesSnapshot } from "../../features/agents/choices";
 import type { Agent, Agents } from "../../features/agents/service";
 import type { RelaySession } from "../../features/relay/session";
+import { useFirstAgentWelcome } from "./FirstAgentWelcome";
 import { BestieChooser } from "./BestieChooser";
 
 vi.mock("../agents/AgentCreateDialog", () => ({
@@ -47,6 +50,7 @@ function fixture(
   place: Agent["place"] = "here",
 ) {
   let selectable = initial;
+  const listeners = new Set<() => void>();
   const makeSnapshot = () =>
     ({
       status: "ready" as const,
@@ -64,12 +68,15 @@ function fixture(
         definitions: [],
       },
     }) as const;
-  let choices = makeSnapshot();
+  let choices: AgentChoicesSnapshot = makeSnapshot();
   const session = {
     mainAgent: { read: async () => undefined, write: vi.fn(write) },
     agentChoices: {
       snapshot: () => choices,
-      subscribe: () => () => {},
+      subscribe: (listener: () => void) => {
+        listeners.add(listener);
+        return () => listeners.delete(listener);
+      },
       retain: () => () => {},
       ensure: () => {},
       refresh: vi.fn(async () => {}),
@@ -83,6 +90,10 @@ function fixture(
   } as unknown as Agents;
   return {
     session,
+    update: (patch: Partial<typeof choices>) => {
+      choices = { ...choices, ...patch };
+      for (const listener of listeners) listener();
+    },
     removeChoice: () => {
       selectable = [];
       choices = makeSnapshot();
@@ -140,6 +151,9 @@ it("searches namesakes, shows distinct identities, and selects with the keyboard
   await waitFor(() =>
     expect(f.session.mainAgent?.write).toHaveBeenCalledWith(other),
   );
+  cleanup();
+  render(<WelcomeEvidence />);
+  expect(screen.getByLabelText("creation welcome")).toHaveTextContent("none");
 });
 
 it("holds the selected agent disabled until the account save settles", async () => {
@@ -298,4 +312,126 @@ it("retries the handoff after agent creation refresh fails", async () => {
   await waitFor(() =>
     expect(f.session.mainAgent?.write).toHaveBeenCalledWith(pollen),
   );
+});
+
+it("offers first-agent setup only after a complete successful inventory read", async () => {
+  const f = fixture(async () => {}, []);
+  f.update({ complete: false, pending: true });
+  f.mount();
+  expect(
+    screen.queryByRole("heading", { name: "Create your first agent" }),
+  ).not.toBeInTheDocument();
+  expect(f.session.mainAgent?.write).not.toHaveBeenCalled();
+  act(() => f.update({ pending: false, error: "Inventory unavailable" }));
+  expect(screen.getByRole("alert")).toHaveTextContent("Inventory unavailable");
+  expect(
+    screen.queryByRole("heading", { name: "Create your first agent" }),
+  ).not.toBeInTheDocument();
+  act(() =>
+    f.update({
+      complete: true,
+      pending: false,
+      error: "",
+      archives: { status: "loading", archived: [] },
+    }),
+  );
+  expect(
+    screen.queryByRole("heading", { name: "Create your first agent" }),
+  ).not.toBeInTheDocument();
+  act(() =>
+    f.update({
+      archives: {
+        status: "error",
+        archived: [],
+        error: "Archives unavailable",
+      },
+    }),
+  );
+  expect(screen.getByRole("alert")).toHaveTextContent("Archives unavailable");
+  expect(screen.getByRole("button", { name: "Try again" })).toBeEnabled();
+  act(() => f.update({ archives: { status: "ready", archived: [] } }));
+  expect(
+    screen.getByRole("heading", { name: "Create your first agent" }),
+  ).toBeVisible();
+  expect(screen.queryByRole("combobox")).not.toBeInTheDocument();
+  expect(
+    screen.queryByRole("button", { name: "Finish creation" }),
+  ).not.toBeInTheDocument();
+  const user = userEvent.setup();
+  await user.click(screen.getByRole("button", { name: "Create an agent" }));
+  expect(screen.getByRole("button", { name: "Finish creation" })).toBeVisible();
+  expect(f.session.mainAgent?.write).not.toHaveBeenCalled();
+});
+
+function WelcomeEvidence({ scope = "community:viewer" }: { scope?: string }) {
+  const welcome = useFirstAgentWelcome(scope, pollen, "verified-dm");
+  return (
+    <output aria-label="creation welcome">
+      {welcome ? "welcome" : "none"}
+    </output>
+  );
+}
+
+it("retains first-creation intent through inventory changes and refresh/save retry, scoped to its owner", async () => {
+  let saves = 0;
+  const f = fixture(async () => {
+    if (++saves === 1) throw new Error("account offline");
+  }, []);
+  vi.mocked(f.session.agentChoices.refresh).mockRejectedValueOnce(
+    new Error("inventory offline"),
+  );
+  f.mount();
+  const user = userEvent.setup();
+  await user.click(screen.getByRole("button", { name: "Create an agent" }));
+  act(() =>
+    f.update({
+      selectable: [{ pubkey: pollen, name: "Pollen", managed: true }],
+      identities: [{ pubkey: pollen, name: "Pollen", managed: true }],
+    }),
+  );
+  await user.click(screen.getByRole("button", { name: "Finish creation" }));
+  expect(await screen.findByRole("alert")).toHaveTextContent(
+    "inventory offline",
+  );
+  await user.click(screen.getByRole("button", { name: "Try again" }));
+  expect(await screen.findByRole("alert")).toHaveTextContent(
+    "couldn't be saved",
+  );
+  await user.click(screen.getByRole("button", { name: "Try again" }));
+  await waitFor(() =>
+    expect(f.session.mainAgent?.write).toHaveBeenCalledTimes(2),
+  );
+  cleanup();
+  const evidence = render(<WelcomeEvidence />);
+  expect(await screen.findByLabelText("creation welcome")).toHaveTextContent(
+    "welcome",
+  );
+  evidence.rerender(<WelcomeEvidence scope="another-community:viewer" />);
+  expect(screen.getByLabelText("creation welcome")).toHaveTextContent("none");
+  evidence.rerender(<WelcomeEvidence />);
+  expect(screen.getByLabelText("creation welcome")).toHaveTextContent(
+    "welcome",
+  );
+});
+
+it("does not welcome a new agent as the first when an existing identity is archived", async () => {
+  const f = fixture(async () => {}, []);
+  f.update({
+    identities: [{ pubkey: "c".repeat(64), name: "Old agent", managed: false }],
+  });
+  f.mount();
+  const user = userEvent.setup();
+  await user.click(screen.getByRole("button", { name: "Create an agent" }));
+  act(() =>
+    f.update({
+      selectable: [{ pubkey: pollen, name: "Pollen", managed: true }],
+    }),
+  );
+  await user.click(screen.getByRole("button", { name: "Finish creation" }));
+  await waitFor(() =>
+    expect(f.session.mainAgent?.write).toHaveBeenCalledWith(pollen),
+  );
+  cleanup();
+  render(<WelcomeEvidence />);
+  expect(screen.getByLabelText("creation welcome")).toHaveTextContent("none");
 });

@@ -51,7 +51,7 @@ const CUSTOM_MODEL_ACTION: ModelChoice = {
 /** Resolve artwork before passing an optional leading slot to a control. */
 export function modelLogo(model: string, className?: string) {
   const name = model.toLowerCase();
-  const Icon = /claude|anthropic|opus|sonnet|haiku/.test(name)
+  const Icon = /claude|anthropic|opus|sonnet|haiku|fable/.test(name)
     ? ClaudeLogoIcon
     : /(?:^|[\s/._-])(?:gpt|codex|o[134](?:[\s/._-]|$))|openai/.test(name)
       ? CodexLogoIcon

@@ -125,3 +125,84 @@ appTest.describe("app delivery", () => {
     },
   );
 });
+
+// Browser boundary: the real journal storage survives a reload, and a send
+// that reaches the relay after its removal returns as an ordinary message.
+appTest.describe("app delivery removal", () => {
+  appTest.use({ productionBroker: true });
+  appTest(
+    "removes unconfirmed sends from this device without hiding a relay copy",
+    async ({ page, app }) => {
+      await open(page, app);
+      const lost = new Map();
+      await page.route("**/api/relay/**/publish", async (route) => {
+        const request = route.request();
+        const event = request.postDataJSON();
+        if (!["Lost send", "Late send"].includes(event.content))
+          return route.continue();
+        lost.set(event.content, { id: event.id, request });
+        // The connection drops mid-send: no answer ever arrives, so the
+        // delivery deadline leaves it unconfirmed.
+      });
+      const editor = page.getByRole("textbox", {
+        name: "Message #Alpha",
+        exact: true,
+      });
+      const row = (text) =>
+        page
+          .locator("[data-channel-timeline] [data-message-id]")
+          .filter({ hasText: text });
+      for (const text of ["Lost send", "Late send"]) {
+        await editor.fill(text);
+        await editor.press("Enter");
+        await expect(
+          row(text).getByRole("button", { name: "Retry", exact: true }),
+        ).toBeVisible({ timeout: 15000 });
+      }
+      await page.unroute("**/api/relay/**/publish");
+      for (const text of ["Lost send", "Late send"]) {
+        // Keyboard reaches the action on a send that may never arrive.
+        const trigger = row(text).getByRole("button", {
+          name: "More message actions",
+        });
+        await trigger.focus();
+        await trigger.press("Enter");
+        await page
+          .getByRole("menuitem", { name: "Remove from this device" })
+          .click();
+        const confirmation = page.getByRole("alertdialog", {
+          name: "Remove message from this device?",
+        });
+        await expect(confirmation).toContainText(
+          "If it was delivered, it stays in the conversation.",
+        );
+        await confirmation.getByRole("button", { name: "Remove" }).click();
+        await expect(confirmation).toHaveCount(0);
+        await expect(row(text)).toHaveCount(0);
+      }
+      // The dropped request still reaches the relay after its removal.
+      const late = lost.get("Late send").request;
+      const delivered = await page.request.fetch(late.url(), {
+        method: "POST",
+        headers: await late.allHeaders(),
+        data: late.postData(),
+      });
+      expect(delivered.ok()).toBe(true);
+      await expect(row("Late send")).toBeVisible();
+      await page.reload();
+      await open(page, app);
+      await expect(row("Late send")).toBeVisible();
+      await expect(
+        row("Late send").getByRole("button", { name: "Retry", exact: true }),
+      ).toHaveCount(0);
+      await expect(row("Lost send")).toHaveCount(0);
+      // Removal published nothing of its own: no deletion and no resend.
+      expect(
+        app.report.publications.filter(
+          ({ event }) =>
+            event?.kind === 5 || event?.id === lost.get("Lost send").id,
+        ),
+      ).toEqual([]);
+    },
+  );
+});

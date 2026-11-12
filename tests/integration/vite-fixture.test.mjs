@@ -192,6 +192,43 @@ test("port 0 servers, restarts and previews bind where the OS assigns, not a pro
   }
 });
 
+test("fixture and preview servers never close an idle keep-alive connection", async () => {
+  // Node's 5 s default raced a browser reusing the connection for a lazy
+  // import; that request fails and no module script is retried.
+  const idle = (server) => assert.equal(server.httpServer.keepAliveTimeout, 0);
+  let server, previewServer;
+  try {
+    server = await createServer({
+      configFile: false,
+      envDir: false,
+      logLevel: "silent",
+      server: {
+        host: "127.0.0.1",
+        port: 0,
+        strictPort: true,
+        ws: false,
+        watch: null,
+      },
+    });
+    await server.listen();
+    idle(server);
+    // A restart builds a new HTTP server.
+    await server.restart();
+    idle(server);
+    previewServer = await preview({
+      root,
+      configFile: false,
+      envFile: false,
+      logLevel: "silent",
+      preview: { host: "127.0.0.1", port: 0, strictPort: true },
+    });
+    idle(previewServer);
+  } finally {
+    await server?.close();
+    await previewServer?.close();
+  }
+});
+
 test("fixture servers reject configuration that would change dependency optimization", async () => {
   await assert.rejects(
     createServer({ ...config, optimizeDeps: { include: ["yaml"] } }),

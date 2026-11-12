@@ -18,6 +18,7 @@ import {
   type GitHubCli,
 } from "./gh";
 import { GitHubPanel, REFRESH_MS } from "./index";
+import { createPanelMemory } from "./panel-memory";
 import { createPullStates } from "./pull-states";
 import { ToastProvider } from "../../shared/design-system/ui/Toast";
 
@@ -1241,6 +1242,414 @@ it("shows a pull request's changes under Changes, with its line counts", async (
   expect(diff).toHaveBeenCalledTimes(1);
 });
 
+it("opens a pull request again on the view and unsent review it was left with", async () => {
+  const user = userEvent.setup();
+  const gh = vi.fn(async (query: string, _variables?: unknown) =>
+    query.startsWith("mutation") ? {} : pullData(),
+  );
+  const diff = vi.fn(async () => patch);
+  // The plugin's, so it outlives a panel the channel unmounts on leaving.
+  const memory = createPanelMemory();
+  const panel = () => (
+    <GitHubPanel
+      target={pull}
+      close={() => {}}
+      gh={gh as unknown as GitHubCli}
+      diff={diff}
+      memory={memory}
+    />
+  );
+  const first = render(panel(), { wrapper: ToastProvider });
+  await screen.findByRole("heading", { name: "Private change #9" });
+  await user.click(screen.getByRole("button", { name: "Submit review" }));
+  let popup = await screen.findByRole("dialog", { name: "Submit review" });
+  await user.click(within(popup).getByRole("radio", { name: /^Request/ }));
+  await user.type(within(popup).getByRole("textbox"), "Needs a test");
+  await user.keyboard("{Escape}");
+  await waitFor(() => expect(popup).not.toBeInTheDocument());
+  await user.click(screen.getByRole("tab", { name: /^Changes/ }));
+  await screen.findByRole("region", { name: "src/app.ts" });
+  first.unmount();
+
+  render(panel(), { wrapper: ToastProvider });
+  expect(await screen.findByRole("tab", { name: /^Changes/ })).toHaveAttribute(
+    "aria-selected",
+    "true",
+  );
+  // The diff is read again, as the pull request is on every open.
+  expect(
+    await screen.findByRole("region", { name: "src/app.ts" }),
+  ).toBeVisible();
+  expect(diff).toHaveBeenCalledTimes(2);
+  expect(
+    screen.queryByRole("heading", { name: "Private change #9" }),
+  ).not.toBeInTheDocument();
+  await user.click(screen.getByRole("button", { name: "Submit review" }));
+  popup = await screen.findByRole("dialog", { name: "Submit review" });
+  expect(within(popup).getByRole("radio", { name: /^Request/ })).toBeChecked();
+  expect(within(popup).getByRole("textbox")).toHaveValue("Needs a test");
+  await user.click(
+    within(popup).getByRole("button", { name: "Submit review" }),
+  );
+  await waitFor(() => expect(popup).not.toBeInTheDocument());
+  expect(
+    gh.mock.calls.find(([query]) => query.startsWith("mutation"))?.[1],
+  ).toEqual({
+    input: {
+      pullRequestId: "PR_9",
+      commitOID: "abc123",
+      event: "REQUEST_CHANGES",
+      body: "Needs a test",
+    },
+  });
+  // Once it is in, the next panel on it starts a fresh review.
+  expect(memory.get(pull)).toEqual({ view: "changes", review: undefined });
+});
+
+it("starts on Summary in another channel, with the pull request's unsent review", async () => {
+  const user = userEvent.setup();
+  const gh = vi.fn(async () => pullData());
+  const memory = createPanelMemory();
+  const panel = (channelId: string) => (
+    <GitHubPanel
+      target={pull}
+      close={() => {}}
+      context={{ channelId, canOpen: () => false, open: () => false }}
+      gh={gh as unknown as GitHubCli}
+      diff={async () => patch}
+      memory={memory}
+    />
+  );
+  const alpha = render(panel("alpha"), { wrapper: ToastProvider });
+  await screen.findByRole("heading", { name: "Private change #9" });
+  await user.click(screen.getByRole("tab", { name: /^Changes/ }));
+  await user.click(screen.getByRole("button", { name: "Submit review" }));
+  let popup = await screen.findByRole("dialog", { name: "Submit review" });
+  await user.type(within(popup).getByRole("textbox"), "Looks right");
+  await user.keyboard("{Escape}");
+  await waitFor(() => expect(popup).not.toBeInTheDocument());
+  alpha.unmount();
+
+  // A first look from elsewhere starts at the title; the review waits there.
+  const beta = render(panel("beta"), { wrapper: ToastProvider });
+  expect(await screen.findByRole("tab", { name: "Summary" })).toHaveAttribute(
+    "aria-selected",
+    "true",
+  );
+  expect(
+    screen.getByRole("heading", { name: "Private change #9" }),
+  ).toBeInTheDocument();
+  await user.click(screen.getByRole("button", { name: "Submit review" }));
+  popup = await screen.findByRole("dialog", { name: "Submit review" });
+  expect(within(popup).getByRole("textbox")).toHaveValue("Looks right");
+  beta.unmount();
+
+  render(panel("alpha"), { wrapper: ToastProvider });
+  expect(await screen.findByRole("tab", { name: /^Changes/ })).toHaveAttribute(
+    "aria-selected",
+    "true",
+  );
+});
+
+it.each([
+  ["goes in", false, ""],
+  ["is refused", true, "Looks right"],
+])(
+  "offers a review sent as its panel unmounted to the next panel only if it is refused: %s",
+  async (_, refused, offered) => {
+    const user = userEvent.setup();
+    let release!: () => void;
+    const gh = vi.fn(async (query: string, _variables?: unknown) => {
+      if (!query.startsWith("mutation")) return pullData();
+      await new Promise<void>((resolve) => {
+        release = resolve;
+      });
+      if (refused) throw new GitHubError("Pull request is locked");
+      return {};
+    });
+    const memory = createPanelMemory();
+    const panel = () => (
+      <GitHubPanel
+        target={pull}
+        close={() => {}}
+        gh={gh as unknown as GitHubCli}
+        memory={memory}
+      />
+    );
+    const first = render(panel(), { wrapper: ToastProvider });
+    await screen.findByRole("heading", { name: "Private change #9" });
+    await user.click(screen.getByRole("button", { name: "Submit review" }));
+    let popup = await screen.findByRole("dialog", { name: "Submit review" });
+    await user.type(within(popup).getByRole("textbox"), "Looks right");
+    await user.click(
+      within(popup).getByRole("button", { name: "Submit review" }),
+    );
+    await waitFor(() => expect(gh).toHaveBeenCalledTimes(2));
+    // Leaving the channel and coming back before GitHub answers doesn't
+    // stop the review going in, so the panel there can't send it again.
+    first.unmount();
+    render(panel(), { wrapper: ToastProvider });
+    await screen.findByRole("heading", { name: "Private change #9" });
+    const trigger = screen.getByRole("button", { name: "Submit review" });
+    await user.click(trigger);
+    popup = await screen.findByRole("dialog", { name: "Submit review" });
+    expect(within(popup).getByRole("textbox")).toHaveValue("");
+    await user.keyboard("{Escape}");
+    await waitFor(() => expect(popup).not.toBeInTheDocument());
+    release();
+    await waitFor(() =>
+      expect(memory.get(pull).review?.body ?? "").toBe(offered),
+    );
+    await user.click(trigger);
+    popup = await screen.findByRole("dialog", { name: "Submit review" });
+    expect(
+      within(popup).getByRole("radio", { name: /^Comment/ }),
+    ).toBeChecked();
+    expect(within(popup).getByRole("textbox")).toHaveValue(offered);
+  },
+);
+
+it("drops a review another panel on the pull request sent", async () => {
+  const user = userEvent.setup();
+  const gh = vi.fn(async (query: string, _variables?: unknown) =>
+    query.startsWith("mutation") ? {} : pullData(),
+  );
+  const memory = createPanelMemory();
+  const panel = () => (
+    <GitHubPanel
+      target={pull}
+      close={() => {}}
+      gh={gh as unknown as GitHubCli}
+      memory={memory}
+    />
+  );
+  // Two tabs on one pull request, as /pull/9 and /pull/9/ would be.
+  const first = within(render(panel(), { wrapper: ToastProvider }).container);
+  const second = within(render(panel(), { wrapper: ToastProvider }).container);
+  const review = async (view: typeof first) => {
+    await view.findByRole("heading", { name: "Private change #9" });
+    await user.click(view.getByRole("button", { name: "Submit review" }));
+    return screen.findByRole("dialog", { name: "Submit review" });
+  };
+  const dismiss = async (popup: HTMLElement) => {
+    await user.keyboard("{Escape}");
+    await waitFor(() => expect(popup).not.toBeInTheDocument());
+  };
+  let popup = await review(first);
+  await user.type(within(popup).getByRole("textbox"), "Looks right");
+  await dismiss(popup);
+  popup = await review(second);
+  expect(within(popup).getByRole("textbox")).toHaveValue("Looks right");
+  await dismiss(popup);
+  popup = await review(first);
+  await user.click(
+    within(popup).getByRole("button", { name: "Submit review" }),
+  );
+  await waitFor(() => expect(popup).not.toBeInTheDocument());
+  popup = await review(second);
+  expect(within(popup).getByRole("radio", { name: /^Comment/ })).toBeChecked();
+  expect(within(popup).getByRole("textbox")).toHaveValue("");
+});
+
+it.each([
+  ["sent", false, undefined],
+  ["refused, then sent on an unedited retry", true, false],
+  ["refused, then refused again on an unedited retry", true, true],
+])(
+  "keeps a draft written in another tab while a review was %s from this one",
+  async (_outcome, refuse, retryRefused) => {
+    const user = userEvent.setup();
+    let release!: () => void;
+    let refuseNext = refuse;
+    const gh = vi.fn(async (query: string, _variables?: unknown) => {
+      if (!query.startsWith("mutation")) return pullData();
+      await new Promise<void>((resolve) => {
+        release = resolve;
+      });
+      if (refuseNext) throw new GitHubError("Pull request is locked");
+      return {};
+    });
+    const memory = createPanelMemory();
+    const panel = () => (
+      <GitHubPanel
+        target={pull}
+        close={() => {}}
+        gh={gh as unknown as GitHubCli}
+        memory={memory}
+      />
+    );
+    // Two tabs on one pull request, both staying mounted once shown.
+    const first = within(render(panel(), { wrapper: ToastProvider }).container);
+    const second = within(
+      render(panel(), { wrapper: ToastProvider }).container,
+    );
+    await first.findByRole("heading", { name: "Private change #9" });
+    await second.findByRole("heading", { name: "Private change #9" });
+    await user.click(first.getByRole("button", { name: "Submit review" }));
+    const sending = await screen.findByRole("dialog", {
+      name: "Submit review",
+    });
+    await user.type(within(sending).getByRole("textbox"), "Looks right");
+    await user.click(
+      within(sending).getByRole("button", { name: "Submit review" }),
+    );
+    await waitFor(() =>
+      expect(within(sending).getByRole("textbox")).toBeDisabled(),
+    );
+    // While it goes in, the other tab writes a new review and puts it away.
+    await user.click(second.getByRole("button", { name: "Submit review" }));
+    const popups = await screen.findAllByRole("dialog", {
+      name: "Submit review",
+    });
+    const drafting = popups.find((popup) => popup !== sending);
+    if (!drafting) throw new Error("Missing the second tab's popover");
+    await user.click(within(drafting).getByRole("radio", { name: /^Request/ }));
+    await user.type(within(drafting).getByRole("textbox"), "Needs a test");
+    await user.click(within(drafting).getByRole("button", { name: "Cancel" }));
+    await waitFor(() => expect(drafting).not.toBeInTheDocument());
+    release();
+    if (refuse) {
+      expect(await within(sending).findByRole("alert")).toHaveTextContent(
+        "Pull request is locked",
+      );
+      expect(within(sending).getByRole("textbox")).toHaveValue("Looks right");
+    } else await waitFor(() => expect(sending).not.toBeInTheDocument());
+    // However the first ends, the second's draft is the one remembered.
+    const drafted = {
+      event: "REQUEST_CHANGES",
+      body: "Needs a test",
+      head: "abc123",
+    };
+    expect(memory.get(pull).review).toEqual(drafted);
+    if (retryRefused !== undefined) {
+      // The first tab still shows its refused review. Retrying it as it
+      // stands sends only it; the second tab's newer draft is not its to
+      // clear, however the retry ends.
+      refuseNext = retryRefused;
+      await user.click(
+        within(sending).getByRole("button", { name: "Submit review" }),
+      );
+      await waitFor(() =>
+        expect(within(sending).getByRole("textbox")).toBeDisabled(),
+      );
+      release();
+      if (retryRefused) {
+        expect(await within(sending).findByRole("alert")).toHaveTextContent(
+          "Pull request is locked",
+        );
+      } else await waitFor(() => expect(sending).not.toBeInTheDocument());
+      expect(memory.get(pull).review).toEqual(drafted);
+    }
+    await user.click(second.getByRole("button", { name: "Submit review" }));
+    const popup = (
+      await screen.findAllByRole("dialog", { name: "Submit review" })
+    ).find((candidate) => candidate !== sending);
+    if (!popup) throw new Error("Missing the second tab's popover");
+    expect(
+      within(popup).getByRole("radio", { name: /^Request/ }),
+    ).toBeChecked();
+    expect(within(popup).getByRole("textbox")).toHaveValue("Needs a test");
+  },
+);
+
+it("keeps a review going in out of memory when a push lands meanwhile", async () => {
+  vi.useFakeTimers({ shouldAdvanceTime: true });
+  try {
+    const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
+    let pushed = false;
+    let release!: () => void;
+    const gh = vi.fn(async (query: string, _variables?: unknown) => {
+      if (!query.startsWith("mutation"))
+        return pullData(
+          pushed ? { headRefOid: "def456", title: "Pushed again" } : {},
+        );
+      await new Promise<void>((resolve) => {
+        release = resolve;
+      });
+      return {};
+    });
+    const memory = createPanelMemory();
+    const panel = () => (
+      <GitHubPanel
+        target={pull}
+        close={() => {}}
+        gh={gh as unknown as GitHubCli}
+        memory={memory}
+      />
+    );
+    const first = render(panel(), { wrapper: ToastProvider });
+    await screen.findByRole("heading", { name: "Private change #9" });
+    await user.click(screen.getByRole("button", { name: "Submit review" }));
+    let popup = await screen.findByRole("dialog", { name: "Submit review" });
+    await user.type(within(popup).getByRole("textbox"), "Looks right");
+    await user.click(
+      within(popup).getByRole("button", { name: "Submit review" }),
+    );
+    await vi.waitFor(() => expect(gh).toHaveBeenCalledTimes(2));
+    // A push lands while it goes in. Taking it then changes nothing, so the
+    // review stays out of memory however this panel ends.
+    pushed = true;
+    await vi.advanceTimersByTimeAsync(REFRESH_MS);
+    await screen.findByRole("heading", { name: "Pushed again #9" });
+    await user.click(
+      within(popup).getByRole("button", { name: "Use latest commit" }),
+    );
+    first.unmount();
+    render(panel(), { wrapper: ToastProvider });
+    await screen.findByRole("heading", { name: "Pushed again #9" });
+    await user.click(screen.getByRole("button", { name: "Submit review" }));
+    popup = await screen.findByRole("dialog", { name: "Submit review" });
+    expect(
+      within(popup).getByRole("radio", { name: /^Comment/ }),
+    ).toBeChecked();
+    expect(within(popup).getByRole("textbox")).toHaveValue("");
+    release();
+  } finally {
+    vi.useRealTimers();
+  }
+});
+
+it("asks about a newer push only for a remembered review with text", async () => {
+  const user = userEvent.setup();
+  let head = "abc123";
+  const gh = vi.fn(async () => pullData({ headRefOid: head }));
+  const memory = createPanelMemory();
+  const reopen = async () => {
+    cleanup();
+    render(
+      <GitHubPanel
+        target={pull}
+        close={() => {}}
+        gh={gh as unknown as GitHubCli}
+        memory={memory}
+      />,
+      { wrapper: ToastProvider },
+    );
+    await screen.findByRole("heading", { name: "Private change #9" });
+    await user.click(screen.getByRole("button", { name: "Submit review" }));
+    return screen.findByRole("dialog", { name: "Submit review" });
+  };
+  let popup = await reopen();
+  // A decision with only spaces is no draft, so it waits on no push.
+  await user.click(within(popup).getByRole("radio", { name: /^Request/ }));
+  await user.type(within(popup).getByRole("textbox"), "   ");
+  head = "def456";
+  popup = await reopen();
+  expect(within(popup).getByRole("radio", { name: /^Comment/ })).toBeChecked();
+  expect(within(popup).getByRole("textbox")).toHaveValue("");
+  expect(within(popup).queryByRole("status")).not.toBeInTheDocument();
+  await user.type(within(popup).getByRole("textbox"), "Looks right");
+  head = "0a1b2c3";
+  popup = await reopen();
+  expect(within(popup).getByRole("textbox")).toHaveValue("Looks right");
+  expect(within(popup).getByRole("status")).toHaveTextContent(
+    "New commits were pushed after you started this review.",
+  );
+  expect(
+    within(popup).getByRole("button", { name: "Submit review" }),
+  ).toHaveAttribute("aria-disabled", "true");
+});
+
 it("reads a merged pull request's changes by its number", async () => {
   const user = userEvent.setup();
   const gh = vi.fn(async () => pullData({ state: "MERGED" }));
@@ -1463,6 +1872,51 @@ it("asks before a review goes in against a push that arrived mid-draft", async (
     expect(
       screen.queryByRole("button", { name: "Submit review" }),
     ).not.toBeInTheDocument();
+  } finally {
+    vi.useRealTimers();
+  }
+});
+
+it("asks before an approval without text goes in against a push since it was chosen", async () => {
+  vi.useFakeTimers({ shouldAdvanceTime: true });
+  try {
+    const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
+    let pushed = false;
+    const gh = vi.fn(async (query: string, _variables?: unknown) =>
+      query.startsWith("mutation")
+        ? {}
+        : pullData(
+            pushed ? { headRefOid: "def456", title: "Pushed again" } : {},
+          ),
+    );
+    render(
+      <GitHubPanel
+        target={pull}
+        close={() => {}}
+        gh={gh as unknown as GitHubCli}
+      />,
+    );
+    await screen.findByRole("heading", { name: "Private change #9" });
+    const trigger = screen.getByRole("button", { name: "Submit review" });
+    await user.click(trigger);
+    let popup = await screen.findByRole("dialog", { name: "Submit review" });
+    await user.click(within(popup).getByRole("radio", { name: /^Approve/ }));
+    await user.keyboard("{Escape}");
+    await vi.waitFor(() => expect(popup).not.toBeInTheDocument());
+    pushed = true;
+    await vi.advanceTimersByTimeAsync(REFRESH_MS);
+    await screen.findByRole("heading", { name: "Pushed again #9" });
+    await user.click(trigger);
+    popup = await screen.findByRole("dialog", { name: "Submit review" });
+    expect(
+      within(popup).getByRole("radio", { name: /^Approve/ }),
+    ).toBeChecked();
+    expect(within(popup).getByRole("status")).toHaveTextContent(
+      "New commits were pushed after you started this review.",
+    );
+    expect(
+      within(popup).getByRole("button", { name: "Submit review" }),
+    ).toHaveAttribute("aria-disabled", "true");
   } finally {
     vi.useRealTimers();
   }

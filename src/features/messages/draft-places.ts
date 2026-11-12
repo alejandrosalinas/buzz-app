@@ -2,7 +2,7 @@ import { useCallback, useLayoutEffect, useSyncExternalStore } from "react";
 import {
   draftCoordinates,
   listDraftViews,
-  MAX_DRAFT_VIEW_LENGTH,
+  parseDraftView,
   subscribeView,
   viewRevision,
 } from "../../shared/view-state";
@@ -52,15 +52,13 @@ function sameMembership(
   if (!draftCoordinates(key)) return true;
   const listed = places.some((place) => place.key === key);
   const raw = viewRevision(session.scope, key);
-  // A forgotten key is never listed; unreadable or oversized ones are left to
-  // the full scan, as before.
-  if (raw === null) return !listed;
-  if (raw === undefined || raw.length > MAX_DRAFT_VIEW_LENGTH) return false;
-  try {
-    return listed === draftCounts(session, key, JSON.parse(raw));
-  } catch {
-    return false;
-  }
+  // Unreadable or oversized keys are left to the full scan, as before; a
+  // forgotten, empty or malformed one is never listed.
+  if (raw === undefined) return false;
+  const draft = parseDraftView(raw);
+  if (draft === "oversized") return false;
+  if (!draft) return !listed;
+  return listed === draftCounts(session, key, draft.value);
 }
 
 type Store = {

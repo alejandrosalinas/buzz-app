@@ -168,7 +168,7 @@ async function fixture(signedIn = true, openIdentity?: () => void) {
   };
 }
 async function loadedInstructions() {
-  const field = screen.getByRole("textbox", { name: "Instructions" });
+  const field = await screen.findByRole("textbox", { name: "Instructions" });
   await waitFor(() => expect(field).toBeEnabled());
   return field;
 }
@@ -254,11 +254,19 @@ it.each(["cancel", "timeout"] as const)(
         name: "Sign in to Builderlab",
       });
       expect(retry).toBeEnabled();
-      const guidance = screen.getByText(
-        "Sign in to edit settings. You can still message this agent.",
-      );
-      expect(row).not.toContainElement(guidance);
-      expect(row?.parentElement).toContainElement(guidance);
+      if (outcome === "cancel") {
+        const guidance = screen.getByText(
+          "Sign in to edit settings. You can still message this agent.",
+        );
+        expect(row).not.toContainElement(guidance);
+        expect(row?.parentElement).toContainElement(guidance);
+      } else {
+        // The failure beside Sign in replaces the guidance: one message.
+        expect(screen.getByRole("alert")).toHaveTextContent(
+          "Builderlab authentication timed out",
+        );
+        expect(screen.queryByText(/Sign in to edit settings/)).toBeNull();
+      }
       expect(screen.queryByRole("region")).toBeNull();
       expect(h.acquire).toHaveBeenCalledOnce();
       expect(h.request).not.toHaveBeenCalled();
@@ -1098,11 +1106,34 @@ it("shows the remote execution hint only while the shared account is signed in",
   await loadedInstructions();
   const note = screen.getByRole("note");
   expect(within(note).getByText("Remote agent")).toBeVisible();
-  expect(within(note).getByText("Runs on a Builderlab machine")).toBeVisible();
+  expect(within(note).getByText(/Runs on a Builderlab machine/)).toBeVisible();
+  expect(
+    within(note).getByRole("link", { name: "See usage and billing" }),
+  ).toBeVisible();
   expect(note).not.toHaveTextContent("It can’t open files on this computer.");
   act(() => h.session.signOut());
   expect(screen.queryByRole("note")).not.toBeInTheDocument();
 });
+
+it.each(["https://builderlab.example", "https://login.example/deployment/"])(
+  "links usage and billing in the remote hint to %s",
+  async (server) => {
+    vi.stubEnv("VITE_BUZZ_BUILDERLAB_URL", server);
+    const h = await fixture();
+    renderTabs(h);
+    await loadedInstructions();
+    const link = within(screen.getByRole("note")).getByRole("link", {
+      name: "See usage and billing",
+    });
+    expect(link).toHaveAttribute("href", server);
+    expect(link).toHaveAttribute("target", "_blank");
+    expect(link).toHaveAttribute("rel", "noopener noreferrer");
+    expect(link.parentElement).toHaveClass("buzz-preference-row-description");
+    expect(link.parentElement).toHaveTextContent(
+      "Runs on a Builderlab machine. See usage and billing.",
+    );
+  },
+);
 
 it("hides the runtime Workspace hint while signed out without loading settings", async () => {
   const h = await fixture(false);
@@ -1140,7 +1171,7 @@ it("keeps hosted instructions on cancellation and resets a confirmed discard", a
   const identity = screen.getByRole("tabpanel", { name: "Identity" });
   const note = within(identity).getByRole("note");
   expect(within(note).getByText("Remote agent")).toBeVisible();
-  expect(within(note).getByText("Runs on a Builderlab machine")).toBeVisible();
+  expect(within(note).getByText(/Runs on a Builderlab machine/)).toBeVisible();
   const harness = within(identity).getByRole("button", {
     name: "Change harness from Builderlab",
   });

@@ -5,6 +5,9 @@
     gap: var(--space-3);
     margin-bottom: var(--space-5);
   }
+  .buzz-content-header[data-align="end"] {
+    align-items: end;
+  }
   .buzz-content-header-copy {
     flex: 1;
     min-width: 0;
@@ -12,6 +15,11 @@
   .buzz-content-header-title {
     @apply text-label;
     margin: 0;
+  }
+  /* A title given tabIndex -1 is a focus landing; ring it for keyboard users. */
+  html[data-keyboard-navigation] .buzz-content-header-title:focus-visible {
+    outline: 2px solid var(--border-focus);
+    outline-offset: 2px;
   }
   .buzz-content-header-subtitle {
     @apply text-body-sm;

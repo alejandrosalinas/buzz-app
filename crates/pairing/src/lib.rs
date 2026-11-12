@@ -4,7 +4,7 @@
 //! `nsec` or a NIP-46 bunker connection string) over an untrusted relay, using:
 //!
 //! 1. **HKDF-SHA256** for all key derivation (session ID, SAS code, transcript hash).
-//! 2. **ECDH** (via [`nostr::util::generate_shared_key`]) for the shared secret.
+//! 2. **ECDH** (via [`crypto::ecdh_shared_x`]) for the shared secret.
 //! 3. **NIP-44 v2** for encrypting the message payloads.
 //! 4. **Short Authentication String (SAS)** for out-of-band confirmation.
 //!
@@ -64,7 +64,7 @@ pub enum PairingError {
 
     /// NIP-44 encryption or decryption failed.
     #[error("NIP-44 error: {0}")]
-    Nip44(#[from] nostr::nips::nip44::Error),
+    Nip44(#[from] nostr::error::Error),
 
     /// JSON serialization or deserialization failed.
     #[error("JSON error: {0}")]

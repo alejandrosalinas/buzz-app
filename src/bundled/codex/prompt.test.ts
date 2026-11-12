@@ -14,6 +14,26 @@ const event = {
 } as EventData;
 const conversation = { channelId: "chan", name: "general", root: event.id };
 
+it("permits the runtime's agent CLI provider without credential or owner fallback", () => {
+  const instructions = developerInstructions({
+    name: "Codex",
+    pubkey: "b".repeat(64),
+  });
+  expect(instructions).toContain("Prefer these tools for Buzz operations.");
+  expect(instructions).toContain("You may use the buzz CLI");
+  expect(instructions).toContain("agent-specific BUZZ_CREDENTIAL_PROVIDER");
+  expect(instructions).toContain(
+    "use the available Buzz tools or report the blocker",
+  );
+  expect(instructions).toContain(
+    "Do not look for credentials, read private keys",
+  );
+  expect(instructions).toContain(
+    "change the provider, or pair the CLI as your owner",
+  );
+  expect(instructions).not.toContain("Do not invoke the buzz CLI");
+});
+
 it("tells a turn a mention starts what it owes the mention, and a wake's turn nothing of the kind", () => {
   const asked = turnInput("agent", event, conversation, "what changed?");
   expect(asked).toContain(`${MENTION_PROMPT}\n<buzz-event>`);

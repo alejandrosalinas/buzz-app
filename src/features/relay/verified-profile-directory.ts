@@ -146,6 +146,8 @@ export function createVerifiedProfileDirectory(
     chunk: readonly string[],
     // A change accepted before EOSE that is not yet published.
     dirty = false,
+    // A resume after a planned renewal: heads changed since this cursor only.
+    since?: number,
   ) {
     let active = true;
     let ready = false;
@@ -173,7 +175,7 @@ export function createVerifiedProfileDirectory(
     batches.add(batch);
     try {
       stopWire = subscribe(
-        verifiedProfileFilter(currentAuthority.pubkey, chunk),
+        verifiedProfileFilter(currentAuthority.pubkey, chunk, since),
         {
           event(event) {
             if (!active) return;
@@ -191,6 +193,17 @@ export function createVerifiedProfileDirectory(
             if (!active) return;
             clearTimeout(timeout);
             ready = true;
+            if (since !== undefined) {
+              // A resume sends only changed heads; the batch was live until
+              // its cursor, so an omitted subject keeps its status and head.
+              for (const subject of seen) {
+                if (!wanted.has(subject) || checked.has(subject)) continue;
+                checked.add(subject);
+                dirty = true;
+              }
+              if (dirty) changed();
+              return;
+            }
             // A full response with missing subjects may be truncated. It is
             // never evidence that an omitted key has no current projection.
             const complete = count < chunk.length || seen.size === chunk.length;
@@ -209,18 +222,20 @@ export function createVerifiedProfileDirectory(
             // A replay that confirmed what was already shown changes nothing.
             if (dirty) changed();
           },
-          closed(reason) {
+          closed(reason, resume) {
             if (!reason.startsWith("disconnected:")) return fail();
             // A replaced socket ends every sent sync. An outage then reports
             // the connection down in the same task, which stops every batch.
             // A planned renewal keeps it up: send the batch again and keep
             // its checked status until the replacement answers, as a rebuilt
-            // batch does.
+            // batch does. One that reached EOSE resumes from the socket's
+            // cursor; a resume that did not keeps its own start point.
+            const next = ready ? resume?.since : since;
             queueMicrotask(() => {
               if (!active || !online) return fail();
               batch.stop();
               batches.delete(batch);
-              start(currentAuthority, batch.subjects, batch.pending());
+              start(currentAuthority, batch.subjects, batch.pending(), next);
             });
           },
         },

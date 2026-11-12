@@ -13,7 +13,8 @@ headphone button says **Talk with [agent]**, and starting a Huddle adds the agen
 to its room. Joining an existing Huddle never adds anyone. Otherwise, add agents
 with **Add someone**; parent conversation membership alone does not seat them.
 
-On this computer, a seated agent rests at a smaller size, adds a rotating ring
-(activity dots in the mini player) while it works, and returns to normal size
-while it speaks. Reduced motion keeps the ring static. This state is local and
-not shared with other participants.
+On this computer, a seated agent starts at normal size and shrinks by 20% while
+you speak. It stays smaller with a rotating ring (activity dots in the mini
+player) while it works, then speaks at normal size with the same pulse as people.
+Reduced motion keeps the ring static. This state is local and not shared with
+other participants.

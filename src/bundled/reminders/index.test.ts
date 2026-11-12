@@ -5,10 +5,12 @@ import { createReminders } from "../../features/relay/reminders";
 import { Context } from "@deepseek-ai/cordis";
 import { PluginRuntime } from "../../plugins/runtime";
 import type { PluginModule } from "../../plugins/api";
+import type { PluginInfo } from "../../plugins/types";
 import { provideNavigation } from "../../features/navigation/service";
 import { NotificationsService } from "../../features/notifications/service";
 import { createNotificationPreferences } from "../../features/notifications/preferences";
 import type { NotificationPlatform } from "../../features/notifications/platform";
+import type { Navigation } from "../../features/navigation/controller";
 import { apply } from "./index";
 
 const viewer = "a".repeat(64);
@@ -78,7 +80,7 @@ const channels = {
 function mount(notifications?: unknown) {
   const listeners = new Set<() => void>();
   let snapshot: unknown = { status: "connecting" };
-  const submit = vi.fn(() => Promise.resolve());
+  const submit = vi.fn(() => Promise.resolve(true));
   const stop: (() => void)[] = [];
   const ctx = {
     relay: {
@@ -292,6 +294,59 @@ it("opens a note-only reminder's notification on its own community's page", asyn
   });
 });
 
+it("opens a reminder's notification on its page when its channel refuses the message", async () => {
+  const origin = "https://a.example";
+  const scope = { viewer, communityOrigin: origin };
+  // Access refuses the message, as for a channel the viewer has left.
+  const submit = vi.fn(
+    async (input: { target: { kind: string } }) => input.target.kind === "page",
+  );
+  const { connect, dispose } = mount({ register: () => ({ submit }) });
+  stored.set(`buzz-reminders-checked.v1:${origin}:${viewer}`, "40");
+  try {
+    connect(
+      `${origin}:${viewer}`,
+      session(Promise.resolve([wire("left", 50)])).capability,
+    );
+    await flush();
+    const text = {
+      sourceKey: "left:50",
+      title: "Reminder due · #general",
+      body: "hi",
+    };
+    expect(submit.mock.calls.map(([input]) => input)).toEqual([
+      {
+        ...text,
+        target: {
+          version: 1,
+          kind: "conversation",
+          scope,
+          channelId: "c",
+          messageId: target.eventId,
+        },
+      },
+      {
+        ...text,
+        target: {
+          version: 1,
+          kind: "page",
+          pluginId: "buzz.reminders",
+          pageId: "reminders",
+          scope,
+        },
+      },
+    ]);
+    connect(
+      `${origin}:${viewer}`,
+      session(Promise.resolve([wire("left", 50)])).capability,
+    );
+    await flush();
+    expect(submit).toHaveBeenCalledTimes(2);
+  } finally {
+    dispose();
+  }
+});
+
 it("names the channel and the reminder in banners through the real notification service", async () => {
   const ctx = new Context();
   let module: PluginModule = { apply() {} };
@@ -441,7 +496,12 @@ type Launch = Readonly<{
   roster?: keyof typeof ROSTERS;
   permission?: "granted" | "denied";
   member?: boolean;
+  /** The list shows the channel anyway, without the viewer in its members.
+   * Discovery lists no such channel today; this pins the access check. */
+  listed?: boolean;
   category?: boolean;
+  /** Focus is on: its real gate admits only Solo conversations. */
+  focus?: boolean;
   /** A live roster for a first-page channel arrives before any page. */
   early?: boolean;
   /** That channel is revoked between pages, so discovery restarts. */
@@ -463,6 +523,7 @@ async function launch(options: Launch) {
   const { notificationAuthorized } = await import(
     "../../features/notifications/messages"
   );
+  const { soloConversation } = await import("../focus/status");
   const key = options.key ?? keypair();
   const relayKey = keypair();
   const origin = "https://restart.example";
@@ -548,16 +609,48 @@ async function launch(options: Launch) {
   }
   await vi.advanceTimersByTimeAsync(0);
   const ctx = new Context();
-  const runtime = new PluginRuntime(ctx, async () => ({
-    inject: ["notifications", "relay", "navigation", "pages", "conversation"],
-    apply,
-  }));
+  // Focus while it is on: a plugin holding Focus's own gate.
+  const focus: PluginModule = {
+    inject: ["notifications", "relay"],
+    apply: (scope) =>
+      void scope.notifications.gate({
+        id: "solo",
+        allows: (to) => soloConversation(scope.relay, to),
+      }),
+  };
+  const runtime = new PluginRuntime(ctx, async (plugin) =>
+    plugin.manifest.id === "buzz.focus"
+      ? focus
+      : {
+          inject: [
+            "notifications",
+            "relay",
+            "navigation",
+            "pages",
+            "conversation",
+          ],
+          apply,
+        },
+  );
   const connectionListeners = new Set<() => void>();
+  const channels = owner.session.channels;
   let snapshot = {
     status: "ready",
     viewer: key.pubkey,
     scope,
-    session: owner.session,
+    session: options.listed
+      ? {
+          ...owner.session,
+          channels: {
+            ...channels,
+            list: () => {
+              const list = channels.list();
+              const room = { id: "room", name: "Room", members: [] };
+              return { ...list, channels: [...list.channels, room] };
+            },
+          },
+        }
+      : owner.session,
     generation: 1,
   };
   const connection = {
@@ -576,12 +669,14 @@ async function launch(options: Launch) {
     }),
     subscribe: () => () => {},
   };
-  const show = vi.fn(async () => {});
+  const show = vi.fn<NotificationPlatform["show"]>(async () => {});
+  // A click opens its target; navigation itself is frozen, so wrap a copy.
+  const open = vi.fn<Navigation["open"]>(async () => ({ status: "opened" }));
   const permission = async () => options.permission ?? "granted";
   const preferences = createNotificationPreferences(undefined);
   new NotificationsService(
     ctx,
-    provideNavigation(ctx).navigation,
+    { ...provideNavigation(ctx).navigation, open },
     {
       label: "Test",
       permission,
@@ -624,6 +719,13 @@ async function launch(options: Launch) {
   return {
     key,
     show,
+    /** Click every banner shown so far; returns the targets they opened. */
+    click() {
+      open.mockClear();
+      for (const [, activate] of show.mock.calls) activate();
+      return open.mock.calls.map(([to]) => to);
+    },
+    scope: { viewer: key.pubkey, communityOrigin: origin },
     pages: ROSTERS[shape],
     saved: () => stored.get(`buzz-reminders-checked.v1:${scope}`),
     emitRoster: () =>
@@ -693,16 +795,18 @@ async function launch(options: Launch) {
     },
     async start() {
       if (!options.offline) live?.state({ status: "connected", routes: [] });
+      const plugin = (id: string, name: string): PluginInfo => ({
+        manifest: { id, name, apiVersion: 1 },
+        enabled: true,
+        source: "bundled",
+        revision: "v1",
+        previous: null,
+        reloadable: true,
+        error: null,
+      });
       runtime.reconcile([
-        {
-          manifest: { id: "buzz.reminders", name: "Reminders", apiVersion: 1 },
-          enabled: true,
-          source: "bundled",
-          revision: "v1",
-          previous: null,
-          reloadable: true,
-          error: null,
-        },
+        plugin("buzz.reminders", "Reminders"),
+        ...(options.focus ? [plugin("buzz.focus", "Focus")] : []),
       ]);
       if (options.first === "list") {
         await flush();
@@ -742,8 +846,27 @@ it.each<[string, Launch["first"], Launch["banners"], Partial<Launch>]>([
   ["revocation between pages", "history", 1, { roster: "two", revoke: true }],
   ["Reminders category off", "list", 0, { category: false }],
   ["permission denied", "list", 0, { permission: "denied" }],
-  ["missing membership", "list", 0, { member: false }],
-  ["an empty roster", "list", 0, { roster: "empty" }],
+  ["missing membership", "list", 1, { member: false }],
+  ["an empty roster", "list", 1, { roster: "empty" }],
+  [
+    "missing membership, Reminders category off",
+    "list",
+    0,
+    { member: false, category: false },
+  ],
+  [
+    "missing membership, permission denied",
+    "list",
+    0,
+    { member: false, permission: "denied" },
+  ],
+  ["missing membership, Focus on", "list", 0, { member: false, focus: true }],
+  [
+    "a listed channel without membership",
+    "list",
+    1,
+    { member: false, listed: true },
+  ],
 ])(
   "catches up a reminder missed while closed: %s",
   async (_, first, banners, rest) => {
@@ -784,6 +907,25 @@ it.each<[string, Launch["first"], Launch["banners"], Partial<Launch>]>([
       await app.nextPage();
       if (first === "list" && !rest.early) await app.start();
       await vi.waitFor(() => expect(app.show).toHaveBeenCalledTimes(banners));
+      // The banner opens the message, or Reminders when the viewer isn't in
+      // the message's channel and access refuses it.
+      const opens =
+        rest.member === false || rest.roster === "empty"
+          ? {
+              version: 1,
+              kind: "page",
+              pluginId: "buzz.reminders",
+              pageId: "reminders",
+              scope: app.scope,
+            }
+          : {
+              version: 1,
+              kind: "conversation",
+              scope: app.scope,
+              channelId: "room",
+              messageId: target.eventId,
+            };
+      expect(app.click()).toEqual(Array(banners).fill(opens));
       await vi.waitFor(() => expect(app.saved()).toBe("5000"));
       if (rest.revoke) expect(app.roster()).toBe("verified");
       if (rest.roster === "capped")

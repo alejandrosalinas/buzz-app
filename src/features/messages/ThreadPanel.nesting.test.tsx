@@ -40,9 +40,11 @@ vi.mock("./MessageRow", () => ({
     day,
     repliedAgents,
     stoppedRequest,
+    recordedActivity,
   }: MessageRowProps) => (
     <article
       data-message-id={row.id}
+      data-request={recordedActivity?.requestId}
       data-replied-agents={repliedAgents?.join(",")}
       data-stopped-request={stoppedRequest?.id}
       data-layout={layout}
@@ -185,6 +187,28 @@ function setup(messageId = "root") {
     },
   };
 }
+it("binds a flattened update to the request it claims in another reply level", () => {
+  const h = setup();
+  const agent = "b".repeat(64);
+  const update = (id: string): ChannelMessage => ({
+    ...row(id, "root"),
+    threadRootId: "root",
+    authorId: agent,
+    audience: "agents",
+  });
+  h.update([
+    update("old"),
+    { ...row("follow-up", "old"), threadRootId: "root" },
+    // Its send names the nested follow-up, but its reply link is the root.
+    { ...update("current"), request: "follow-up" },
+  ]);
+  fireEvent.click(
+    screen.getByRole("button", { name: /^Show activity history:/ }),
+  );
+  const article = (text: string) => screen.getByText(text).closest("article");
+  expect(article("current")).toHaveAttribute("data-request", "follow-up");
+  expect(article("old")).toHaveAttribute("data-request", "root");
+});
 it("keeps a stopped note on the agent's latest reply that a collapsed branch cannot hide", () => {
   const h = setup();
   const agent = "b".repeat(64);

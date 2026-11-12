@@ -3,6 +3,7 @@ import type { OutboxRecovery } from "../relay/outbox";
 import { ownSolo } from "../solo/labels";
 import { archivedMention } from "./mention-admission";
 import type { FollowUpMessage } from "./follow-up-storage";
+import { signMessageTokens } from "./message-tokens";
 
 /** Recreated after restart; no composer closures or old membership authority. */
 export function followUpMessage(
@@ -46,6 +47,18 @@ export function followUpMessage(
       )
         throw new Error(
           "This Solo chat or its recipients are no longer available.",
+        );
+      if (message.tokens?.length)
+        return signMessageTokens(message.tokens, () =>
+          session.messages.send(
+            message.channelId,
+            message.text,
+            message.recipients,
+            message.attachments,
+            recovery,
+            message.references,
+            message.picks,
+          ),
         );
       if (
         !recovery &&

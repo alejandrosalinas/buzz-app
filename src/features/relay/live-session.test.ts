@@ -8,6 +8,7 @@ import type { ReadFilter, RelayEvent } from "./events";
 import type { LiveCallbacks } from "./live";
 import { headRecovering } from "./live-recovery";
 import { EMOJI_SET } from "./emoji";
+import type { SidebarPreferences } from "./sidebar-preferences";
 import { readJournal, type ReadJournal } from "./read-state-storage";
 // The real host codec, as read-state.test.ts uses it.
 import {
@@ -1572,6 +1573,7 @@ it("skips the reads a continuous global replay covers, and keeps them after a cu
     },
     {
       readStateStorage: {
+        capture: async () => structuredClone(journal),
         async update(change) {
           journal = readJournal(change(journal), viewer.pubkey);
           return journal;
@@ -2562,4 +2564,145 @@ describe("a reconnect whose replay was continuous", () => {
       }
     },
   );
+});
+
+it("reconciles own sidebar hints with full fresh reads and bounded reconnect repair", async () => {
+  const viewer = keypair(),
+    relay = keypair();
+  const wire = scriptedTransport(viewer.pubkey, relay.pubkey);
+  let live!: LiveCallbacks;
+  const data = {
+    sections: [{ id: "work", name: "Work", order: 0 }],
+    assignments: { alpha: "work" },
+    starred: ["beta"],
+    muted: ["gamma"],
+  };
+  const decode = vi.fn(async (): Promise<SidebarPreferences> => data);
+  const owner = createRelaySession({
+    ...wire.transport,
+    decodeSidebarPreferences: decode,
+    subscribe(callbacks) {
+      live = callbacks;
+      return { update() {}, retry() {}, dispose() {} };
+    },
+  });
+  const hint = signed(viewer, {
+    kind: 30078,
+    created_at: 1700000000,
+    content: "encrypted",
+    tags: [
+      ["d", "channel-sections"],
+      ["t", "channel-sections"],
+    ],
+  });
+  const preferences = owner.session.sidebarPreferences;
+  try {
+    const initial = preferences.ensure();
+    await flush();
+    wire.next().respond([]);
+    await initial;
+    const empty = { ...data, assignments: {} };
+    decode.mockResolvedValueOnce(empty);
+    live.receive([hint, hint]);
+    await flush();
+    const read = wire.next();
+    expect(read.filters).toHaveLength(5);
+    expect(
+      read.filters.every(
+        (filter) =>
+          filter.consistency === "strong" &&
+          filter.limit === 1 &&
+          filter.authors?.[0] === viewer.pubkey,
+      ),
+    ).toBe(true);
+    read.respond([]);
+    await preferences.ensure();
+    expect(preferences.snapshot().data).toEqual(empty);
+    live.receive([
+      hint,
+      signed(keypair(), { ...hint, created_at: hint.created_at + 1 }),
+      signed(viewer, { ...hint, tags: [["d", "unknown"]] }),
+      signed(viewer, {
+        ...hint,
+        tags: [
+          ["d", "channel-stars"],
+          ["d", "channel-sections"],
+        ],
+      }),
+    ]);
+    await flush();
+    expect(wire.pending).toHaveLength(0);
+    live.state({ status: "connected", routes: [] });
+    live.established(undefined, { route: "membership", continuous: true });
+    await flush();
+    // Other global owners may read; only count this complete account batch.
+    const batches = () =>
+      wire.pending.filter((entry) =>
+        entry.filters.some((f) => f["#d"]?.includes("channel-sections")),
+      );
+    expect(batches()).toHaveLength(0);
+    live.state({ status: "retrying", routes: [] });
+    live.state({ status: "connected", routes: [] });
+    live.established(undefined, { route: "membership", continuous: false });
+    await flush();
+    expect(batches()).toHaveLength(1);
+    batches()[0]?.respond([]);
+    await preferences.ensure();
+    expect(preferences.snapshot().data).toEqual(data);
+    live.established(undefined, { route: "membership", continuous: true });
+    await flush();
+    expect(decode).toHaveBeenCalledTimes(3);
+  } finally {
+    owner.dispose();
+  }
+});
+
+it("retries transient sidebar hint failures through existing preference recovery", async () => {
+  vi.useFakeTimers();
+  const viewer = keypair(),
+    relay = keypair();
+  let live!: LiveCallbacks;
+  const data = { sections: [], assignments: {}, starred: [], muted: [] };
+  const read = vi.fn(async () => []);
+  const decode = vi.fn(async () => data);
+  const owner = createRelaySession({
+    viewer: viewer.pubkey,
+    relayAuthor: relay.pubkey,
+    media: () => undefined,
+    query: read,
+    decodeSidebarPreferences: decode,
+    subscribe(callbacks) {
+      live = callbacks;
+      return { update() {}, retry() {}, dispose() {} };
+    },
+  });
+  try {
+    await owner.session.sidebarPreferences.ensure();
+    decode.mockRejectedValueOnce(new TypeError("network unavailable"));
+    live.receive([
+      signed(viewer, {
+        kind: 30078,
+        content: "encrypted",
+        tags: [["d", "channel-sections"]],
+      }),
+    ]);
+    await Promise.resolve();
+    await owner.session.sidebarPreferences.ensure();
+    expect(owner.session.sidebarPreferences.snapshot()).toMatchObject({
+      status: "error",
+      data,
+      transient: true,
+    });
+    expect(owner.session.recovery?.snapshot().recovering).toBe(true);
+    expect(read).toHaveBeenCalledTimes(2);
+    await vi.advanceTimersByTimeAsync(5000);
+    await owner.session.sidebarPreferences.ensure();
+    expect(owner.session.sidebarPreferences.snapshot()).toEqual({
+      status: "ready",
+      data,
+    });
+    expect(read).toHaveBeenCalledTimes(3);
+  } finally {
+    owner.dispose();
+  }
 });

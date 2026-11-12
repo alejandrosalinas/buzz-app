@@ -184,6 +184,7 @@ function setup(
       };
     },
     retry() {},
+    tryAgain() {},
     disconnect() {},
     async clearCache() {},
   };

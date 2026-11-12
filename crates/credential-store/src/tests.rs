@@ -195,7 +195,7 @@ fn error_mapping_is_typed_and_contains_no_backend_detail() {
         error(keyring::Error::BadEncoding(b"PRIVATE".to_vec())),
         Error::Corrupt
     );
-    assert_eq!(error(keyring::Error::Ambiguous(vec![])), Error::Corrupt);
+    assert_eq!(error(keyring::Error::Ambiguous(vec![])), Error::Ambiguous);
 }
 
 #[test]

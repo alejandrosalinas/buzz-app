@@ -1,3 +1,4 @@
+import { activityRow } from "./navigation.mjs";
 import { test, expect } from "./fixture.mjs";
 import { open, settle, virtuaIdle } from "./timeline.mjs";
 import {
@@ -30,10 +31,7 @@ test("Inbox DM composer focus reads a visible peer arrival after dwell without r
       }),
     )
     .toEqual({ status: "reconciled", completeness: "snapshot" });
-  await page
-    .getByRole("navigation", { name: "Apps dock", exact: true })
-    .getByRole("tab", { name: "Activity", exact: true })
-    .click();
+  await activityRow(page).click();
   const inbox = page.getByRole("region", { name: "Activity", exact: true });
   const dm = inbox
     .getByRole("list", { name: "Activity", exact: true })

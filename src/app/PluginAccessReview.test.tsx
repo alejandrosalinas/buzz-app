@@ -190,3 +190,80 @@ it("uses the existing unchanged disclosure for managed saves", () => {
     screen.getByRole("button", { name: /Save temporary plugin files/ }),
   ).toBeVisible();
 });
+
+const publicImages = (granted: boolean): PluginManifest => ({
+  ...manifest(false),
+  host: { publicImages: granted },
+});
+it("discloses public image reads, their limits and that sites see the IP address", async () => {
+  render(<PluginAccessReview manifest={publicImages(true)} />);
+  expect(screen.queryByRole("button", { name: /Read your files/ })).toBeNull();
+  fireEvent.click(
+    screen.getByRole("button", {
+      name: /Contact any public website for images/,
+    }),
+  );
+  await waitFor(() =>
+    expect(
+      screen.getByText(
+        /Only PNG, JPEG, GIF, WebP and AVIF images are returned/,
+      ),
+    ).toBeVisible(),
+  );
+  expect(screen.getByText(/Sites see your IP address/)).toBeVisible();
+  expect(
+    screen.getByText(
+      /can't recognize internal sites that resolve to public addresses/,
+    ),
+  ).toBeVisible();
+});
+it("shows no public image access when it isn't declared", () => {
+  render(<PluginAccessReview manifest={publicImages(false)} />);
+  expect(
+    screen.queryByRole("button", {
+      name: /Contact any public website for images/,
+    }),
+  ).toBeNull();
+});
+const publicPages = (granted: boolean): PluginManifest => ({
+  ...manifest(false),
+  host: { publicPages: granted },
+});
+it("discloses public page reads and that only preview fields come back", async () => {
+  render(<PluginAccessReview manifest={publicPages(true)} />);
+  fireEvent.click(
+    screen.getByRole("button", {
+      name: /Contact any public website for link previews/,
+    }),
+  );
+  await waitFor(() =>
+    expect(screen.getByText(/returns only its preview fields/)).toBeVisible(),
+  );
+});
+it("shows no public page access when it isn't declared", () => {
+  render(<PluginAccessReview manifest={publicPages(false)} />);
+  expect(
+    screen.queryByRole("button", {
+      name: /Contact any public website for link previews/,
+    }),
+  ).toBeNull();
+});
+it.each([
+  [false, true, "Added"],
+  [true, false, "Removed"],
+] as const)(
+  "compares public image access from %s to %s",
+  (before, after, change) => {
+    render(
+      <PluginAccessReview
+        manifest={publicImages(after)}
+        previousManifest={publicImages(before)}
+      />,
+    );
+    expect(
+      within(
+        screen.getByRole("region", { name: `${change} declarations` }),
+      ).getByRole("button", { name: /Contact any public website for images/ }),
+    ).toBeVisible();
+  },
+);

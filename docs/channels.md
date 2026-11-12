@@ -496,6 +496,11 @@ Profile replacement does not establish relay ownership transfer or revocation.
 The viewer signs the unchanged Delete command and the relay enforces its stored
 ownership and current channel state. A definitive rejection retains the channel
 and recoverable confirmation; uncertain delivery still blocks blind resubmission.
+A Delete refused by the client's relay-request pause (bare `ApiPaused`, which can only
+escape `run` before publication) keeps its confirmation open with the remaining wait;
+**Retry** enables when the pause ends and reruns the full `run`, fresh checks included.
+It never starts by itself, and a pause wrapped as unconfirmed or reported by publication
+keeps the ordinary failure.
 Existing membership requirements remain; nonmember access and community-admin
 overrides are not added. Invalid member keys and duplicate entries still fail
 closed in the confirmation check.

@@ -93,14 +93,6 @@ state for their shared load/preflight/confirmation reads; the member dialog's
 separate display-roster load remains replica-eligible. Channel-write membership
 preflights (including session sends and canvas saves) also use the writer, so a
 just-added member does not fail the next operation.
-`owner_channel_get` reads a channel's records from the writer once and judges
-its archive state and lifecycle rights, including an owned agent's grant, from
-those records. The other channel-scoped owner reads check the same records
-before reading the channel's content as a snapshot read, which feeds no session
-view; an unscoped `owner_read` search keeps only results in the owner's listed
-channels. The first page of `owner_canvas_history` is the writer's, as the app's
-history is, and `owner_canvas_get` reads an explicit revision from the writer,
-so a revision that history just listed is found.
 Template setup also confirms exact Canvas/member events and selected Canvas heads
 against the writer without replaying accepted commands. Agent deletion discovers
 member channels and confirms each removal with writer-backed rosters; unreadable
@@ -705,13 +697,28 @@ disconnect. Window focus does not read the roster. Decryption, uploads and serve
 
 The same rule covers the other reads a global route replays. After a continuous
 profiles replay, statuses and the emoji catalog are not read again; after a
-continuous membership replay, the read-state markers and the reminders list are
-not read again. Each owner returns to the state the drop interrupted once the
-replay is in, and reads again when that state was incomplete, failed, or still
-loading. A cut replay or no cursor keeps the earlier reads, even after an earlier
-report on the same connection; a route that fails before it establishes, or a
-host that reports no route, keeps them once per connection. The unread repair
-still runs on each connection.
+continuous membership replay, the read-state markers, reminders list and saved
+sidebar preferences are not read again unless reconciliation is still owed.
+Each owner returns to the state the drop interrupted once the replay is in, and
+reads again when that state was incomplete, failed, or still loading. A cut
+replay or no cursor keeps the earlier reads, even after an earlier report on the
+same connection; a route that fails before it establishes, or a host that reports
+no route, keeps them once per connection. The unread repair still runs on each
+connection.
+
+Saved sidebar preferences use no idle polling. A newer own sidebar event,
+including a local-write echo, requests one strong, fresh five-filter latest-head
+batch (limit 1 per coordinate). Same-turn hints coalesce; a newer hint or an
+overlapping local write can require a trailing batch. Duplicate or superseded
+hints request none. A non-continuous membership establishment requests one batch,
+including the first connection without a cursor: cold start typically reads
+twice (initial load plus repair), with another batch possible if replay overlaps
+a read. Continuous reconnect adds none when reconciliation is complete. Each
+published local preference write can therefore add one echo batch; unchanged
+writes that do not publish add none. Transient read failures use the existing
+session recovery backoff (1 second through a 30-second cap); other failures wait
+for Retry, a newer hint or reconnect. All reads use the existing host decoder;
+live payloads are invalidation hints, not preference authority.
 
 `session.messages.send(channelId, text)`, `.reply(channelId, resolvedRootId, text)`,
 `.edit(messageId, text)` and `.retry(id)`

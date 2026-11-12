@@ -43,7 +43,9 @@ export type SetupSnapshot = Readonly<
   | {
       status: "failed";
       error: string;
-      /** The error says Try again can help, as a retryable `BackupError` does. */
+      /** Try again can help: false when the error says another attempt gets
+       * the same answer (`retryable: false`), as an ended sign-in, a refusal
+       * or a non-retryable `BackupError` does. */
       retryable: boolean;
       /** Continuing past the failure skips the link, so the key stays unlinked. */
       skipsLink: boolean;
@@ -97,7 +99,7 @@ function saved(identity: Identity) {
 function vacant(identity: Identity) {
   if (identity.snapshot().status === "ready")
     throw new Error(
-      "This Mac already has a different Buzz key. Sign out of Buzz on this Mac first, or use a different account.",
+      "This computer already has a different Buzz key. Sign out of Buzz on this computer first, or use a different account.",
     );
 }
 
@@ -403,18 +405,20 @@ export function restoreCommunities(
  * Welcome back offers a restore and an import still needs backup.
  * Reported as `undefined` where backup status is unavailable (most Builderlab
  * deployments today) or failed, never as a failed setup: the pages work without it, and
- * no copy implies the user lost a backup.
+ * no copy implies the user lost a backup. A failed lookup also reports
+ * `failed`: a backup may still exist, so Welcome back still offers the restore,
+ * whose own page says when none holds the key.
  */
 export function checkBackup(
   account: FirstRunAccount,
-  onListed: (pubkeys: readonly string[] | undefined) => void,
+  onListed: (pubkeys: readonly string[] | undefined, failed?: true) => void,
 ): SetupStep {
   return {
     label: "Checking for a backed-up key…",
     run: () =>
       account.backupStatus().then(
         (listed) => onListed(listed === "unavailable" ? undefined : listed),
-        () => onListed(undefined),
+        () => onListed(undefined, true),
       ),
   };
 }
@@ -457,10 +461,11 @@ export function createSetup() {
           status: "failed",
           error:
             error instanceof Error ? error.message : "Setup failed. Try again.",
-          retryable:
+          retryable: !(
             error instanceof Error &&
             "retryable" in error &&
-            error.retryable === true,
+            error.retryable === false
+          ),
           skipsLink: left.some((step) => step.links === true),
           bound: boundElsewhere(error),
           ...(step.backup &&

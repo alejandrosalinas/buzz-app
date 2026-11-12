@@ -40,6 +40,8 @@ export const manifest: PluginManifest = {
     commands: [{ id: "status", program: "example-cli", args: ["status"], maxOutputBytes: 65536 }],
     networkOrigins: ["https://api.example.com"],
     managedFiles: true,
+    publicImages: true,
+    publicPages: true,
   },
 };
 const ExampleSidebar = ({ target, children }: PageSidebarProps) => {
@@ -251,6 +253,7 @@ export function apply(ctx: Context) {
     questions: { bad: { type: "freeform", instructions: "x" } },
   });
   void ctx.decisions.backend();
+  ctx.decisions.retireProvider("retired");
   // @ts-expect-error Only Settings chooses the backend.
   ctx.decisions.setBackend("typesafe");
 }

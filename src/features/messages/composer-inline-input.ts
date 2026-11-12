@@ -64,8 +64,13 @@ function spanOf(node: Nodes, start: number, end: number, raw: string) {
     case "emphasis":
       delimiter = 1;
       break;
+    case "delete":
+      delimiter = /^~+/.exec(raw)?.[0].length ?? 0;
+      break;
     default:
-      delimiter = /^[`~]+/.exec(raw)?.[0].length ?? 0;
+      // Only the backtick run delimits a code span; a `~` right after the
+      // opener (`~/path`) is content, not part of the delimiter.
+      delimiter = /^`+/.exec(raw)?.[0].length ?? 0;
   }
   if (!delimiter) return;
   let innerStart = start + delimiter,

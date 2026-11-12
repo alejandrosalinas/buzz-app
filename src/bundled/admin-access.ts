@@ -92,7 +92,7 @@ export function createAdminAccess(
     retry(id: string) {
       if (id === "buzz.relay-staff") staff.retry();
       else if (relay.snapshot().status !== "ready" || relay.snapshot().cached)
-        relay.retry();
+        relay.tryAgain();
       else void membership.refresh();
     },
     dispose() {

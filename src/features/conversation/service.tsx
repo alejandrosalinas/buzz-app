@@ -13,6 +13,8 @@ import {
   type MessageComposerProps,
 } from "../messages/MessageComposer";
 import { MessageRow, type MessageRowProps } from "../messages/MessageRow";
+import { ReplyBranch } from "../messages/ReplyBranch";
+import { ReplySummary } from "../messages/ReplySummary";
 import {
   formatDayGroupLabel,
   formatFullTimestamp,
@@ -25,9 +27,12 @@ import type {
   ComposerTool,
   ComposerAccessory,
   ComposerCompletion,
+  ComposerAnnotator,
   InlineRenderer,
   LinkRenderer,
+  LinkPreviewRenderer,
   MessageRenderer,
+  IdentityMark,
   MessageAction,
   ContributionReader,
   PageTabsProps,
@@ -68,14 +73,22 @@ export type Conversation = {
   registerTool(tool: ComposerTool): void;
   completions: ContributionReader<ComposerCompletion>;
   registerCompletion(provider: ComposerCompletion): void;
+  annotators: ContributionReader<ComposerAnnotator>;
+  /** Marks on the focused composer's prose; see `ComposerAnnotator`. */
+  registerAnnotator(annotator: ComposerAnnotator): void;
   inline: ContributionReader<InlineRenderer>;
   registerInline(renderer: InlineRenderer): void;
   links: ContributionReader<LinkRenderer>;
   registerLink(renderer: LinkRenderer): void;
+  /** Cards below messages for their links; see `LinkPreviewRenderer`. */
+  linkPreviews: ContributionReader<LinkPreviewRenderer>;
+  registerLinkPreview(renderer: LinkPreviewRenderer): void;
   codeBlocks: ContributionReader<CodeBlockRenderer>;
   registerCodeBlock(renderer: CodeBlockRenderer): void;
   actions: ContributionReader<MessageAction>;
   registerMessageAction(action: MessageAction): void;
+  identityMarks: ContributionReader<IdentityMark>;
+  registerIdentityMark(mark: IdentityMark): void;
   ui: {
     Thread: (props: EmbeddedThreadProps) => ReactNode;
     /** One channel's message management, edit target and overlays for a page's
@@ -83,6 +96,10 @@ export type Conversation = {
     Conversation: (props: EmbeddedConversationProps) => ReactNode;
     Composer: (props: Omit<MessageComposerProps, "extensions">) => ReactNode;
     Message: (props: Omit<MessageRowProps, "extensions">) => ReactNode;
+    /** Controlled native reply grouping for caller-owned retained readers. */
+    ReplyBranch: typeof ReplyBranch;
+    /** Native reply summary from the caller's count and participant facts. */
+    ReplySummary: typeof ReplySummary;
     /** The page's content as the first tab, beside conversations it opens;
      * absent until a plugin provides the tab workspace, as Channels does. */
     readonly Tabs?: ((props: PageTabsProps) => ReactNode) | undefined;
@@ -119,11 +136,14 @@ function validate(
     | ComposerTool
     | InlineRenderer
     | ComposerCompletion
+    | ComposerAnnotator
     | ComposerAccessory
     | LinkRenderer
+    | LinkPreviewRenderer
     | CodeBlockRenderer
     | MessageRenderer
-    | MessageAction,
+    | MessageAction
+    | IdentityMark,
 ) {
   if (
     !value ||
@@ -146,15 +166,21 @@ export class ConversationService extends Service implements Conversation {
   private readonly accessoryEntries;
   readonly completions;
   private readonly completionEntries;
+  readonly annotators;
+  private readonly annotatorEntries;
   readonly inline;
   private readonly toolEntries;
   private readonly inlineEntries;
   readonly links;
   private readonly linkEntries;
+  readonly linkPreviews;
+  private readonly linkPreviewEntries;
   readonly codeBlocks;
   private readonly codeBlockEntries;
   readonly actions;
   private readonly actionEntries;
+  readonly identityMarks;
+  private readonly identityMarkEntries;
   private readonly tabEntries;
   readonly chatMenus;
   private readonly chatMenuEntries;
@@ -188,6 +214,12 @@ export class ConversationService extends Service implements Conversation {
       snapshot: completions.snapshot,
       subscribe: completions.subscribe,
     };
+    const annotators = createContributions<ComposerAnnotator>(ctx);
+    this.annotatorEntries = annotators;
+    this.annotators = {
+      snapshot: annotators.snapshot,
+      subscribe: annotators.subscribe,
+    };
     const inline = createContributions<InlineRenderer>(ctx);
     this.toolEntries = tools;
     this.inlineEntries = inline;
@@ -196,6 +228,12 @@ export class ConversationService extends Service implements Conversation {
     const links = createContributions<LinkRenderer>(ctx);
     this.linkEntries = links;
     this.links = { snapshot: links.snapshot, subscribe: links.subscribe };
+    const linkPreviews = createContributions<LinkPreviewRenderer>(ctx);
+    this.linkPreviewEntries = linkPreviews;
+    this.linkPreviews = {
+      snapshot: linkPreviews.snapshot,
+      subscribe: linkPreviews.subscribe,
+    };
     const codeBlocks = createContributions<CodeBlockRenderer>(ctx);
     this.codeBlockEntries = codeBlocks;
     this.codeBlocks = {
@@ -205,6 +243,12 @@ export class ConversationService extends Service implements Conversation {
     const actions = createContributions<MessageAction>(ctx);
     this.actionEntries = actions;
     this.actions = { snapshot: actions.snapshot, subscribe: actions.subscribe };
+    const identityMarks = createContributions<IdentityMark>(ctx);
+    this.identityMarkEntries = identityMarks;
+    this.identityMarks = {
+      snapshot: identityMarks.snapshot,
+      subscribe: identityMarks.subscribe,
+    };
     const tabs = createContributions<{
       id: string;
       component: ComponentType<PageTabsProps>;
@@ -239,6 +283,8 @@ export class ConversationService extends Service implements Conversation {
       Message: (props: Omit<MessageRowProps, "extensions">) => (
         <MessageRow {...props} extensions={this} />
       ),
+      ReplyBranch,
+      ReplySummary,
       get Tabs() {
         return tabs.snapshot().length ? Tabs : undefined;
       },
@@ -268,6 +314,10 @@ export class ConversationService extends Service implements Conversation {
     )
       throw new Error("A message action needs a matcher");
     this.actionEntries.register(this.ctx, value);
+  }
+  registerIdentityMark(value: IdentityMark) {
+    validate(value);
+    this.identityMarkEntries.register(this.ctx, value);
   }
   registerAttachment(value: AttachmentRenderer) {
     validate(value);
@@ -313,6 +363,10 @@ export class ConversationService extends Service implements Conversation {
       throw new Error("A completion provider needs a matcher");
     this.completionEntries.register(this.ctx, value);
   }
+  registerAnnotator(value: ComposerAnnotator) {
+    validate(value);
+    this.annotatorEntries.register(this.ctx, value);
+  }
   registerInline(value: InlineRenderer) {
     validate(value);
     if (typeof value.matches !== "function")
@@ -332,6 +386,20 @@ export class ConversationService extends Service implements Conversation {
     if (value.className !== undefined && typeof value.className !== "string")
       throw new Error("A link renderer class must be a string");
     this.linkEntries.register(this.ctx, value);
+  }
+  registerLinkPreview(value: LinkPreviewRenderer) {
+    validate(value);
+    if (typeof value.matches !== "function")
+      throw new Error("A link preview renderer needs a matcher");
+    if (
+      value.order !== undefined &&
+      typeof value.order !== "number" &&
+      typeof value.order !== "function"
+    )
+      throw new Error(
+        "A link preview renderer order must be a number or function",
+      );
+    this.linkPreviewEntries.register(this.ctx, value);
   }
   registerCodeBlock(value: CodeBlockRenderer) {
     validate(value);

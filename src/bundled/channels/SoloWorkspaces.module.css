@@ -51,6 +51,18 @@
   border-radius: var(--radius-row);
   background: var(--affordance-panel-hover);
 }
+/* A composed workspace header's primary target spans its blank space. A header
+   too narrow for both of its controls keeps only Actions, whose menu also
+   offers New task. */
+.workspaceHeader {
+  position: relative;
+  container: solo-workspace-header / inline-size;
+}
+@container solo-workspace-header (max-width: 9rem) {
+  .workspaceHeader [data-solo-workspace-new-task] {
+    display: none;
+  }
+}
 .organizedRow {
   display: flex;
   align-items: center;
@@ -163,6 +175,10 @@
 }
 .organizedRow:has([aria-current="page"])::before {
   background: var(--surface-sidebar-selected);
+}
+/* Composed workspace chats share the task card's complete interaction surface. */
+.composedChat .organizedRow::before {
+  display: none;
 }
 /* Bold is Solo's only unread cue, as on Team rows. */
 .organizedRow [data-channel-unread-title="true"] {

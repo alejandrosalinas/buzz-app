@@ -176,7 +176,7 @@ export function useMentionModels(
                     error,
                   );
                 }
-                return failed || found.models.length || session
+                return failed || type.models || found.models.length || session
                   ? [
                       {
                         pubkey,

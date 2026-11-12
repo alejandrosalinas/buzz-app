@@ -23,7 +23,7 @@ import { setAttention, type AgentRecord } from "./store";
 export const ABSENT = "object-v1:absent";
 /** The most stored attention an agent can write for itself, so that one agent
  * cannot fill the device storage that every agent's settings share. */
-export const AGENT_BYTES = 256 * 1024;
+export const AGENT_BYTES = 1024 * 1024;
 /** The shortest interval an agent can give a timer. Each run is a new Claude
  * turn, so a faster timer only queues turns it cannot run. */
 export const MIN_INTERVAL_SECS = 60;

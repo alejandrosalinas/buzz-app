@@ -1,5 +1,20 @@
 use super::*;
 
+#[test]
+fn inline_csp_hash_matches_html_newline_normalization() {
+    let expected =
+        base64::engine::general_purpose::STANDARD.encode(Sha256::digest("first\nsecond\nthird\n"));
+    for source in [
+        "first\nsecond\nthird\n",
+        "first\r\nsecond\r\nthird\r\n",
+        "first\rsecond\rthird\r",
+        "first\r\nsecond\rthird\n",
+    ] {
+        assert_eq!(inline_csp_hash(source), expected);
+    }
+    assert_ne!(inline_csp_hash("first\nsecond\nthird"), expected);
+}
+
 fn options(path: &str) -> OAuthRequest {
     OAuthRequest {
         authorization_url: "https://provider.example/authorize?client_id=buzz&scope=a%20b&scope=c"
@@ -220,7 +235,8 @@ async fn real_listener_preserves_callback_parameters_and_closes_after_completion
             .split_once("</style>")
             .unwrap()
             .0;
-        let hash = base64::engine::general_purpose::STANDARD.encode(Sha256::digest(style));
+        let parsed_style = style.replace("\r\n", "\n").replace('\r', "\n");
+        let hash = base64::engine::general_purpose::STANDARD.encode(Sha256::digest(parsed_style));
         assert!(headers.contains(&format!("style-src 'sha256-{hash}'")));
         assert!(headers.contains("default-src 'none'"));
         assert!(headers.contains("img-src data:;"));
@@ -262,7 +278,9 @@ async fn real_listener_preserves_callback_parameters_and_closes_after_completion
             .unwrap()
             .0;
         assert_eq!(script, include_str!("page.js"));
-        let script_hash = base64::engine::general_purpose::STANDARD.encode(Sha256::digest(script));
+        let parsed_script = script.replace("\r\n", "\n").replace('\r', "\n");
+        let script_hash =
+            base64::engine::general_purpose::STANDARD.encode(Sha256::digest(parsed_script));
         assert!(headers.contains(&format!("script-src 'sha256-{script_hash}'")));
         assert_eq!(body.matches("<script").count(), 1);
         assert!(!response.contains("one+time"));
@@ -705,8 +723,11 @@ fn assert_federated_callback(response: &str, message: &str) {
     assert!(!body.contains("{{"));
     assert!(!body.contains("Builderlab"));
     assert!(body.contains(include_str!("page.js")));
+    let parsed_script = include_str!("page.js")
+        .replace("\r\n", "\n")
+        .replace('\r', "\n");
     let script_hash =
-        base64::engine::general_purpose::STANDARD.encode(Sha256::digest(include_str!("page.js")));
+        base64::engine::general_purpose::STANDARD.encode(Sha256::digest(parsed_script));
     assert!(headers.contains(&format!("script-src 'sha256-{script_hash}'")));
     assert!(body.contains("Closing this window automatically"));
     assert!(body.contains("id=\"close-spinner\""));
@@ -737,7 +758,8 @@ fn assert_federated_callback(response: &str, message: &str) {
         .split_once("</style>")
         .unwrap()
         .0;
-    let hash = base64::engine::general_purpose::STANDARD.encode(Sha256::digest(style));
+    let parsed_style = style.replace("\r\n", "\n").replace('\r', "\n");
+    let hash = base64::engine::general_purpose::STANDARD.encode(Sha256::digest(parsed_style));
     assert!(headers.contains(&format!("style-src 'sha256-{hash}'")));
     assert!(headers.contains("default-src 'none'"));
     assert!(headers.contains("img-src data:;"));

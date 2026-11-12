@@ -553,6 +553,96 @@ describe("a session without hooks", () => {
     await second;
   });
 
+  it("cancels captured work on Stop, final settlement, failure and close, independently per session", async () => {
+    const harness = fakeHarness({ hold: true });
+    const acp = await start(harness);
+    const session = await acp.open({ cwd: "/work", systemPrompt: "" });
+    const other = await acp.open({ cwd: "/work", systemPrompt: "" });
+    expect(session.signal.aborted).toBe(true);
+    const first = session.send("first");
+    const parallel = other.send("other");
+    await flush();
+    const old = session.signal;
+    const isolated = other.signal;
+    session.interrupt();
+    expect(old.aborted).toBe(true);
+    expect(isolated.aborted).toBe(false);
+    const second = session.send("second");
+    expect(session.signal.aborted).toBe(true);
+    harness.turns[0]?.finish();
+    await flush();
+    const fresh = session.signal;
+    expect(fresh).not.toBe(old);
+    expect(fresh.aborted).toBe(false);
+    expect(old.aborted).toBe(true);
+    session.finished("final-call");
+    expect(fresh.aborted).toBe(true);
+    expect(session.working).toBe(true);
+    await second;
+    harness.turns[2]?.finish();
+    await first;
+    await acp.close(other);
+    expect(isolated.aborted).toBe(true);
+    await parallel;
+    const failed = session.send("failure");
+    await flush();
+    const failing = session.signal;
+    session.fail("failure");
+    expect(failing.aborted).toBe(true);
+    await expect(failed).resolves.toMatchObject({ ok: false });
+  });
+
+  it("aborts work when a prompt fails, without waiting for a process close", async () => {
+    const harness = fakeHarness({
+      promptError: { code: -32000, message: "failed" },
+    });
+    const acp = await start(harness);
+    const session = await acp.open({ cwd: "/work", systemPrompt: "" });
+    const done = session.send("first");
+    const signal = session.signal;
+    expect(signal.aborted).toBe(false);
+    await expect(done).resolves.toMatchObject({ ok: false });
+    expect(signal.aborted).toBe(true);
+    expect(session.open).toBe(true);
+  });
+
+  it("forwards an aborted signal before session/new and while idle, and aborts active calls on process exit", async () => {
+    const fake = fakeGoose({ hold: true });
+    const signals: AbortSignal[] = [];
+    const handler: ToolServer = async (_conversation, message, signal) => {
+      if (!signal) throw new Error("Missing cancellation");
+      signals.push(signal);
+      return { jsonrpc: "2.0", id: message.id, result: {} };
+    };
+    const acp = await AcpProcess.start(fake.spawn, GOOSE, {
+      cwd: "/work",
+      serve: async (dispatch) => {
+        await dispatch({ id: 1, method: "tools/list" });
+        return fake.serve(dispatch);
+      },
+    });
+    const session = await acp.open({
+      cwd: "/work",
+      systemPrompt: "",
+      tools: handler,
+    });
+    expect(signals).toHaveLength(1);
+    expect(signals[0]?.aborted).toBe(true);
+    const process = fake.geese[0];
+    if (!process) throw new Error("Missing process");
+    await process.mcp(session.id, "tools/list");
+    expect(signals.every((signal) => signal.aborted)).toBe(true);
+    const done = session.send("first");
+    await vi.waitFor(() => expect(process.turns).toHaveLength(1));
+    await process.mcp(session.id, "tools/call", { name: "fixture" });
+    const active = signals.at(-1);
+    expect(active?.aborted).toBe(false);
+    process.exit(1, "failed");
+    await acp.exited;
+    expect(active?.aborted).toBe(true);
+    await expect(done).resolves.toMatchObject({ ok: false });
+  });
+
   it("keeps the harness's error code on a failed turn", async () => {
     const harness = fakeHarness({
       promptError: { code: -32000, message: "Authentication required" },

@@ -581,3 +581,76 @@ appTest.describe("pending entry membership", () => {
     },
   );
 });
+
+// Crosses the window page size against the real store's history read: the
+// restore tests model which rows that read leaves the unread store knowing.
+appTest.describe("history longer than one page", () => {
+  appTest.use({ historyCounts: { alpha: 25, beta: 1 } });
+  appTest(
+    "marks messages that arrive after reading to the bottom of a channel with unloaded history",
+    async ({ page, app }) => {
+      const seeded = app.histories.get("primary/alpha");
+      const entryWindow = () =>
+        page.evaluate(() => {
+          const history = window.fixtureRelay
+            .snapshot()
+            .session.channels.window("alpha");
+          return {
+            status: history.status,
+            freshness: history.freshness,
+            hasMore: history.hasMore,
+          };
+        });
+      await open(page, app);
+      await expect.poll(entryWindow).toEqual({
+        status: "ready",
+        freshness: "verified",
+        hasMore: true,
+      });
+      // Read to the bottom: the channel catch-up read covers every seeded row.
+      await reachEdge(page, 1);
+      await composer(page).focus();
+      await expect
+        .poll(
+          async () =>
+            (await readJournal(page))?.state.frontiers["activity:alpha"] ?? 0,
+        )
+        .toBeGreaterThanOrEqual(seeded.at(-1).created_at);
+
+      await page.getByRole("button", { name: /^Beta/ }).click();
+      await expect(
+        page.getByRole("textbox", { name: "Message #Beta", exact: true }),
+      ).toBeVisible();
+      const arrivals = [1, 2, 3].map((index) =>
+        app.append("primary", "alpha", `Later message ${index}`, true, false),
+      );
+      await expect
+        .poll(() =>
+          page.evaluate(
+            (ids) =>
+              ids.every(
+                (id) =>
+                  window.fixtureRelay
+                    .snapshot()
+                    .session.unread.attention("alpha", id).unread,
+              ),
+            arrivals.map((event) => event.id),
+          ),
+        )
+        .toBe(true);
+
+      await page.getByRole("button", { name: /^Alpha/ }).click();
+      await expect(composer(page)).toBeVisible();
+      await expect.poll(entryWindow).toEqual({
+        status: "ready",
+        freshness: "verified",
+        hasMore: true,
+      });
+      await expect(separator(page)).toHaveCount(1);
+      expect(await messageAfter(separator(page))).toBe(arrivals[0].id);
+      await expect(
+        history(page).locator(`[data-message-id="${seeded.at(-1).id}"]`),
+      ).toBeVisible();
+    },
+  );
+});

@@ -28,6 +28,7 @@ import type {
   SidebarFilterMode,
   SidebarSortMode,
 } from "../relay/sidebar-preferences";
+import type { LiveCallbacks } from "../relay/live";
 import type { RelayData, RelaySnapshot } from "../relay/service";
 import type { ChannelList, ChannelSummary } from "../relay/contracts";
 import type { UnreadSnapshot } from "../relay/unread";
@@ -206,6 +207,7 @@ function fixture(
       return () => connectionListeners.delete(listener);
     },
     retry() {},
+    tryAgain() {},
     disconnect() {},
     async clearCache() {},
   } satisfies RelayData;
@@ -282,6 +284,121 @@ function visibilityFixture() {
   return { f, read, lifecycle };
 }
 
+/** A DM the relay first reports hidden, with a stub for confirmed opens. */
+function confirmedOpenFixture() {
+  const dm = "11111111-1111-4111-8111-111111111111";
+  const relayKey = keypair();
+  const f = fixture(undefined, "ready", [
+    { id: "alpha", name: "alpha", channelType: "stream" },
+    {
+      id: dm,
+      name: "Avery",
+      channelType: "dm",
+      members: ["a".repeat(64), "c".repeat(64)],
+    },
+  ]);
+  let at = 1_700_000_000;
+  const visibility = (hidden: boolean) =>
+    signed(relayKey, {
+      kind: 30622,
+      created_at: at++,
+      tags: [
+        ["d", f.session.viewer],
+        ["p", f.session.viewer],
+        ...(hidden ? [["h", dm]] : []),
+      ],
+      content: "",
+    });
+  const relay = { hidden: true };
+  const read = vi.fn(async () => [visibility(relay.hidden)]);
+  const lifecycle = createChannelLifecycle({
+    reader: { read },
+    viewer: f.session.viewer,
+    relayAuthor: relayKey.pubkey,
+    canAccess: () => true,
+    acceptDiscovery() {},
+    removed() {},
+  });
+  f.session.channelLifecycle = lifecycle.capability;
+  const opened = new Set<(id: string) => void>();
+  f.session.directMessages = {
+    ...f.session.directMessages,
+    subscribeOpened(listener) {
+      opened.add(listener);
+      return () => void opened.delete(listener);
+    },
+  };
+  return {
+    dm,
+    f,
+    read,
+    relay,
+    visibility,
+    lifecycle,
+    open: () =>
+      act(() => {
+        for (const listener of opened) listener(dm);
+      }),
+    row: () => document.querySelector(`[data-channel-id="${dm}"]`),
+  };
+}
+
+it("reads DM visibility again after a confirmed open within FRESH_FOR", async () => {
+  const { dm, f, read, relay, lifecycle, open, row } = confirmedOpenFixture();
+  try {
+    render(f.view("alpha"));
+    await waitFor(() =>
+      expect(lifecycle.capability.snapshot().hidden).toEqual([dm]),
+    );
+    expect(row()).toBeNull();
+    // The relay unhides the DM; a roster commit within FRESH_FOR reads nothing.
+    relay.hidden = false;
+    f.commit();
+    expect(read).toHaveBeenCalledOnce();
+    open();
+    await waitFor(() => expect(row()).not.toBeNull());
+    expect(read).toHaveBeenCalledTimes(2);
+  } finally {
+    cleanup();
+    lifecycle.dispose();
+  }
+});
+it("reads DM visibility after a confirmed open that a pending read predates", async () => {
+  const { f, read, relay, visibility, lifecycle, open, row } =
+    confirmedOpenFixture();
+  let release!: () => void;
+  const held = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  read.mockImplementationOnce(async () => {
+    const before = visibility(true);
+    await held;
+    return [before];
+  });
+  try {
+    render(f.view("alpha"));
+    await waitFor(() => expect(read).toHaveBeenCalledOnce());
+    relay.hidden = false;
+    // Repeated opens during the pending read share one later read.
+    open();
+    open();
+    expect(read).toHaveBeenCalledOnce();
+    release();
+    await waitFor(() => expect(read).toHaveBeenCalledTimes(2));
+    await waitFor(() =>
+      expect(lifecycle.capability.snapshot()).toMatchObject({
+        status: "ready",
+        hidden: [],
+      }),
+    );
+    expect(row()).not.toBeNull();
+    expect(read).toHaveBeenCalledTimes(2);
+  } finally {
+    release();
+    cleanup();
+    lifecycle.dispose();
+  }
+});
 it("keeps visibility recovery quiet, then offers the existing retry after exhaustion", async () => {
   vi.useFakeTimers();
   const random = vi.spyOn(Math, "random").mockReturnValue(0.5);
@@ -2420,6 +2537,7 @@ it("promotes exactly the Bestie DM, restores prior local removal, and releases i
     snapshot: () => h.snapshot,
     subscribe: () => () => {},
     retry() {},
+    tryAgain() {},
     disconnect() {},
     async clearCache() {},
   };
@@ -2464,7 +2582,9 @@ it("promotes exactly the Bestie DM, restores prior local removal, and releases i
     act(() => {
       forgetDefaultAgent(fizz);
     });
-    expect(screen.getByRole("button", { name: "Bestie" })).toBeInTheDocument();
+    expect(
+      screen.getByRole("button", { name: "Create an agent" }),
+    ).toBeInTheDocument();
     expect(row("fizz-dm")).not.toBeNull();
 
     act(() => {
@@ -3482,4 +3602,73 @@ it("updates decorated unread data and a selected unread sort without rewriting p
   } finally {
     prefs.dispose();
   }
+});
+
+it("moves a mounted session-backed sidebar on a CLI hint without clearing stars or other assignments", async () => {
+  const viewer = keypair(),
+    relay = keypair();
+  let live!: LiveCallbacks;
+  let data: SidebarPreferences = {
+    sections: [{ id: "work", name: "Work", order: 0 }],
+    assignments: { gamma: "work" },
+    starred: ["beta"],
+    muted: [],
+  };
+  const reads: unknown[] = [];
+  const owner = createRelaySession({
+    viewer: viewer.pubkey,
+    relayAuthor: relay.pubkey,
+    scope: "https://relay.example.org",
+    media: () => undefined,
+    async query(filters) {
+      reads.push(filters);
+      return [];
+    },
+    decodeSidebarPreferences: async () => data,
+    subscribe(callbacks) {
+      live = callbacks;
+      return { update() {}, retry() {}, dispose() {} };
+    },
+  });
+  owners.push(owner);
+  await owner.session.sidebarPreferences.ensure();
+  const h = fixture(owner.session.sidebarPreferences);
+  render(h.view("alpha"));
+  const row = await screen.findByRole("button", { name: "alpha" });
+  const sidebar = screen.getByRole("complementary", { name: "Sidebar" });
+  expect(sidebar).toContainElement(row);
+  const placement = (name: string) =>
+    screen
+      .getByRole("button", { name })
+      .closest("[data-sidebar-section]")
+      ?.getAttribute("data-sidebar-section");
+  expect(placement("alpha")).toBe("channels");
+  expect(placement("beta")).toBe("starred");
+  expect(placement("gamma")).toBe("group:work");
+  data = {
+    ...data,
+    assignments: { ...data.assignments, alpha: "work", beta: "work" },
+  };
+  await act(async () => {
+    live.receive([
+      signed(viewer, {
+        kind: 30078,
+        created_at: 1700000000,
+        content: "encrypted",
+        tags: [
+          ["d", "channel-sections"],
+          ["t", "channel-sections"],
+        ],
+      }),
+    ]);
+    await Promise.resolve();
+    await owner.session.sidebarPreferences.ensure();
+  });
+  await waitFor(() => expect(placement("alpha")).toBe("group:work"));
+  expect(placement("beta")).toBe("starred");
+  expect(placement("gamma")).toBe("group:work");
+  expect(screen.getByRole("button", { name: "alpha" }).closest("aside")).toBe(
+    sidebar,
+  );
+  expect(reads).toHaveLength(2);
 });

@@ -498,6 +498,26 @@ pub(super) fn set_media_suspended(_guest: &WebView, _suspended: bool) -> Result<
     Err("Suspending a page's media is supported only on macOS".into())
 }
 
+/// Reads the guest's URL from its own handlers, which the guest owns, so
+/// this holds it weakly.
+#[cfg(target_os = "macos")]
+pub(super) fn location(guest: &WebView) -> Box<dyn Fn() -> Option<String>> {
+    use wry::WebViewExtMacOS;
+    let guest = objc2::rc::Weak::from_retained(&guest.webview());
+    Box::new(move || {
+        let guest = guest.load()?;
+        unsafe { guest.URL() }
+            .and_then(|url| url.absoluteString())
+            .map(|url| url.to_string())
+    })
+}
+
+/// Elsewhere the page-load URL stands in.
+#[cfg(not(target_os = "macos"))]
+pub(super) fn location(_guest: &WebView) -> Box<dyn Fn() -> Option<String>> {
+    Box::new(|| None)
+}
+
 #[cfg(not(target_os = "macos"))]
 pub(super) fn current_url(guest: &WebView) -> Result<Option<String>, String> {
     guest.url().map(Some).map_err(|error| error.to_string())

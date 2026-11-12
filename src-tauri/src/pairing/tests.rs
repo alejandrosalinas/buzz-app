@@ -1,21 +1,22 @@
 use super::*;
 use buzz_pairing::{crypto, PairingMessage};
-use nostr_pairing::{EventBuilder, JsonUtil, Keys, Kind, Tag};
+use nostr::event::{EventBuilder, FinalizeEvent, Kind, Tag};
+use nostr::key::Keys;
 
 fn message(keys: &Keys, source: &PairingSession, value: PairingMessage) -> Event {
     raw(keys, source, serde_json::to_value(&value).unwrap())
 }
 fn raw(keys: &Keys, source: &PairingSession, value: serde_json::Value) -> Event {
-    let content = nostr_pairing::nips::nip44::encrypt(
+    let content = nostr::nips::nip44::encrypt(
         keys.secret_key(),
         &source.pubkey(),
         value.to_string(),
-        nostr_pairing::nips::nip44::Version::V2,
+        nostr::nips::nip44::Version::V2,
     )
     .unwrap();
     EventBuilder::new(Kind::Custom(buzz_pairing::session::KIND_PAIRING), content)
         .tags([Tag::public_key(source.pubkey())])
-        .sign_with_keys(keys)
+        .finalize(keys)
         .unwrap()
 }
 // Current phones still request the removed desktop-code-v1 confirmation and
@@ -48,8 +49,7 @@ fn entry() -> (Exchange, Keys, buzz_pairing::QrPayload, String) {
     (exchange, target, qr, code)
 }
 fn proof(exchange: &Exchange, target: &Keys, qr: &buzz_pairing::QrPayload) -> Event {
-    let shared =
-        nostr_pairing::util::generate_shared_key(target.secret_key(), &qr.source_pubkey).unwrap();
+    let shared = crypto::ecdh_shared_x(target.secret_key(), &qr.source_pubkey).unwrap();
     let (_, sas) = crypto::derive_sas(&shared, &qr.session_secret);
     let hash = crypto::derive_transcript_hash(
         &crypto::derive_session_id(&qr.session_secret),
@@ -118,7 +118,7 @@ fn desktop_confirmation_transfers_and_waits_for_real_completion() {
     assert_eq!(output.status, Some(Status::Transferring));
     assert_eq!(output.events.len(), 2);
     let plain = Zeroizing::new(
-        nostr_pairing::nips::nip44::decrypt(
+        nostr::nips::nip44::decrypt(
             target.secret_key(),
             &qr.source_pubkey,
             &output.events[1].content,
@@ -411,10 +411,9 @@ async fn cancellation_notifies_a_known_peer_before_transfer_and_waits_for_teardo
         .unwrap();
     let json: serde_json::Value = serde_json::from_str(frame.to_text().unwrap()).unwrap();
     assert_eq!(json[0], "EVENT");
-    let event = Event::from_json(json[1].to_string()).unwrap();
+    let event = serde_json::from_value::<Event>(json[1].clone()).unwrap();
     let plaintext =
-        nostr_pairing::nips::nip44::decrypt(target.secret_key(), &event.pubkey, &event.content)
-            .unwrap();
+        nostr::nips::nip44::decrypt(target.secret_key(), &event.pubkey, &event.content).unwrap();
     assert!(matches!(
         serde_json::from_str::<PairingMessage>(&plaintext).unwrap(),
         PairingMessage::Abort {
@@ -474,9 +473,9 @@ async fn cancellation_after_transfer_closes_without_aborting_the_importing_phone
             .unwrap();
         let json: serde_json::Value = serde_json::from_str(frame.to_text().unwrap()).unwrap();
         assert_eq!(json[0], "EVENT");
-        let event = Event::from_json(json[1].to_string()).unwrap();
+        let event = serde_json::from_value::<Event>(json[1].clone()).unwrap();
         let plaintext =
-            nostr_pairing::nips::nip44::decrypt(target.secret_key(), &event.pubkey, &event.content)
+            nostr::nips::nip44::decrypt(target.secret_key(), &event.pubkey, &event.content)
                 .unwrap();
         messages.push(serde_json::from_str::<PairingMessage>(&plaintext).unwrap());
     }
@@ -740,9 +739,9 @@ async fn sign_out_blocks_a_prepared_payload_and_any_later_attempt() {
     {
         let Ok(text) = frame.to_text() else { continue };
         let json: serde_json::Value = serde_json::from_str(text).unwrap();
-        let event = Event::from_json(json[1].to_string()).unwrap();
+        let event = serde_json::from_value::<Event>(json[1].clone()).unwrap();
         let plaintext =
-            nostr_pairing::nips::nip44::decrypt(target.secret_key(), &event.pubkey, &event.content)
+            nostr::nips::nip44::decrypt(target.secret_key(), &event.pubkey, &event.content)
                 .unwrap();
         assert!(
             !matches!(

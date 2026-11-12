@@ -4,16 +4,22 @@
 //!   or Image) only to the private `_webView:contextMenuDidCreateDownload:`
 //!   (`WKNavigationDelegatePrivate.h`, macOS 12). Wry implements only the
 //!   public download hooks, so the download has no delegate and WebKit
-//!   cancels it. For relay media, Buzz attaches a `WKDownloadDelegate` that
-//!   saves to Downloads under the media's `<hash>.<ext>` name, not the
-//!   attachment name the player's Download uses; WebKit streams the file
-//!   and quarantines it. A response of unknown length, or longer than the
-//!   largest video Buzz uploads, is refused. The partial file of a download
-//!   that fails, or is still running when Buzz quits, is removed. Each
-//!   result is sent to the main window as `media-menu-download`: the saved
-//!   file's name, or null if it failed. A `just desktop` build with a pinned
-//!   viewer plays media from its dev server's relay broker instead, whose
-//!   media URLs on that origin are named the same way.
+//!   cancels it. Relay media saves to Downloads under its `<hash>.<ext>`
+//!   name, not the attachment name the player's Download uses.
+//!   - WebKit's network process cannot load Buzz's `buzz-media` scheme, from
+//!     which `<img>` shows relay images, and fails a download of it as an
+//!     unsupported URL. Buzz saves that media itself, as the player's
+//!     Download does, and leaves WebKit's download without a delegate.
+//!   - For other relay media, Buzz attaches a `WKDownloadDelegate`; WebKit
+//!     streams the file and quarantines it. A response of unknown length, or
+//!     longer than the largest video Buzz uploads, is refused. The partial
+//!     file of a download that fails, or is still running when Buzz quits,
+//!     is removed. A `just desktop` build with a pinned viewer plays media
+//!     from its dev server's relay broker, whose media URLs on that origin
+//!     are named the same way.
+//!
+//!   Each result is sent to the main window as `media-menu-download`: the
+//!   saved file's name, or null if it failed.
 //! - `<video>` and `<audio>` play from the tokened loopback listener
 //!   (`relay::media_stream`). Copy … Address, Open … in New Window and
 //!   Share… would hand that URL, token included, to the clipboard, a window
@@ -147,10 +153,8 @@ define_class!(
 
         #[unsafe(method(downloadDidFinish:))]
         fn did_finish(&self, download: &WKDownload) {
-            let name = self
-                .release(download)
-                .and_then(|path| Some(path.file_name()?.to_string_lossy().into_owned()));
-            self.notify(Some(name.unwrap_or_default()));
+            let name = self.release(download).as_deref().and_then(file_name);
+            notify(&self.ivars().app, Some(name.unwrap_or_default()));
         }
 
         #[unsafe(method(download:didFailWithError:resumeData:))]
@@ -165,7 +169,7 @@ define_class!(
             if let Some(partial) = self.release(download) {
                 remove_partial(&partial);
             }
-            self.notify(None);
+            notify(&self.ivars().app, None);
         }
     }
 );
@@ -173,15 +177,34 @@ define_class!(
 impl DownloadDelegate {
     /// The Downloads name for `download`, if it is of relay media.
     fn name(&self, download: &WKDownload) -> Option<String> {
-        let source = unsafe { download.originalRequest() }?
-            .URL()?
-            .absoluteString()?;
         let downloads = self.ivars();
         media_name(
-            &source.to_string(),
+            &source_of(download)?,
             downloads.stream.as_deref(),
             downloads.dev.as_ref(),
         )
+    }
+
+    /// Saves the relay media `url` names, which WebKit cannot download, as
+    /// the player's Download does, under the name its menu downloads take.
+    fn save(&self, url: Url) {
+        use tauri::Manager as _;
+        let downloads = self.ivars();
+        let app = downloads.app.clone();
+        let directory = downloads.directory.clone();
+        tauri::async_runtime::spawn(async move {
+            let host = app.state::<crate::identity::IdentityHost>().inner().clone();
+            let fi = app
+                .state::<crate::federated_identity::FederatedIdentity>()
+                .inner()
+                .clone();
+            let saved = crate::relay::save_media(&host, Some(&fi), url, directory, "").await;
+            // Its errors never hold the URL.
+            if let Err(error) = &saved {
+                eprintln!("Could not download media: {error}");
+            }
+            notify(&app, saved.ok().as_deref().and_then(file_name));
+        });
     }
 
     /// Frees `download`'s destination for later downloads, returning it if
@@ -194,15 +217,22 @@ impl DownloadDelegate {
             .remove(&path)
             .then_some(path)
     }
+}
 
-    /// Tells the main window a download saved as `name`, or failed. Never
-    /// its URL, which holds the listener's token.
-    fn notify(&self, name: Option<String>) {
-        let _ = self
-            .ivars()
-            .app
-            .emit_to("main", "media-menu-download", name);
-    }
+/// The URL `download` loads.
+fn source_of(download: &WKDownload) -> Option<String> {
+    let request = unsafe { download.originalRequest() }?;
+    Some(request.URL()?.absoluteString()?.to_string())
+}
+
+fn file_name(path: &Path) -> Option<String> {
+    Some(path.file_name()?.to_string_lossy().into_owned())
+}
+
+/// Tells the main window a download saved as `name`, or failed. Never its
+/// URL, which may hold the listener's token.
+fn notify(app: &tauri::AppHandle, name: Option<String>) {
+    let _ = app.emit_to("main", "media-menu-download", name);
 }
 
 /// Whether a download whose response declared `expected` bytes, or -1
@@ -377,12 +407,16 @@ unsafe extern "C-unwind" fn context_menu_did_create_download(
         return;
     };
     if_main(webview, |main| {
-        // Any other download keeps no delegate, and WebKit cancels it as before.
-        let delegate = main
-            .downloads
-            .as_ref()
-            .filter(|delegate| delegate.name(download).is_some());
-        if let Some(delegate) = delegate {
+        // Any download without a delegate is cancelled by WebKit, as before.
+        let Some(delegate) = main.downloads.as_ref() else {
+            return;
+        };
+        if let Some(url) = source_of(download)
+            .as_deref()
+            .and_then(crate::relay::download_target)
+        {
+            delegate.save(url);
+        } else if delegate.name(download).is_some() {
             unsafe { download.setDelegate(Some(ProtocolObject::from_ref(&**delegate))) };
         }
     });

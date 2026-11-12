@@ -38,6 +38,7 @@ import {
 } from "./ChannelsPage";
 import { SoloWorkspaces } from "./SoloWorkspaces";
 import type { RelaySession } from "../../features/relay/session";
+import type { RegisteredSidebarRows } from "../../features/channel-navigation/sidebar-rows-service";
 import type { ReadTarget } from "../../features/relay/read-state-model";
 
 vi.mock(
@@ -75,7 +76,9 @@ function fixture({
   viewOnly = false,
   canLeave,
   preview,
+  sidebarRows,
 }: {
+  sidebarRows?: readonly RegisteredSidebarRows[];
   /** Observed unread messages in this chat; fakes the read state when given. */
   unread?: number;
   /** What the read state can do on this connection. */
@@ -178,7 +181,7 @@ function fixture({
           ...(action === "archive"
             ? [{ ...channel, archived: true as const }]
             : []),
-          ...neighbors,
+          ...list.channels.filter((chat) => chat.id !== id),
         ],
       };
       emitList();
@@ -360,6 +363,7 @@ function fixture({
     snapshot: () => snapshot,
     subscribe: () => () => {},
     retry() {},
+    tryAgain() {},
     disconnect() {},
     async clearCache() {},
   };
@@ -390,6 +394,7 @@ function fixture({
     open,
     retry() {},
     snapshot: () => navigationSnapshot,
+    subscribe: () => () => {},
   } as unknown as Navigation;
   const archive: ArchiveShortcut = {};
   const read: ReadShortcut = {};
@@ -400,6 +405,7 @@ function fixture({
           session={session as unknown as RelaySession}
           navigator={navigator}
           scope={scope}
+          sidebarRows={sidebarRows}
           chats={[channel, ...neighbors].map((chat) => ({
             id: chat.id,
             title: chat.name,
@@ -450,6 +456,15 @@ function fixture({
       if (archived) next.archived = true;
       else delete next.archived;
       list = { ...list, channels: [next] };
+      emitList();
+    },
+    updateChat(id: string, change: Partial<ChannelSummary>) {
+      list = {
+        ...list,
+        channels: list.channels.map((chat) =>
+          chat.id === id ? { ...chat, ...change } : chat,
+        ),
+      };
       emitList();
     },
     // Chat activity: a new summary object for the same chat.
@@ -1196,6 +1211,81 @@ it.each([
     expect(f.open).toHaveBeenCalledExactlyOnceWith(
       conversationTarget(f.scope, other),
     );
+  },
+);
+
+it.each([
+  ["Chat actions", "confirmation"],
+  ["Chat actions", "pending"],
+  ["Chat actions", "all-hidden"],
+  ["Actions for Planning", "confirmation"],
+  ["Actions for Planning", "pending"],
+  ["Actions for Planning", "all-hidden"],
+] as const)(
+  "rechecks plugin-hidden successors from %s during %s",
+  async (trigger, phase) => {
+    const other = "22222222-2222-4222-8222-222222222222";
+    const last = "33333333-3333-4333-8333-333333333333";
+    const f = fixture({
+      others: [other, last],
+      sidebarRows: [
+        {
+          version: 1,
+          id: "hide",
+          key: "fixture.rows/hide",
+          pluginId: "fixture.rows",
+          revision: "one",
+          render: (row, Default) =>
+            row.channel.lastActivityAt === 1 ? null : Default,
+        },
+      ],
+    });
+    let release = () => {};
+    const pending = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const run = f.run.getMockImplementation();
+    if (!run) throw new Error("Missing lifecycle fixture implementation");
+    f.run.mockImplementationOnce(async (...args) => {
+      await pending;
+      await run(...args);
+    });
+    f.mountWithSidebar();
+    const user = userEvent.setup();
+    try {
+      await user.click(await screen.findByRole("button", { name: trigger }));
+      await user.click(
+        await screen.findByRole("menuitem", { name: "Delete chat" }),
+      );
+      const dialog = await screen.findByRole("dialog", {
+        name: "Delete Planning?",
+      });
+      if (phase === "confirmation")
+        act(() => f.updateChat(other, { lastActivityAt: 1 }));
+      await user.click(
+        within(dialog).getByRole("button", { name: "Delete chat" }),
+      );
+      await waitFor(() => expect(f.run).toHaveBeenCalledOnce());
+      expect(f.open).not.toHaveBeenCalled();
+      if (phase !== "confirmation")
+        act(() => {
+          f.updateChat(other, { lastActivityAt: 1 });
+          if (phase === "all-hidden") f.updateChat(last, { lastActivityAt: 1 });
+        });
+      expect(screen.queryByRole("button", { name: "Other 1" })).toBeNull();
+      await act(async () => {
+        release();
+      });
+      await waitFor(() =>
+        expect(f.open).toHaveBeenCalledExactlyOnceWith(
+          phase === "all-hidden"
+            ? soloDraftTarget(f.scope)
+            : conversationTarget(f.scope, last),
+        ),
+      );
+    } finally {
+      release();
+    }
   },
 );
 

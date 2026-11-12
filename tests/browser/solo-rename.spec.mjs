@@ -1,5 +1,6 @@
 import { test, expect } from "./fixture.mjs";
 import { newChat } from "./navigation.mjs";
+import { animationsSettled } from "./animations.mjs";
 
 const alpha = "33333333-3333-4333-8333-333333333333";
 const beta = "44444444-4444-4444-8444-444444444444";
@@ -28,14 +29,130 @@ async function settledError(page) {
   await expect(alert).toBeVisible();
   // The Field error grows above Reload. Visibility alone admits a click while
   // its hit target is still moving; wait for the actual opening to finish.
-  await alert.evaluate((element) =>
-    Promise.all(
-      element.parentElement
-        .getAnimations({ subtree: true })
-        .map((animation) => animation.finished),
-    ),
-  );
+  await animationsSettled(alert.locator(".."), { subtree: true });
 }
+
+// Real hit testing proves the stretched primary target excludes sibling controls.
+// jsdom cannot establish this geometry or the positioned buttons' stacking order.
+for (const variant of [
+  { name: "light-wide", theme: "light", width: 1280, scale: 1 },
+  { name: "dark-narrow", theme: "dark", width: 640, scale: 2 },
+])
+  test(`workspace blank space selects independently of its controls ${variant.name}`, async ({
+    page,
+    app,
+  }) => {
+    await page.setViewportSize({ width: variant.width, height: 1000 });
+    await page.addInitScript(({ theme, scale }) => {
+      localStorage.setItem("buzz-appearance.v1", theme);
+      localStorage.setItem("buzz-font-scale.v1", String(scale));
+    }, variant);
+    await page.goto(
+      `${app.origin}/?solo-region-fixture&compose-workspaces&workspace-hit-targets`,
+    );
+    await newChat(page);
+    await page.evaluate(() => window.fixtureSoloRegion.createWorkspace());
+    const show = page.getByRole("button", {
+      name: "Show navigation",
+      exact: true,
+    });
+    if (await show.isVisible()) await show.click();
+    const title = sidebar(page).getByRole("button", {
+      name: "Work",
+      exact: true,
+    });
+    await expect(title).toBeVisible();
+    const header = title.locator("xpath=ancestor::*[@data-solo-menu-id][1]");
+    await header
+      .getByRole("button", { name: "Hide tasks and chats in Work" })
+      .click();
+    await expect(title).not.toHaveAttribute("aria-current", "page");
+    await expect(
+      sidebar(page).getByRole("button", { name: "Workspace task" }),
+    ).toBeHidden();
+    await header.scrollIntoViewIfNeeded();
+    const toggle = header.getByRole("button", {
+      name: "Show tasks and chats in Work",
+    });
+    const newTask = header.getByRole("button", { name: "New task in Work" });
+    const point = await header.evaluate((row) => {
+      const bounds = row.getBoundingClientRect();
+      const buttons = [...row.querySelectorAll("button")].map((button) =>
+        button.getBoundingClientRect(),
+      );
+      const caret = row
+        .querySelector("[data-solo-disclosure]")
+        .getBoundingClientRect();
+      const xs = [
+        ...new Set([
+          bounds.left,
+          bounds.right,
+          ...buttons.flatMap((box) => [box.left, box.right]),
+        ]),
+      ].sort((a, b) => a - b);
+      const ys = [
+        ...new Set([
+          bounds.top,
+          bounds.bottom,
+          ...buttons.flatMap((box) => [box.top, box.bottom]),
+        ]),
+      ].sort((a, b) => a - b);
+      const points = xs
+        .slice(1)
+        .flatMap((x, i) =>
+          ys
+            .slice(1)
+            .map((y, j) => ({ x: (xs[i] + x) / 2, y: (ys[j] + y) / 2 })),
+        );
+      // Prefer space after the caret. With enlarged text, the only free space
+      // may be above it. Exclude actual buttons and clipped scrollbar gutters.
+      return [...points.filter((p) => p.x >= caret.right), ...points].find(
+        (p) =>
+          !buttons.some(
+            (b) =>
+              p.x >= b.left &&
+              p.x <= b.right &&
+              p.y >= b.top &&
+              p.y <= b.bottom,
+          ) && row.contains(document.elementFromPoint(p.x, p.y)),
+      );
+    });
+    if (!point)
+      throw new Error("Workspace header must have visible blank space");
+    await page.mouse.click(point.x, point.y);
+    await expect(title).toHaveAttribute("aria-current", "page");
+    await expect(toggle).toHaveAttribute("aria-expanded", "false");
+    const actions = header.getByRole("button", { name: "Actions for Work" });
+    const newTaskItem = page.getByRole("menuitem", { name: "New task" });
+    if (variant.name === "dark-narrow") {
+      // Without room for both controls, New task is reached through Actions.
+      await expect(newTask).toBeHidden();
+      await actions.focus();
+      await page.keyboard.press("Enter");
+      await expect(newTaskItem).toBeFocused();
+      await page.keyboard.press("Enter");
+    } else {
+      await newTask.click();
+    }
+    await expect(title).not.toHaveAttribute("aria-current", "page");
+    await toggle.click();
+    await expect(
+      sidebar(page).getByRole("button", { name: "Workspace task" }),
+    ).toBeVisible();
+    await expect(title).not.toHaveAttribute("aria-current", "page");
+    await actions.click();
+    await expect(
+      page.getByRole("menuitem", { name: "Workspace settings" }),
+    ).toBeVisible();
+    // The menu offers New task at each width.
+    await expect(newTaskItem).toBeVisible();
+    await page.keyboard.press("Escape");
+    await expect(title).not.toHaveAttribute("aria-current", "page");
+    await title.focus();
+    await page.keyboard.press("Enter");
+    await expect(title).toHaveAttribute("aria-current", "page");
+    expect(app.report.unexpected).toEqual([]);
+  });
 
 // These exercise native focus loss, actual drawer hit targets and signed live
 // metadata. DOM-only tests cannot establish these browser/host contracts.
@@ -483,14 +600,15 @@ test("collapsing a workspace waits for its rename save before hiding the editor"
 // Real browser focus refusal for display:none cannot be established in jsdom.
 const regionRow = (page, id) =>
   sidebar(page).locator(`[data-solo-destination-id="${id}"]`);
+// Classify refuses a chat the roster has not loaded, so wait for its row first.
 async function regionFixture(page, app, ids = [alpha, beta]) {
   await page.goto(`${app.origin}/?solo-region-fixture`);
   await newChat(page);
-  await expect(row(page, alpha)).toBeVisible();
+  await expect(row(page, ids[0])).toBeVisible();
   await page.evaluate(async (ids) => {
     for (const id of ids) await window.fixtureSoloRegion.classify(id);
   }, ids);
-  await expect(regionRow(page, alpha)).toBeVisible();
+  await expect(regionRow(page, ids[0])).toBeVisible();
 }
 
 test("composable rows retain narrow rename and immediate keyboard/touch activation", async ({
@@ -597,4 +715,84 @@ test("removing a focused region keeps keyboard focus in the remaining region", a
     await remaining.press("Enter");
     await expect(regionRow(page, alpha)).toBeVisible();
   }
+});
+
+// Real shell scope and page fallback after roster removal require app wiring.
+// The controlled completion/failure/navigation matrix lives in SoloRegions.test.tsx.
+test.describe("plugin-owned Solo lifecycle", () => {
+  const id = "11111111-1111-4111-8111-111111111111";
+  test.use({
+    channelLifecycle: true,
+    soloChannels: [id],
+    ownSoloChannels: [id],
+  });
+
+  test("deleting a plugin-owned chat keeps the shell in Solo", async ({
+    page,
+    app,
+  }) => {
+    await regionFixture(page, app, [id]);
+    const solo = page.getByRole("tab", { name: "Solo", exact: true });
+    await solo.click();
+    await expect(solo).toHaveAttribute("aria-selected", "true");
+    const row = regionRow(page, id);
+    await expect(row).toBeVisible();
+    await row.click();
+    await expect(row).toHaveAttribute("aria-current", "page");
+    await expect(composer(page)).toBeEnabled();
+    await row.click({ button: "right" });
+    await page
+      .getByRole("menuitem", { name: "Delete chat", exact: true })
+      .click();
+    const dialog = page.getByRole("dialog", {
+      name: "Delete Lifecycle channel?",
+    });
+    await dialog
+      .getByRole("button", { name: "Delete chat", exact: true })
+      .click();
+    await expect(dialog).toHaveCount(0);
+    await expect(row).toHaveCount(0);
+    await expect(
+      page.getByRole("tab", { name: "Solo", exact: true }),
+    ).toHaveAttribute("aria-selected", "true");
+    await expect(page).toHaveURL(/solo-draft/);
+    expect(
+      app.report.lifecyclePublications.map((event) => [event.kind, event.tags]),
+    ).toEqual([[9008, [["h", id]]]]);
+    expect(app.report.unexpected).toEqual([]);
+  });
+});
+
+// This protects real DOM focus/selection when the source changes an ordinary
+// row's placement; React/jsdom can prove retained state but not native blur.
+test("task-source recovery retains an ordinary chat editor, caret and unsaved name", async ({
+  page,
+  app,
+}) => {
+  await page.goto(`${app.origin}/?solo-region-fixture&compose-workspaces`);
+  await newChat(page);
+  await row(page, alpha).dblclick();
+  await expect(input(page)).toHaveAttribute("aria-disabled", "false");
+  await input(page).fill("Keep this unsaved name");
+  await input(page).evaluate((field) => field.setSelectionRange(4, 4));
+  for (const status of ["loading", "ready"]) {
+    await page.evaluate(
+      (status) => window.fixtureSoloRegion.status(status),
+      status,
+    );
+    await expect(input(page)).toBeVisible();
+    await expect(input(page)).toBeFocused();
+    await expect(input(page)).toHaveValue("Keep this unsaved name");
+    await expect
+      .poll(() =>
+        input(page).evaluate((field) => [
+          field.selectionStart,
+          field.selectionEnd,
+        ]),
+      )
+      .toEqual([4, 4]);
+  }
+  await input(page).press("Escape");
+  await expect(input(page)).toHaveCount(0);
+  expect(app.report.detailsPublications ?? []).toHaveLength(0);
 });

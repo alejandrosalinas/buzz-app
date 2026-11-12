@@ -196,3 +196,27 @@ it("uses one raw read with unchanged fallback and falsy-value semantics", () => 
   expect(readView("scope", "value", "fallback")).toBe("fallback");
   expect(read).toHaveBeenCalledExactlyOnceWith(key);
 });
+
+it("records the write phase when a subscriber fails after storage accepts a draft", async () => {
+  const invoke = vi.fn().mockResolvedValue(undefined);
+  vi.stubGlobal("isTauri", true);
+  vi.stubGlobal("__TAURI_INTERNALS__", { invoke });
+  const stop = subscribeView("scope", () => {
+    throw Error("private error");
+  });
+  try {
+    expect(writeView("scope", "draft:room", "private draft")).toBe(false);
+    expect(readView("scope", "draft:room", "")).toBe("private draft");
+    await vi.waitFor(() => expect(invoke).toHaveBeenCalled());
+    const payload = invoke.mock.calls.at(-1)?.[1];
+    expect(payload).toMatchObject({
+      records: expect.arrayContaining([
+        expect.objectContaining({ operation: "notify-failed" }),
+      ]),
+    });
+    expect(JSON.stringify(payload)).not.toContain("private");
+  } finally {
+    stop();
+    vi.unstubAllGlobals();
+  }
+});

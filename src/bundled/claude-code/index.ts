@@ -5,8 +5,11 @@ import { repositoriesContext } from "../../features/communities/repositories";
 // this computer. Each conversation the agent is in is one continuing session;
 // Claude answers with the in-process Buzz tools.
 import { isTauri } from "@tauri-apps/api/core";
+import { type ComponentType, createElement } from "react";
 import { pubkeyOf } from "../../features/agents/membership";
 import { ownerReads } from "../../features/agents/reads";
+import { withProviderWords } from "../../features/agents/failure-words";
+import { refusedByBuzz } from "./auth";
 import type { PluginModule } from "../../plugins/api";
 import { ClaudeLogoIcon } from "../../shared/design-system/icons";
 import { claudeRun, TYPE_ID } from "./run";
@@ -20,7 +23,13 @@ export { TYPE_ID };
 /** How often Buzz's copy of Claude looks for a new release. */
 const UPDATE_MS = 6 * 60 * 60_000;
 
-export const inject = ["agents", "host", "agentProtection", "navigation"];
+export const inject = [
+  "agents",
+  "host",
+  "agentProtection",
+  "navigation",
+  "settingsCards",
+];
 export const apply: PluginModule["apply"] = (ctx) => {
   // Only the desktop app can start `claude`, and setup and file uploads run
   // `bash` and `base64`, which stock Windows lacks; no unusable type elsewhere.
@@ -30,6 +39,18 @@ export const apply: PluginModule["apply"] = (ctx) => {
   const spawn = host.spawn && withScript(host.spawn.bind(host));
   const readFile = host.readFile?.bind(host);
   const setup = new ClaudeSetup(spawn, (input) => host.request(input));
+  // Older replacement auth implementations need not provide key management.
+  const { Settings } = setup.auth as {
+    Settings?: ComponentType<{ setup: ClaudeSetup; active(): boolean }>;
+  };
+  if (Settings)
+    ctx.settingsCards.register({
+      id: "credentials",
+      title: "Claude",
+      icon: ClaudeLogoIcon,
+      group: "Plugins",
+      component: ({ active }) => createElement(Settings, { setup, active }),
+    });
   ctx.agentProtection.registerModels({
     label: "Claude",
     models: async () =>
@@ -105,19 +126,20 @@ export const apply: PluginModule["apply"] = (ctx) => {
     });
   }
 
+  const destination = Settings
+    ? { section: `${ctx.pluginOwner?.id ?? "buzz.claude-code"}/credentials` }
+    : { section: "agents", provider: typeKey };
+  const settingsLink = `buzz://settings?${new URLSearchParams(destination)}`;
   const openSetup = () =>
-    void ctx.navigation.open({
-      version: 1,
-      kind: "settings",
-      section: "agents",
-      provider: typeKey,
-    });
-  // Failed turns' reports link to the same place.
-  runtime.explain = (error) =>
-    setup.auth.explainTurn(
-      error,
-      `buzz://settings?section=agents&provider=${encodeURIComponent(typeKey)}`,
-    );
+    void ctx.navigation.open({ version: 1, kind: "settings", ...destination });
+  // Failed turns' reports link to the same place, then quote Claude. Buzz's
+  // own refusal to start Claude isn't Claude's words, and the link says it.
+  runtime.explain = (error) => {
+    const explained = setup.auth.explainTurn(error, settingsLink);
+    return explained === error || refusedByBuzz(error)
+      ? explained
+      : withProviderWords(explained, "Claude", error);
+  };
   const {
     Create,
     CreateAction,
@@ -205,11 +227,13 @@ export const apply: PluginModule["apply"] = (ctx) => {
       snapshot: setup.providerSnapshot,
       subscribe: setup.subscribe,
       check: () => setup.check(),
+      /** Settings' row updates or signs in with one click. A missing copy
+       * has no action: its row opens DialogBody, so the download note is
+       * seen before the download starts. */
       get attentionAction() {
         const state = setup.snapshot();
         if (state.running) return undefined;
-        return state.status?.state === "missing" ||
-          state.status?.state === "outdated"
+        return state.status?.state === "outdated"
           ? () => void setup.run("install")
           : state.status?.state === "signed-out" && setup.auth.signIn
             ? () => void setup.run("sign-in")

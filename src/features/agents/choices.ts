@@ -34,6 +34,8 @@ type Choice = AgentLibrarySnapshot["identities"][number] & {
   /** Known from this community's local/hosted source, never presence. */
   execution?: AgentExecutionLocation;
   runtime?: string;
+  /** A managed agent's type on this machine; it grants no control. */
+  type?: string;
   managedName?: string;
   /** Additional DM eligibility from completed owned hosted-agent records. */
   messageable?: true;
@@ -153,6 +155,7 @@ export function createAgentChoices({
           managed: true,
           managedName: row.name,
           execution: row.execution ?? "local",
+          ...(row.type ? { type: row.type } : {}),
         });
       }
     const ready = legacy.status === "ready" || local?.status === "ready";

@@ -25,10 +25,13 @@ const after =
 const image =
   "https://github.com/user-attachments/assets/cd0773ee-9861-46d9-8a0f-352ae951ec7f";
 const audio = "https://github.com/user-attachments/files/123/recording.wav";
-const metadata = `<details><summary>before.mp4</summary><video src="https://private-user-images.githubusercontent.com/1888043/659873452-81e77cff-0e61-4694-9a88-add0c1f997e4.mp4?jwt=expired"></video></details><video><source src="${after}" /></video>`;
+const signedBefore =
+  "https://private-user-images.githubusercontent.com/1888043/659873452-81e77cff-0e61-4694-9a88-add0c1f997e4.mp4?jwt=expired";
+const metadata = `<details><summary>before.mp4</summary><video src="${signedBefore}"></video></details><video><source src="${after}" /></video>`;
 
 afterEach(() => {
   cleanup();
+  vi.useRealTimers();
   vi.unstubAllGlobals();
   vi.restoreAllMocks();
 });
@@ -202,6 +205,10 @@ it("keeps original links when media fails before loading", () => {
   );
   for (const media of container.querySelectorAll("video, img, audio"))
     fireEvent.error(media);
+  // The video has a signed link in the rendered HTML; it fails too.
+  const video = container.querySelector("video") as HTMLVideoElement;
+  expect(video).toHaveAttribute("src", signedBefore);
+  fireEvent.error(video);
   expect(screen.getAllByRole("status")).toHaveLength(3);
   for (const [name, href] of [
     [before, before],
@@ -211,6 +218,440 @@ it("keeps original links when media fails before loading", () => {
     expect(screen.getByRole("link", { name })).toBeVisible();
     expect(screen.getByRole("link", { name })).toHaveAttribute("href", href);
   }
+});
+
+const signedImage = (jwt: string) =>
+  `https://private-user-images.githubusercontent.com/1888043/1-cd0773ee-9861-46d9-8a0f-352ae951ec7f.png?jwt=${jwt}`;
+const signedVideo = (jwt: string) => signedBefore.replace("expired", jwt);
+const signedHtml = (jwt: string) =>
+  `<p><a href="${signedImage(jwt)}"><img src="${signedImage(jwt)}" alt="Screenshot"></a></p><video src="${signedVideo(jwt)}"></video>`;
+const signedBody = `![Screenshot](${image})\n\n${before}`;
+
+it("takes a signed link only when media's own link fails, renewing it when that fails too", async () => {
+  const read = deferred<void>();
+  const refresh = vi.fn(() => read.promise);
+  const { container, rerender } = render(
+    <GitHubBody
+      url={url}
+      body={signedBody}
+      bodyHtml={signedHtml("1")}
+      refresh={refresh}
+    />,
+  );
+  const video = container.querySelector("video") as HTMLVideoElement;
+  // Media loads its own link first, as for a public repository.
+  expect(screen.getByAltText("Screenshot")).toHaveAttribute("src", image);
+  expect(video).toHaveAttribute("src", before);
+  fireEvent.loadedData(video);
+  fireEvent.error(screen.getByAltText("Screenshot"));
+  expect(screen.getByAltText("Screenshot")).toHaveAttribute(
+    "src",
+    signedImage("1"),
+  );
+  expect(refresh).not.toHaveBeenCalled();
+  // The signed link failing reads again; the original link remains meanwhile.
+  fireEvent.error(screen.getByAltText("Screenshot"));
+  expect(refresh).toHaveBeenCalledOnce();
+  expect(screen.getByRole("link", { name: "Screenshot" })).toHaveAttribute(
+    "href",
+    image,
+  );
+  rerender(
+    <GitHubBody
+      url={url}
+      body={signedBody}
+      bodyHtml={signedHtml("2")}
+      refresh={refresh}
+    />,
+  );
+  expect(screen.getByAltText("Screenshot")).toHaveAttribute(
+    "src",
+    signedImage("2"),
+  );
+  // The loaded video keeps its element and link, so it does not restart.
+  expect(container.querySelector("video")).toBe(video);
+  expect(video).toHaveAttribute("src", before);
+  await act(async () => read.resolve());
+  // A renewed link that fails before loading does not read again at once.
+  fireEvent.error(screen.getByAltText("Screenshot"));
+  expect(refresh).toHaveBeenCalledOnce();
+});
+
+it("reads again after a failed renewal, one read at a time", async () => {
+  const signedAfter =
+    "https://private-user-images.githubusercontent.com/1888043/2-dd1f7e4f-e2a4-4aec-b661-cb45032f29c5.mp4?jwt=1";
+  const first = deferred<void>();
+  const refresh = vi
+    .fn<() => Promise<void>>()
+    .mockReturnValueOnce(first.promise)
+    .mockResolvedValue(undefined);
+  const { container } = render(
+    <GitHubBody
+      url={url}
+      body={`${signedBody}\n\n${after}`}
+      bodyHtml={`${signedHtml("1")}<video src="${signedAfter}"></video>`}
+      refresh={refresh}
+    />,
+  );
+  const videos = () => [...container.querySelectorAll("video")];
+  // Each takes its signed link when its own fails, and loads it.
+  for (const media of [screen.getByAltText("Screenshot"), ...videos()])
+    fireEvent.error(media);
+  const [video, later] = videos();
+  if (!video || !later) throw new Error("Expected both videos");
+  expect(later).toHaveAttribute("src", signedAfter);
+  fireEvent.loadedData(video);
+  fireEvent.loadedData(later);
+  fireEvent.error(screen.getByAltText("Screenshot"));
+  // Media failing while a read is in flight waits for that read.
+  fireEvent.error(video);
+  expect(refresh).toHaveBeenCalledOnce();
+  await act(async () => first.reject(new Error("offline")));
+  // The read failed and nothing changed; media that expires later still
+  // reads again.
+  fireEvent.error(later);
+  expect(refresh).toHaveBeenCalledTimes(2);
+});
+
+const privateImage = (jwt: string) =>
+  `<img src="${signedImage(jwt)}" alt="Screenshot">`;
+const privateBody = `![Screenshot](${image})`;
+const settle = () => act(async () => {});
+const fail = (element: HTMLMediaElement, code: number) => {
+  Object.defineProperty(element, "error", {
+    configurable: true,
+    value: { code },
+  });
+  fireEvent.error(element);
+};
+const wait = (ms: number) =>
+  act(async () => {
+    await vi.advanceTimersByTimeAsync(ms);
+  });
+// Its own link fails, then its signed link: one read.
+const failTwice = () => {
+  fireEvent.error(screen.getByAltText("Screenshot"));
+  fireEvent.error(screen.getByAltText("Screenshot"));
+};
+
+it("reads again 30 seconds after a failed renewal, three times at most", async () => {
+  vi.useFakeTimers();
+  const refresh = vi.fn(() => Promise.reject(new Error("Not Found")));
+  render(
+    <GitHubBody
+      url={url}
+      body={privateBody}
+      bodyHtml={privateImage("1")}
+      refresh={refresh}
+    />,
+  );
+  failTwice();
+  expect(refresh).toHaveBeenCalledOnce();
+  await settle();
+  await wait(29_999);
+  expect(refresh).toHaveBeenCalledOnce();
+  await wait(1);
+  expect(refresh).toHaveBeenCalledTimes(2);
+  await wait(30_000);
+  await wait(30_000);
+  expect(refresh).toHaveBeenCalledTimes(4);
+  // Then it stops, leaving the original link.
+  await wait(5 * 60_000);
+  expect(refresh).toHaveBeenCalledTimes(4);
+  expect(vi.getTimerCount()).toBe(0);
+  expect(screen.getByRole("link", { name: "Screenshot" })).toHaveAttribute(
+    "href",
+    image,
+  );
+});
+
+it("stops retrying once a renewed link loads, without refilling its retries", async () => {
+  vi.useFakeTimers();
+  let reads = 0;
+  const refresh = vi.fn(async () => {
+    reads += 1;
+    if (reads !== 2) throw new Error("Not Found");
+    view.rerender(
+      <GitHubBody
+        url={url}
+        body={privateBody}
+        bodyHtml={privateImage("2")}
+        refresh={refresh}
+      />,
+    );
+  });
+  const view = render(
+    <GitHubBody
+      url={url}
+      body={privateBody}
+      bodyHtml={privateImage("1")}
+      refresh={refresh}
+    />,
+  );
+  failTwice();
+  await settle();
+  await wait(30_000);
+  expect(refresh).toHaveBeenCalledTimes(2);
+  expect(screen.getByAltText("Screenshot")).toHaveAttribute(
+    "src",
+    signedImage("2"),
+  );
+  fireEvent.load(screen.getByAltText("Screenshot"));
+  await wait(5 * 60_000);
+  expect(refresh).toHaveBeenCalledTimes(2);
+  // When it expires later it already had its read at once; it waits and
+  // uses only the two retries left.
+  fireEvent.error(screen.getByAltText("Screenshot"));
+  expect(refresh).toHaveBeenCalledTimes(2);
+  await wait(30_000);
+  expect(refresh).toHaveBeenCalledTimes(3);
+  await wait(5 * 60_000);
+  expect(refresh).toHaveBeenCalledTimes(4);
+  expect(vi.getTimerCount()).toBe(0);
+});
+
+it("caps reads for media that loads and then fails on each link", async () => {
+  vi.useFakeTimers();
+  const privateVideo = (jwt: string) =>
+    `<video src="${signedVideo(jwt)}"></video>`;
+  let reads = 0;
+  // Every read brings a new link, which also loads and then fails.
+  const refresh = vi.fn(async () => {
+    reads += 1;
+    view.rerender(
+      <GitHubBody
+        url={url}
+        body={before}
+        bodyHtml={privateVideo(String(reads + 1))}
+        refresh={refresh}
+      />,
+    );
+  });
+  const view = render(
+    <GitHubBody
+      url={url}
+      body={before}
+      bodyHtml={privateVideo("1")}
+      refresh={refresh}
+    />,
+  );
+  const video = () => view.container.querySelector("video");
+  fireEvent.error(video() as HTMLVideoElement);
+  expect(video()).toHaveAttribute("src", signedVideo("1"));
+  // Each link loads, then fails, which leaves it unavailable until a newer
+  // link replaces it.
+  let cycles = 0;
+  for (let shown = video(); cycles < 8 && shown; shown = video()) {
+    fireEvent.loadedData(shown);
+    fireEvent.error(shown);
+    cycles += 1;
+    await settle();
+    await wait(30_000);
+  }
+  expect(cycles).toBe(5);
+  // One read at once for the source, then three retries; then none.
+  expect(refresh).toHaveBeenCalledTimes(4);
+  await wait(10 * 60_000);
+  expect(refresh).toHaveBeenCalledTimes(4);
+  expect(vi.getTimerCount()).toBe(0);
+});
+
+it("does not refill retries when other media loads", async () => {
+  vi.useFakeTimers();
+  const working = `https://private-user-images.githubusercontent.com/1888043/2-dd1f7e4f-e2a4-4aec-b661-cb45032f29c5.png?jwt=1`;
+  const refresh = vi.fn(() => Promise.reject(new Error("Not Found")));
+  render(
+    <GitHubBody
+      url={url}
+      body={`${privateBody}\n\n![Working](${after})`}
+      bodyHtml={`${privateImage("1")}<img src="${working}" alt="Working">`}
+      refresh={refresh}
+    />,
+  );
+  failTwice();
+  await settle();
+  await wait(30_000);
+  expect(refresh).toHaveBeenCalledTimes(2);
+  // Another image loads its signed link, then loads again (as a fullscreen
+  // viewer's copy would), between retries.
+  fireEvent.error(screen.getByAltText("Working"));
+  expect(screen.getByAltText("Working")).toHaveAttribute("src", working);
+  for (let load = 0; load < 3; load++) {
+    fireEvent.load(screen.getByAltText("Working"));
+    await wait(30_000);
+  }
+  await wait(10 * 60_000);
+  expect(refresh).toHaveBeenCalledTimes(4);
+  expect(vi.getTimerCount()).toBe(0);
+});
+
+it("cancels a pending retry on unmount, and schedules none after it", async () => {
+  vi.useFakeTimers();
+  const refresh = vi.fn(() => Promise.reject(new Error("Not Found")));
+  const first = render(
+    <GitHubBody
+      url={url}
+      body={privateBody}
+      bodyHtml={privateImage("1")}
+      refresh={refresh}
+    />,
+  );
+  failTwice();
+  await settle();
+  expect(vi.getTimerCount()).toBe(1);
+  first.unmount();
+  expect(vi.getTimerCount()).toBe(0);
+  await wait(60_000);
+  expect(refresh).toHaveBeenCalledOnce();
+
+  const read = deferred<void>();
+  const pending = vi.fn(() => read.promise);
+  const second = render(
+    <GitHubBody
+      url={url}
+      body={privateBody}
+      bodyHtml={privateImage("1")}
+      refresh={pending}
+    />,
+  );
+  failTwice();
+  second.unmount();
+  await act(async () => read.reject(new Error("Not Found")));
+  expect(vi.getTimerCount()).toBe(0);
+  await wait(60_000);
+  expect(pending).toHaveBeenCalledOnce();
+});
+
+it("never schedules a retry for public media or media whose own link loads", async () => {
+  vi.useFakeTimers();
+  const refresh = vi.fn(() => Promise.reject(new Error("Not Found")));
+  render(
+    <GitHubBody
+      url={url}
+      body={`![Asset](${image})\n\n![Screenshot](${after})`}
+      bodyHtml={`<img src="${image}" alt="Asset"><img src="https://private-user-images.githubusercontent.com/1888043/2-dd1f7e4f-e2a4-4aec-b661-cb45032f29c5.png?jwt=1" alt="Screenshot">`}
+      refresh={refresh}
+    />,
+  );
+  fireEvent.error(screen.getByAltText("Asset"));
+  fireEvent.load(screen.getByAltText("Screenshot"));
+  expect(screen.getByAltText("Screenshot")).toHaveAttribute("src", after);
+  await settle();
+  expect(vi.getTimerCount()).toBe(0);
+  await wait(5 * 60_000);
+  expect(refresh).not.toHaveBeenCalled();
+});
+
+it("leaves network failures on a signed video to the player's quiet reload", async () => {
+  vi.useFakeTimers();
+  const refresh = vi.fn(async () => {});
+  const view = render(
+    <GitHubBody
+      url={url}
+      body={`[Movie](${before})`}
+      bodyHtml={`<video src="${signedVideo("1")}"></video>`}
+      refresh={refresh}
+    />,
+  );
+  const video = () => view.container.querySelector("video") as HTMLVideoElement;
+  const movie = () => screen.queryByRole("link", { name: "Movie" });
+  fail(video(), 4);
+  const signed = video();
+  expect(signed).toHaveAttribute("src", signedVideo("1"));
+  fireEvent.loadedData(signed);
+  expect(movie()).not.toBeInTheDocument();
+  // A network blip neither reads again nor remounts the player, and shows
+  // the original link until the video loads again.
+  fail(signed, 2);
+  await settle();
+  expect(video()).toBe(signed);
+  expect(movie()).toHaveAttribute("href", before);
+  fireEvent.loadedMetadata(signed);
+  expect(movie()).not.toBeInTheDocument();
+  // When the player's own reloads give up, the original link stays and the
+  // panel still reads nothing.
+  fail(signed, 2);
+  await wait(5 * 60_000);
+  expect(screen.getByText("Video unavailable")).toBeVisible();
+  expect(movie()).toHaveAttribute("href", before);
+  expect(refresh).not.toHaveBeenCalled();
+  expect(vi.getTimerCount()).toBe(0);
+});
+
+it("shows the original link when loaded audio fails on a network error", () => {
+  const { container } = render(
+    <GitHubBody url={url} body={`[Audio recording](${audio})`} />,
+  );
+  const element = container.querySelector("audio");
+  if (!element) throw new Error("Missing audio");
+  fireEvent.loadedData(element);
+  expect(
+    screen.queryByRole("link", { name: "Audio recording" }),
+  ).not.toBeInTheDocument();
+  fail(element, 2);
+  expect(screen.getByText("Audio unavailable")).toBeVisible();
+  expect(screen.getByRole("link", { name: "Audio recording" })).toHaveAttribute(
+    "href",
+    audio,
+  );
+});
+
+it("tries a link a poll delivers before the retry instead of reading again", async () => {
+  vi.useFakeTimers();
+  const refresh = vi.fn(() => Promise.reject(new Error("Not Found")));
+  const { rerender } = render(
+    <GitHubBody
+      url={url}
+      body={privateBody}
+      bodyHtml={privateImage("1")}
+      refresh={refresh}
+    />,
+  );
+  failTwice();
+  await settle();
+  await wait(10_000);
+  // A PR poll brings a newer link; the failed image takes it.
+  rerender(
+    <GitHubBody
+      url={url}
+      body={privateBody}
+      bodyHtml={privateImage("2")}
+      refresh={refresh}
+    />,
+  );
+  expect(screen.getByAltText("Screenshot")).toHaveAttribute(
+    "src",
+    signedImage("2"),
+  );
+  // Still loading when the retry is due: nothing is read.
+  await wait(20_000);
+  expect(refresh).toHaveBeenCalledOnce();
+  fireEvent.load(screen.getByAltText("Screenshot"));
+  await wait(5 * 60_000);
+  expect(refresh).toHaveBeenCalledOnce();
+  expect(vi.getTimerCount()).toBe(0);
+});
+
+it("keeps public and raw media on their own links without reading again", () => {
+  const raw = "https://raw.githubusercontent.com/block/buzz-app/main/icon.png";
+  const refresh = vi.fn();
+  render(
+    <GitHubBody
+      url={url}
+      body={`![Asset](${image})\n\n![Raw](${raw})`}
+      bodyHtml={`<img src="${image}" alt="Asset"><img src="https://camo.githubusercontent.com/1/2" data-canonical-src="${raw}" alt="Raw">`}
+      refresh={refresh}
+    />,
+  );
+  for (const [name, source] of [
+    ["Asset", image],
+    ["Raw", raw],
+  ] as const) {
+    expect(screen.getByAltText(name)).toHaveAttribute("src", source);
+    fireEvent.error(screen.getByAltText(name));
+    expect(screen.getByRole("link", { name })).toHaveAttribute("href", source);
+  }
+  expect(refresh).not.toHaveBeenCalled();
 });
 
 it("preserves HTML-only summaries, prose and file links", () => {
@@ -477,10 +918,12 @@ it.each([
 
 function deferred<T>() {
   let resolve!: (value: T) => void;
-  const promise = new Promise<T>((done) => {
+  let reject!: (error: unknown) => void;
+  const promise = new Promise<T>((done, fail) => {
     resolve = done;
+    reject = fail;
   });
-  return { promise, resolve };
+  return { promise, resolve, reject };
 }
 
 it("ignores retired PR loads, retries errors, and clears media when navigating", async () => {
@@ -556,4 +999,57 @@ it("ignores retired PR loads, retries errors, and clears media when navigating",
   ).toBeVisible();
   expect(container.querySelector("video")).toBeNull();
   expect(screen.getByRole("link", { name: before })).toBeVisible();
+});
+
+it("reads the pull request again when its signed image fails", async () => {
+  const signed = (read: number) =>
+    `https://private-user-images.githubusercontent.com/1/2-cd0773ee-9861-46d9-8a0f-352ae951ec7f.png?jwt=${read}`;
+  let reads = 0;
+  const fetch = vi.fn(async () => {
+    reads += 1;
+    return new Response(
+      JSON.stringify({
+        title: "Private PR",
+        body: `![Screenshot](${image})`,
+        body_html: `<img src="${signed(reads)}" alt="Screenshot">`,
+      }),
+    );
+  });
+  vi.stubGlobal("fetch", fetch);
+  render(<GitHubPanel target={url} close={() => {}} />);
+  fireEvent.error(await screen.findByAltText("Screenshot"));
+  expect(screen.getByAltText("Screenshot")).toHaveAttribute("src", signed(1));
+  fireEvent.error(screen.getByAltText("Screenshot"));
+  await waitFor(() =>
+    expect(screen.getByAltText("Screenshot")).toHaveAttribute("src", signed(2)),
+  );
+  expect(fetch).toHaveBeenCalledTimes(2);
+});
+
+it("keeps a shown issue when reading it again for its signed image fails", async () => {
+  const issue = "https://github.com/block/buzz-app/issues/5";
+  const fetch = vi
+    .fn()
+    .mockResolvedValueOnce(
+      new Response(
+        JSON.stringify({
+          title: "Private issue",
+          body: `![Screenshot](${image})`,
+          body_html: `<img src="${signedImage("1")}" alt="Screenshot">`,
+        }),
+      ),
+    )
+    .mockResolvedValueOnce(new Response(null, { status: 404 }));
+  vi.stubGlobal("fetch", fetch);
+  render(<GitHubPanel target={issue} close={() => {}} />);
+  fireEvent.error(await screen.findByAltText("Screenshot"));
+  fireEvent.error(screen.getByAltText("Screenshot"));
+  await waitFor(() => expect(fetch).toHaveBeenCalledTimes(2));
+  await act(async () => {});
+  expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+  expect(screen.getByRole("heading", { name: "Private issue" })).toBeVisible();
+  expect(screen.getByRole("link", { name: "Screenshot" })).toHaveAttribute(
+    "href",
+    image,
+  );
 });

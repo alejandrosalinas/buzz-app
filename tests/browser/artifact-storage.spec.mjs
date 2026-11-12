@@ -418,6 +418,225 @@ test("atomically indexes preference changes and preserves newer values during mi
   ]);
 });
 
+test("reuses unchanged stored state and indexes after repeat delivery", async ({
+  page,
+  storageUrl,
+}) => {
+  await open(page, storageUrl);
+  const result = await page.evaluate(async () => {
+    let projections = 0;
+    const c = window.artifactTest.open("viewer", "relay", "test", {
+      project: ({ record, preference }) => {
+        projections++;
+        return [
+          {
+            index: "state",
+            value: JSON.stringify([
+              record.local,
+              preference,
+              record.availability,
+            ]),
+            order: record.id,
+          },
+        ];
+      },
+    });
+    const record = {
+      id: "task",
+      channelId: "channel",
+      type: "test.task",
+      revision: { id: "A", content: "{}" },
+    };
+    const refresh = await c.beginRefresh("all");
+    const batch = {
+      source: "all",
+      refresh,
+      records: [record],
+      availability: [
+        {
+          id: "task",
+          expectedRevision: "A",
+          value: { state: "available" },
+        },
+      ],
+    };
+    await c.applyBatch(batch);
+    await c.importBatch({
+      records: [
+        { id: "task", local: { title: "device", labels: ["one", "two"] } },
+      ],
+      preferences: [{ id: "task", value: { pinned: false, rank: 0 } }],
+    });
+    const before = await c.get("task");
+    projections = 0;
+    const writes = [];
+    const put = IDBObjectStore.prototype.put;
+    const remove = IDBObjectStore.prototype.delete;
+    IDBObjectStore.prototype.put = function (...args) {
+      if (["records", "preferences", "entries"].includes(this.name))
+        writes.push(this.name);
+      return put.apply(this, args);
+    };
+    IDBObjectStore.prototype.delete = function (...args) {
+      if (this.name === "entries") writes.push(this.name);
+      return remove.apply(this, args);
+    };
+    try {
+      await c.applyBatch(structuredClone(batch));
+      await c.preferences.update("task", () => ({ rank: 0, pinned: false }));
+      await c.importBatch({
+        records: [{ id: "task", local: { title: "discarded retry" } }],
+        preferences: [{ id: "task", value: true }],
+        marker: "retry",
+      });
+      return {
+        writes,
+        projections,
+        before,
+        after: await c.get("task"),
+        indexed: await c.page({
+          index: "state",
+          value: JSON.stringify([
+            { title: "device", labels: ["one", "two"] },
+            { pinned: false, rank: 0 },
+            { state: "available" },
+          ]),
+        }),
+        imported: await c.imported("retry"),
+      };
+    } finally {
+      IDBObjectStore.prototype.put = put;
+      IDBObjectStore.prototype.delete = remove;
+    }
+  });
+  expect(result.writes).toEqual([]);
+  expect(result.projections).toBe(0);
+  expect(result.after).toEqual(result.before);
+  expect(result.indexed.entries).toEqual([result.before]);
+  expect(result.imported).toBe(true);
+});
+
+test("commits changed local data, preferences, revisions and availability", async ({
+  page,
+  storageUrl,
+}) => {
+  await open(page, storageUrl);
+  const result = await page.evaluate(async () => {
+    const c = window.artifactTest.open("viewer", "relay", "test", {
+      project: ({ record, preference }) => [
+        {
+          index: "state",
+          value: JSON.stringify([
+            record.local,
+            preference,
+            record.channelId,
+            record.current,
+            record.availability,
+          ]),
+          order: record.id,
+        },
+      ],
+    });
+    const refresh = await c.beginRefresh("all");
+    const record = {
+      id: "task",
+      channelId: "channel",
+      type: "test.task",
+      revision: { id: "A", content: "{}" },
+    };
+    const states = [];
+    async function capture() {
+      const entry = await c.get("task");
+      const r = entry.record;
+      const page = await c.page({
+        index: "state",
+        value: JSON.stringify([
+          r.local,
+          entry.preference,
+          r.channelId,
+          r.current,
+          r.availability,
+        ]),
+      });
+      states.push({ entry, indexed: page.entries });
+    }
+    await c.applyBatch({ source: "all", refresh, records: [record] });
+    await c.importBatch({
+      records: [{ id: "task", local: { title: "device" } }],
+    });
+    await capture();
+    await c.preferences.update("task", () => ({ pinned: false }));
+    await c.preferences.update("task", (current) => {
+      current.pinned = true;
+      return current;
+    });
+    await capture();
+    for (const revision of [
+      { id: "A", content: '{"title":"updated"}' },
+      {
+        id: "A",
+        content: '{"title":"updated"}',
+        event: { tags: [["x", "one"]] },
+      },
+      {
+        id: "A",
+        content: '{"title":"updated"}',
+        event: { tags: [["x", "two"]] },
+      },
+    ]) {
+      await c.applyBatch({
+        source: "all",
+        refresh,
+        records: [{ ...record, revision }],
+      });
+      await capture();
+    }
+    await c.applyBatch({
+      source: "all",
+      refresh,
+      records: [{ ...record, channelId: "moved" }],
+    });
+    await capture();
+    for (const value of [
+      { state: "unavailable", reason: "access" },
+      { state: "unavailable", reason: "removed" },
+      { state: "available" },
+    ]) {
+      await c.applyBatch({
+        source: "all",
+        refresh,
+        availability: [{ id: "task", expectedRevision: "A", value }],
+      });
+      await capture();
+    }
+    return states;
+  });
+  for (const { entry, indexed } of result) expect(indexed).toEqual([entry]);
+  expect(result[0].entry.record.local).toEqual({ title: "device" });
+  expect(result[1].entry.preference).toEqual({ pinned: true });
+  expect(result.slice(2, 5).map(({ entry }) => entry.record.current)).toEqual([
+    { id: "A", content: '{"title":"updated"}' },
+    {
+      id: "A",
+      content: '{"title":"updated"}',
+      event: { tags: [["x", "one"]] },
+    },
+    {
+      id: "A",
+      content: '{"title":"updated"}',
+      event: { tags: [["x", "two"]] },
+    },
+  ]);
+  expect(result[5].entry.record.channelId).toBe("moved");
+  expect(result.slice(6).map(({ entry }) => entry.record.availability)).toEqual(
+    [
+      { state: "unavailable", reason: "access" },
+      { state: "unavailable", reason: "removed" },
+      { state: "available" },
+    ],
+  );
+});
+
 test("commits delta progress without inferring absence and preserves device data", async ({
   page,
   storageUrl,
@@ -791,7 +1010,7 @@ test("accepts authoritative heads without ancestry and rejects retired captures"
       .applyBatch({
         source: "all",
         refresh: old,
-        records: [record("A", "old-home")],
+        records: [record("C", "new-home")],
       })
       .then(
         () => "unexpected",
@@ -802,7 +1021,7 @@ test("accepts authoritative heads without ancestry and rejects retired captures"
         source: "all",
         refresh: newer,
         availability: [
-          { id: "task", expectedRevision: "A", value: { state: "deleted" } },
+          { id: "task", expectedRevision: "A", value: { state: "available" } },
         ],
       })
       .then(

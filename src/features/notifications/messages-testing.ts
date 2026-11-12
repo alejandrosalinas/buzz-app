@@ -154,6 +154,7 @@ export async function setup(
           }
         : {}),
       readStateStorage: {
+        capture: async () => structuredClone(readState),
         async update(change) {
           await (typeof readBarrier === "function"
             ? readBarrier()

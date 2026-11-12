@@ -26,8 +26,19 @@ export function handoffFederatedBackupSession(
 
 /** What the native uploader last did for this device's key. `seq` orders
  * statuses; a pass numbered at or above a handoff's ticket started after it. */
+export type IdentityManagement = Readonly<{
+  pubkey: string;
+  policy: "self-managed" | "organization-managed";
+  initialBackupConfirmed: boolean;
+}>;
+
 export type BackupStatus = Readonly<
-  { seq: number; pass: number; builderlab: boolean } & (
+  {
+    seq: number;
+    pass: number;
+    builderlab: boolean;
+    management?: IdentityManagement;
+  } & (
     | { status: "idle" | "running" | "complete" }
     | { status: "waiting"; reason: "no_consent" | "no_session" | "not_linked" }
     | {
@@ -79,6 +90,12 @@ export function createBackupStatus(send: Send = invoke) {
   return {
     snapshot: () => status,
     ready,
+    retry: () => send("nsec_backup_retry"),
+    async refresh() {
+      await ready();
+      accept(await send<BackupStatus>("nsec_backup_state"));
+      return status as BackupStatus;
+    },
     subscribe(listener: () => void) {
       listeners.add(listener);
       void ready().catch(() => {});
@@ -93,15 +110,20 @@ export function createBackupStatus(send: Send = invoke) {
   };
 }
 
-/** A first-run backup that did not complete, with the table's copy as its message. */
+/** A first-run backup that did not complete, with the table's copy as its
+ * message. `retryable` is the table's unless the step's own Try again does
+ * more than repeat the pass, as signing in again does. */
 export class BackupError extends Error {
   readonly kind: BackupFailureKind;
   readonly retryable: boolean;
-  constructor(kind: BackupFailureKind) {
+  constructor(
+    kind: BackupFailureKind,
+    retryable: boolean = BACKUP_FAILURES[kind].retryable,
+  ) {
     super(BACKUP_FAILURES[kind].message);
     this.name = "BackupError";
     this.kind = kind;
-    this.retryable = BACKUP_FAILURES[kind].retryable;
+    this.retryable = retryable;
   }
 }
 

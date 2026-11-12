@@ -365,6 +365,37 @@ it("messages clear only their typing scope and suppress delayed typing, while fr
   expect(f.snapshot().typing).toHaveLength(2);
   f.activity.dispose();
 });
+it("a thread reply also clears and briefly suppresses the agent's channel-level typing, but not other threads", async () => {
+  const f = fixture();
+  const root = "b".repeat(64),
+    sibling = "c".repeat(64);
+  f.send(f.item("turn_liveness"));
+  f.activity.channelEvents([typingEvent(), typingEvent(sibling)]);
+  f.activity.channelEvents([{ ...typingEvent(root), kind: 9 }]);
+  expect(f.snapshot().typing.map((entry) => entry.threadRootId)).toEqual([
+    sibling,
+  ]);
+  // A channel-level pulse stamped before the reply but delivered after it.
+  await vi.advanceTimersByTimeAsync(1000);
+  f.activity.channelEvents([
+    typingEvent(undefined, { created_at: Date.now() / 1000 - 1 }),
+  ]);
+  expect(f.snapshot().typing.map((entry) => entry.threadRootId)).toEqual([
+    sibling,
+  ]);
+  await vi.advanceTimersByTimeAsync(2000);
+  f.activity.channelEvents([typingEvent()]);
+  expect(f.snapshot().typing.map((entry) => entry.threadRootId)).toEqual([
+    sibling,
+    undefined,
+  ]);
+  // A channel-level message clears only channel-level typing.
+  f.activity.channelEvents([{ ...typingEvent(), kind: 9 }]);
+  expect(f.snapshot().typing.map((entry) => entry.threadRootId)).toEqual([
+    sibling,
+  ]);
+  f.activity.dispose();
+});
 it("invalid, stale, unknown-agent and ambiguous channel/thread typing cannot create a channel fallback", () => {
   const f = fixture();
   f.send(f.item("turn_liveness"));
@@ -561,3 +592,253 @@ it("skips the snapshot comparison for channel traffic that changes no typing", (
     f.activity.dispose();
   }
 });
+it("adds a steered message to its running turn, so it works and ends with that turn", () => {
+  const f = fixture();
+  const first = "1".repeat(64),
+    steered = "2".repeat(64);
+  const state = (id: string) => requestWork(f.snapshot(), "a", id)[0]?.state;
+  f.send(
+    f.item("turn_started", "one", {
+      payload: { source: "mention", triggeringEventIds: [first] },
+    }),
+  );
+  expect(state(steered)).toBeUndefined();
+  f.send(
+    f.item("turn_steered", "one", {
+      seq: 2,
+      payload: { source: "mention", triggeringEventIds: [steered] },
+    }),
+  );
+  expect(f.snapshot().turns).toEqual([
+    expect.objectContaining({
+      turnId: "one",
+      state: "working",
+      triggeringEventIds: [first, steered],
+    }),
+  ]);
+  expect(f.snapshot().turns[0]?.ambiguous).toBeUndefined();
+  expect(state(first)).toBe("working");
+  expect(state(steered)).toBe("working");
+  // A repeated steer frame adds nothing.
+  f.send(
+    f.item("turn_steered", "one", {
+      seq: 3,
+      payload: { triggeringEventIds: [steered] },
+    }),
+  );
+  expect(f.snapshot().turns[0]?.triggeringEventIds).toEqual([first, steered]);
+  f.send(
+    f.item("turn_completed", "one", {
+      seq: 4,
+      payload: { outcome: "completed" },
+    }),
+  );
+  expect(state(first)).toBe("ended");
+  expect(state(steered)).toBe("ended");
+  f.activity.dispose();
+});
+it("keeps a steer late to its turn's end as membership, without reviving the turn", () => {
+  const f = fixture();
+  const first = "1".repeat(64),
+    steered = "2".repeat(64);
+  f.send(
+    f.item("turn_started", "one", {
+      payload: { triggeringEventIds: [first] },
+    }),
+  );
+  f.send(
+    f.item("turn_completed", "one", {
+      seq: 3,
+      payload: { outcome: "completed" },
+    }),
+  );
+  f.send(
+    f.item("turn_steered", "one", {
+      seq: 2,
+      timestamp: new Date(Date.now() - 1000).toISOString(),
+      payload: { triggeringEventIds: [steered] },
+    }),
+  );
+  expect(f.snapshot().turns[0]).toMatchObject({
+    state: "ended",
+    outcome: "ended",
+    triggeringEventIds: [first, steered],
+  });
+  expect(requestWork(f.snapshot(), "a", steered)[0]?.state).toBe("ended");
+  f.activity.dispose();
+});
+it("a steer alone owns its turn, and only a second start makes a turn ambiguous", () => {
+  const f = fixture();
+  const first = "1".repeat(64),
+    steered = "2".repeat(64),
+    again = "3".repeat(64);
+  f.send(
+    f.item("turn_steered", "lost-start", {
+      payload: { triggeringEventIds: [steered] },
+    }),
+  );
+  expect(requestWork(f.snapshot(), "a", steered)[0]?.state).toBe("working");
+  f.send(
+    f.item("turn_started", "lost-start", {
+      seq: 2,
+      payload: { triggeringEventIds: [first] },
+    }),
+  );
+  expect(f.snapshot().turns[0]).toMatchObject({
+    triggeringEventIds: [steered, first],
+  });
+  expect(f.snapshot().turns[0]?.ambiguous).toBeUndefined();
+  f.send(
+    f.item("turn_started", "lost-start", {
+      seq: 3,
+      payload: { triggeringEventIds: [again] },
+    }),
+  );
+  expect(f.snapshot().turns[0]?.ambiguous).toBe(true);
+  f.activity.dispose();
+});
+it("ignores malformed steer triggers and keeps the turn's existing ones", () => {
+  const f = fixture();
+  const first = "1".repeat(64);
+  f.send(
+    f.item("turn_started", "one", {
+      payload: { triggeringEventIds: [first] },
+    }),
+  );
+  for (const triggeringEventIds of [
+    ["not-an-id"],
+    "2".repeat(64),
+    Array.from({ length: 65 }, (_, i) => i.toString(16).padStart(64, "0")),
+  ])
+    f.send(f.item("turn_steered", "one", { payload: { triggeringEventIds } }));
+  expect(f.snapshot().turns[0]?.triggeringEventIds).toEqual([first]);
+  f.activity.dispose();
+});
+it("gives no request work to a message whose steer the lifecycle rejected", () => {
+  const f = fixture();
+  const id = (n: number) => n.toString(16).padStart(64, "0");
+  const first = "1".repeat(64),
+    malformed = "2".repeat(64),
+    oversized = "3".repeat(64),
+    overflow = "4".repeat(64);
+  const work = (message: string) => requestWork(f.snapshot(), "a", message);
+  f.send(
+    f.item("turn_started", "one", {
+      payload: {
+        triggeringEventIds: [
+          first,
+          ...Array.from({ length: 60 }, (_, i) => id(i + 1)),
+        ],
+      },
+    }),
+  );
+  // A list with one bad entry, a list over the limit, and a list that would
+  // take the turn past the limit are each rejected whole.
+  f.send(
+    f.item("turn_steered", "one", {
+      seq: 2,
+      payload: { triggeringEventIds: [malformed, "not-an-id"] },
+    }),
+  );
+  f.send(
+    f.item("turn_steered", "one", {
+      seq: 3,
+      payload: {
+        triggeringEventIds: [
+          oversized,
+          ...Array.from({ length: 64 }, (_, i) => id(i + 100)),
+        ],
+      },
+    }),
+  );
+  f.send(
+    f.item("turn_steered", "one", {
+      seq: 4,
+      payload: {
+        triggeringEventIds: [
+          overflow,
+          ...Array.from({ length: 4 }, (_, i) => id(i + 200)),
+        ],
+      },
+    }),
+  );
+  expect(f.snapshot().turns[0]?.triggeringEventIds).toHaveLength(61);
+  expect(work(first)[0]?.state).toBe("working");
+  for (const message of [malformed, oversized, overflow])
+    expect(work(message)).toEqual([]);
+  // The raw records still select the turn for an admitted message.
+  expect([...(work(id(1))[0]?.selected.turnIds ?? [])]).toEqual(["one"]);
+  f.activity.dispose();
+});
+it("gives no request work to a rejected steer after its turn's raw start is evicted", () => {
+  const id = (n: number) => n.toString(16).padStart(64, "0");
+  const evicted = fixture();
+  const rejected = "2".repeat(64);
+  evicted.send(
+    evicted.item("turn_started", "one", {
+      payload: {
+        triggeringEventIds: Array.from({ length: 64 }, (_, i) => id(i + 1)),
+      },
+    }),
+  );
+  for (let i = 0; i < ACTIVITY_RECORD_LIMIT - 1; i++)
+    evicted.send(evicted.item("acp_read", "one", { seq: i + 2 }));
+  evicted.send(
+    evicted.item("turn_steered", "one", {
+      seq: ACTIVITY_RECORD_LIMIT + 2,
+      payload: { triggeringEventIds: [rejected] },
+    }),
+  );
+  expect(evicted.snapshot().trimmed).toBeGreaterThan(0);
+  expect(evicted.snapshot().turns[0]?.triggeringEventIds).toHaveLength(64);
+  expect(requestWork(evicted.snapshot(), "a", rejected)).toEqual([]);
+  expect([
+    ...(requestWork(evicted.snapshot(), "a", id(1))[0]?.selected.turnIds ?? []),
+  ]).toEqual(["one"]);
+  evicted.activity.dispose();
+});
+it.each(["turn_liveness", "turn_steered"])(
+  "keeps a start that arrives after its turn's %s as membership, without refreshing the turn",
+  (firstKind) => {
+    const f = fixture();
+    const origin = "1".repeat(64),
+      steered = "2".repeat(64),
+      second = "3".repeat(64);
+    f.send(
+      f.item(firstKind, "one", {
+        seq: 2,
+        payload:
+          firstKind === "turn_steered" ? { triggeringEventIds: [steered] } : {},
+      }),
+    );
+    const timestamp = f.snapshot().turns[0]?.timestamp;
+    f.send(
+      f.item("turn_started", "one", {
+        timestamp: new Date(Date.now() - 1000).toISOString(),
+        payload: { triggeringEventIds: [origin] },
+      }),
+    );
+    f.send(f.item("acp_read", "one", { seq: 3 }));
+    expect(f.snapshot().turns[0]).toMatchObject({
+      timestamp,
+      state: "working",
+      triggeringEventIds:
+        firstKind === "turn_steered" ? [steered, origin] : [origin],
+    });
+    expect(f.snapshot().turns[0]?.ambiguous).toBeUndefined();
+    const [work] = requestWork(f.snapshot(), "a", origin);
+    expect(work?.state).toBe("working");
+    expect([...(work?.selected.turnIds ?? [])]).toEqual(["one"]);
+    expect(work?.selected.records.length).toBeGreaterThanOrEqual(3);
+    // A second late start leaves the turn ambiguous, as one in order would.
+    f.send(
+      f.item("turn_started", "one", {
+        timestamp: new Date(Date.now() - 2000).toISOString(),
+        payload: { triggeringEventIds: [second] },
+      }),
+    );
+    expect(f.snapshot().turns[0]?.ambiguous).toBe(true);
+    expect(f.snapshot().turns[0]?.triggeringEventIds).not.toContain(second);
+    f.activity.dispose();
+  },
+);

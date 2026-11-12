@@ -2,7 +2,7 @@ import { useState, type Ref } from "react";
 import { Field } from "../../shared/design-system/ui/Field";
 import { Input } from "../../shared/design-system/ui/Input";
 import { AvatarEditor } from "../profiles/AvatarEditor";
-import { avatarPictureError } from "../profiles/avatar-upload";
+import { profilePictureError } from "../profiles/avatar-upload";
 import type { PersonalProfile } from "./service";
 import type { VerifiedProfile } from "../relay/verified-profile";
 import { PROFILE_ABOUT_MAX_LENGTH } from "./service";
@@ -19,7 +19,7 @@ export function profilesEqual(left: PersonalProfile, right: PersonalProfile) {
 export function canSaveProfile(profile: PersonalProfile) {
   return (
     !!profile.name.trim() &&
-    !avatarPictureError(profile.picture) &&
+    !profilePictureError(profile.picture) &&
     (profile.about?.length ?? 0) <= PROFILE_ABOUT_MAX_LENGTH
   );
 }
@@ -66,6 +66,7 @@ export function ProfileFields({
     <div className="grid gap-4">
       {showAvatar && (
         <AvatarEditor
+          personal
           emptyStyle={emptyAvatarStyle}
           value={profile.picture}
           name={profile.name}

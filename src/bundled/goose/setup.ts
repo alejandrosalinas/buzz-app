@@ -3,6 +3,7 @@
 // call runs a short-lived `goose-acp`; keys go to goose's secret store, never
 // into Buzz.
 import type { ModelChoice } from "../../features/agents/ModelPicker";
+import { withProviderWords } from "../../features/agents/failure-words";
 import type {
   ProtectedSpawn,
   ReviewPrompt,
@@ -686,6 +687,25 @@ function needs(provider: Omit<Provider, "needs">) {
       ? "Run goose configure to sign in."
       : "";
   return step && `${provider.name} isn't set up in goose. ${step}`;
+}
+
+/** A failed turn's error as its report in the conversation says it, in
+ * Markdown: a key goose lacks or its provider refused links to `settings`,
+ * where goose's providers are set up. Without the key goose fails the turn
+ * with "Configuration value not found: ANTHROPIC_API_KEY"; a provider that
+ * refuses its key or sign-in ends it with ACP's "Authentication required",
+ * which a failed start or handover reports after "goose could not start: " or
+ * "Error: ". A turn doesn't say which kind of provider refused, and a sign-in
+ * is redone outside Buzz, so the report asks only to check the provider. The
+ * explanation comes first, then goose's own words. */
+export function explainTurn(error: string, settings: string) {
+  const missing = /Configuration value not found: (\w*API_KEY)\b/.exec(error);
+  const explanation = missing
+    ? `Goose is missing an API key (${missing[1]}). Head to [Settings](${settings}) to add it.`
+    : /(?:^|: )Authentication required\b/.test(error)
+      ? `Goose's provider rejected its API key or sign-in. Head to [Settings](${settings}) to check its provider.`
+      : undefined;
+  return explanation ? withProviderWords(explanation, "goose", error) : error;
 }
 
 /** `ANTHROPIC_API_KEY` reads as `API key`, `OPENAI_HOST` as `Host`. */

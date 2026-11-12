@@ -55,6 +55,9 @@ struct App {
 }
 impl App {
     fn new(origin: &str) -> Self {
+        Self::with_host(serde_json::json!({"networkOrigins":[origin]}))
+    }
+    fn with_host(host: serde_json::Value) -> Self {
         let root = tempfile::tempdir().unwrap();
         let manager =
             buzzodz_plugins::Manager::open(Some(root.path().join("data")), "test", false).unwrap();
@@ -65,11 +68,13 @@ impl App {
             source.join("manifest.json"),
             serde_json::to_vec(&serde_json::json!({
                 "id":"example.replay", "name":"Replay fixture", "apiVersion":1,
-                "host":{"networkOrigins":[origin]}
+                "host":host
             }))
             .unwrap(),
         )
         .unwrap();
+        buzzodz_plugins::sign_release(&source, &nostr::key::SecretKey::generate().to_secret_hex())
+            .unwrap();
         let installed = manager.install(&source).unwrap();
         let revision = installed
             .plugins
@@ -587,6 +592,25 @@ fn upload_ipc(
     .map_err(|e| e.to_string())
     .map(|r| r.deserialize().unwrap())
 }
+#[test]
+fn public_images_alone_cannot_authorize_an_upload() {
+    let _serial = crate::host_files::managed_tests::commands();
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let url = format!("https://{}/upload", listener.local_addr().unwrap());
+    let fixture = App::with_host(serde_json::json!({"publicImages":true}));
+    let calls = fixture.app.state::<HostCalls>();
+    let metadata = upload_metadata(&fixture, &envelope(&calls), &url);
+    let error = upload_ipc(
+        &fixture,
+        &metadata,
+        tauri::ipc::InvokeBody::Raw(PNG_UPLOAD.to_vec()),
+    )
+    .unwrap_err();
+    assert!(error.contains("not declared"), "{error}");
+    listener.set_nonblocking(true).unwrap();
+    assert!(matches!(listener.accept(), Err(e) if e.kind() == std::io::ErrorKind::WouldBlock));
+}
+
 #[test]
 fn upload_raw_ipc_consumes_once_without_files_and_binds_bytes_and_metadata() {
     let _serial = crate::host_files::managed_tests::commands();

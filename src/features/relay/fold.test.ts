@@ -62,6 +62,42 @@ describe("message fold", () => {
       expect(row?.content).toBe(content);
     }
   });
+  it("reads one exact signed request id, and none from conflicting or malformed tags", () => {
+    const a = "a".repeat(64),
+      b = "b".repeat(64);
+    for (const [tags, request] of [
+      [[["buzz:request", a]], a],
+      [
+        [
+          ["buzz:request", a],
+          ["buzz:request", a],
+        ],
+        a,
+      ],
+      [
+        [
+          ["buzz:request", a],
+          ["buzz:request", b],
+        ],
+        undefined,
+      ],
+      [[["buzz:request", a.toUpperCase()]], undefined],
+      [[["buzz:request", "nope"]], undefined],
+      [[["buzz:request"]], undefined],
+      [[["request", a]], undefined],
+    ] as const) {
+      const [row] = foldMessages(channel, relay.pubkey, [
+        message(
+          alice,
+          channel,
+          "Checking",
+          1,
+          tags.map((tag) => [...tag]),
+        ),
+      ]);
+      expect(row?.request).toBe(request);
+    }
+  });
   it("reads the id of a plugin request from the signed tag", () => {
     const content = "Requested: install Browser — Check the staging site";
     const id = "5d1f0b8e-8c2a-4a39-9a54-0f6a4e7e6c11";
@@ -897,6 +933,20 @@ describe("profiles", () => {
     expect(profiles.get(relay.pubkey)).toEqual({
       name: relay.pubkey.slice(0, 10),
       nameIsFallback: true,
+    });
+  });
+
+  it("drops an ill-formed emoji avatar and keeps the rest of the profile", () => {
+    // Old Buzz's emoji template around a lone surrogate, which cannot be encoded.
+    const picture = `data:image/svg+xml,${encodeURIComponent(
+      '<svg xmlns="http://www.w3.org/2000/svg" width="512" height="512" viewBox="0 0 512 512"><rect width="512" height="512" rx="256" fill="#FFB84D"/><text x="50%" y="56%" dominant-baseline="middle" text-anchor="middle" font-size="258">',
+    )}\ud83d${encodeURIComponent("</text></svg>")}`;
+    const profiles = foldProfiles([
+      profile(alice, { name: "Alice", about: "Skates", picture }),
+    ]);
+    expect(profiles.get(alice.pubkey)).toEqual({
+      name: "Alice",
+      about: "Skates",
     });
   });
 });

@@ -3,3 +3,131 @@
   overflow-wrap: anywhere;
   user-select: all;
 }
+.identityLayout {
+  container-type: inline-size;
+}
+.magneticKeyInput {
+  position: absolute;
+  top: calc(var(--space-8) + var(--space-3));
+  inset-inline: var(--space-5);
+  z-index: 1;
+}
+.keyNotice {
+  display: grid;
+  gap: var(--space-2);
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.keyWarning {
+  padding: var(--space-2);
+  border: 1px solid var(--border-primary);
+  border-radius: var(--radius-chip);
+}
+.removeKey {
+  display: grid;
+  gap: var(--space-2);
+  margin-block-start: auto;
+}
+.overview {
+  display: grid;
+  align-items: center;
+  gap: var(--space-8);
+  margin-block: var(--space-6) var(--space-8);
+}
+.accounts {
+  min-width: 0;
+  width: 100%;
+}
+.accountList {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: var(--space-6);
+}
+.communityAssets {
+  position: relative;
+  isolation: isolate;
+  width: fit-content;
+  max-width: 100%;
+}
+.accountEntry {
+  --account-outline: var(--border-standard);
+  perspective: 60rem;
+  display: grid;
+  grid-template-rows: 1fr auto;
+  min-width: 0;
+  gap: var(--space-2);
+}
+.accountEndnote {
+  padding-inline: var(--space-4);
+}
+.accountFooter {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  padding-inline: var(--space-4);
+}
+.accountFooter > div {
+  min-width: 0;
+  max-width: 100%;
+}
+.accountFooter > div:first-child {
+  flex-shrink: 0;
+}
+.accountActions {
+  display: grid;
+  justify-items: end;
+  gap: var(--space-3);
+  margin-left: auto;
+}
+.accountCard {
+  display: grid;
+  min-width: 0;
+  gap: var(--space-3);
+  padding: var(--space-4);
+  border: 1px solid var(--account-outline);
+  border-radius: var(--radius-container);
+  background: var(--surface-inset);
+  mask-image: radial-gradient(
+    circle var(--space-1h) at calc(100% - var(--space-5)) var(--space-5),
+    transparent 100%,
+    black calc(100% + 0.5px)
+  );
+  overflow-wrap: anywhere;
+}
+.accountCard > div:first-child {
+  padding-inline-end: var(--space-6);
+}
+@media (prefers-reduced-motion: reduce) {
+  .accountCard {
+    /* biome-ignore lint/complexity/noImportantStyles: Motion writes inline transforms. */
+    transform: none !important;
+  }
+}
+
+/* Alpha-following lift separates transparent community artwork. */
+.communityIcon img {
+  filter: drop-shadow(
+    0 1px 2px color-mix(in srgb, var(--text-primary) 20%, transparent)
+  );
+}
+
+.communityIcons {
+  display: inline-flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  padding-inline-end: var(--space-3);
+}
+.communityIcon {
+  position: relative;
+  display: inline-flex;
+  flex-shrink: 0;
+  width: var(--space-8);
+  height: var(--space-8);
+}
+html[data-keyboard-navigation] .communityIcon:focus-visible {
+  outline: 2px solid var(--border-focus);
+  outline-offset: 2px;
+}

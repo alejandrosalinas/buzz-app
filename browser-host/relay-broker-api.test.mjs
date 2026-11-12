@@ -3,6 +3,7 @@ import { Context } from "@deepseek-ai/cordis";
 import { HostService } from "../src/features/host/service.ts";
 import { authTagOwner } from "../src/features/agents/owner-attestation.ts";
 import { publishAgentRecord } from "../src/features/agents/relay-removal.ts";
+import { publishProfile } from "../src/features/communities/api.ts";
 import { logSocketFrame } from "../src/features/developer/traffic.ts";
 import { getLogger, setLogLevel } from "../src/features/developer/logging.ts";
 import { brokerSocket, openBrokerSocket } from "../tests/broker-socket.mjs";
@@ -2212,6 +2213,55 @@ test("message/reaction deletions pass real signing and publication without admit
     }
     expect(h.publications).toHaveLength(1);
   } finally {
+    await h.close();
+  }
+});
+
+test("a profile save keeps a Buzz mobile emoji avatar through the broker, never other SVG", async () => {
+  const h = await harness(success);
+  try {
+    const http = globalThis.fetch;
+    vi.stubGlobal("fetch", (url, input) => http(new URL(url, h.base), input));
+    // Buzz mobile's emojiAvatarDataUrl("🛹", 0xFFFFB84D).
+    const svg =
+      '<svg xmlns="http://www.w3.org/2000/svg" width="512" height="512" viewBox="0 0 512 512"><rect width="512" height="512" rx="256" fill="#FFB84D"/><text x="50%" y="56%" dominant-baseline="middle" text-anchor="middle" font-size="258">🛹</text></svg>';
+    const picture = `data:image/svg+xml,${encodeURIComponent(svg)}`;
+    const published = () =>
+      h.calls.filter((call) => call.url.endsWith("/events"));
+    await publishProfile(
+      fixtureRelayUrl,
+      { name: "Changed", picture, about: "Keep this" },
+      { picture, website: "https://example.org" },
+    );
+    expect(published()).toHaveLength(1);
+    const event = published()[0].body;
+    expect(verifyEvent(event)).toBe(true);
+    expect(event).toMatchObject({ kind: 0, pubkey: h.event.pubkey });
+    expect(JSON.parse(event.content)).toEqual({
+      picture,
+      website: "https://example.org",
+      name: "Changed",
+      display_name: "Changed",
+      about: "Keep this",
+    });
+    for (const rejected of [
+      "data:image/svg+xml,%3Csvg%3E%3Cscript%3Ealert(1)%3C%2Fscript%3E%3C%2Fsvg%3E",
+      `data:image/svg+xml,${encodeURIComponent(svg.replace("<text ", '<text onclick="alert(1)" '))}`,
+      `data:image/svg+xml,${encodeURIComponent(svg.replace("#FFB84D", "url(https://example.org/x)"))}`,
+      "data:image/png;base64,AA==",
+      "http://example.org/avatar.png",
+      `https://example.org/${"a".repeat(2048)}`,
+    ])
+      await expect(
+        publishProfile(
+          fixtureRelayUrl,
+          { name: "Changed", picture: rejected },
+          {},
+        ),
+      ).rejects.toThrow(/optional HTTPS picture URL/);
+    expect(published()).toHaveLength(1);
+  } finally {
+    vi.unstubAllGlobals();
     await h.close();
   }
 });

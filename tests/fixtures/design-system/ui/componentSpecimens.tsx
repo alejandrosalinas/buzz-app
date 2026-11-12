@@ -7,6 +7,7 @@ import { Calendar } from "../../../../src/shared/design-system/ui/Calendar";
 import { FieldButton } from "../../../../src/shared/design-system/ui/FieldButton";
 import {
   MenuRoot,
+  MenuItem,
   MenuTrigger,
   MenuPopup,
   MenuRadioGroup,
@@ -159,6 +160,23 @@ function FieldButtonSpecimen() {
               </MenuRadioItem>
             ))}
           </MenuRadioGroup>
+        </MenuPopup>
+      </MenuRoot>
+      <MenuRoot>
+        <MenuTrigger
+          render={
+            <FieldButton
+              appearance="masked"
+              prefix="key"
+              aria-label="Value actions"
+            />
+          }
+        >
+          <span aria-hidden="true">••••••••••••••••</span>
+        </MenuTrigger>
+        <MenuPopup>
+          <MenuItem>Copy</MenuItem>
+          <MenuItem>Reveal</MenuItem>
         </MenuPopup>
       </MenuRoot>
     </SpecimenFrame>
@@ -834,6 +852,14 @@ function TabsSpecimen() {
         items={DESTINATIONS}
       />
       <Tabs
+        label="Capsule filters"
+        variant="capsule"
+        value={panelDestination}
+        onValueChange={setPanelDestination}
+        items={DESTINATIONS}
+        trailingAction={<Button variant="subtle">Filter action</Button>}
+      />
+      <Tabs
         label="Small segmented filters"
         variant="segmented"
         size="sm"
@@ -846,7 +872,13 @@ function TabsSpecimen() {
         variant="dock"
         value={panelDestination}
         onValueChange={setPanelDestination}
-        items={iconItems}
+        items={iconItems.map((item, index) => ({
+          ...item,
+          trailing:
+            index === 0 ? (
+              <CountBadge count={12} label="12 items" />
+            ) : undefined,
+        }))}
       />
       <Tabs
         label="Icon segmented filters"
@@ -2654,16 +2686,20 @@ export const COMPONENT_SPECIMENS: Record<string, () => ReactNode> = {
   ),
   header: () => (
     <SpecimenFrame
-      code={`<div>
+      code={`<div className="buzz-settings-page" style={{ containerType: "inline-size" }}>
   <Header
     title="Profile"
     eyebrow="Account"
     subtitle="Your local default for new communities."
   />
   <InlineHeader title="Preferences" subtitle="Choose what works for you." />
+  <Header title="Communities" align="end" actions={<Button aria-label="Create community">Create</Button>} />
 </div>`}
     >
-      <div>
+      <div
+        className="buzz-settings-page"
+        style={{ containerType: "inline-size" }}
+      >
         <Header
           title="Profile"
           eyebrow="Account"
@@ -2672,6 +2708,11 @@ export const COMPONENT_SPECIMENS: Record<string, () => ReactNode> = {
         <InlineHeader
           title="Preferences"
           subtitle="Choose what works for you."
+        />
+        <Header
+          title="Communities"
+          align="end"
+          actions={<Button aria-label="Create community">Create</Button>}
         />
       </div>
     </SpecimenFrame>

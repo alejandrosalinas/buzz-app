@@ -8,3 +8,8 @@
   min-height: 0;
   overflow: hidden;
 }
+
+.welcome {
+  color: var(--text-standard);
+  text-align: start;
+}

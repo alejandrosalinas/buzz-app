@@ -75,6 +75,25 @@ describe("message edit round trips", () => {
     const row = firstRow([{ ...original, tags: [["h", "room"]] }]);
     expect(messageEditText(row, profiles)).toBe(original.content);
   });
+  it.each([
+    "[ref]: <https://example.com/a @Sam>",
+    '[ref]: https://example.com "Ask @Sam"',
+    "<!-- @Sam -->",
+    '<span title="@Sam">Hi</span>',
+    '[[a]](https://example.com "See @Sam")',
+    '[a](https://example.com\n "See @Sam")',
+    "[hello\n@Sam](https://example.com)",
+    ">     @Sam",
+  ])("links a name beside literal Markdown, not inside it: %s", (literal) => {
+    const content = `<b>@Sam</b>\n\n${literal}`;
+    const tags = [
+      ["h", "room"],
+      ["p", person],
+    ];
+    expect(
+      messageEditText(firstRow([{ ...original, content, tags }]), profiles),
+    ).toBe(`<b>[@Sam](${profileTarget(person)})</b>\n\n${literal}`);
+  });
 });
 
 it("rejects changed attachment links while allowing text-only edits", () => {

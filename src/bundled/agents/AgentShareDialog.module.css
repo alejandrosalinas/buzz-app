@@ -55,3 +55,24 @@
   display: flex;
   flex-direction: column;
 }
+
+/* Keep the burst clear of the fixed footer instead of reserving an empty
+   loading-status row above the artwork. */
+.preview {
+  padding-bottom: var(--space-8);
+}
+
+/* A wrapping error needs the space more than the finished burst does. */
+.preview:has([role="alert"]) {
+  padding-bottom: 0;
+}
+
+/* LoadingRegion owns the delay. Overlay its status in the empty card area so
+   slow artwork has visible feedback without reserving a row above the card. */
+.preview [class~="buzz-loading-region-feedback"]:not(:has([role="alert"])) {
+  position: absolute;
+  top: 50%;
+  width: 100%;
+  text-align: center;
+  pointer-events: none;
+}

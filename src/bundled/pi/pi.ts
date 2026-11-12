@@ -1,9 +1,13 @@
+import { writeJSON } from "../../features/agent-protection/json-stream";
 // The Pi host (host.mjs): one process for every Pi agent here, started when
 // something needs it, spoken to over stdio, one JSON message a line. Requests
 // go both ways: the plugin asks the host to run turns, and the host asks the
 // plugin to run the Buzz tools, so the process holds no Buzz key.
 import type { AgentProtection } from "../../features/agent-protection/service";
-import { protectionEnvironment } from "../../features/agent-protection/native-bridge";
+import {
+  protectionChannel,
+  protectionEnvironment,
+} from "../../features/agent-protection/native-bridge";
 import type { Context } from "../../buzz-mcp/client";
 import type {
   HostProcess,
@@ -95,7 +99,7 @@ type ProtectedLaunch = {
 };
 type Connection = {
   lifetime: AbortController;
-  /** Security checks and tool calls the host can cancel, by request id. */
+  /** Tool calls the host can cancel, by request id. */
   checks: Map<number | string, AbortController>;
   process: HostProcess;
   calls: Map<
@@ -182,14 +186,14 @@ export class Pi {
     const answer = new Promise<unknown>((resolve, reject) =>
       connection.calls.set(id, { resolve, reject }),
     );
-    void connection.process
-      .write(`${JSON.stringify({ id, method, params })}\n`)
-      .catch((error: unknown) => {
+    void writeJSON(connection.process, { id, method, params }).catch(
+      (error: unknown) => {
         connection.calls
           .get(id)
           ?.reject(new Error(`Pi did not take that: ${error}`));
         connection.calls.delete(id);
-      });
+      },
+    );
     return answer as Promise<T>;
   }
 
@@ -242,11 +246,34 @@ export class Pi {
       calls: new Map(),
       process: undefined as unknown as HostProcess,
     };
+    const evidence =
+      this.protectedLaunch && protectionChannel(this.protectedLaunch.gate);
+    connection.lifetime.signal.addEventListener(
+      "abort",
+      () => evidence?.close(),
+      { once: true },
+    );
     const handle = (message: Message) => {
-      if (message.method === "security_cancel") {
+      if (message.method?.startsWith("buzz/security/evidence/")) {
+        if (!evidence) {
+          void connection.process.kill();
+          return;
+        }
+        void evidence
+          .handler(message)
+          .then(
+            (reply) => connection.process.write(JSON.stringify(reply) + "\n"),
+            () =>
+              connection.process.write(
+                JSON.stringify({
+                  id: message.id,
+                  error: "Security evidence transfer failed",
+                }) + "\n",
+              ),
+          )
+          .catch(() => connection.process.kill());
+      } else if (message.method === "security_cancel") {
         connection.checks.get((message.params as { id: string }).id)?.abort();
-      } else if (message.method === "security" && message.id !== undefined) {
-        void this.security(connection, message.id, message.params);
       } else if (message.method === "ready") ready();
       else if (message.method === "event")
         this.handlers.event(message.params as PiEvent);
@@ -392,42 +419,6 @@ export class Pi {
     await started;
     if (connection.gone) throw connection.gone;
     return connection;
-  }
-
-  private async security(
-    connection: Connection,
-    id: number | string,
-    raw: unknown,
-  ) {
-    const controller = new AbortController();
-    const signal = AbortSignal.any([
-      controller.signal,
-      connection.lifetime.signal,
-    ]);
-    if (connection.checks.has(id)) {
-      await connection.process.kill();
-      return;
-    }
-    connection.checks.set(id, controller);
-    let allowed = false;
-    try {
-      const request = raw as {
-        agent: string;
-        action: Parameters<AgentProtection["check"]>[0];
-      };
-      if (!this.protectedLaunch || request.agent !== this.protectedLaunch.agent)
-        throw new Error("No matching protected agent");
-      await this.protectedLaunch.gate.check(request.action, signal);
-      allowed = !signal.aborted;
-    } catch {
-      /* Native checks fail closed. */
-    } finally {
-      connection.checks.delete(id);
-    }
-    if (!connection.gone)
-      await connection.process
-        .write(`${JSON.stringify({ id, result: allowed })}\n`)
-        .catch(() => undefined);
   }
 
   /** Runs a Buzz tool the host called, and sends it the result. */

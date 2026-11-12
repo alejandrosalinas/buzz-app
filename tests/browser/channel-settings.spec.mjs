@@ -1,6 +1,9 @@
 import { openChannelDetails } from "./channel-details.mjs";
+import { hoverMessage } from "./message-actions.mjs";
 import { openPage, settlePanelMotion } from "./navigation.mjs";
+import { fileURLToPath } from "node:url";
 import { test, expect } from "./fixture.mjs";
+import { open } from "./timeline.mjs";
 
 test("channel settings owns its responsive side panel and returns keyboard focus", async ({
   page,
@@ -131,6 +134,142 @@ test("channel settings owns its responsive side panel and returns keyboard focus
     page.getByRole("region", { name: "New message", exact: true }),
   ).toBeVisible();
   await expect(panel).toHaveCount(0);
+});
+
+// Browser-only: the real modal, the dock hidden and inert under it, and the
+// portaled thread slot must hold together across one review. Vitest can
+// mount the pane or the viewer, not both with focus and portals intact.
+test("an image review keeps Channel settings open and hands the thread draft to the viewer", async ({
+  page,
+  app,
+  context,
+}) => {
+  await context.route("**/api/relay/primary/media?**", (route) =>
+    route.fulfill({
+      path: fileURLToPath(
+        new URL("../../public/shell-gradient.png", import.meta.url),
+      ),
+      contentType: "image/png",
+    }),
+  );
+  await open(page, app);
+  const event = app.append(
+    "primary",
+    "alpha",
+    "Reviewed beside settings",
+    true,
+    true,
+    undefined,
+    undefined,
+    [["imeta", "url https://primary.example/media/photo.png", "m image/png"]],
+  );
+  const row = page
+    .getByRole("region", { name: "Channel message history" })
+    .locator(`[data-message-id="${event.id}"]`);
+  const tile = row.getByRole("link", {
+    name: "Open image attachment",
+    exact: true,
+  });
+  const viewer = page.getByRole("dialog", {
+    name: "Image viewer",
+    exact: true,
+  });
+  const workspace = page.locator("[data-panel-workspace]");
+  const panel = page.getByRole("complementary", {
+    name: "Channel settings",
+    exact: true,
+  });
+  // Role queries skip hidden elements; this one tells hidden from unmounted.
+  const retainedPanel = page.getByRole("complementary", {
+    name: "Channel settings",
+    exact: true,
+    includeHidden: true,
+  });
+  const settingsTab = workspace.getByRole("tab", {
+    name: "Channel settings",
+    exact: true,
+  });
+  await openChannelDetails(page);
+  await expect(panel).toBeVisible();
+  await expect(settingsTab).toHaveAttribute("aria-selected", "true");
+  await tile.click();
+  await expect(viewer).toBeVisible();
+  // The pane waits under the modal: hidden once its closing motion ends, and
+  // out of reach of focus and assistive technology throughout. A dock that
+  // only outlives its closing motion is never hidden; it unmounts instead.
+  const dock = page.locator("[data-panel-dock]", { has: retainedPanel });
+  await expect(dock).toHaveAttribute("hidden", "");
+  await expect(dock).toHaveAttribute("inert", "");
+  await expect(dock).toHaveAttribute("aria-hidden", "true");
+  await expect(panel).toBeHidden();
+  await page.keyboard.press("Escape");
+  await expect(viewer).toHaveCount(0);
+  await expect(panel).toBeVisible();
+  await expect(settingsTab).toHaveAttribute("aria-selected", "true");
+  await expect(tile).toBeFocused();
+
+  // Side thread tabs leave while the viewer is up: the viewer's comment
+  // composer reads the saved draft when it mounts, and the thread composer
+  // reads the viewer's edits back when it returns. Reply closes settings today.
+  await hoverMessage(row);
+  await row.getByRole("button", { name: "Reply", exact: true }).click();
+  const thread = page.getByRole("complementary", {
+    name: "Thread",
+    exact: true,
+  });
+  const hiddenThread = page.getByRole("complementary", {
+    name: "Thread",
+    exact: true,
+    includeHidden: true,
+  });
+  const threadDraft = thread.getByRole("textbox", {
+    name: "Reply to thread",
+    exact: true,
+  });
+  await threadDraft.fill("Handoff draft");
+  await tile.click();
+  await expect(viewer).toBeVisible();
+  await expect(hiddenThread).toHaveCount(0);
+  await viewer
+    .getByRole("button", { name: "Show comments", exact: true })
+    .click();
+  const reviewDraft = viewer
+    .getByRole("complementary", { name: "Media comments", exact: true })
+    .getByRole("textbox", { name: "Reply to thread", exact: true });
+  await expect(reviewDraft).toHaveText("Handoff draft");
+  await reviewDraft.fill("Handoff draft, edited in the viewer");
+  await viewer
+    .getByRole("button", { name: "Close fullscreen viewer", exact: true })
+    .click();
+  await expect(viewer).toHaveCount(0);
+  await expect(threadDraft).toHaveText("Handoff draft, edited in the viewer");
+  await expect(tile).toBeFocused();
+
+  // A thread in the main pane is not under the dock and keeps its place
+  // through a review: the same composer stays mounted, never leaving the DOM.
+  const main = page.locator("[data-main-workspace]");
+  const threadTabs = (host) =>
+    host.locator('[role="tab"][data-tab-value^="thread:"]');
+  await threadTabs(workspace).focus();
+  await page.keyboard.press("Alt+Shift+ArrowLeft");
+  await expect(threadTabs(main)).toHaveCount(1);
+  const mainDraft = main.getByRole("textbox", {
+    name: "Reply to thread",
+    exact: true,
+  });
+  await expect(mainDraft).toHaveText("Handoff draft, edited in the viewer");
+  const mainEditor = await mainDraft.elementHandle();
+  await main.getByRole("tab", { name: "Alpha", exact: true }).click();
+  await expect(tile).toBeVisible();
+  await tile.click();
+  await expect(viewer).toBeVisible();
+  await expect(hiddenThread).toHaveCount(1);
+  expect(await mainEditor.evaluate((node) => node.isConnected)).toBe(true);
+  await page.keyboard.press("Escape");
+  await expect(viewer).toHaveCount(0);
+  expect(await mainEditor.evaluate((node) => node.isConnected)).toBe(true);
+  await expect(threadTabs(main)).toHaveCount(1);
+  await expect(tile).toBeFocused();
 });
 
 test.describe("description links", () => {

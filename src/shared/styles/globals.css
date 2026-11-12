@@ -220,6 +220,10 @@
     min-height: 0;
   }
   .shell-dock-pages {
+    /* Keep corner counts and focus rings inside the scrollport without
+       changing the dock width or the tile positions. */
+    padding: var(--space-3);
+    margin: calc(-1 * var(--space-3));
     min-height: 0;
     flex: 1;
     overflow-y: auto;
@@ -290,13 +294,14 @@
   .shell-pages {
     @apply flex min-w-0 flex-col gap-1;
   }
-  /* Matches ChannelSidebarRow's icon box so page rows share its icon and label
-     columns. */
+  /* Matches ChannelSidebarRow's icon box and centers larger avatars around the
+     same icon slot without moving the label column. */
   .shell-page-icon {
     display: inline-grid;
     width: 1.25rem;
     height: 1.25rem;
     flex: 0 0 1.25rem;
+    place-content: center;
     place-items: center;
   }
   .shell-navigation,
@@ -546,8 +551,11 @@
      and their focus rings, so their ink and fills keep the pairing they were
      designed for. Resize grips sit on the joined pane surface, which is
      already opaque. */
-  .shell-background:has(> .shell-backdrop) .shell-header > *,
-  .shell-background:has(> .shell-backdrop) .shell-side-dock {
+  .shell-background > .shell-backdrop ~ .shell-header > *,
+  .shell-background
+    > .shell-backdrop
+    ~ :where(.shell-workspace)
+    > .shell-side-dock {
     border-radius: var(--radius-pill);
     background: var(--bg-app);
     box-shadow: 0 0 0 var(--space-2) var(--bg-app);

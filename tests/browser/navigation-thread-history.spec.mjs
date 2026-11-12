@@ -1,3 +1,4 @@
+import { activityRow } from "./navigation.mjs";
 import { readFileSync } from "node:fs";
 import { test, expect } from "./fixture.mjs";
 import {
@@ -898,7 +899,7 @@ test("header openings keep focus while a main-pane thread is retained", async ({
     exact: true,
   });
   const projects = topbar.getByRole("tab", { name: "Workflows", exact: true });
-  const inbox = topbar.getByRole("tab", { name: "Activity", exact: true });
+  const inbox = activityRow(page);
   for (const leave of [inbox, projects]) {
     await page
       .locator(`[data-channel-timeline="alpha"] [data-message-id="${root.id}"]`)

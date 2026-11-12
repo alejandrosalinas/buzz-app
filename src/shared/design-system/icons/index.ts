@@ -87,6 +87,8 @@ export const ArrowCounterClockwiseIcon = defineIcon(
 // Tabler only. Add individual exports as needed; outline icons are the default.
 import TablerSendIcon from "@tabler/icons-react/dist/esm/icons/IconSend.mjs";
 export const SendIcon = defineIcon("tabler", TablerSendIcon);
+import TablerBookIcon from "@tabler/icons-react/dist/esm/icons/IconBook.mjs";
+export const BookIcon = defineIcon("tabler", TablerBookIcon);
 import TablerSparklesIcon from "@tabler/icons-react/dist/esm/icons/IconSparkles.mjs";
 export const SparklesIcon = defineIcon("tabler", TablerSparklesIcon);
 import TablerStarFilledIcon from "@tabler/icons-react/dist/esm/icons/IconStarFilled.mjs";

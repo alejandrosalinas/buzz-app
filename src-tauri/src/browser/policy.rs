@@ -51,9 +51,10 @@ impl NavigationPolicy {
     }
 }
 
-/// The Builderlab portal's tool-app approval page. Approving needs the
-/// portal's own web login, which a Buzz guest never has (it only holds an app
-/// viewer cookie), so Buzz opens this page in the system browser instead.
+/// The Builderlab portal's tool-app approval page and account connections
+/// page. Both need the portal's own web login, which a Buzz guest never has
+/// (it only holds an app viewer cookie), so Buzz opens them in the system
+/// browser instead.
 #[derive(Clone)]
 pub(super) struct ApprovalGate {
     url: Url,
@@ -62,6 +63,7 @@ pub(super) struct ApprovalGate {
 
 impl ApprovalGate {
     const SUFFIX: &'static str = "/v1/hosted-app-tools/gate";
+    const CONNECTIONS: &'static str = "/connections";
 
     /// The gate of the portal whose API lives at `adapter_base`, for apps
     /// under `apps_domain`. A build without an Apps domain has none.
@@ -77,35 +79,71 @@ impl ApprovalGate {
     /// off: the gate rebuilt with only its app, and the app's address to
     /// return to once approved.
     pub(super) fn approval(&self, target: &str) -> Option<Approval> {
+        let target = self.portal_page(target, self.url.path())?;
+        let (host, app) = self.app(&target)?;
+        let mut page = self.url.clone();
+        page.query_pairs_mut().append_pair("app", &host);
+        Some(Approval {
+            page: page.into(),
+            app,
+        })
+    }
+
+    /// When `target` is the portal page connecting an account, such as
+    /// GitHub, for a Builderlab app, that page rebuilt with only its
+    /// extension and app, and the app's address to return to.
+    pub(super) fn connection(&self, target: &str) -> Option<Approval> {
+        let target = self.portal_page(target, Self::CONNECTIONS)?;
+        let extension = single(&target, "extension").filter(|value| {
+            (1..=64).contains(&value.len())
+                && value
+                    .bytes()
+                    .all(|byte| byte.is_ascii_alphanumeric() || b"-_.".contains(&byte))
+        })?;
+        let (host, app) = self.app(&target)?;
+        let mut page = self.url.clone();
+        page.set_path(Self::CONNECTIONS);
+        page.query_pairs_mut()
+            .append_pair("extension", &extension)
+            .append_pair("app", &host);
+        Some(Approval {
+            page: page.into(),
+            app,
+        })
+    }
+
+    fn portal_page(&self, target: &str, path: &str) -> Option<Url> {
         let target = Url::parse(target).ok()?;
-        if target.origin() != self.url.origin()
-            || target.path().trim_end_matches('/') != self.url.path()
-        {
-            return None;
-        }
-        let mut apps = target
-            .query_pairs()
-            .filter(|(name, _)| name == "app")
-            .map(|(_, value)| value.into_owned());
-        let app = apps.next().filter(|_| apps.next().is_none())?;
+        (target.origin() == self.url.origin() && target.path().trim_end_matches('/') == path)
+            .then_some(target)
+    }
+
+    /// The Builderlab app a portal page names, and that app's root.
+    fn app(&self, target: &Url) -> Option<(String, String)> {
+        let app = single(target, "app")?;
         let app_url = Url::parse(&format!("https://{app}/")).ok()?;
         let host = app_url.host_str()?;
         if host != app.to_ascii_lowercase() {
             return None;
         }
         let root = super::builderlab::app_root(self.apps_domain, app_url.as_str()).ok()?;
-        let mut gate = self.url.clone();
-        gate.query_pairs_mut().append_pair("app", host);
-        Some(Approval {
-            gate: gate.into(),
-            app: root,
-        })
+        Some((host.to_owned(), root))
     }
 }
 
+/// The value of a query parameter that appears exactly once.
+fn single(url: &Url, name: &str) -> Option<String> {
+    let mut values = url
+        .query_pairs()
+        .filter(|(key, _)| key == name)
+        .map(|(_, value)| value.into_owned());
+    values.next().filter(|_| values.next().is_none())
+}
+
+/// A portal page to open in the system browser, and the app page to return to.
 #[derive(Clone, Debug, PartialEq)]
 pub(super) struct Approval {
-    pub(super) gate: String,
+    pub(super) page: String,
     pub(super) app: String,
 }
 
@@ -161,7 +199,7 @@ mod tests {
         .unwrap();
         assert!(ApprovalGate::new("https://app.builderlab.xyz/api/goose", "").is_none());
         let expected = Approval {
-            gate: "https://app.builderlab.xyz/api/goose/v1/hosted-app-tools/gate?app=eggy--bpsites.apps.builderlab.xyz".into(),
+            page: "https://app.builderlab.xyz/api/goose/v1/hosted-app-tools/gate?app=eggy--bpsites.apps.builderlab.xyz".into(),
             app: "https://eggy--bpsites.apps.builderlab.xyz/".into(),
         };
         assert_eq!(
@@ -191,6 +229,40 @@ mod tests {
             "not a url",
         ] {
             assert_eq!(gate.approval(other), None, "{other}");
+        }
+    }
+
+    #[test]
+    fn recognizes_only_the_portal_connections_page() {
+        let gate = ApprovalGate::new(
+            "https://app.builderlab.xyz/api/goose",
+            "apps.builderlab.xyz",
+        )
+        .unwrap();
+        let expected = Approval {
+            page: "https://app.builderlab.xyz/connections?extension=github&app=eggy--bpsites.apps.builderlab.xyz".into(),
+            app: "https://eggy--bpsites.apps.builderlab.xyz/".into(),
+        };
+        assert_eq!(
+            gate.connection("https://APP.builderlab.xyz/connections/?extension=github&app=Eggy--bpsites.apps.builderlab.xyz&next=https://evil.example#x"),
+            Some(expected)
+        );
+        for other in [
+            "https://app.builderlab.xyz/connections?app=a.apps.builderlab.xyz",
+            "https://app.builderlab.xyz/connections?extension=&app=a.apps.builderlab.xyz",
+            "https://app.builderlab.xyz/connections?extension=git%2Fhub&app=a.apps.builderlab.xyz",
+            &format!("https://app.builderlab.xyz/connections?extension={}&app=a.apps.builderlab.xyz", "a".repeat(65)),
+            "https://app.builderlab.xyz/connections?extension=github&extension=linear&app=a.apps.builderlab.xyz",
+            "https://app.builderlab.xyz/connections?extension=github",
+            "https://app.builderlab.xyz/connections?extension=github&app=a.example",
+            "https://app.builderlab.xyz/connections?extension=github&app=a.b.apps.builderlab.xyz",
+            "https://app.builderlab.xyz/connections/oauth/github?extension=github&app=a.apps.builderlab.xyz",
+            "https://app.builderlab.xyz/api/goose/connections?extension=github&app=a.apps.builderlab.xyz",
+            "https://app.builderlabstaging.xyz/connections?extension=github&app=a.apps.builderlab.xyz",
+            "http://app.builderlab.xyz/connections?extension=github&app=a.apps.builderlab.xyz",
+            "https://app.builderlab.xyz/api/goose/v1/hosted-app-tools/gate?app=a.apps.builderlab.xyz",
+        ] {
+            assert_eq!(gate.connection(other), None, "{other}");
         }
     }
 

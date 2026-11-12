@@ -37,6 +37,12 @@ export function cliTarget(root, env = process.env) {
   return join(basename(common) === ".git" ? dirname(common) : root, "target");
 }
 
+// Cargo treats a git checkout as unchanging and trusts its old build after the
+// revision changes, so each revision builds in its own directory.
+export function cliBuildDir(target, rev) {
+  return join(target, "buzz-cli-build", rev);
+}
+
 if (import.meta.main) {
   const root = fileURLToPath(new URL("../", import.meta.url));
   const { git, rev } = buzzPin(
@@ -70,7 +76,7 @@ if (import.meta.main) {
       "--root",
       prefix,
       "--target-dir",
-      join(target, "buzz-cli-build"),
+      cliBuildDir(target, rev),
       ...(dev ? ["--debug"] : ["--config", "profile.release.strip=true"]),
       ...(triple ? ["--target", triple] : []),
       "buzz-cli",

@@ -59,6 +59,7 @@ it.each([-3601, 86400, -30, 0])(
       snapshot: () => snapshot,
       subscribe: () => () => {},
       retry() {},
+      tryAgain() {},
       disconnect() {},
       async clearCache() {},
     };

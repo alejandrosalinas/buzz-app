@@ -1,10 +1,10 @@
 .icon {
-  /* Emoji artwork geometry stays fixed within the dock tile's icon slot. */
-  --reaction-emoji-size: 1.125rem;
+  /* Emoji artwork geometry stays fixed within the sidebar row's icon slot. */
+  --reaction-emoji-size: 1rem;
   position: relative;
   display: inline-grid;
-  width: 1.25rem;
-  height: 1.25rem;
+  width: 1rem;
+  height: 1rem;
   flex-shrink: 0;
 }
 .bell,

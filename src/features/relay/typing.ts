@@ -122,7 +122,25 @@ export function createTyping(
     )
       return;
     const threadRootId = threadReference(event)?.rootId;
-    const key = `${channelId}:${threadRootId ?? ""}:${event.pubkey}`;
+    const record = recordFor(channelId, threadRootId, event.pubkey);
+    if (typing) {
+      if (record) receiveActivity(record, at, now);
+      return;
+    }
+    if (record) recordCompletion(record, at, now);
+    // A reply in a thread also ends the author's channel-level typing: its
+    // pulses and replies can be filed apart for the same turn. Other threads
+    // keep theirs.
+    const channel =
+      threadRootId && recordFor(channelId, undefined, event.pubkey);
+    if (channel) recordCompletion(channel, at, now);
+  }
+  function recordFor(
+    channelId: string,
+    threadRootId: string | undefined,
+    pubkey: string,
+  ) {
+    const key = `${channelId}:${threadRootId ?? ""}:${pubkey}`;
     let record = records.get(key);
     if (!record) {
       if (records.size >= MAX_ACTIVITY_RECORDS) return;
@@ -130,7 +148,7 @@ export function createTyping(
         entry: Object.freeze({
           channelId,
           ...(threadRootId ? { threadRootId } : {}),
-          pubkey: event.pubkey,
+          pubkey,
         }),
         lastActivityAt: -1,
         lastMessageAt: -1,
@@ -139,8 +157,7 @@ export function createTyping(
       };
       records.set(key, record);
     }
-    if (typing) receiveActivity(record, at, now);
-    else recordCompletion(record, at, now);
+    return record;
   }
   function accept(events: readonly RelayEvent[], live = false) {
     if (closed) return;

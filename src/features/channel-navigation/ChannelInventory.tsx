@@ -151,6 +151,7 @@ export function ChannelInventory({
   queries,
   cached,
   layoutReady = true,
+  preserveSidebar = false,
   connectionError,
   scope,
   viewer,
@@ -166,6 +167,7 @@ export function ChannelInventory({
   cached: boolean;
   /** Other inventories sharing this viewport must settle before restoring it. */
   layoutReady?: boolean;
+  preserveSidebar?: boolean;
   connectionError?: string | undefined;
   scope: string;
   viewer?: string | undefined;
@@ -242,11 +244,27 @@ export function ChannelInventory({
     visibilityRequest.current = request;
     return () => request.abort();
   }, [lifecycle]);
-  // biome-ignore lint/correctness/useExhaustiveDependencies: a completed roster refresh also refreshes per-viewer visibility.
+  // A completed roster refresh also refreshes per-viewer visibility. One new
+  // chat commits the roster several times; a recent read answers the repeats.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: each roster commit is a trigger.
   useEffect(() => {
     if (list.status === "ready")
-      void lifecycle.refreshVisibility(visibilityRequest.current?.signal);
+      void lifecycle.refreshVisibility(visibilityRequest.current?.signal, {
+        ifStale: true,
+      });
   }, [lifecycle, list.asOf, list.status]);
+  // A confirmed open asks the relay to unhide its DM, so a recent read is out
+  // of date.
+  useEffect(
+    () =>
+      queries.directMessages.subscribeOpened(
+        () =>
+          void lifecycle.refreshVisibility(visibilityRequest.current?.signal, {
+            trailing: true,
+          }),
+      ),
+    [queries, lifecycle],
+  );
   const lifecycleFocus = useRef<string | undefined>(undefined);
   const lifecycleTrigger = useRef<HTMLElement | undefined>(undefined);
   const sidebar = useSidebarView(
@@ -263,6 +281,7 @@ export function ChannelInventory({
         target.scope.communityOrigin !== scope.slice(0, -(viewer.length + 1)))
       ? undefined
       : sidebarEntryLocation(target),
+    preserveSidebar,
   );
   const { channels, profiles: dmProfiles } = useChannelLabels(
     list.channels,
@@ -1427,7 +1446,7 @@ export function ChannelInventory({
               }
               channels={{
                 rows: section.hiddenRows,
-                selected: current?.id,
+                selected: preserveSidebar ? undefined : current?.id,
                 select,
               }}
               onRemove={
@@ -1521,7 +1540,9 @@ export function ChannelInventory({
               >
                 {section.rows.map((channel) => {
                   const selected =
-                    current?.id === channel.id ? current.id : undefined;
+                    !preserveSidebar && current?.id === channel.id
+                      ? current.id
+                      : undefined;
                   // Every row offers Copy link; build items only for the open
                   // menu. useChannelRowMenu closes a menu left with none.
                   const menuOpen =
@@ -1643,7 +1664,7 @@ export function ChannelInventory({
         {cached && connectionError && (
           <p className={styles.preferenceNotice} role="status">
             Offline · Showing saved conversations.
-            <Button onClick={relay.retry}>Retry connection</Button>
+            <Button onClick={relay.tryAgain}>Retry connection</Button>
           </p>
         )}
         {preferences.sortErrors?.map(({ group, mode, error }) => (

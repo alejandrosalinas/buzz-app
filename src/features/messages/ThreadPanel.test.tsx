@@ -712,6 +712,7 @@ it("leaves a sibling reply it hides unread while a DM reply's original is unavai
     {
       readStateFloor: () => 0,
       readStateStorage: {
+        capture: async () => structuredClone(journal),
         async update(change) {
           journal = readJournal(change(journal), self.pubkey);
           return journal;

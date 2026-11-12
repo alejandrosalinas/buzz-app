@@ -88,6 +88,7 @@ export function communityFixture(
       return () => listeners.delete(listener);
     },
     retry() {},
+    tryAgain() {},
     disconnect() {},
     async clearCache() {},
   };

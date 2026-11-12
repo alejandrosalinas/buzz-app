@@ -339,6 +339,47 @@ it("opens the shared image flow from a text trigger and applies its URL", async 
   expect(onChange).toHaveBeenCalledWith(next);
 });
 
+it("keeps a Buzz mobile emoji avatar for a personal profile, never for an agent", async () => {
+  const emoji = `data:image/svg+xml,${encodeURIComponent(
+    '<svg xmlns="http://www.w3.org/2000/svg" width="512" height="512" viewBox="0 0 512 512"><rect width="512" height="512" rx="256" fill="#FFB84D"/><text x="50%" y="56%" dominant-baseline="middle" text-anchor="middle" font-size="258">🛹</text></svg>',
+  )}`;
+  const change = vi.fn();
+  // The agent editor: native saving takes HTTPS pictures only.
+  const agent = render(
+    <AvatarEditor
+      triggerStyle="dotted-squircle"
+      inlinePicker
+      shape="squircle"
+      value=""
+      name="Agent"
+      community={community}
+      onChange={change}
+    />,
+  );
+  const url = screen.getByLabelText("Picture URL (optional)");
+  fireEvent.change(url, { target: { value: emoji } });
+  fireEvent.click(screen.getByRole("button", { name: "Done" }));
+  expect(url).toHaveAccessibleDescription(/Use an HTTPS image URL/);
+  expect(change).not.toHaveBeenCalled();
+  agent.unmount();
+
+  render(
+    <AvatarEditor
+      personal
+      value={original}
+      name="Human"
+      community={community}
+      onChange={change}
+    />,
+  );
+  await open();
+  fireEvent.change(screen.getByLabelText("Picture URL (optional)"), {
+    target: { value: emoji },
+  });
+  fireEvent.click(screen.getByRole("button", { name: "Done" }));
+  expect(change).toHaveBeenCalledExactlyOnceWith(emoji);
+});
+
 it("previews an inline agent emoji and its background with Done in the form footer", async () => {
   const footer = document.createElement("div");
   document.body.append(footer);

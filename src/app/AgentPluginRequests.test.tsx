@@ -124,7 +124,7 @@ it("installs the pinned commit only after the owner confirms, then tells the age
     "https://example.com/plugins",
     "main",
     undefined,
-    commit,
+    { commit, path: "tasks" },
   );
   expect(
     within(dialog).getByText(
@@ -198,7 +198,7 @@ it("updates at the pinned commit and keeps the plugin's enabled state", async ()
     "https://example.com/plugins",
     "main",
     undefined,
-    commit,
+    { commit, path: "tasks" },
   );
   expect(within(dialog).getByText(`Builder: ${reason}`)).toBeVisible();
   fireEvent.click(within(dialog).getByRole("button", { name: "Update" }));

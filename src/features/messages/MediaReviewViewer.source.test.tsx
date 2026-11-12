@@ -12,7 +12,10 @@ import {
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import type { createRelaySession as CreateRelaySession } from "../relay/session";
 
-vi.mock("@tauri-apps/api/core", () => ({ invoke: vi.fn() }));
+vi.mock("@tauri-apps/api/core", () => ({
+  invoke: vi.fn(),
+  isTauri: () => false,
+}));
 
 const url = `https://relay.test/media/${"a".repeat(64)}.mp4`;
 const source = `buzz-media://localhost/${encodeURIComponent(url)}`;

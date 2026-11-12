@@ -459,6 +459,66 @@ it("keeps every DM scope of a sidebar pass for the next pass", () => {
   expect(resolve).toHaveBeenCalledTimes(dms.length);
 });
 
+it("reuses a scope's labels for display facts rebuilt with equal content", () => {
+  const profiles = new Map();
+  const library = {
+    status: "ready",
+    definitions: [],
+    identities: [],
+  } as const;
+  const source: NameSource = {
+    profiles: {
+      snapshot: () => profiles,
+      subscribe: () => () => {},
+      ensure: async () => {},
+    },
+    agentLibrary: {
+      snapshot: () => library,
+      subscribe: () => () => {},
+      refresh: async () => {},
+      retain: () => () => {},
+    },
+  };
+  const resolve = vi.fn(defaultNamingPolicy.resolve);
+  const names = bindNames(source, {
+    snapshot: () => [createNameProvider({ id: "spy", resolve })],
+    subscribe: () => () => {},
+  });
+  const [a, b] = ["a", "b"].map((key) => key.repeat(64));
+  if (!a || !b) throw new Error("Missing fixture keys");
+  const facts = (name: string) => [
+    { pubkey: a, name: "Alex" },
+    { pubkey: b, name },
+  ];
+  // A view rebuilds its facts on every render: equal content, new arrays.
+  expect(names.scope([a, b], facts("Blake"))(b)?.name).toBe("Blake");
+  expect(names.scope([a, b], facts("Blake"))(b)?.name).toBe("Blake");
+  expect(resolve).toHaveBeenCalledTimes(1);
+  expect(names.scope([a, b], facts("Bo"))(b)?.name).toBe("Bo");
+  expect(resolve).toHaveBeenCalledTimes(2);
+  // A fact that changes who is an agent, or whose, is a new scope.
+  const agent = (ownerPubkey?: string) => [
+    { pubkey: a, name: "Alex" },
+    {
+      pubkey: b,
+      name: "Bo",
+      isAgent: true,
+      ...(ownerPubkey ? { ownerPubkey } : {}),
+    },
+  ];
+  names.scope([a, b], agent())(b);
+  names.scope([a, b], agent(a))(b);
+  names.scope([a, b], agent(a))(b);
+  expect(resolve).toHaveBeenCalledTimes(4);
+  // A key outside the scope keeps its label across equal rebuilt facts.
+  const outside = "c".repeat(64);
+  names.scope([a, b], agent(a))(outside);
+  names.scope([a, b], agent(a))(outside);
+  expect(resolve).toHaveBeenCalledTimes(5);
+  names.scope([a, b], facts("Bo"))(outside);
+  expect(resolve).toHaveBeenCalledTimes(6);
+});
+
 it("labels a frozen member list like an equal unfrozen one, across interleaved scopes", () => {
   const [a, b, d] = ["a", "b", "d"].map((key) => key.repeat(64));
   if (!a || !b || !d) throw new Error("Missing fixture keys");

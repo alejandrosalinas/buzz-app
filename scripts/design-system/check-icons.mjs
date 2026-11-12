@@ -17,6 +17,7 @@ const nonIconDependencies = new Set([
   "@earendil-works/chord", // The Pi host's packages, which pi.sh installs.
   "@earendil-works/pi-ai",
   "@earendil-works/pi-durable",
+  "@earendil-works/pi-schema",
   "@emoji-mart/data",
   "@fontsource-variable/inter",
   "@fontsource/jetbrains-mono",
@@ -48,6 +49,7 @@ const nonIconDependencies = new Set([
   "d3-scale", // Chart scales and ticks; marks are Buzz-rendered SVG.
   "diff", // Text line diffs for Canvas history, not an icon library.
   "dockview-react",
+  "echarts", // Chart marks; not an icon library.
   "emoji-mart",
   "flexlayout-react",
   "jsdom",

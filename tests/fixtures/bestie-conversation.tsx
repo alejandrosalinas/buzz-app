@@ -240,7 +240,7 @@ function Fixture() {
           session={owner.session}
           scope={scope}
           channel={verifiedChannel}
-          bestie="Bestie"
+          agent={{ pubkey: agent.pubkey, name: "Bestie" }}
           icon={<RobotIcon size="1rem" />}
           host={{ relay, panels, navigation: navigator }}
           extensions={{ tools: contribution, inline: contribution }}

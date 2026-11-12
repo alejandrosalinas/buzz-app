@@ -9,6 +9,7 @@ import {
   buzzHome,
   checkCodex,
   CodexSetup,
+  explainTurn,
   reviewHome,
   withScript,
 } from "./setup";
@@ -481,4 +482,35 @@ it("tries the first download again when a mention finds no copy", async () => {
   await setup.installed(new AbortController().signal);
   expect(disk.state.fetched).toHaveLength(2);
   expect(disk.state.used).toEqual(["0.163.0"]);
+});
+
+const SETTINGS = "buzz://settings?section=agents&provider=buzz.codex%2Fcodex";
+const NOT_SIGNED_IN = `Codex isn't signed in. Head to [Settings](${SETTINGS}) to sign in.`;
+
+it("quotes Codex's words after the link, without the notice around them", () => {
+  const words =
+    "unexpected status 401 Unauthorized: Missing bearer or basic authentication in header, url: https://api.openai.com/v1/responses";
+  for (const notice of [
+    `Codex could not finish: ${words}.`,
+    `Codex could not start: ${words}.`,
+  ])
+    expect(explainTurn(notice, SETTINGS)).toBe(
+      `${NOT_SIGNED_IN}\n\nCodex said:\n> ${words}`,
+    );
+  // A failed handover reports Codex's error as it is.
+  expect(explainTurn(`Error: ${words}`, SETTINGS)).toBe(
+    `${NOT_SIGNED_IN}\n\nCodex said:\n> Error: ${words}`,
+  );
+});
+
+it("quotes at most 500 characters of Codex's words, marking the cut", () => {
+  const words = `Missing bearer or basic authentication ${"x".repeat(600)}`;
+  expect(explainTurn(`Codex could not finish: ${words}.`, SETTINGS)).toBe(
+    `${NOT_SIGNED_IN}\n\nCodex said:\n> ${words.slice(0, 500)}…`,
+  );
+});
+
+it("leaves a notice it can't explain exactly as Codex's runtime wrote it", () => {
+  const notice = "Codex could not finish: model busy.";
+  expect(explainTurn(notice, SETTINGS)).toBe(notice);
 });

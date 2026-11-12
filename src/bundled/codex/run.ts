@@ -20,6 +20,7 @@ export const codexRun = (
   AgentType<Config>,
   | "models"
   | "retire"
+  | "sessionAdmission"
   | "sessionControls"
   | "run"
   | "runOnce"
@@ -28,12 +29,14 @@ export const codexRun = (
   | "resumes"
   | "readFile"
 > => ({
+  sessionAdmission: true,
   models: (agent) => runtime.preview(agent),
   retire: (agent) => runtime.retire(agent),
   sessionControls: {
     scope: (agent) => config(agent.config).scope,
     state: (agent, place) => runtime.sessionState(agent, place),
-    run: (agent, place, action) => runtime.session(agent, place, action),
+    run: (agent, place, action, reset) =>
+      runtime.session(agent, place, action, reset),
     subscribe: (listener) => runtime.subscribe(listener),
   },
   run: async (delivery) => {

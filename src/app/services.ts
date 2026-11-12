@@ -13,6 +13,7 @@ import { SettingsCardsService } from "../features/settings/service";
 import { IdentityNamesService } from "../features/identity-names/service";
 import { createLocalAgents } from "../features/agents/local";
 import {
+  askAgain,
   FederatedIdentityService,
   onSignedIn,
 } from "../features/federated-identity/service";
@@ -48,6 +49,7 @@ import {
 import { createUpdates } from "../features/updates/updates";
 import { PanelsService } from "../features/panels/service";
 import { BackdropsService } from "../features/backdrops/service";
+import { SubjectLiftService } from "../features/messages/subject-lift";
 import { Context } from "@deepseek-ai/cordis";
 import { BrowserService } from "../features/browser/service";
 import { PagesService } from "../features/pages/service";
@@ -58,6 +60,7 @@ import { SidebarScopeService } from "../features/channel-navigation/sidebar-scop
 import { bundledPlugins } from "../bundled";
 import { bundledFederatedIdentity } from "../bundled/builderlab/oauth/first-run";
 import { nativeBuilderlab } from "../bundled/builderlab/session";
+import { builderlabPhone } from "../features/identity/builderlab-account";
 import { conversationFeatures } from "./conversation-features";
 import { PluginDevelopmentService } from "../features/plugin-development/service";
 import { createPluginManager } from "../plugins/manager";
@@ -110,6 +113,7 @@ export function createServices() {
   const sidebarRows = new SidebarRowsService(ctx);
   const panels = new PanelsService(ctx);
   const backdrops = new BackdropsService(ctx);
+  new SubjectLiftService(ctx);
   const accountActions = new AccountActionsService(ctx);
   const conversation = new ConversationService(ctx);
   const settingsCards = new SettingsCardsService(ctx);
@@ -125,6 +129,7 @@ export function createServices() {
     identity ? connectNativeTransport : undefined,
     localActivity.reader,
     identity ? verifyNativeStored : undefined,
+    identity ? askAgain : undefined,
   );
   ctx.provide("communityReader", {
     snapshot: communities.snapshot,
@@ -136,6 +141,12 @@ export function createServices() {
     pending: communities.pendingSync,
     apply: communities.applySync,
   });
+  // The mobile card's one question of the Builderlab account, asked through
+  // app-owned code so the pairing plugin never calls as the Builderlab plugin.
+  ctx.provide(
+    "builderlabPhone",
+    builderlabPhone(firstRunFederatedIdentity, identity),
+  );
   const relay = communities.relay;
   const artifactStorage = new ArtifactStorageService(ctx);
   provideArtifactStoreSync(ctx, artifactStorage);

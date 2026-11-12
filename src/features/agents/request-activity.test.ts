@@ -51,3 +51,72 @@ it("parses only newly appended records when the records array changes", () => {
     parse.mockRestore();
   }
 });
+
+it("gives a steered message the records of the turn it joined, from that turn's start", () => {
+  const steered = "d".repeat(64);
+  const records = [
+    record(1, [
+      event("turn_started", "t", 1, { triggeringEventIds: [trigger] }),
+      event("step", "t", 2),
+    ]),
+    record(2, [
+      event("turn_steered", "t", 3, { triggeringEventIds: [steered] }),
+      event("step", "t", 4),
+      event("turn_completed", "t", 5, { outcome: "completed" }),
+    ]),
+  ];
+  const result = requestActivity(records, agent, "c", steered);
+  expect([...result.turnIds]).toEqual(["t"]);
+  expect(result.uncertain).toBe(false);
+  expect(result.records).toHaveLength(5);
+  expect(result.terminal.get("t")).toBe("ended");
+  // Both messages select the turn once.
+  const both = requestActivity(records, agent, "c", [trigger, steered]);
+  expect(both.records).toHaveLength(5);
+  // Without its start, the steer anchors the turn's records.
+  const partial = requestActivity(records.slice(1), agent, "c", steered);
+  expect(partial.records).toHaveLength(3);
+  expect(partial.terminal.get("t")).toBe("ended");
+});
+
+it("selects no turn for a message in a start or steer list the lifecycle rejects", () => {
+  const id = (n: number) => n.toString(16).padStart(64, "0");
+  const malformed = "d".repeat(64),
+    oversized = "e".repeat(64),
+    overflow = "f".repeat(64);
+  const records = [
+    record(1, [
+      event("turn_started", "t", 1, {
+        triggeringEventIds: [
+          trigger,
+          ...Array.from({ length: 60 }, (_, i) => id(i + 1)),
+        ],
+      }),
+      event("turn_steered", "t", 2, {
+        triggeringEventIds: [malformed, "not-an-id"],
+      }),
+      event("turn_steered", "t", 3, {
+        triggeringEventIds: [
+          oversized,
+          ...Array.from({ length: 64 }, (_, i) => id(i + 100)),
+        ],
+      }),
+      event("turn_steered", "t", 4, {
+        triggeringEventIds: [
+          overflow,
+          ...Array.from({ length: 4 }, (_, i) => id(i + 200)),
+        ],
+      }),
+    ]),
+    record(2, [
+      event("turn_started", "bad", 1, {
+        triggeringEventIds: [malformed, 7],
+      }),
+    ]),
+  ];
+  for (const message of [malformed, oversized, overflow])
+    expect(requestActivity(records, agent, "c", message).turnIds.size).toBe(0);
+  expect([...requestActivity(records, agent, "c", trigger).turnIds]).toEqual([
+    "t",
+  ]);
+});

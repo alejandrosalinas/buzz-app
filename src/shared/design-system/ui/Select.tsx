@@ -58,7 +58,7 @@ export function Select({
   valueLabel?: string | undefined;
   valueTitle?: string;
   /** Compact metadata stays visible while the selected value truncates. */
-  valueSuffix?: string | undefined;
+  valueSuffix?: ReactNode;
   /** Decorative 20px icon, avatar, or custom accessory shown before the selected value. */
   leading?: ReactNode;
   /** Anchor the popup to the corresponding trigger edge. */

@@ -364,6 +364,8 @@ it.each(["missing", "failed", "legacy"])(
         return { update() {}, retry() {}, dispose() {} };
       },
     });
+    const elapsed = performance.now.bind(performance);
+    let clock: { mockRestore(): void } | undefined;
     try {
       owner.session.channels.ensureList();
       wire
@@ -426,7 +428,12 @@ it.each(["missing", "failed", "legacy"])(
           r.filters[0]?.kinds?.includes(39000),
         );
         if (result === "missing") {
-          // A newer live version wins while the writer metadata read is held.
+          // The background miss backs off; past its longest jittered wait, a
+          // newer live version reads again, and wins while the writer
+          // metadata read is held.
+          clock = vi
+            .spyOn(performance, "now")
+            .mockImplementation(() => elapsed() + 90_000);
           live.receive([
             metadata(relay, room, "Renamed", 31, [
               ["t", "stream"],
@@ -495,6 +502,7 @@ it.each(["missing", "failed", "legacy"])(
       });
     } finally {
       owner.dispose();
+      clock?.mockRestore();
     }
   },
 );

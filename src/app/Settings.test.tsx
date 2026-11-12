@@ -14,7 +14,7 @@ import userEvent from "@testing-library/user-event";
 import { useSyncExternalStore } from "react";
 import { ToastProvider } from "../shared/design-system/ui/Toast";
 import { Context } from "@deepseek-ai/cordis";
-import { afterEach, expect, it, vi } from "vitest";
+import { afterEach, expect, it, onTestFinished, vi } from "vitest";
 import { createCommunityMembership } from "../bundled/moderation/membership";
 import {
   SettingsCardsService,
@@ -22,11 +22,20 @@ import {
   type SettingsCards,
 } from "../features/settings/service";
 import type { ClientSnapshot } from "../features/communities/service";
+import { federatedFixture } from "../features/federated-identity/testing";
 import type { DecisionsService } from "../features/decisions/service";
 import type { RelayData } from "../features/relay/service";
 import type { Contribution } from "../plugins/contributions";
 import { createPluginInstallRequests } from "../plugins/installer";
 import { createPluginRequests } from "../plugins/requests";
+import { createPluginManager } from "../plugins/manager";
+import { PagesService } from "../features/pages/service";
+import type { PluginStorage } from "../plugins/storage";
+import type {
+  ImportPreview,
+  PluginInfo,
+  StorageResult,
+} from "../plugins/types";
 
 afterEach(cleanup);
 // Settings reads agent plugin requests from every plugin manager.
@@ -721,6 +730,159 @@ it("opens each plugin's existing metadata and controls in a detail aside", () =>
 });
 
 // These fixtures exercise catalog updates through the same subscription as the host.
+it.each(["folder", "git"] as const)(
+  "repairs an enabled unsigned plugin through Settings without changing its revision (%s)",
+  async (source) => {
+    const signatureError = "External plugins require a signed release";
+    const unsigned: PluginInfo = {
+      manifest: { id: "example.repair", name: "Repair", apiVersion: 1 },
+      source: "external",
+      enabled: true,
+      revision: "unchanged",
+      previous: null,
+      hasSignature: false,
+      publisher: null,
+      reloadable: true,
+      updateSource:
+        source === "folder"
+          ? { root: "/plugins", path: "dist" }
+          : {
+              repository: "https://example.com/plugins.git",
+              reference: "main",
+              path: "dist",
+            },
+      error: signatureError,
+    };
+    const signed = {
+      ...unsigned,
+      hasSignature: true,
+      publisher: "a".repeat(64),
+      error: null,
+    };
+    let installed = unsigned;
+    const catalog = (): StorageResult => ({
+      status: "ready",
+      externalPluginsPaused: false,
+      catalog: { profile: "test", location: "test", plugins: [installed] },
+    });
+    const preview: ImportPreview = {
+      token: "repair-preview",
+      source: "/plugins",
+      commit: null,
+      warnings: [],
+      candidates: [
+        {
+          path: "dist",
+          manifest: signed.manifest,
+          revision: signed.revision,
+          publisher: signed.publisher,
+        },
+      ],
+    };
+    const code = `export const inject = ["pages"];
+export function apply(ctx) {
+  ctx.pages.register({ id: "repaired", title: "Repaired", component: () => null });
+}`;
+    const originalURL = URL;
+    vi.stubGlobal(
+      "URL",
+      class extends originalURL {
+        static createObjectURL() {
+          return `data:text/javascript,${encodeURIComponent(code)}`;
+        }
+        static revokeObjectURL() {}
+      },
+    );
+    const install = vi.fn(async () => {
+      installed = signed;
+      return catalog();
+    });
+    const storage: PluginStorage = {
+      getCatalog: async () => catalog(),
+      changePlugin: vi.fn(),
+      recoverSettings: vi.fn(),
+      reloadPlugin: vi.fn(),
+      readModule: vi.fn(async () => code),
+      imports: {
+        folder: vi.fn(),
+        files: vi.fn(),
+        git: vi.fn(async () => preview),
+        url: vi.fn(),
+        checkGit: vi.fn(async () => preview),
+        checkFolder: vi.fn(async () => ({
+          revision: signed.revision,
+          publisher: signed.publisher,
+        })),
+        previewFolder: vi.fn(async () => preview),
+        install,
+        discard: vi.fn(async () => {}),
+      },
+    };
+    const root = new Context();
+    const plugins = createPluginManager(root, { storage, bundled: [] });
+    const pages = new PagesService(root);
+    const { cards } = registry([]);
+    const view = render(<Settings {...host} cards={cards} plugins={plugins} />);
+    try {
+      await waitFor(() => expect(plugins.startup()).toBe("ready"));
+      fireEvent.click(screen.getByRole("button", { name: "Manage plugins" }));
+      fireEvent.click(
+        await screen.findByRole("button", { name: "View Repair details" }),
+      );
+      const details = screen.getByRole("complementary", {
+        name: "Repair details",
+      });
+      expect(within(details).getByText(signatureError)).toBeVisible();
+      if (source === "git")
+        fireEvent.click(
+          within(details).getByRole("button", { name: "Check for updates" }),
+        );
+      await waitFor(() =>
+        expect(
+          within(details).getByRole("button", { name: "Update" }),
+        ).toBeEnabled(),
+      );
+      fireEvent.click(within(details).getByRole("button", { name: "Update" }));
+      const dialog = await screen.findByRole("dialog", {
+        name: "Update Repair",
+      });
+      const confirm = await within(dialog).findByRole("button", {
+        name: "Update",
+      });
+      expect(install).not.toHaveBeenCalled();
+      expect(storage.readModule).not.toHaveBeenCalled();
+      expect(pages.snapshot()).toEqual([]);
+      fireEvent.click(confirm);
+      await waitFor(() =>
+        expect(pages.snapshot().map((page) => page.key)).toEqual([
+          "example.repair/repaired",
+        ]),
+      );
+      expect(install).toHaveBeenCalledExactlyOnceWith("repair-preview", "dist");
+      expect(plugins.snapshot().configuration).toMatchObject({
+        catalog: {
+          plugins: [
+            {
+              enabled: true,
+              revision: "unchanged",
+              hasSignature: true,
+              error: null,
+            },
+          ],
+        },
+      });
+      expect(within(details).queryByText(signatureError)).toBeNull();
+      await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+      expect(within(details).getByText("Up to date")).toBeVisible();
+    } finally {
+      view.unmount();
+      await plugins.dispose();
+      await root.fiber.dispose();
+      vi.stubGlobal("URL", originalURL);
+    }
+  },
+);
+
 function reviewPluginFixture(
   extra: Partial<Parameters<typeof Settings>[0]> = {},
 ) {
@@ -1329,6 +1491,94 @@ it("opens Manage plugins from the Decisions API hint", async () => {
   expect(screen.getByRole("region", { name: "Manage plugins" })).toHaveFocus();
 });
 
+it("opens Builderlab from Identity sync only while its card is registered", async () => {
+  vi.stubEnv("VITE_BUZZ_BUILDERLAB_URL", "https://builderlab.example");
+  onTestFinished(() => {
+    vi.unstubAllEnvs();
+  });
+  const user = userEvent.setup();
+  const builderlab = {
+    ...card("login", "Builderlab", "Plugins"),
+    key: "block.builderlab/login",
+    pluginId: "block.builderlab",
+  };
+  const { cards, set } = registry([builderlab]);
+  const status = {
+    seq: 1,
+    pass: 1,
+    builderlab: true,
+    status: "waiting",
+    reason: "not_linked",
+    management: {
+      pubkey: communityState.viewer,
+      policy: "self-managed",
+      initialBackupConfirmed: false,
+    },
+  };
+  const identity = {
+    exportKey: vi.fn(),
+    backup: {
+      subscribe: () => () => {},
+      snapshot: () => status,
+      ready: async () => status,
+    },
+  } as unknown as Parameters<typeof Settings>[0]["identity"];
+  const onSection = vi.fn();
+  const view = (section: string) => (
+    <ToastProvider>
+      <main id="main-content" tabIndex={-1}>
+        <Settings
+          {...host}
+          cards={cards}
+          identity={identity}
+          navigation={
+            {
+              target: { version: 1, kind: "settings", section },
+              complete: () => true,
+            } as never
+          }
+          onSection={onSection}
+        />
+      </main>
+    </ToastProvider>
+  );
+  const identitySection = () =>
+    screen.getByRole("region", { name: "Identity" });
+  const link = () =>
+    within(identitySection()).queryByRole("button", { name: "Builderlab" });
+  const sentence = () =>
+    within(identitySection()).queryByText(
+      (_, el) =>
+        el?.tagName === "P" &&
+        el.textContent ===
+          "This key isn’t linked to your Builderlab account yet, so it can’t be backed up",
+    );
+  const { rerender } = render(view("identity"));
+  await user.click(screen.getByRole("button", { name: "More options" }));
+  await within(identitySection()).findByRole("button", { name: "Builderlab" });
+  const shown = sentence();
+  expect(shown).not.toBeNull();
+  // Turning the plugin off while Identity is open unlinks the name in place.
+  act(() => set([]));
+  expect(link()).toBeNull();
+  expect(sentence()).toBe(shown);
+  act(() => set([builderlab]));
+  await user.click(link() as HTMLElement);
+  expect(onSection).toHaveBeenCalledExactlyOnceWith("block.builderlab/login");
+  // The link goes with Identity, so focus moves into the section it opened.
+  rerender(view("block.builderlab/login"));
+  expect(screen.getByText("Builderlab body")).toBeVisible();
+  expect(document.getElementById("main-content")).toHaveFocus();
+
+  // With the plugin off, the sentence still names Builderlab, unlinked.
+  act(() => set([]));
+  rerender(view("identity"));
+  await user.click(screen.getByRole("button", { name: "More options" }));
+  await waitFor(() => expect(sentence()).not.toBeNull());
+  expect(link()).toBeNull();
+  expect(sentence()).not.toBeNull();
+});
+
 function pluginSectionsFixture(
   cards: SettingsCards,
   decisions?: DecisionsService,
@@ -1445,7 +1695,9 @@ type Visit = {
   entryId?: string;
   traversal?: true;
   pluginId?: string;
-  pluginImport?: { repository: string; reference: string };
+  pluginImport?:
+    | { repository: string; reference: string }
+    | { id: string; url: string; sha256: string };
 };
 
 it("links a plugin's details to the Settings sections it adds", async () => {
@@ -1741,6 +1993,57 @@ it("records the plugin Open in Buzz shows on the visit replacing its import", as
   expect(shown()).toBe("Codex");
 });
 
+it("keeps the plugin a URL link's Open plugin shows when its dismissal lands later", async () => {
+  const fromFolder = {
+    manifest: { id: "example.artifact", name: "Artifact", apiVersion: 1 },
+    source: "external",
+    enabled: true,
+    revision: "git",
+    previous: null,
+    reloadable: false,
+    error: null,
+    updateSource: { root: "/plugins/artifact", path: "." },
+  };
+  const snapshot = {
+    configuration: {
+      status: "ready",
+      externalPluginsPaused: false,
+      catalog: { profile: "test", location: "test", plugins: [fromFolder] },
+    },
+    activation: {},
+    busy: false,
+    error: null,
+    refreshError: null,
+  };
+  const url = vi.fn();
+  const { visit, land, entry, shown, stored, onPluginImportClosed } =
+    pluginHost(
+      { snapshot: () => snapshot, imports: { url, discard: vi.fn() } },
+      { entryId: "p1" },
+    );
+  visit("plugins", {
+    entryId: "p2",
+    pluginImport: {
+      id: "example.artifact",
+      url: "https://plugins.example.org/artifact.json",
+      sha256: "a".repeat(64),
+    },
+  });
+  onPluginImportClosed.mockImplementation(() =>
+    setTimeout(() => land("plugins", { entryId: "p1", traversal: true })),
+  );
+  fireEvent.click(await screen.findByRole("button", { name: "Open plugin" }));
+  await waitFor(() => expect(entry()).toBe("p1"));
+  expect(shown()).toBe("Artifact");
+  await waitFor(() =>
+    expect(
+      screen.getByRole("button", { name: "Close plugin details" }),
+    ).toHaveFocus(),
+  );
+  expect(stored("p1")).toBe("example.artifact");
+  expect(url).not.toHaveBeenCalled();
+});
+
 it("keeps an earlier visit's details when an import finishes after Back", async () => {
   let finish!: (installed: boolean) => void;
   const installed = new Promise<boolean>((resolve) => {
@@ -1966,6 +2269,7 @@ it("keeps Community admin hidden after applying a verified ordinary-member roste
       session: {
         relayAuthor,
         read: () => roster,
+        subscribeLive: () => () => {},
         profiles: { ensure: vi.fn(async () => {}) },
       },
     }),
@@ -2232,7 +2536,7 @@ it("keeps related plugins out of the pane even when tags overlap", () => {
   };
   const plugins = {
     imports: {
-      checkFolder: vi.fn(async () => "updated"),
+      checkFolder: vi.fn(async () => ({ revision: "updated" })),
       previewFolder: vi.fn(),
       folder: vi.fn(),
       files: vi.fn(),
@@ -2702,17 +3006,54 @@ it("keeps identity independent of community profile and clears revealed keys on 
     screen.queryByRole("button", { name: "Reveal private key" }),
   ).toBeNull();
   await user.click(screen.getByRole("button", { name: "Identity" }));
-  await user.click(screen.getByRole("button", { name: "Reveal private key" }));
+  await user.click(screen.getByRole("button", { name: "More options" }));
+  await user.click(screen.getByRole("button", { name: "Private key actions" }));
+  await user.click(
+    await screen.findByRole("menuitem", { name: "Reveal private key" }),
+  );
   expect(screen.getByLabelText("Private key (nsec)")).toHaveValue(
     "nsec-public-test-fixture",
   );
   await user.click(screen.getByRole("button", { name: "Appearance" }));
   expect(screen.queryByLabelText("Private key (nsec)")).toBeNull();
   await user.click(screen.getByRole("button", { name: "Identity" }));
-  expect(screen.getByLabelText("Private key (nsec)")).toHaveValue(
-    "••••••••••••••••",
-  );
+  await user.click(screen.getByRole("button", { name: "More options" }));
+  expect(
+    screen.getByRole("button", { name: "Private key actions" }),
+  ).toHaveTextContent("••••••••••••••••");
   expect(exportKey).toHaveBeenCalledTimes(1);
+});
+
+it("retires contributed identity rows and their stale actions with the owning revision", async () => {
+  const navigate = vi.fn();
+  let stillActive = () => false;
+  const entry = {
+    ...card("account", "Account", "Plugins"),
+    identityRow: ({ active }: { active(): boolean }) => {
+      stillActive = active;
+      return (
+        <button type="button" onClick={() => active() && navigate()}>
+          Open account settings
+        </button>
+      );
+    },
+  };
+  const { cards, set } = registry([entry]);
+  const h = federatedFixture();
+  render(
+    <ToastProvider>
+      <Settings {...host} cards={cards} federatedIdentity={h.service} />
+    </ToastProvider>,
+  );
+  fireEvent.click(screen.getByRole("button", { name: "Identity" }));
+  const link = await screen.findByRole("button", {
+    name: "Open account settings",
+  });
+  fireEvent.click(link);
+  expect(navigate).toHaveBeenCalledOnce();
+  act(() => set([]));
+  expect(screen.queryByText("Open account settings")).toBeNull();
+  expect(stillActive()).toBe(false);
 });
 
 it("offers Retry beside a failed installed revision without changing saved state", () => {
@@ -2818,11 +3159,11 @@ it("retains both local drafts across section navigation but retires them with th
 });
 
 it("allows Add to install while an independent folder check is pending, including pane remount", async () => {
-  let finish!: (revision: string) => void;
+  let finish!: (release: { revision: string }) => void;
   const fixture = reviewPluginFixture();
   const checkFolder = vi.fn(
     () =>
-      new Promise<string>((resolve) => {
+      new Promise<{ revision: string }>((resolve) => {
         finish = resolve;
       }),
   );
@@ -2866,7 +3207,7 @@ it("allows Add to install while an independent folder check is pending, includin
   await within(dialog).findByRole("button", { name: "Install plugin" });
   fixture.external.revision = "cli-reloaded";
   act(fixture.publish);
-  await act(async () => finish("current"));
+  await act(async () => finish({ revision: "current" }));
   expect(discard).not.toHaveBeenCalled();
   fireEvent.click(
     within(dialog).getByRole("switch", { name: "Enable plugin" }),
@@ -2976,7 +3317,7 @@ it("recommends managed plugins in Settings and points to them from navigation", 
     "https://example.com/plugins",
     "v1",
     undefined,
-    pinned,
+    { commit: pinned, path: "dist" },
   );
 });
 
@@ -3094,7 +3435,7 @@ it("routes a managed plugin's updates through the managed review instead of the 
     "https://example.com/plugins",
     "v1",
     undefined,
-    pinned,
+    { commit: pinned, path: "dist" },
   );
   expect(checkGit).not.toHaveBeenCalled();
 });

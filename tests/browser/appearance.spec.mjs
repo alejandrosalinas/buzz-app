@@ -461,7 +461,9 @@ test("saved dark document paints before the application module is allowed to exe
   // Completing a no-op module keeps React from executing without leaving a
   // pending script request. WebKit stalls animation frames when that pending
   // request coexists with @font-face rules, even after styles are computed.
-  await page.route(/\/assets\/.*\.js$/, (route) =>
+  // Only the entry is withheld: a modulepreloaded shared chunk served empty
+  // would poison WebKit's module map for the reload below.
+  await page.route(/\/assets\/index-[^/]*\.js$/, (route) =>
     route.fulfill({
       contentType: "application/javascript",
       headers: { "cache-control": "no-store" },

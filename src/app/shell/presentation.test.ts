@@ -141,6 +141,19 @@ test.each([undefined, "toolbar"] as const)(
   },
 );
 
+test.each([undefined, "dock"] as const)(
+  "bundled Activity is a Messages sidebar row regardless of registered %s placement",
+  (placement) => {
+    expect(
+      pagePlacement({
+        ...inbox,
+        primary: true,
+        ...(placement ? { placement } : {}),
+      }),
+    ).toBe("sidebar");
+  },
+);
+
 test.each([
   [undefined, "sidebar"],
   ["sidebar", "sidebar"],

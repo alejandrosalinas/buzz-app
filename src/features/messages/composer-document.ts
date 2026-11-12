@@ -13,6 +13,11 @@ import type {
   PendingMention,
 } from "./mention-draft";
 import type { ComposerResource } from "../conversation/contracts";
+import {
+  composerToken,
+  composerTokenText,
+  type ComposerToken,
+} from "./composer-token";
 
 /** The document owns editable marks and exact source tokens. Unimplemented
  * Markdown stays source text, never round-trips through an HTML serializer. */
@@ -99,6 +104,8 @@ export const composerSchema = new Schema<
         recipient: { default: null },
         /** Host-owned `{ uri, label }`; valid only while `source` is its link. */
         resource: { default: null },
+        /** A `ComposerToken` whose label is `source`; never a recipient. */
+        semantic: { default: null },
         /** `{ id, name }` while the host resolves a mention Space committed
          * before the chooser could decide. Never persists past the editor. */
         pending: { default: null },
@@ -238,9 +245,14 @@ export function readComposerDocument(
         if (node.attrs.pending)
           return composerSchema.text(node.attrs.source, marks);
         const resource = composerResource(node.attrs.resource);
+        const semantic = composerToken(node.attrs.semantic);
         return node.type.create(
           {
             ...node.attrs,
+            semantic:
+              semantic && composerTokenText(semantic) === node.attrs.source
+                ? semantic
+                : null,
             recipient:
               node.attrs.recipient && valid(node.attrs.recipient)
                 ? node.attrs.recipient
@@ -373,6 +385,23 @@ export function composerResource(
   )
     return;
   return { resource: { uri, label: text }, source };
+}
+
+/** Semantic chips and their text spans. Host-internal: `MentionDraft`, which
+ * plugins see, never carries them. */
+export function composerChips(doc: EditorNode | undefined) {
+  const chips: Readonly<{
+    token: ComposerToken;
+    start: number;
+    end: number;
+  }>[] = [];
+  for (const { node, start, end } of doc
+    ? projectComposerDocument(doc).tokens
+    : []) {
+    const token = composerToken(node.attrs.semantic);
+    if (token) chips.push({ token, start, end });
+  }
+  return chips;
 }
 
 /** Document positions, editable text offsets, and serialized Markdown offsets
@@ -573,6 +602,17 @@ function read(value: unknown): EditorNode | undefined {
       )
         return;
       length += node.attrs.source.length;
+      if ("semantic" in node.attrs && node.attrs.semantic !== null) {
+        const token = composerToken(node.attrs.semantic);
+        if (
+          !token ||
+          composerTokenText(token) !== node.attrs.source ||
+          ("recipient" in node.attrs && node.attrs.recipient) ||
+          ("resource" in node.attrs && node.attrs.resource) ||
+          ("pending" in node.attrs && node.attrs.pending)
+        )
+          return;
+      }
     }
     if (length > 16000) return;
     if (node.content !== undefined) {

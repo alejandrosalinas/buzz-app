@@ -17,13 +17,13 @@ type Seat = {
   stop(): Promise<void>;
 };
 
-/** The connected human call is the sole roster source on this desktop.
+/** A local call or verified owner participation on another device supplies the call.
  * Membership is the room's signed roster; parent membership never seats an agent. */
 export function createHuddleVoices(
   huddles: Pick<
     Huddles,
     "snapshot" | "subscribe" | "voiceListening" | "voiceThinking"
-  >,
+  > & { voiceAgent?(): string | undefined },
   agents: Pick<Agents, "snapshot" | "subscribe" | "types">,
   relay: RelayData,
   bridge: HuddleBridge,
@@ -164,6 +164,8 @@ export function createHuddleVoices(
             .snapshot()
             .running.filter(
               (agent) =>
+                (!huddles.voiceAgent?.() ||
+                  agent.pubkey === huddles.voiceAgent()) &&
                 agent.place === "here" &&
                 agent.owner === destination.viewer &&
                 relayOrigin(agent.relay) ===
@@ -196,7 +198,10 @@ export function createHuddleVoices(
       !channel.pending &&
       !channel.cached &&
       !channel.archived &&
-      !channel.readOnly;
+      !channel.readOnly &&
+      (!huddles.voiceAgent?.() ||
+        (channel.huddle === true &&
+          channel.parentChannelId === destination?.channelId));
     const running = available
       ? candidates.filter((agent) => channel.members?.includes(agent.pubkey))
       : [];

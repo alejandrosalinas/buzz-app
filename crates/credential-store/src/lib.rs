@@ -58,6 +58,9 @@ pub enum Error {
     Changed,
     Denied,
     Corrupt,
+    /// Several Secret Service items match one service and account. Reads and
+    /// deletes both refuse, and Buzz can't tell which item is the key.
+    Ambiguous,
     Unavailable,
     Busy,
 }
@@ -72,7 +75,7 @@ fn error(value: keyring::Error) -> Error {
             bytes.zeroize();
             Error::Corrupt
         }
-        keyring::Error::Ambiguous(_) => Error::Corrupt,
+        keyring::Error::Ambiguous(_) => Error::Ambiguous,
         _ => Error::Unavailable,
     }
 }

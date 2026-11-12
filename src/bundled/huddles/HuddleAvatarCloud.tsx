@@ -200,6 +200,7 @@ export function HuddleAvatarCloud({
   const [active, setActive] = useState<ActiveName>();
   const activeKey = active?.key;
   const self = participants.find((person) => person.own);
+  const selfSpeaking = !muted && (self?.level ?? 0) > 0;
   const peers = participants.filter((person) => !person.own);
   const hasPeers = peers.length > 0;
   const centered = !!self && participants.length > 3;
@@ -323,7 +324,12 @@ export function HuddleAvatarCloud({
               data-name-active={activeKey === person.key}
               {...nameInteraction(person.key)}
             >
-              <Bubble person={person} muted={false} stage={stage} />
+              <Bubble
+                person={person}
+                muted={false}
+                listening={!!person.listening && selfSpeaking}
+                stage={stage}
+              />
             </div>
           ))}
           {hidden > 0 && (
@@ -355,17 +361,19 @@ export function HuddleAvatarCloud({
 function Bubble({
   person,
   muted,
+  listening = false,
   stage,
 }: {
   person: Person;
   muted: boolean;
+  listening?: boolean;
   stage: RefObject<HTMLElement | null>;
 }) {
   const level = muted ? 0 : Math.max(0, Math.min(1, person.level));
-  // A seated voice agent rests smaller; speech restores its normal size.
-  const quiet = level === 0 && !!(person.listening || person.thinking);
+  // The ready seat is not active listening: shrink only while its owner talks.
+  const quiet = level === 0 && (listening || !!person.thinking);
   const thinking = level === 0 && !!person.thinking;
-  const label = `${person.name}${person.own ? (muted ? " (you, muted)" : " (you)") : ""}${level > 0 ? ", speaking" : ""}${thinking ? ", thinking" : ""}${person.listening ? ", listening to you" : ""}`;
+  const label = `${person.name}${person.own ? (muted ? " (you, muted)" : " (you)") : ""}${level > 0 ? ", speaking" : ""}${thinking ? ", thinking" : ""}${listening && level === 0 && !thinking ? ", listening to you" : ""}`;
   return (
     <HuddleAvatarToss stage={stage}>
       <span

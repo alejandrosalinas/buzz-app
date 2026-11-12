@@ -29,7 +29,6 @@ tauri-build = { version = "2.7.2", features = [] }
 buzz-mesh-compute = { path = "../src/bundled/mesh-compute/compute" }
 buzz-nsec-backup = { path = "../crates/nsec-backup" }
 buzz-pairing = { path = "../crates/pairing" }
-nostr-pairing = { package = "nostr", version = "0.44", features = ["nip44"] }
 tokio-util = "0.7"
 tokio-tungstenite = { version = "0.29", features = ["rustls-tls-native-roots"] }
 futures-util = { version = "0.3", features = ["sink"] }
@@ -46,7 +45,7 @@ buzz-credential-store = { path = "../crates/credential-store" }
 buzz-agent-controller = { path = "../crates/agent-controller" }
 serde = { version = "1", features = ["derive"] }
 serde_json = { version = "1", features = ["raw_value"] }
-buzz-audio-client = { git = "https://github.com/block/buzz.git", rev = "c8d736642e1cddaca5797c54c0c625d16a1724ed" }
+buzz-audio-client = { git = "https://github.com/block/buzz.git", rev = "0e6037c74d67930de36143ed4661f469039d8dc7" }
 rustls-native-certs = "0.8"
 tokio = { version = "1", features = ["sync", "time", "macros", "process", "io-util", "net", "signal"] }
 sha2 = "0.10"
@@ -105,8 +104,12 @@ tauri-plugin-mcp-bridge = { git = "https://github.com/hypothesi/mcp-server-tauri
 security-framework = "3.7"
 block2 = "=0.6.2"
 objc2 = "=0.6.4"
-objc2-app-kit = { version = "=0.3.2", default-features = false, features = ["NSApplication", "NSResponder", "NSScreen", "NSWindow", "NSEvent", "NSWorkspace", "NSRunningApplication", "NSMenu", "NSMenuItem", "NSUserInterfaceItemIdentification", "block2"] }
-objc2-foundation = { version = "=0.3.2", default-features = false, features = ["std", "NSObject", "NSThread", "NSBundle", "NSString", "NSURL", "NSError", "NSUserDefaults", "NSFormatter", "NSDateFormatter", "NSLocale", "NSProcessInfo", "NSData", "NSProgress", "NSURLRequest", "NSURLResponse", "NSURLError", "NSNotification", "NSOperation", "block2"] }
+objc2-app-kit = { version = "=0.3.2", default-features = false, features = ["NSSharingService", "NSImage", "NSView", "NSApplication", "NSResponder", "NSScreen", "NSWindow", "NSEvent", "NSWorkspace", "NSRunningApplication", "NSMenu", "NSMenuItem", "NSUserInterfaceItemIdentification", "block2"] }
+objc2-foundation = { version = "=0.3.2", default-features = false, features = ["std", "NSObject", "NSThread", "NSBundle", "NSString", "NSURL", "NSError", "NSUserDefaults", "NSFormatter", "NSDateFormatter", "NSLocale", "NSProcessInfo", "NSData", "NSProgress", "NSURLRequest", "NSURLResponse", "NSURLError", "NSNotification", "NSOperation", "block2", "NSArray", "NSDictionary", "NSIndexSet"] }
+objc2-core-graphics = { version = "=0.3.2", default-features = false, features = ["std", "CGColorSpace"] }
+objc2-core-image = { version = "=0.3.2", default-features = false, features = ["std", "CIContext", "CIImage", "objc2-core-graphics", "objc2-core-video"] }
+objc2-core-video = { version = "=0.3.2", default-features = false, features = ["std", "CVBuffer", "CVImageBuffer", "CVPixelBuffer", "objc2"] }
+objc2-vision = { version = "=0.3.2", default-features = false, features = ["std", "VNRequest", "VNRequestHandler", "VNGenerateForegroundInstanceMaskRequest", "VNObservation", "objc2-core-video"] }
 objc2-user-notifications = { version = "=0.3.2", default-features = false, features = ["UNError", "UNUserNotificationCenter", "UNNotificationSettings", "UNNotification", "UNNotificationContent", "UNNotificationRequest", "UNNotificationResponse", "UNNotificationTrigger", "block2"] }
 
 objc2-web-kit = { version = "=0.3.2", default-features = false, features = ["std", "objc2-app-kit", "block2", "WKWebView", "WKUIDelegate", "WKFrameInfo", "WKSecurityOrigin", "WKWebViewConfiguration", "WKWebsiteDataStore", "WKHTTPCookieStore", "WKDownload", "WKDownloadDelegate", "WKNavigation", "WKNavigationDelegate"] }

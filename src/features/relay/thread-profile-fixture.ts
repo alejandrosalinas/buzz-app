@@ -282,6 +282,7 @@ export async function threadSample(
           close() {},
         },
         readStateStorage: {
+          capture: async () => structuredClone(journal),
           async update(change) {
             journal = change(journal);
             return journal;

@@ -1,0 +1,340 @@
+/* Feature-owned identity artwork; shared controls retain their own recipes. */
+.badge {
+  display: grid;
+  justify-items: center;
+  gap: var(--space-3);
+  width: 100%;
+  text-align: center;
+  padding: var(--space-4);
+}
+.actions {
+  justify-self: start;
+  align-self: start;
+  z-index: 1;
+}
+@container (min-width: 28rem) {
+  .actions,
+  .stage {
+    grid-area: 1 / 1;
+  }
+}
+@container (max-width: 24rem) {
+  .badge {
+    padding-inline: 0;
+  }
+  .actions {
+    margin-inline: var(--space-4);
+  }
+}
+.stage {
+  width: min(100%, 20rem);
+  perspective: 60rem;
+}
+.tilt {
+  transform-style: preserve-3d;
+}
+.card {
+  position: relative;
+  display: grid;
+  transform-style: preserve-3d;
+  transition: transform var(--duration-panel-enter) var(--easing-enter);
+}
+.card[data-back] {
+  transform: rotateY(180deg);
+}
+.face {
+  grid-area: 1 / 1;
+  position: relative;
+  isolation: isolate;
+  overflow: hidden;
+  min-height: 25rem;
+  border: 1px solid var(--border-primary);
+  border-radius: var(--radius-card);
+  background: var(--surface-inset);
+  color: var(--text-primary);
+  text-align: left;
+  backface-visibility: hidden;
+}
+@media (prefers-reduced-motion: no-preference) {
+  .face {
+    transition: visibility var(--duration-panel-enter) var(--easing-enter);
+  }
+  /* WebKit can paint a mirrored back face despite backface-visibility. */
+  .face[aria-hidden="true"] {
+    visibility: hidden;
+  }
+}
+.slot {
+  position: absolute;
+  top: var(--space-3);
+  left: 50%;
+  width: 3rem;
+  height: var(--space-2);
+  transform: translateX(-50%);
+  border-radius: var(--radius-pill);
+  background: var(--surface-popover);
+  z-index: 2;
+}
+.front {
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+}
+.artwork {
+  position: absolute;
+  inset: 0;
+  z-index: -1;
+  overflow: hidden;
+}
+/* Static material grain stays below the portrait labels and controls. */
+.artwork::after,
+.stripe::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  background-image: url("../shared/assets/card-grain.png");
+  background-size: 128px 128px;
+  opacity: 0.06;
+}
+.photoArea {
+  position: relative;
+  isolation: isolate;
+  width: 100%;
+  aspect-ratio: 1;
+  flex-shrink: 0;
+}
+.backupCaption {
+  position: absolute;
+  inset-inline-end: var(--space-5);
+  bottom: var(--space-4);
+  min-height: var(--space-6);
+  display: flex;
+  align-items: center;
+}
+.backupPill {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  padding: var(--space-1) var(--space-2);
+  border: 1px solid var(--border-primary);
+  border-radius: var(--radius-pill);
+  background: var(--surface-panel);
+  color: var(--text-primary);
+}
+.portrait {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  object-position: center;
+  filter: grayscale(1);
+  opacity: 0;
+  mask-image: radial-gradient(
+    ellipse 80% 65% at 50% 45%,
+    black 30%,
+    transparent 100%
+  );
+}
+.portrait[data-loaded] {
+  opacity: 1;
+}
+.monogram {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  font: 900 12rem / 1 var(--font-sans);
+  color: var(--text-subtle);
+}
+.tint {
+  position: absolute;
+  inset: 0;
+  background:
+    radial-gradient(
+      ellipse at 20% 25%,
+      color-mix(in srgb, var(--affordance-accent-prominent) 65%, transparent),
+      transparent 70%
+    ),
+    radial-gradient(
+      ellipse at 80% 75%,
+      var(--affordance-accent-prominent),
+      transparent 75%
+    );
+  mix-blend-mode: color;
+}
+.topline {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: var(--space-3);
+  padding: var(--space-8) var(--space-5) var(--space-4);
+}
+@container (max-width: 10rem) {
+  .topline {
+    padding-block-start: calc(var(--space-5) + var(--space-half));
+    padding-inline: var(--space-4);
+  }
+  .backupCaption {
+    inset-inline-end: var(--space-4);
+  }
+}
+.reflection {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  pointer-events: none;
+  color: var(--affordance-accent-prominent);
+  mix-blend-mode: soft-light;
+}
+.reflection[data-identity-reflection="magnetic"] {
+  color: var(--text-subtle);
+}
+.reflection[data-identity-reflection="film"] {
+  mix-blend-mode: normal;
+  opacity: 0.04;
+}
+.photoHint {
+  display: inline-flex;
+  border-radius: var(--radius-pill);
+}
+
+.identity {
+  color: var(--text-standard);
+  padding: var(--space-4);
+  display: grid;
+  gap: var(--space-1);
+  background: var(--surface-inset);
+}
+.keyLabel {
+  padding-block: var(--space-half);
+  text-align: center;
+}
+.publicId {
+  display: grid;
+  grid-template-columns: minmax(var(--space-5), 1fr) minmax(0, max-content) minmax(
+      var(--space-5),
+      1fr
+    );
+  align-items: center;
+  gap: var(--space-1);
+}
+.copyAction {
+  grid-column: 3;
+  justify-self: start;
+  display: inline-flex;
+}
+.barcodeSticker {
+  position: relative;
+  display: flex;
+  width: 100%;
+  aspect-ratio: 133 / 37;
+  border-radius: var(--radius-chip);
+}
+.barcodeSticker::before {
+  content: "";
+  position: absolute;
+  inset: var(--space-half);
+  border-radius: inherit;
+  background: color-mix(
+    in srgb,
+    var(--text-standard) 92%,
+    var(--surface-panel)
+  );
+}
+.barcodeFilm {
+  position: relative;
+  isolation: isolate;
+  display: block;
+  width: 100%;
+  height: 100%;
+  transform-origin: center;
+  transform: rotateY(-7deg);
+}
+.barcodeFilm svg {
+  display: block;
+  width: 100%;
+  height: 100%;
+}
+.reflection[data-identity-reflection="paper"] {
+  top: calc(-1 * var(--space-half));
+  left: calc(-1 * var(--space-half));
+  width: calc(100% + var(--space-1));
+  height: calc(100% + var(--space-1));
+  border-radius: 0;
+  mix-blend-mode: normal;
+  opacity: 0.15;
+  box-shadow: var(--shadow-panel);
+}
+.publicId code {
+  grid-column: 2;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+/* The front owns card geometry; long back content cannot stretch either face. */
+.back {
+  position: absolute;
+  inset: 0;
+  min-height: 0;
+  min-width: 0;
+  max-height: 100%;
+  display: flex;
+  flex-direction: column;
+  transform: rotateY(180deg);
+  padding-block-start: var(--space-8);
+}
+.stripe {
+  position: relative;
+  flex-shrink: 0;
+  overflow: hidden;
+  height: calc(
+    var(--space-8) +
+    var(--space-3) +
+    var(--space-3) +
+    var(--space-2) +
+    var(--space-half)
+  );
+  background: color-mix(in srgb, var(--surface-inset) 70%, black);
+}
+[data-color-mode="light"] .stripe {
+  background: var(--surface-panel);
+}
+@media (prefers-reduced-transparency: reduce), (forced-colors: active) {
+  .artwork::after,
+  .stripe::after {
+    display: none;
+  }
+}
+.details {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  min-height: 0;
+  overflow-y: auto;
+  justify-content: safe flex-start;
+  gap: var(--space-4);
+  padding: var(--space-5);
+}
+.details p {
+  margin: 0;
+}
+@media (prefers-reduced-motion: reduce) {
+  /* Motion writes inline transforms; the accessibility preference wins. */
+  .tilt {
+    /* biome-ignore lint/complexity/noImportantStyles: Reduced motion must override Motion's inline transform. */
+    transform: none !important;
+  }
+  .tilt,
+  .card,
+  .card[data-back],
+  .back {
+    transform: none;
+    transition: none;
+  }
+  .face {
+    transition: opacity var(--duration-state) linear;
+  }
+  .face[aria-hidden="true"] {
+    opacity: 0;
+  }
+}

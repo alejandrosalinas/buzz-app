@@ -229,7 +229,7 @@ const message = (
     </ToastProvider>,
   );
 
-it("takes pull request and issue links from Links, which keeps the rest of GitHub and stands in without it", async () => {
+it("takes repository, pull request, issue and commit links from Links, which keeps the rest of GitHub and stands in without it", async () => {
   const { links, github } = renderers();
   expect(resolveLink(pull, [links, github])).toBe(github);
   for (const url of [issue, `${issue}?q=1`, `${issue}/`, issueCased])
@@ -240,6 +240,11 @@ it("takes pull request and issue links from Links, which keeps the rest of GitHu
   for (const url of [
     "https://github.com/block/buzz-app",
     "https://github.com/block/buzz-app/commit/abcdef1",
+  ])
+    expect(resolveLink(url, [links, github])).toBe(github);
+  for (const url of [
+    "https://github.com/block",
+    "https://github.com/block/buzz-app/blob/main/README.md",
     `${issue}#issuecomment-1`,
     `${issue}/timeline`,
   ])

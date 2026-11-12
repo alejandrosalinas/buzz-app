@@ -165,11 +165,6 @@
   flex-direction: column;
 }
 
-.badge {
-  color: var(--text-navigation-unread);
-  font-weight: var(--type-weight-semibold);
-}
-
 .marker {
   display: inline-flex;
   color: var(--text-subtle);

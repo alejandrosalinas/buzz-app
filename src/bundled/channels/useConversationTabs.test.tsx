@@ -19,13 +19,19 @@ import type { RelayData } from "../../features/relay/service";
 import type {
   ChannelLauncherProps,
   PanelContext,
+  PanelProps,
   Panels,
   RegisteredPanel,
 } from "../../features/panels/service";
 import { createAgentLibrary } from "../../features/agents/library";
 import { setThreadPlacementPreference } from "../../features/messages/thread-preferences";
-import { channelTabs, tabPane, useChannelTabState } from "./useChannelTabState";
-import { useConversationTabs } from "./useConversationTabs";
+import {
+  channelTabs,
+  tabPane,
+  useChannelTabState,
+  type TabPane,
+} from "./useChannelTabState";
+import { historyPanel, useConversationTabs } from "./useConversationTabs";
 import {
   claimProfileTranscript,
   openProfileTranscript,
@@ -61,88 +67,94 @@ vi.mock("../../features/messages/MessageComposer", () => ({
 }));
 
 afterEach(cleanup);
-it("keeps a profile's content mounted while its version address changes", () => {
-  const channels = [{ id: "alpha", name: "Alpha" }];
-  const session = {
-    viewer: "viewer",
-    channels: { list: () => ({ channels }), window: () => ({ rows: [] }) },
-  } as unknown as RelaySession;
-  const panel: RegisteredPanel = {
-    key: "buzz.profiles/profile",
-    id: "profile",
-    pluginId: "buzz.profiles",
-    revision: "1",
-    title: "Profile",
-    matches: () => true,
-    component: ({ target }) => (
-      <section aria-label="Profile reader">
-        <input aria-label="Profile draft" />
-        <output>{target}</output>
-      </section>
-    ),
-  };
-  const available = [panel];
-  const panels = {
-    snapshot: () => available,
-    subscribe: () => () => {},
-  } as unknown as Panels;
-  const relay = {
-    snapshot: () => ({ status: "ready", session }),
-  } as unknown as RelayData;
-  let workspace!: ReturnType<typeof useConversationTabs>;
-  function Harness() {
-    const state = useChannelTabState(session, "alpha");
-    workspace = useConversationTabs({
-      profiles: new Map(),
-      state,
-      relay,
-      session,
-      panels,
-      current: channels[0],
-      channels,
-      scope: "scope:viewer",
-      conversationIcon: () => null,
-      leadingIds: [],
-      continuingVisit: true,
-      isLive: () => true,
-      openLink: () => false,
-    });
-    return (
-      <PanelWorkspace
-        label="Channel tabs"
-        value={workspace.selectedTab}
-        select={state.select}
-        items={workspace.items}
-      />
+it.each(["buzz.profiles/profile", "example.profiles/enriched"])(
+  "%s keeps a profile's content mounted while its version address changes",
+  (key) => {
+    const channels = [{ id: "alpha", name: "Alpha" }];
+    const session = {
+      viewer: "viewer",
+      channels: { list: () => ({ channels }), window: () => ({ rows: [] }) },
+    } as unknown as RelaySession;
+    const panel: RegisteredPanel = {
+      key,
+      id: "profile",
+      pluginId: "buzz.profiles",
+      revision: "1",
+      title: "Profile",
+      matches: () => true,
+      component: Object.assign(
+        ({ target }: PanelProps) => (
+          <section aria-label="Profile reader">
+            <input aria-label="Profile draft" />
+            <output>{target}</output>
+          </section>
+        ),
+        { profileHistory: true },
+      ),
+    };
+    const available = [panel];
+    const panels = {
+      snapshot: () => available,
+      subscribe: () => () => {},
+    } as unknown as Panels;
+    const relay = {
+      snapshot: () => ({ status: "ready", session }),
+    } as unknown as RelayData;
+    let workspace!: ReturnType<typeof useConversationTabs>;
+    function Harness() {
+      const state = useChannelTabState(session, "alpha");
+      workspace = useConversationTabs({
+        profiles: new Map(),
+        state,
+        relay,
+        session,
+        panels,
+        current: channels[0],
+        channels,
+        scope: "scope:viewer",
+        conversationIcon: () => null,
+        leadingIds: [],
+        continuingVisit: true,
+        isLive: () => true,
+        openLink: () => false,
+      });
+      return (
+        <PanelWorkspace
+          label="Channel tabs"
+          value={workspace.selectedTab}
+          select={state.select}
+          items={workspace.items}
+        />
+      );
+    }
+    render(<Harness />);
+    const base = `buzz:agent-profile:${"a".repeat(64)}`;
+    const open = (target: string) =>
+      act(() => workspace.open({ channelId: "alpha", panel, target }));
+    open(base);
+    const reader = screen.getByLabelText("Profile reader");
+    const draft = screen.getByRole("textbox", { name: "Profile draft" });
+    fireEvent.change(draft, { target: { value: "keep this" } });
+    reader.scrollTop = 636;
+    for (const target of [
+      `${base}#versions`,
+      `${base}#version=instructions/${"b".repeat(64)}`,
+      `${base}#versions`,
+    ]) {
+      open(target);
+      expect(screen.getByLabelText("Profile reader")).toBe(reader);
+      expect(reader.scrollTop).toBe(636);
+      expect(draft).toHaveValue("keep this");
+      expect(reader).toHaveTextContent(target);
+      expect(workspace.items).toHaveLength(1);
+    }
+    open(`buzz:agent-profile:${"c".repeat(64)}`);
+    expect(screen.getByLabelText("Profile reader")).not.toBe(reader);
+    expect(screen.getByRole("textbox", { name: "Profile draft" })).toHaveValue(
+      "",
     );
-  }
-  render(<Harness />);
-  const base = `buzz:agent-profile:${"a".repeat(64)}`;
-  const open = (target: string) =>
-    act(() => workspace.open({ channelId: "alpha", panel, target }));
-  open(base);
-  const reader = screen.getByLabelText("Profile reader");
-  const draft = screen.getByRole("textbox", { name: "Profile draft" });
-  fireEvent.change(draft, { target: { value: "keep this" } });
-  reader.scrollTop = 636;
-  for (const target of [
-    `${base}#versions`,
-    `${base}#version=instructions/${"b".repeat(64)}`,
-    `${base}#versions`,
-  ]) {
-    open(target);
-    expect(screen.getByLabelText("Profile reader")).toBe(reader);
-    expect(reader.scrollTop).toBe(636);
-    expect(draft).toHaveValue("keep this");
-    expect(reader).toHaveTextContent(target);
-    expect(workspace.items).toHaveLength(1);
-  }
-  open(`buzz:agent-profile:${"c".repeat(64)}`);
-  expect(screen.getByLabelText("Profile reader")).not.toBe(reader);
-  expect(screen.getByRole("textbox", { name: "Profile draft" })).toHaveValue(
-    "",
-  );
-});
+  },
+);
 
 it("closing a main thread selects the adjacent app and keeps focus in its pane", async () => {
   const channels = [{ id: "alpha", name: "Alpha" }];
@@ -530,7 +542,11 @@ it.each([
   },
 );
 
-it.each(["buzz.profiles/profile", "buzz.github/object"])(
+it.each([
+  "buzz.profiles/profile",
+  "buzz.github/object",
+  "example.profiles/enriched",
+])(
   "%s replaces transient details, preserves explicit pushes, and reports X without visiting its neighbour",
   (key) => {
     const channels = [{ id: "alpha", name: "Alpha" }];
@@ -538,7 +554,15 @@ it.each(["buzz.profiles/profile", "buzz.github/object"])(
       viewer: "viewer",
       channels: { list: () => ({ channels }) },
     } as unknown as RelaySession;
-    const panel = { key, title: "Content" } as RegisteredPanel;
+    const panel = {
+      key,
+      id: "content",
+      pluginId: "example.profiles",
+      revision: "1",
+      matches: () => true,
+      title: "Content",
+      component: Object.assign(() => null, { profileHistory: true }),
+    } as RegisteredPanel;
     const available = [panel];
     const panels = {
       snapshot: () => available,
@@ -569,8 +593,20 @@ it.each(["buzz.profiles/profile", "buzz.github/object"])(
         onClosePanel,
       }),
     );
-    const first = { channelId: "alpha", panel, target: "content:first" };
-    const second = { ...first, target: "content:second" };
+    const profile = key === "example.profiles/enriched";
+    const first = {
+      channelId: "alpha",
+      panel,
+      target: profile
+        ? `buzz:agent-profile:${"a".repeat(64)}`
+        : "content:first",
+    };
+    const second = {
+      ...first,
+      target: profile
+        ? `buzz:agent-profile:${"b".repeat(64)}`
+        : "content:second",
+    };
     act(() => h.result.current.open(first));
     act(() => h.result.current.open(second));
     expect(h.result.current.items).toHaveLength(1);
@@ -1967,6 +2003,73 @@ it("mounts a hidden thread tab when first shown and keeps it for the visit", () 
   expect(restored("thread:alpha:r1")).toBeUndefined();
 });
 
+it("a page withholds one pane's thread content and hosts it again afterwards", () => {
+  setThreadPlacementPreference("side");
+  const channels = [{ id: "alpha", name: "Alpha" }];
+  const session = {
+    viewer: "viewer",
+    channels: { list: () => ({ channels }), window: () => ({ rows: [] }) },
+  } as unknown as RelaySession;
+  const emptyPanels: RegisteredPanel[] = [];
+  const panels = {
+    snapshot: () => emptyPanels,
+    subscribe: () => () => {},
+  } as unknown as Panels;
+  const relay = {
+    snapshot: () => ({ status: "ready", session }),
+  } as unknown as RelayData;
+  const h = renderHook(
+    ({ hostPanes }: { hostPanes?: readonly TabPane[] }) => {
+      const state = useChannelTabState(session, "alpha");
+      const workspace = useConversationTabs({
+        profiles: new Map(),
+        state,
+        relay,
+        session,
+        panels,
+        current: channels[0],
+        channels,
+        scope: "scope:viewer",
+        conversationIcon: () => null,
+        leadingIds: [],
+        continuingVisit: true,
+        mainPane: true,
+        hostPanes,
+        isLive: () => true,
+        openLink: () => false,
+      });
+      return { state, workspace };
+    },
+    { initialProps: {} },
+  );
+  const hosted = () =>
+    h.result.current.workspace.hosts.map(
+      (host) => (host as { key?: string }).key,
+    );
+  act(() => h.result.current.state.openThreadTab("alpha", "r1", "r1"));
+  act(() =>
+    h.result.current.state.openThreadTab(
+      "alpha",
+      "r2",
+      "r2",
+      undefined,
+      "main",
+    ),
+  );
+  expect(h.result.current.state.tabs.map(tabPane)).toEqual(["side", "main"]);
+  expect(hosted()).toEqual(["thread:alpha:r1", "thread:alpha:r2"]);
+  // Only the side thread leaves; the main-pane thread keeps rendering.
+  h.rerender({ hostPanes: ["main"] });
+  expect(hosted()).toEqual(["thread:alpha:r2"]);
+  // Withholding the side thread must not forget that this visit showed it.
+  // Close the pane so r1 is no longer active, then drop hostPanes: r1 comes
+  // back only if the visit still remembers showing it before the withholding.
+  act(() => h.result.current.state.setPaneOpen(false));
+  h.rerender({});
+  expect(h.result.current.state.paneOpen).toBe(false);
+  expect(hosted()).toEqual(["thread:alpha:r1", "thread:alpha:r2"]);
+});
+
 it("a hidden retained thread tab's rows re-render for new panels, not channel-list changes", () => {
   setThreadPlacementPreference("side");
   const thread = (id: string) => ({
@@ -2107,4 +2210,65 @@ it("a hidden retained thread tab's rows re-render for new panels, not channel-li
     for (const listener of panelListeners) listener();
   });
   expect(rowRenders).toContain(`${roots.r1}:reply`);
+});
+
+it("keeps contextual, unrelated and malformed plugin targets out of profile history", () => {
+  const panel = {
+    key: "example.profiles/enriched",
+    id: "enriched",
+    pluginId: "example.profiles",
+    revision: "1",
+    title: "Profile",
+    matches: () => true,
+    component: Object.assign(() => null, { profileHistory: true }),
+  } as RegisteredPanel;
+  const entry = {
+    panel,
+    channelId: "alpha",
+    target: `buzz:agent-profile:${"a".repeat(64)}`,
+  };
+  expect(historyPanel(entry)).toBe(true);
+  expect(
+    historyPanel({
+      ...entry,
+      channelContext: {
+        scope: "scope",
+        channelId: "alpha",
+        channelName: "Alpha",
+        viewer: "viewer",
+        relayUrl: "https://relay.example.org",
+      },
+    }),
+  ).toBe(false);
+  for (const target of [
+    "https://example.org",
+    "nostr:invalid",
+    "buzz:agent-profile:invalid",
+  ])
+    expect(historyPanel({ ...entry, target })).toBe(false);
+  expect(
+    historyPanel({
+      ...entry,
+      target: profileActivityViewTarget("a".repeat(64)) ?? "",
+    }),
+  ).toBe(true);
+});
+
+it("does not treat an unmarked catch-all as a native profile history reader", () => {
+  const panel = {
+    key: "example/catch-all",
+    id: "catch-all",
+    pluginId: "example",
+    revision: "1",
+    title: "Catch all",
+    matches: () => true,
+    component: () => null,
+  } as RegisteredPanel;
+  expect(
+    historyPanel({
+      panel,
+      channelId: "alpha",
+      target: `buzz:agent-profile:${"a".repeat(64)}`,
+    }),
+  ).toBe(false);
 });

@@ -105,6 +105,55 @@ function hostDeclarations(
       icon: GlobeIcon,
       details: <code className={styles.sourcePath}>{origin}</code>,
     })),
+    ...(manifest.host?.publicImages
+      ? [
+          {
+            key: "publicImages",
+            signature:
+              "Public images: any public HTTPS site · images returned only · no cookies",
+            title: "Public images:",
+            label: "Contact any public website for images",
+            hint: "The plugin picks the address, so it can send what it knows to any site in that address. Only images come back, without your cookies.",
+            icon: GlobeIcon,
+            details: (
+              <p className="m-0">
+                Each request goes to port 443 on a public address and follows no
+                redirect: the plugin sees where a redirect points and decides
+                whether to ask again. Only PNG, JPEG, GIF, WebP and AVIF images
+                are returned. The address check can't recognize internal sites
+                that resolve to public addresses, such as those reached through
+                a company VPN, so the plugin has to refuse those itself. Sites
+                see your IP address.
+              </p>
+            ),
+          },
+        ]
+      : []),
+    ...(manifest.host?.publicPages
+      ? [
+          {
+            key: "publicPages",
+            signature:
+              "Public pages: any public HTTPS site · title, description and image only · no cookies",
+            title: "Public pages:",
+            label: "Contact any public website for link previews",
+            hint: "The plugin picks the address, so it can send what it knows to any site in that address. Only a page's title, description, site name, image and icon come back, without your cookies.",
+            icon: GlobeIcon,
+            details: (
+              <p className="m-0">
+                Each request goes to port 443 on a public address and follows no
+                redirect: the plugin sees where a redirect points and decides
+                whether to ask again. Buzz reads at most the page's head and
+                returns only its preview fields, never the page itself. The
+                address check can't recognize internal sites that resolve to
+                public addresses, such as those reached through a company VPN,
+                so the plugin has to refuse those itself. Sites see your IP
+                address.
+              </p>
+            ),
+          },
+        ]
+      : []),
     ...(manifest.host?.federatedIdentity?.operations ?? []).map(
       (operation) => ({
         key: `federated:${operation.method} ${operation.path}`,

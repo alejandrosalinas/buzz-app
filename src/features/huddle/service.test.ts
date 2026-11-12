@@ -7,17 +7,22 @@ import { describe, expect, it, vi } from "vitest";
 import type { ChannelSummary } from "../relay/contracts";
 import type { RelayData, RelaySnapshot } from "../relay/service";
 import { keypair, signed } from "../relay/testing";
+import { createOutbox } from "../relay/outbox";
+import { createChannelWrites } from "../relay/channel-writes";
 import { createRelaySession } from "../relay/session";
 import type { HuddleAudio, OpenHuddleAudio } from "./audio";
 import type { HuddleBridge, HuddleDestination, HuddleUpdate } from "./bridge";
 import { createHuddles, provideHuddleStatus } from "./service";
 
+const viewerKey = keypair();
+const relayKey = keypair();
+const botKey = keypair();
 const destination: HuddleDestination = {
   channelId: "00000000-0000-4000-8000-000000000001",
   channelName: "Design",
   scope: "https://relay.example:viewer",
   relayUrl: "wss://relay.example",
-  viewer: "ab".repeat(32),
+  viewer: viewerKey.pubkey,
 };
 function deferred<T>() {
   let resolve = (_: T) => {};
@@ -41,6 +46,27 @@ function harness(
   const accessListeners = new Set<() => void>();
   const store = createRelaySession(null);
   const read = vi.fn<typeof store.session.read>(async () => []);
+  const snapshotRead = vi.fn<NonNullable<typeof store.session.snapshotRead>>(
+    async () => [],
+  );
+  const archive = vi.fn(async () => {});
+  const publish = vi.fn(async () => {});
+  const writes = createOutbox(
+    viewerKey.pubkey,
+    {
+      sign: async (event) => signed(viewerKey, event),
+      publish,
+    },
+    { load: () => [], save: () => {} },
+  );
+  const writeLifetime = new AbortController();
+  const channelWrites = createChannelWrites(
+    writes.outbox,
+    store.session.channels,
+    { read: async () => [] },
+    writeLifetime.signal,
+    writes.local,
+  );
   let connection: RelaySnapshot = {
     status: "ready",
     generation: 1,
@@ -49,6 +75,15 @@ function harness(
     session: {
       ...store.session,
       read,
+      snapshotRead,
+      relayAuthor: relayKey.pubkey,
+      outbox: writes.outbox,
+      channelWrites,
+      channelLifecycle: {
+        ...store.session.channelLifecycle,
+        available: true,
+        run: archive,
+      },
       channels: {
         ...store.session.channels,
         subscribeList(fn: () => void) {
@@ -77,6 +112,7 @@ function harness(
       };
     },
     retry() {},
+    tryAgain() {},
     disconnect() {},
     async clearCache() {},
   };
@@ -104,6 +140,9 @@ function harness(
   const service = createHuddles(relay, bridge, openAudio, dmAgent);
   return {
     service,
+    snapshotRead,
+    archive,
+    publish,
     read,
     bridge,
     audio,
@@ -121,6 +160,8 @@ function harness(
     },
     async dispose() {
       await service.dispose();
+      writeLifetime.abort();
+      writes.dispose();
       store.dispose();
     },
   };
@@ -783,4 +824,281 @@ it("clears thinking on leave and ignores callbacks from an old call", async () =
   } finally {
     await h.dispose();
   }
+});
+
+it("reports remote voice errors when idle without replacing a local call", async () => {
+  const h = harness();
+  try {
+    h.service.remoteVoiceError(
+      "Codex could not start. Rejoin from your phone.",
+    );
+    expect(h.service.snapshot()).toMatchObject({
+      phase: "error",
+      error: "Codex could not start. Rejoin from your phone.",
+    });
+    await h.service.leave();
+    expect(h.service.snapshot().phase).toBe("idle");
+    await h.service.join(destination, "room");
+    h.receive({ type: "connected", room: "room", participants: [] });
+    h.service.remoteVoiceError("Late phone error");
+    expect(h.service.snapshot().phase).toBe("connected");
+    expect(h.service.snapshot().error).toBeUndefined();
+  } finally {
+    await h.dispose();
+  }
+});
+
+describe("explicit last-human hangup", () => {
+  const room = "00000000-0000-4000-8000-000000000002";
+  function records(extra: string[][] = []) {
+    return [
+      signed(relayKey, {
+        kind: 39000,
+        content: "",
+        tags: [
+          ["d", room],
+          ["P", destination.viewer],
+        ],
+      }),
+      signed(relayKey, {
+        kind: 39002,
+        content: "",
+        tags: [
+          ["d", room],
+          ["p", destination.viewer, "", "owner"],
+          ["p", botKey.pubkey, "", "bot"],
+          ...extra,
+        ],
+      }),
+    ] as const;
+  }
+  async function connected() {
+    const h = harness();
+    h.snapshotRead.mockResolvedValue(records());
+    await h.service.join(destination);
+    h.receive({
+      type: "connected",
+      room,
+      participants: [destination.viewer, botKey.pubkey],
+    });
+    return h;
+  }
+  it("closes audio, publishes the end, and archives without removing history membership", async () => {
+    const h = await connected();
+    h.publish.mockImplementation(async () => {
+      expect(h.bridge.close).toHaveBeenCalled();
+      expect(h.audio.close).toHaveBeenCalled();
+      expect(h.archive).not.toHaveBeenCalled();
+    });
+    await h.service.leave();
+    expect(h.publish).toHaveBeenCalledWith(
+      expect.objectContaining({
+        kind: 48103,
+        tags: expect.arrayContaining([["h", destination.channelId]]),
+        content: JSON.stringify({ ephemeral_channel_id: room }),
+      }),
+      expect.anything(),
+    );
+    expect(h.archive).toHaveBeenCalledWith(
+      "archive",
+      room,
+      expect.any(AbortSignal),
+      expect.any(Function),
+    );
+    expect(h.archive).toHaveBeenCalledTimes(1);
+    expect(h.service.snapshot().phase).toBe("idle");
+    await h.dispose();
+  });
+  it.each([
+    "second device",
+    "another human",
+    "unknown peer",
+    "missing roster",
+    "different creator",
+  ])("keeps the Huddle open for %s", async (reason) => {
+    const h = await connected();
+    if (reason === "second device")
+      h.receive({
+        type: "participants",
+        participants: [destination.viewer, destination.viewer, botKey.pubkey],
+      });
+    if (reason === "another human") {
+      const human = keypair().pubkey;
+      h.snapshotRead
+        .mockResolvedValueOnce(records([["p", human, "", "member"]]))
+        .mockResolvedValue([]);
+      h.receive({
+        type: "participants",
+        participants: [destination.viewer, botKey.pubkey, human],
+      });
+    }
+    if (reason === "unknown peer")
+      h.receive({
+        type: "participants",
+        participants: [destination.viewer, keypair().pubkey],
+      });
+    if (reason === "missing roster") h.snapshotRead.mockResolvedValue([]);
+    if (reason === "different creator")
+      h.snapshotRead.mockResolvedValue([
+        signed(relayKey, {
+          kind: 39000,
+          content: "",
+          tags: [
+            ["d", room],
+            ["P", botKey.pubkey],
+          ],
+        }),
+        records()[1],
+      ]);
+    await h.service.leave();
+    expect(h.publish).not.toHaveBeenCalled();
+    expect(h.archive).not.toHaveBeenCalled();
+    await h.dispose();
+  });
+
+  it.each([
+    "departed human",
+    "legacy agent",
+    "untrusted claim",
+    "failed lookup",
+  ])(
+    "classifies audio attendance while retaining history: %s",
+    async (scenario) => {
+      const h = await connected();
+      const other = keypair();
+      const base = records([["p", other.pubkey, "", "member"]]);
+      h.snapshotRead.mockResolvedValueOnce(base);
+      // Both identities remain members. Only a live audio seat affects hangup.
+      h.receive({
+        type: "participants",
+        participants: [destination.viewer, botKey.pubkey, other.pubkey],
+      });
+      if (scenario === "departed human")
+        h.receive({
+          type: "participants",
+          participants: [destination.viewer, botKey.pubkey],
+        });
+      else if (scenario === "failed lookup")
+        h.snapshotRead.mockRejectedValueOnce(
+          new Error("Agent lookup unavailable"),
+        );
+      else
+        h.snapshotRead.mockResolvedValueOnce([
+          signed(scenario === "legacy agent" ? viewerKey : other, {
+            kind: 30177,
+            content: "{}",
+            tags: [["d", other.pubkey]],
+          }),
+        ]);
+      await h.service.leave();
+      const ended =
+        scenario === "departed human" || scenario === "legacy agent";
+      expect(h.publish).toHaveBeenCalledTimes(ended ? 1 : 0);
+      expect(h.archive).toHaveBeenCalledTimes(ended ? 1 : 0);
+      if (ended)
+        expect(h.archive).toHaveBeenCalledWith(
+          "archive",
+          room,
+          expect.any(AbortSignal),
+          expect.any(Function),
+        );
+      if (scenario !== "departed human")
+        expect(h.snapshotRead).toHaveBeenNthCalledWith(
+          2,
+          [
+            {
+              kinds: [30177],
+              authors: [destination.viewer],
+              "#d": [other.pubkey],
+              limit: 1,
+              consistency: "strong",
+            },
+          ],
+          { signal: expect.any(AbortSignal) },
+        );
+      await h.dispose();
+    },
+  );
+  it("does not end after switching communities during the fresh read", async () => {
+    const h = await connected();
+    const gate = deferred<ReturnType<typeof records>>();
+    const started = deferred<void>();
+    h.snapshotRead.mockImplementation(() => {
+      started.resolve();
+      return gate.promise;
+    });
+    const leaving = h.service.leave();
+    await started.promise;
+    h.replace();
+    gate.resolve(records());
+    await leaving;
+    expect(h.publish).not.toHaveBeenCalled();
+    expect(h.archive).not.toHaveBeenCalled();
+    await h.dispose();
+  });
+  it.each(["remote end", "audio error", "dispose"])(
+    "does not finalize on %s",
+    async (reason) => {
+      const h = await connected();
+      if (reason === "remote end") h.receive({ type: "ended", error: null });
+      if (reason === "audio error") await h.service.leave("Audio disconnected");
+      if (reason === "dispose") await h.service.dispose();
+      await h.service.leave();
+      expect(h.snapshotRead).not.toHaveBeenCalled();
+      expect(h.publish).not.toHaveBeenCalled();
+      await h.dispose();
+    },
+  );
+  it("retains the room when its fresh roster cannot be read", async () => {
+    const h = await connected();
+    h.snapshotRead.mockRejectedValue(new Error("Roster unavailable"));
+    await h.service.leave();
+    expect(h.publish).not.toHaveBeenCalled();
+    expect(h.archive).not.toHaveBeenCalled();
+    expect(h.service.snapshot().error).toBe("Roster unavailable");
+    await h.dispose();
+  });
+  it.each([true, false])(
+    "confirms concurrent relay archive: %s",
+    async (archived) => {
+      const h = await connected();
+      h.archive.mockImplementation(async () => {
+        h.snapshotRead.mockResolvedValue([
+          signed(relayKey, {
+            kind: 39000,
+            content: "",
+            tags: [
+              ["d", room],
+              ["archived", String(archived)],
+            ],
+          }),
+        ]);
+        throw new Error("This action is no longer permitted");
+      });
+      await h.service.leave();
+      expect(h.publish).toHaveBeenCalledTimes(1);
+      expect(h.snapshotRead).toHaveBeenCalledTimes(2);
+      expect(h.service.snapshot().phase).toBe(archived ? "idle" : "error");
+      await h.dispose();
+    },
+  );
+  it("does not report successful ending when archive times out", async () => {
+    const h = await connected();
+    const deadline = new AbortController();
+    const timeout = vi
+      .spyOn(AbortSignal, "timeout")
+      .mockReturnValue(deadline.signal);
+    h.archive.mockImplementation(async () => {
+      deadline.abort();
+      throw new Error("Archive timed out");
+    });
+    try {
+      await h.service.leave();
+      expect(h.service.snapshot().error).toBe("Archive timed out");
+      expect(h.snapshotRead).toHaveBeenCalledTimes(1);
+    } finally {
+      timeout.mockRestore();
+      await h.dispose();
+    }
+  });
 });

@@ -1,5 +1,11 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { browserReadPublisherLock, createReadState } from "./read-state";
+import { finalizeEvent } from "nostr-tools";
+import {
+  browserReadPublisherLock,
+  CapturedReadNotRetainedError,
+  createReadState,
+} from "./read-state";
+import { effectiveFrontier, overrideActive } from "./read-state-model";
 import {
   newReadJournal,
   readJournal,
@@ -9,6 +15,7 @@ import {
 import { keypair, scriptedTransport } from "./testing";
 import { createRelayReader } from "./reader";
 import { eventDto, type RelayEvent } from "./events";
+import { READ_RESERVE_KEYS, retainRead } from "./read-state-retention";
 // Test the real host codec with ephemeral identities, never a bypass signer.
 import {
   decodeReadState,
@@ -39,6 +46,7 @@ function fixture(now = 100) {
       return journal;
     }),
     read: vi.fn(async () => journal && readJournal(journal, key.pubkey)),
+    capture: vi.fn(async () => journal && readJournal(journal, key.pubkey)),
     close: vi.fn(),
   };
   let remote: RelayEvent[] = [];
@@ -100,6 +108,10 @@ function fixture(now = 100) {
           ]),
       );
     },
+    addRemote: (event: RelayEvent) => {
+      remote = [...remote, event];
+    },
+    remoteEvents: () => remote,
     setNow: (value: number) => {
       now = value;
     },
@@ -109,7 +121,154 @@ function fixture(now = 100) {
     },
   };
 }
+function peerUnreadMarker(
+  f: ReturnType<typeof fixture>,
+  key: string,
+  baseline = 0,
+  {
+    set = 1,
+    clear = 0,
+    createdAt = 100,
+    slot = "b".repeat(32),
+    clientId = "peer",
+  } = {},
+) {
+  return signReadState(
+    {
+      slot,
+      createdAt,
+      blob: {
+        v: 1,
+        client_id: clientId,
+        contexts: {
+          [`ov_s:${key}`]: set,
+          [`ov_c:${key}`]: clear,
+          [`ov_b:${key}`]: baseline,
+        },
+      },
+    },
+    f.key.secret,
+    createdAt,
+  );
+}
+/** Holds one real storage boundary; all later writes still use the shared journal. */
+function holdUpdate(f: ReturnType<typeof fixture>, afterCommit = false) {
+  let failAfterCallback: boolean | undefined;
+  let release = () => {};
+  let signal = () => {};
+  const hold = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  const started = new Promise<void>((resolve) => {
+    signal = resolve;
+  });
+  const update = vi.mocked(f.storage.update).getMockImplementation();
+  if (!update) throw new Error("Missing fixture storage");
+  vi.mocked(f.storage.update).mockImplementationOnce(async (change) => {
+    const saved = afterCommit ? await update(change) : undefined;
+    signal();
+    await hold;
+    if (failAfterCallback !== undefined) {
+      if (failAfterCallback) change(f.journal());
+      throw new Error("disk full");
+    }
+    return saved ?? update(change);
+  });
+  return {
+    started,
+    release,
+    fail: (after: boolean) => {
+      failAfterCallback = after;
+    },
+  };
+}
 describe("durable read-state owner", () => {
+  it.each(
+    ["room", "thread:root", "msg:reply"].flatMap((key) =>
+      [false, true].map((intervening) => ({ key, intervening })),
+    ),
+  )(
+    "older queued saves preserve intervening intent: $key ($intervening)",
+    async ({ key, intervening }) => {
+      const f = fixture();
+      const owner = f.make();
+      const second = f.make();
+      await Promise.all([owner.ready, second.ready]);
+      let release = () => {};
+      const held = new Promise<void>((resolve) => {
+        release = resolve;
+      });
+      const enqueue = async (save: () => ReturnType<typeof owner.read>) => {
+        await held;
+        return save();
+      };
+      const marks = [
+        owner.markLocalUnread(key, () => true, enqueue),
+        owner.markLocalUnread(key, () => true, enqueue),
+      ];
+      const fence = owner.captureLocalUnread([key]);
+      try {
+        if (intervening) await second.markLocalUnread(key, () => true);
+        release();
+        await Promise.all(marks);
+        const saved = f.journal();
+        const read = owner.read(
+          "room",
+          20,
+          () => true,
+          true,
+          [key],
+          undefined,
+          fence,
+        );
+        if (intervening) {
+          await expect(read).rejects.toThrow("Reading observation expired");
+          expect(f.journal()).toEqual(saved);
+        } else {
+          await expect(read).resolves.toMatchObject({ durability: "saved" });
+          expect(f.journal()?.localUnread[key]).toBeUndefined();
+          expect(f.journal()?.state.frontiers.room).toBe(20);
+        }
+      } finally {
+        release();
+        await Promise.allSettled(marks);
+      }
+    },
+  );
+
+  it("a failed older local mark cannot authorize a newer window's revision", async () => {
+    const f = fixture();
+    const owner = f.make();
+    const second = f.make();
+    await Promise.all([owner.ready, second.ready]);
+    const heldMark = holdUpdate(f);
+    const mark = expect(
+      owner.markLocalUnread("room", () => true),
+    ).rejects.toThrow("disk full");
+    await heldMark.started;
+    const fence = owner.captureLocalUnread(["room"]);
+    const heldRead = holdUpdate(f);
+    const read = expect(
+      owner.read("room", 20, () => true, true, ["room"], undefined, fence),
+    ).rejects.toThrow();
+    try {
+      // Exercise a failed callback that calculated a revision but never saved it.
+      heldMark.fail(true);
+      heldMark.release();
+      await mark;
+      await heldRead.started;
+      await second.markLocalUnread("room", () => true);
+      const saved = f.journal();
+      heldRead.release();
+      await read;
+      expect(f.journal()).toEqual(saved);
+      expect(f.journal()?.state.frontiers).toEqual({});
+    } finally {
+      heldMark.release();
+      heldRead.release();
+    }
+  });
+
   it("saves intent and exact signed event before publishing, then confirms the coordinate", async () => {
     const f = fixture();
     const owner = f.make();
@@ -525,6 +684,1347 @@ describe("durable read-state owner", () => {
     await Promise.all([a.read("a", 2, () => true), b.read("b", 3, () => true)]);
     expect(f.journal()?.state.frontiers).toEqual({ a: 2, b: 3 });
   });
+  it.each(
+    ["refresh", "sibling"].flatMap((source) =>
+      [
+        "advancing",
+        "stale",
+        "cleared",
+        "nonadvancing",
+        "expired",
+        "failed",
+      ].map((outcome) => ({ source, outcome })),
+    ),
+  )(
+    "settles a $source-only marker arriving after read-start capture ($outcome)",
+    async ({ source, outcome }) => {
+      const f = fixture();
+      const key = `msg:${"a".repeat(64)}`;
+      f.setJournal({
+        ...newReadJournal(),
+        state: {
+          frontiers:
+            outcome === "stale"
+              ? { room: 9 }
+              : outcome === "nonadvancing"
+                ? { [key]: 11 }
+                : {},
+          overrides: {},
+        },
+      });
+      const owner = f.make(),
+        sibling = f.make();
+      await Promise.all([owner.ready, sibling.ready]);
+      const baseline =
+        outcome === "stale" ? 5 : outcome === "nonadvancing" ? 11 : 0;
+      const marker = peerUnreadMarker(f, key, baseline, {
+        clear: outcome === "cleared" ? 2 : 0,
+      });
+      let release = (_events: RelayEvent[]) => {};
+      let started = () => {};
+      const response = new Promise<RelayEvent[]>((resolve) => {
+        release = resolve;
+      });
+      const requested = new Promise<void>((resolve) => {
+        started = resolve;
+      });
+      f.reader.read.mockImplementationOnce(() => {
+        started();
+        return response;
+      });
+      const refresh = owner.refresh();
+      await requested;
+      const reading = owner.read(
+        key,
+        11,
+        () => outcome !== "expired",
+        false,
+        undefined,
+        (state) => effectiveFrontier(state, key, "room"),
+      );
+      const result =
+        outcome === "expired" || outcome === "failed"
+          ? expect(reading).rejects.toThrow(
+              outcome === "expired" ? "expired" : "disk full",
+            )
+          : reading;
+      if (outcome === "failed") {
+        const update = vi.mocked(f.storage.update).getMockImplementation();
+        if (!update) throw new Error("Missing fixture storage");
+        vi.mocked(f.storage.update).mockImplementation(async (change) => {
+          const next = change(f.journal());
+          if (next.state.frontiers[key] === 11) throw new Error("disk full");
+          return update(() => next);
+        });
+      }
+      try {
+        if (source === "sibling") {
+          sibling.accept([marker]);
+          await sibling.learnHomes({});
+        }
+        release(source === "refresh" ? [marker] : []);
+        await refresh;
+        await result;
+      } finally {
+        release([]);
+      }
+      const saved = f.journal();
+      if (!saved) throw new Error("Missing saved read state");
+      expect(saved?.state.frontiers[key]).toBe(
+        outcome === "expired" || outcome === "failed" ? undefined : 11,
+      );
+      expect(saved?.state.overrides[key]?.baseline).toBe(
+        outcome === "advancing" ? 11 : baseline,
+      );
+      expect(
+        overrideActive(
+          saved.state.overrides[key],
+          effectiveFrontier(saved.state, key, "room"),
+        ),
+      ).toBe(!["stale", "cleared"].includes(outcome));
+      expect(saved?.peerOverlaps ?? []).toEqual([]);
+      if (outcome === "advancing") {
+        owner.dispose();
+        const restarted = f.make();
+        await restarted.ready;
+        f.addRemote(marker);
+        await restarted.refresh();
+        expect(restarted.state().overrides[key]?.baseline).toBe(11);
+        await restarted.read(key, 12, () => true);
+        await restarted.refresh();
+        expect(
+          overrideActive(
+            restarted.state().overrides[key],
+            restarted.state().frontiers[key],
+          ),
+        ).toBe(false);
+        expect(restarted.state().overrides[key]?.baseline).toBe(11);
+      }
+    },
+  );
+  it.each([
+    ...[false, true].flatMap((beforeCapture) =>
+      [false, true].map((restart) => ({
+        beforeCapture,
+        restart,
+        outcome: "advancing",
+      })),
+    ),
+    ...["stale", "cleared", "nonadvancing", "expired", "failed"].map(
+      (outcome) => ({
+        beforeCapture: false,
+        restart: true,
+        outcome,
+      }),
+    ),
+  ])(
+    "settles sibling pending ingestion relative to capture (before: $beforeCapture, restart: $restart, $outcome)",
+    async ({ beforeCapture, restart, outcome }) => {
+      const f = fixture();
+      const key = `msg:${"a".repeat(64)}`;
+      if (["stale", "nonadvancing"].includes(outcome))
+        f.setJournal({
+          ...newReadJournal(),
+          state: {
+            frontiers: { [key]: outcome === "stale" ? 9 : 11 },
+            overrides: {},
+          },
+        });
+      const owner = f.make();
+      let sibling = f.make();
+      await Promise.all([owner.ready, sibling.ready]);
+      const baseline = outcome === "nonadvancing" ? 11 : 0;
+      const expectedBaseline =
+        outcome === "advancing" && !beforeCapture ? 11 : baseline;
+      const marker = peerUnreadMarker(f, key, baseline);
+      const update = vi.mocked(f.storage.update).getMockImplementation();
+      if (!update) throw new Error("Missing fixture storage");
+      let failed = false;
+      vi.mocked(f.storage.update).mockImplementation(async (change) => {
+        const next = change(f.journal());
+        if (!failed && next.state.overrides[key]) {
+          failed = true;
+          throw new Error("disk full");
+        }
+        return update(() => next);
+      });
+      const checkpoint = async () => {
+        sibling.accept([marker]);
+        await sibling.learnHomes({});
+        expect(sibling.owed()).toBe(true);
+        expect(f.journal()?.state.overrides[key]).toBeUndefined();
+        expect(f.journal()?.peerOverlaps?.[0]?.baseline).toBe(baseline);
+      };
+      if (beforeCapture) await checkpoint();
+      const held = holdUpdate(f);
+      const reading = owner.read(key, 11, () => outcome !== "expired");
+      const result = ["expired", "failed"].includes(outcome)
+        ? expect(reading).rejects.toThrow(
+            outcome === "expired" ? "expired" : "disk full",
+          )
+        : reading;
+      try {
+        await held.started;
+        if (!beforeCapture) await checkpoint();
+        if (outcome === "cleared")
+          await f.storage.update((current) => ({
+            ...(current ?? newReadJournal()),
+            state: {
+              frontiers: {},
+              overrides: { [key]: { set: 1, clear: 1, baseline: 0 } },
+            },
+          }));
+        if (outcome === "failed") held.fail(true);
+        held.release();
+        await result;
+      } finally {
+        held.release();
+      }
+      expect(f.journal()?.peerOverlaps?.[0]?.baseline).toBe(expectedBaseline);
+      if (restart) {
+        sibling.dispose();
+        sibling = f.make();
+        await sibling.ready;
+      }
+      f.addRemote(marker);
+      await sibling.refresh();
+      expect(f.journal()?.peerOverlaps).toBeUndefined();
+      expect(f.journal()?.state.frontiers[key]).toBe(
+        ["expired", "failed"].includes(outcome) ? undefined : 11,
+      );
+      expect(f.journal()?.state.overrides[key]?.baseline).toBe(
+        expectedBaseline,
+      );
+      expect(
+        overrideActive(
+          sibling.state().overrides[key],
+          sibling.state().frontiers[key],
+        ),
+      ).toBe(
+        outcome === "advancing"
+          ? !beforeCapture
+          : ["nonadvancing", "expired", "failed"].includes(outcome),
+      );
+      await sibling.read(key, 12, () => true);
+      await sibling.refresh();
+      expect(
+        overrideActive(
+          sibling.state().overrides[key],
+          sibling.state().frontiers[key],
+        ),
+      ).toBe(false);
+    },
+  );
+  it.each(["message", "channel", "thread"] as const)(
+    "does not resurrect peer unread behind the transaction-current %s frontier",
+    async (scope) => {
+      const f = fixture();
+      const key = `msg:${"a".repeat(64)}`;
+      const rootId = "b".repeat(64);
+      const inherited =
+        scope === "message"
+          ? key
+          : scope === "channel"
+            ? "room"
+            : `thread:${rootId}`;
+      const owner = f.make();
+      await owner.ready;
+      const held = holdUpdate(f);
+      const marker = peerUnreadMarker(f, key, 5);
+      const automaticRead = owner.read(
+        key,
+        11,
+        () => true,
+        false,
+        undefined,
+        (state) => effectiveFrontier(state, key, "room", rootId),
+      );
+      try {
+        await held.started;
+        // Another window advances inheritance after invocation, before serialization.
+        await f.storage.update((current) => ({
+          ...(current ?? newReadJournal()),
+          state: { frontiers: { [inherited]: 9 }, overrides: {} },
+        }));
+        owner.accept([marker]);
+        held.release();
+        await automaticRead;
+      } finally {
+        held.release();
+      }
+      await owner.refresh();
+      expect(f.journal()?.state.overrides[key]?.baseline).toBe(5);
+      expect(
+        overrideActive(
+          owner.state().overrides[key],
+          effectiveFrontier(owner.state(), key, "room", rootId),
+        ),
+      ).toBe(false);
+    },
+  );
+  it.each([
+    "failed-before",
+    "failed-after",
+    "expired",
+    "nonadvancing",
+  ] as const)(
+    "does not promote an effective peer unread for a %s automatic observation",
+    async (outcome) => {
+      const f = fixture();
+      const key = `msg:${"a".repeat(64)}`;
+      if (outcome === "nonadvancing")
+        f.setJournal({
+          ...newReadJournal(),
+          state: { frontiers: { [key]: 11 }, overrides: {} },
+        });
+      const owner = f.make();
+      await owner.ready;
+      const held = holdUpdate(f);
+      const marker = peerUnreadMarker(
+        f,
+        key,
+        outcome === "nonadvancing" ? 11 : 0,
+      );
+      const automaticRead = owner.read(key, 11, () => outcome !== "expired");
+      const result =
+        outcome.startsWith("failed") || outcome === "expired"
+          ? expect(automaticRead).rejects.toThrow(
+              outcome === "expired" ? "expired" : "disk full",
+            )
+          : automaticRead;
+      try {
+        await held.started;
+        if (outcome.startsWith("failed")) {
+          held.fail(outcome === "failed-after");
+        }
+        owner.accept([marker]);
+        held.release();
+        await result;
+      } finally {
+        held.release();
+      }
+      await owner.refresh();
+      expect(f.journal()?.state.overrides[key]?.baseline).toBe(
+        outcome === "nonadvancing" ? 11 : 0,
+      );
+      expect(
+        overrideActive(
+          owner.state().overrides[key],
+          owner.state().frontiers[key],
+        ),
+      ).toBe(true);
+    },
+  );
+  it.each(["rejected", "expired", "disposed"] as const)(
+    "does not save or promote an observation when its capture is %s",
+    async (outcome) => {
+      const f = fixture();
+      const owner = f.make();
+      await owner.ready;
+      const key = `msg:${"a".repeat(64)}`;
+      const snapshot = structuredClone(f.journal());
+      let release = () => {};
+      const gate = new Promise<void>((resolve) => {
+        release = resolve;
+      });
+      vi.mocked(f.storage.capture).mockImplementationOnce(async () => {
+        await gate;
+        if (outcome === "rejected") throw new Error("capture unavailable");
+        return snapshot;
+      });
+      let valid = true;
+      const reading = owner.read(key, 11, () => valid);
+      const result = expect(reading).rejects.toThrow(
+        outcome === "rejected"
+          ? "capture unavailable"
+          : outcome === "expired"
+            ? "expired"
+            : "closed",
+      );
+      try {
+        owner.accept([peerUnreadMarker(f, key)]);
+        if (outcome === "disposed") owner.dispose();
+        if (outcome === "expired") valid = false;
+        release();
+        await result;
+      } finally {
+        release();
+      }
+      const live = outcome === "disposed" ? f.make() : owner;
+      await live.ready;
+      await live.refresh();
+      // Replay is explicit after disposal; no old pending attempt may lift it.
+      live.accept([peerUnreadMarker(f, key)]);
+      await live.learnHomes({});
+      expect(f.journal()?.state.frontiers[key]).toBeUndefined();
+      expect(f.journal()?.state.overrides[key]?.baseline).toBe(0);
+      expect(f.journal()?.peerOverlaps ?? []).toEqual([]);
+    },
+  );
+  it("does not lift peer unread for an automatic read started after marker acceptance", async () => {
+    const f = fixture();
+    const owner = f.make();
+    await owner.ready;
+    let release = () => {};
+    let started = () => {};
+    const hold = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const saving = new Promise<void>((resolve) => {
+      started = resolve;
+    });
+    const update = vi.mocked(f.storage.update).getMockImplementation();
+    if (!update) throw new Error("Missing fixture storage");
+    vi.mocked(f.storage.update).mockImplementationOnce(async (change) => {
+      started();
+      await hold;
+      return update(change);
+    });
+    const busy = owner.read("other", 1, () => true);
+    const id = "c".repeat(64);
+    const key = `msg:${id}`;
+    const marker = peerUnreadMarker(f, key);
+    try {
+      await saving;
+      owner.accept([marker]);
+      const automaticRead = owner.read(key, 11, () => true);
+      release();
+      await busy;
+      await automaticRead;
+    } finally {
+      release();
+    }
+    await expect
+      .poll(() => f.journal()?.state.overrides[key]?.baseline)
+      .toBe(0);
+    expect(
+      overrideActive(
+        owner.state().overrides[key],
+        owner.state().frontiers[key],
+      ),
+    ).toBe(false);
+    expect(owner.state().frontiers[key]).toBe(11);
+  });
+  it.each([
+    {
+      kind: "observed register carried to another coordinate and client",
+      slot: "c".repeat(32),
+      createdAt: 100,
+      clear: 0,
+      active: false,
+      restored: false,
+    },
+    {
+      kind: "same coordinate replay",
+      slot: "b".repeat(32),
+      createdAt: 100,
+      clear: 0,
+      active: false,
+      restored: false,
+    },
+    {
+      kind: "same coordinate newer envelope",
+      slot: "b".repeat(32),
+      createdAt: 101,
+      clear: 0,
+      active: false,
+      restored: false,
+    },
+    {
+      kind: "carried register with a clear",
+      slot: "c".repeat(32),
+      createdAt: 100,
+      clear: 1,
+      active: false,
+      restored: false,
+    },
+    {
+      kind: "carried register after restart",
+      slot: "c".repeat(32),
+      createdAt: 100,
+      clear: 0,
+      active: false,
+      restored: true,
+    },
+    {
+      kind: "carried register already observed above restored fence",
+      slot: "c".repeat(32),
+      createdAt: 101,
+      set: 2,
+      knownSet: 2,
+      clear: 0,
+      active: false,
+      restored: true,
+    },
+    {
+      kind: "newer set from another coordinate",
+      slot: "c".repeat(32),
+      createdAt: 101,
+      set: 2,
+      clear: 0,
+      active: true,
+      restored: false,
+    },
+    {
+      kind: "newer set after restart",
+      slot: "c".repeat(32),
+      createdAt: 101,
+      set: 2,
+      clear: 0,
+      active: true,
+      restored: true,
+    },
+    {
+      kind: "newer set on an observed coordinate",
+      slot: "b".repeat(32),
+      createdAt: 101,
+      set: 2,
+      clear: 0,
+      active: true,
+      restored: false,
+    },
+    {
+      kind: "previously omitted peer replay",
+      slot: "c".repeat(32),
+      createdAt: 102,
+      clear: 0,
+      active: false,
+      restored: false,
+      replaced: "omitted",
+    },
+    {
+      kind: "previously lowered peer replay",
+      slot: "c".repeat(32),
+      createdAt: 102,
+      set: 2,
+      knownSet: 2,
+      clear: 0,
+      active: false,
+      restored: false,
+      replaced: "lowered",
+    },
+  ])(
+    "consumes observed registers but preserves newer sets during an automatic read: $kind",
+    async ({
+      slot,
+      createdAt,
+      set = 1,
+      knownSet = 1,
+      clear,
+      active,
+      restored,
+      replaced,
+    }) => {
+      const f = fixture();
+      let owner = f.make();
+      await owner.ready;
+      const key = `msg:${"a".repeat(64)}`;
+      const known = peerUnreadMarker(f, key, 0, { set: knownSet });
+      const marker =
+        slot === "b".repeat(32) && createdAt === 100
+          ? known
+          : peerUnreadMarker(f, key, 0, {
+              slot,
+              createdAt,
+              set,
+              clear,
+              clientId: slot === "b".repeat(32) ? "peer" : "other-peer",
+            });
+      if (restored) {
+        owner.accept([
+          set === 1
+            ? marker
+            : peerUnreadMarker(f, key, 0, { slot, clientId: "other-peer" }),
+        ]);
+        await owner.learnHomes({});
+        owner.dispose();
+        f.setJournal(JSON.parse(JSON.stringify(f.journal())));
+        owner = f.make();
+        await owner.ready;
+      }
+      if (replaced) {
+        owner.accept([
+          peerUnreadMarker(f, key, 0, { slot, set, clientId: "other-peer" }),
+        ]);
+        await owner.learnHomes({});
+        owner.accept([
+          replaced === "lowered"
+            ? peerUnreadMarker(f, key, 0, {
+                slot,
+                set: 1,
+                createdAt: 101,
+                clientId: "other-peer",
+              })
+            : signReadState(
+                {
+                  slot,
+                  createdAt: 101,
+                  blob: {
+                    v: 1,
+                    client_id: "other-peer",
+                    contexts: { room: 1 },
+                  },
+                },
+                f.key.secret,
+                101,
+              ),
+        ]);
+        await owner.learnHomes({});
+      }
+      owner.accept([known]);
+      await owner.learnHomes({});
+      const held = holdUpdate(f);
+      const reading = owner.read(key, 11, () => true);
+      try {
+        await held.started;
+        owner.accept([marker]);
+        held.release();
+        await reading;
+      } finally {
+        held.release();
+      }
+      await owner.learnHomes({});
+      expect(owner.state().frontiers[key]).toBe(11);
+      expect(owner.state().overrides[key]?.baseline).toBe(active ? 11 : 0);
+      expect(
+        overrideActive(
+          owner.state().overrides[key],
+          owner.state().frontiers[key],
+        ),
+      ).toBe(active);
+    },
+  );
+  it.each([
+    { failure: "storage", restart: false },
+    { failure: "storage", restart: true },
+    { failure: "cancelled", restart: false },
+    { failure: "cancelled", restart: true },
+  ])(
+    "recovers a committed overlap checkpoint after $failure ingest (restart: $restart)",
+    async ({ failure, restart }) => {
+      const f = fixture();
+      const owner = f.make();
+      await owner.ready;
+      const key = `msg:${"a".repeat(64)}`;
+      const marker = peerUnreadMarker(f, key);
+      f.addRemote(marker);
+      const held = holdUpdate(f);
+      const automaticRead = owner.read(key, 11, () => true);
+      const update = vi.mocked(f.storage.update).getMockImplementation();
+      if (!update) throw new Error("Missing fixture storage");
+      let failed = false;
+      try {
+        await held.started;
+        vi.mocked(f.storage.update).mockImplementation(async (change) => {
+          const next = change(f.journal());
+          if (!failed && next.state.overrides[key]) {
+            failed = true;
+            if (failure === "storage") throw new Error("disk full");
+            owner.stale();
+            return update(change);
+          }
+          return update(() => next);
+        });
+        owner.accept([marker]);
+        held.release();
+        await automaticRead;
+      } finally {
+        held.release();
+      }
+      await owner.learnHomes({});
+      expect(owner.owed()).toBe(true);
+      expect(f.journal()?.state.overrides[key]).toBeUndefined();
+      const checkpoint = f.journal()?.peerOverlaps;
+      const other = f.make();
+      await other.ready;
+      await other.read("unrelated", 7, () => true);
+      await other.markLocalUnread("manual", () => true);
+      const preservedCheckpoint = f.journal()?.peerOverlaps;
+      other.dispose();
+      let recovered = owner;
+      if (restart) {
+        owner.dispose();
+        f.setJournal(
+          readJournal(JSON.parse(JSON.stringify(f.journal())), f.key.pubkey),
+        );
+        recovered = f.make();
+        await recovered.ready;
+      }
+      await recovered.refresh();
+      expect(
+        overrideActive(
+          recovered.state().overrides[key],
+          recovered.state().frontiers[key],
+        ),
+      ).toBe(true);
+      expect(preservedCheckpoint).toEqual(checkpoint);
+      expect(checkpoint).toEqual([
+        {
+          coordinate: `read-state:${"b".repeat(32)}`,
+          key,
+          set: 1,
+          baseline: 11,
+          version: { id: marker.id, created_at: marker.created_at },
+        },
+      ]);
+      expect(f.journal()?.state.overrides[key]?.baseline).toBe(11);
+      expect(f.journal()?.peerOverlaps).toBeUndefined();
+      expect(recovered.owed()).toBe(false);
+    },
+  );
+  it.each([
+    { reloaded: false, failedIngest: false },
+    { reloaded: false, failedIngest: true },
+    { reloaded: true, failedIngest: false },
+    { reloaded: true, failedIngest: true },
+  ])(
+    "a live window does not recapture committed peer generations (reloaded: $reloaded, failed ingest: $failedIngest)",
+    async ({ reloaded, failedIngest }) => {
+      const f = fixture();
+      const options = {
+        broadcastName: reloaded
+          ? `read-checkpoint:${crypto.randomUUID()}`
+          : undefined,
+      };
+      const a = f.make(options),
+        b = f.make(options);
+      await Promise.all([a.ready, b.ready]);
+      const key = `msg:${"a".repeat(64)}`;
+      const marker = peerUnreadMarker(f, key);
+      const update = vi.mocked(f.storage.update).getMockImplementation();
+      const read = vi.mocked(f.storage.read).getMockImplementation();
+      if (!update || !read) throw new Error("Missing fixture storage");
+      let loaded = () => {};
+      const checkpointLoaded = new Promise<void>((resolve) => {
+        loaded = resolve;
+      });
+      vi.mocked(f.storage.read).mockImplementation(async () => {
+        const saved = await read();
+        if (saved?.peerOverlaps?.length || saved?.state.overrides[key])
+          loaded();
+        return saved;
+      });
+      let failed = false;
+      vi.mocked(f.storage.update).mockImplementation(async (change) => {
+        const next = change(f.journal());
+        if (failedIngest && !failed && next.state.overrides[key]) {
+          failed = true;
+          throw new Error("disk full");
+        }
+        return update(() => next);
+      });
+      a.accept([marker]);
+      await a.learnHomes({});
+      if (reloaded) {
+        await checkpointLoaded;
+        await b.learnHomes({});
+      }
+      const held = holdUpdate(f);
+      const reading = b.read(key, 11, () => true);
+      try {
+        await held.started;
+        b.accept([marker]);
+        held.release();
+        await reading;
+      } finally {
+        held.release();
+      }
+      await b.learnHomes({});
+      expect(
+        overrideActive(b.state().overrides[key], b.state().frontiers[key]),
+      ).toBe(false);
+      expect(f.journal()?.state.overrides[key]?.baseline).toBe(0);
+      expect(f.journal()?.peerOverlaps).toBeUndefined();
+    },
+  );
+  it.each([1, 2])(
+    "back-to-back peer revisions remain healthy (successor set: %s)",
+    async (set) => {
+      const f = fixture();
+      const owner = f.make();
+      await owner.ready;
+      await owner.refresh();
+      const key = `msg:${"a".repeat(64)}`;
+      owner.accept([peerUnreadMarker(f, key)]);
+      owner.accept([peerUnreadMarker(f, key, 0, { set, createdAt: 101 })]);
+      await owner.learnHomes({});
+      expect(owner.state().overrides[key]).toEqual({
+        set,
+        clear: 0,
+        baseline: 0,
+      });
+      expect(owner.owed()).toBe(false);
+      expect(owner.snapshot().status).not.toBe("error");
+      expect(owner.snapshot().completeness).not.toBe("unknown");
+      expect(f.journal()?.peerOverlaps).toBeUndefined();
+    },
+  );
+  it.each([1, 2])(
+    "revisions dominated by a sibling checkpoint remain healthy (successor set: %s)",
+    async (set) => {
+      const f = fixture();
+      const a = f.make(),
+        b = f.make();
+      await Promise.all([a.ready, b.ready]);
+      await a.refresh();
+      const key = `msg:${"a".repeat(64)}`;
+      const earlier = peerUnreadMarker(f, key);
+      const later = peerUnreadMarker(f, key, 0, { set, createdAt: 101 });
+      const held = holdUpdate(f, true);
+      b.accept([later]);
+      try {
+        await held.started;
+        a.accept([earlier]);
+        await a.learnHomes({});
+        expect(a.state().overrides[key]).toBeUndefined();
+        expect(f.journal()?.peerOverlaps).toContainEqual({
+          coordinate: `read-state:${"b".repeat(32)}`,
+          key,
+          set,
+          baseline: 0,
+          version: { id: later.id, created_at: later.created_at },
+        });
+        expect(a.owed()).toBe(false);
+        expect(a.snapshot()).toMatchObject({
+          status: "reconciled",
+          completeness: "bounded",
+        });
+        a.accept([later]);
+        await a.learnHomes({});
+        expect(a.state().overrides[key]).toEqual({
+          set,
+          clear: 0,
+          baseline: 0,
+        });
+        expect(a.owed()).toBe(false);
+        expect(a.snapshot()).toMatchObject({
+          status: "reconciled",
+          completeness: "bounded",
+        });
+        expect(f.journal()?.peerOverlaps).toBeUndefined();
+      } finally {
+        held.release();
+        await b.learnHomes({});
+      }
+      expect(b.owed()).toBe(false);
+    },
+  );
+  it.each([
+    { source: "accept", compact: true, checkpoints: 2 },
+    { source: "accept", compact: false, checkpoints: 1 },
+    { source: "refresh", compact: true, checkpoints: 1 },
+    { source: "refresh", compact: false, checkpoints: 1 },
+  ])(
+    "a newer checkpoint fences stale marker replay after restart ($source, compact: $compact)",
+    async ({ source, compact, checkpoints }) => {
+      const f = fixture();
+      const owner = f.make();
+      await owner.ready;
+      const key = `msg:${"a".repeat(64)}`;
+      const marker = peerUnreadMarker(f, key);
+      const cleared = compact ? 2 : 1;
+      const clear = signReadState(
+        {
+          slot: "b".repeat(32),
+          createdAt: 101,
+          blob: {
+            v: 1,
+            client_id: "peer",
+            contexts: compact
+              ? { [`ov_c:${key}`]: cleared }
+              : {
+                  [`ov_s:${key}`]: 1,
+                  [`ov_c:${key}`]: cleared,
+                  [`ov_b:${key}`]: 0,
+                },
+          },
+        },
+        f.key.secret,
+        101,
+      );
+      const held = holdUpdate(f);
+      const automaticRead = owner.read(key, 11, () => true);
+      const update = vi.mocked(f.storage.update).getMockImplementation();
+      if (!update) throw new Error("Missing fixture storage");
+      try {
+        await held.started;
+        vi.mocked(f.storage.update).mockImplementation(async (change) => {
+          const next = change(f.journal());
+          if (next.state.overrides[key]) throw new Error("disk full");
+          return update(() => next);
+        });
+        owner.accept([marker]);
+        held.release();
+        await automaticRead;
+      } finally {
+        held.release();
+      }
+      await owner.learnHomes({});
+      expect(f.journal()?.peerOverlaps?.[0]?.baseline).toBe(11);
+      if (source === "accept") {
+        owner.accept([clear]);
+        await owner.learnHomes({});
+      } else {
+        f.addRemote(clear);
+        await owner.refresh();
+      }
+      expect(f.journal()?.peerOverlaps).toHaveLength(checkpoints);
+      owner.dispose();
+      vi.mocked(f.storage.update).mockImplementation(update);
+      const restarted = f.make();
+      await restarted.ready;
+      restarted.accept([marker]);
+      await restarted.learnHomes({});
+      expect(
+        overrideActive(
+          restarted.state().overrides[key],
+          restarted.state().frontiers[key],
+        ),
+      ).toBe(false);
+      expect(restarted.owed()).toBe(false);
+      f.addRemote(clear);
+      await restarted.refresh();
+      expect(f.journal()?.state.overrides[key]?.clear).toBe(cleared);
+      expect(f.journal()?.peerOverlaps).toBeUndefined();
+      expect(restarted.owed()).toBe(false);
+    },
+  );
+  it.each([false, true])(
+    "preserves valid overlapping coordinates without a recovery capacity regression (reading: %s)",
+    async (reading) => {
+      const f = fixture();
+      const owner = f.make();
+      await owner.ready;
+      const firstKey = `msg:${"0".repeat(64)}`;
+      const keys = Array.from(
+        { length: 40 },
+        (_, n) => `msg:${n.toString(16).padStart(64, "0")}`,
+      );
+      const contexts = Object.fromEntries(
+        keys.flatMap((key) => [
+          [`ov_s:${key}`, 1],
+          [`ov_c:${key}`, 0],
+          [`ov_b:${key}`, 0],
+        ]),
+      );
+      const markers = Array.from({ length: 64 }, (_, n) =>
+        signReadState(
+          {
+            slot: n.toString(16).padStart(32, "0"),
+            createdAt: 100,
+            blob: { v: 1, client_id: `peer-${n}`, contexts },
+          },
+          f.key.secret,
+          100,
+        ),
+      );
+      expect(
+        new TextEncoder().encode(JSON.stringify(markers)).byteLength,
+      ).toBeLessThan(READ_SNAPSHOT_BYTES);
+      if (reading) {
+        const held = holdUpdate(f);
+        const read = owner.read(firstKey, 11, () => true);
+        try {
+          await held.started;
+          owner.accept(markers);
+          held.release();
+          await read;
+        } finally {
+          held.release();
+        }
+      } else owner.accept(markers);
+      await owner.learnHomes({});
+      expect(owner.snapshot().error).toBeUndefined();
+      expect(Object.keys(owner.state().overrides)).toEqual(keys);
+      expect(
+        overrideActive(
+          owner.state().overrides[firstKey],
+          owner.state().frontiers[firstKey],
+        ),
+      ).toBe(true);
+      expect(f.journal()?.peerOverlaps).toBeUndefined();
+    },
+  );
+  it("does not claim durable overlap when the first checkpoint write fails", async () => {
+    const f = fixture();
+    const owner = f.make();
+    await owner.ready;
+    const key = `msg:${"a".repeat(64)}`;
+    const marker = peerUnreadMarker(f, key);
+    f.addRemote(marker);
+    const held = holdUpdate(f);
+    const automaticRead = owner.read(key, 11, () => true);
+    try {
+      await held.started;
+      vi.mocked(f.storage.update).mockRejectedValueOnce(new Error("disk full"));
+      owner.accept([marker]);
+      held.release();
+      await automaticRead;
+    } finally {
+      held.release();
+    }
+    await owner.learnHomes({});
+    expect(owner.owed()).toBe(true);
+    expect(f.journal()?.peerOverlaps).toBeUndefined();
+    expect(f.journal()?.state.frontiers[key]).toBe(11);
+    owner.dispose();
+    const restarted = f.make();
+    await restarted.ready;
+    await restarted.refresh();
+    expect(f.journal()?.state.overrides[key]?.baseline).toBe(0);
+    expect(
+      overrideActive(
+        restarted.state().overrides[key],
+        restarted.state().frontiers[key],
+      ),
+    ).toBe(false);
+  });
+  it.each([false, true])(
+    "keeps peer unread when both windows ingest it %s after the automatic commit, including restart",
+    async (afterCommit) => {
+      const f = fixture();
+      const options = { broadcastName: `read-unread:${crypto.randomUUID()}` };
+      const a = f.make(options),
+        b = f.make(options);
+      await Promise.all([a.ready, b.ready]);
+      const id = "a".repeat(64);
+      const key = `msg:${id}`;
+      const held = holdUpdate(f, afterCommit);
+      const marker = peerUnreadMarker(f, key);
+      f.addRemote(marker);
+      const automaticRead = a.read(key, 11, () => true);
+      try {
+        await held.started;
+        a.accept([marker]);
+        b.accept([marker]);
+        await expect.poll(() => f.journal()?.state.overrides[key]?.set).toBe(1);
+        expect(f.journal()?.state.overrides[key]?.baseline).toBe(0);
+        held.release();
+        await automaticRead;
+      } finally {
+        held.release();
+      }
+      await expect
+        .poll(() => f.journal()?.state.overrides[key]?.baseline)
+        .toBe(11);
+      await expect
+        .poll(() =>
+          overrideActive(b.state().overrides[key], b.state().frontiers[key]),
+        )
+        .toBe(true);
+      expect(f.journal()?.state.overrides[key]).toEqual({
+        set: 1,
+        clear: 0,
+        baseline: 11,
+      });
+      expect(
+        decodeReadState([marker], f.key.secret)[0]?.blob.contexts[
+          `ov_b:${key}`
+        ],
+      ).toBe(0);
+      a.accept([marker]);
+      await expect
+        .poll(() => f.journal()?.state.overrides[key]?.baseline)
+        .toBe(11);
+
+      const saved = f.journal();
+      if (!saved) throw new Error("Missing saved read state");
+      a.dispose();
+      b.dispose();
+      f.setJournal(
+        readJournal(JSON.parse(JSON.stringify(saved)), f.key.pubkey),
+      );
+      const restarted = f.make();
+      await restarted.ready;
+      restarted.accept([marker]);
+      await expect
+        .poll(() => f.journal()?.state.overrides[key]?.baseline)
+        .toBe(11);
+      expect(
+        overrideActive(
+          restarted.state().overrides[key],
+          restarted.state().frontiers[key],
+        ),
+      ).toBe(true);
+      expect(restarted.state().frontiers[key]).toBe(11);
+      await restarted.flush();
+      expect(f.own()).toEqual({});
+      expect(f.remoteEvents()).toContainEqual(marker);
+      const explicitRead = true;
+      await restarted.read(key, 12, () => true, explicitRead);
+      expect(
+        overrideActive(
+          restarted.state().overrides[key],
+          restarted.state().frontiers[key],
+        ),
+      ).toBe(false);
+    },
+  );
+  it.each([
+    { failure: "storage", laterRead: false },
+    { failure: "cancelled", laterRead: false },
+    { failure: "decode", laterRead: false },
+    { failure: "decode", laterRead: true },
+  ] as const)(
+    "retains first-arrival correlation through $failure and refresh (later read: $laterRead)",
+    async ({ failure, laterRead }) => {
+      const f = fixture();
+      const owner = f.make();
+      await owner.ready;
+      const key = `msg:${"a".repeat(64)}`;
+      const marker = peerUnreadMarker(f, key);
+      f.addRemote(marker);
+      const held = holdUpdate(f);
+      const automaticRead = owner.read(key, 11, () => true);
+      try {
+        await held.started;
+        if (failure === "storage")
+          vi.mocked(f.storage.update).mockRejectedValueOnce(
+            new Error("disk full"),
+          );
+        if (failure === "decode")
+          f.host.decode.mockRejectedValueOnce(new Error("decode unavailable"));
+        owner.accept([marker]);
+        if (failure === "cancelled") owner.stale();
+        held.release();
+        await automaticRead;
+      } finally {
+        held.release();
+      }
+      // Queue a no-op owner operation as the completion barrier for the failed accept.
+      await owner.learnHomes({});
+      expect(f.journal()?.state.overrides[key]).toBeUndefined();
+      expect(owner.owed()).toBe(true);
+      if (laterRead) await owner.read(key, 12, () => true);
+      await owner.refresh();
+      expect(
+        overrideActive(
+          owner.state().overrides[key],
+          owner.state().frontiers[key],
+        ),
+      ).toBe(!laterRead);
+      expect(f.journal()?.state.overrides[key]?.baseline).toBe(11);
+      expect(owner.state().frontiers[key]).toBe(laterRead ? 12 : 11);
+      expect(owner.owed()).toBe(false);
+    },
+  );
+  it.each([false, true])(
+    "a valid replacement recovers from a superseded undecodable marker (failed save: %s)",
+    async (failedSave) => {
+      const f = fixture();
+      const owner = f.make();
+      await owner.ready;
+      const marker = peerUnreadMarker(f, "room");
+      const invalid = eventDto(
+        finalizeEvent(
+          {
+            kind: marker.kind,
+            created_at: marker.created_at,
+            tags: marker.tags,
+            content: "not an encrypted read-state blob",
+          },
+          f.key.secret,
+        ),
+      );
+      owner.accept([invalid]);
+      await owner.learnHomes({});
+      expect(owner.owed()).toBe(true);
+      const replacement = signReadState(
+        {
+          slot: "b".repeat(32),
+          createdAt: 101,
+          blob: { v: 1, client_id: "peer", contexts: { room: 12 } },
+        },
+        f.key.secret,
+        101,
+      );
+      f.addRemote(replacement);
+      if (failedSave) {
+        const update = vi.mocked(f.storage.update).getMockImplementation();
+        if (!update) throw new Error("Missing fixture storage");
+        let failed = false;
+        vi.mocked(f.storage.update).mockImplementation(async (change) => {
+          const next = change(f.journal());
+          if (!failed && next.state.frontiers.room === 12) {
+            failed = true;
+            throw new Error("disk full");
+          }
+          return update(() => next);
+        });
+      }
+      owner.accept([replacement]);
+      await owner.learnHomes({});
+      if (failedSave) {
+        expect(owner.state().frontiers.room).toBeUndefined();
+        expect(owner.owed()).toBe(true);
+      } else {
+        expect(owner.state().frontiers.room).toBe(12);
+      }
+      await owner.refresh();
+      expect(owner.state().frontiers.room).toBe(12);
+      expect(f.journal()?.state.frontiers.room).toBe(12);
+      expect(owner.owed()).toBe(false);
+    },
+  );
+  it.each([
+    { kind: "same marker", set: 1, clear: 0, baseline: 11, active: true },
+    { kind: "newer set", set: 2, clear: 0, baseline: 0, active: false },
+    { kind: "clear", set: 1, clear: 1, baseline: 0, active: false },
+    { kind: "later read", set: 1, clear: 0, baseline: 11, active: false },
+  ])(
+    "restart correlates only the original marker generation: $kind",
+    async ({ kind, set, clear, baseline, active }) => {
+      const f = fixture();
+      const owner = f.make();
+      await owner.ready;
+      const key = `msg:${"a".repeat(64)}`;
+      const marker = peerUnreadMarker(f, key);
+      const held = holdUpdate(f);
+      const automaticRead = owner.read(key, 11, () => true);
+      try {
+        await held.started;
+        const update = vi.mocked(f.storage.update).getMockImplementation();
+        if (!update) throw new Error("Missing fixture storage");
+        let failed = false;
+        vi.mocked(f.storage.update).mockImplementation(async (change) => {
+          const next = change(f.journal());
+          if (!failed && next.state.overrides[key]) {
+            failed = true;
+            throw new Error("disk full");
+          }
+          return update(() => next);
+        });
+        owner.accept([marker]);
+        held.release();
+        await automaticRead;
+      } finally {
+        held.release();
+      }
+      await owner.learnHomes({});
+      expect(owner.owed()).toBe(true);
+      owner.dispose();
+      const restarted = f.make();
+      await restarted.ready;
+      if (kind === "later read")
+        await restarted.read(key, 12, () => true, true);
+      f.addRemote(peerUnreadMarker(f, key, 0, { set, clear, createdAt: 101 }));
+      await restarted.refresh();
+      expect(f.journal()?.state.overrides[key]).toEqual({
+        set,
+        clear,
+        baseline,
+      });
+      expect(
+        overrideActive(
+          restarted.state().overrides[key],
+          restarted.state().frontiers[key],
+        ),
+      ).toBe(active);
+      expect(restarted.owed()).toBe(false);
+      expect(f.journal()?.peerOverlaps).toBeUndefined();
+    },
+  );
+  it.each(
+    [
+      { kind: "duplicate", createdAt: 100, set: 1, baseline: 0, active: false },
+      {
+        kind: "same generation",
+        createdAt: 101,
+        set: 1,
+        baseline: 0,
+        active: false,
+      },
+      {
+        kind: "new generation",
+        createdAt: 101,
+        set: 2,
+        baseline: 11,
+        active: true,
+      },
+    ].flatMap((value) => [
+      { ...value, checkpointed: false },
+      { ...value, checkpointed: true },
+    ]),
+  )(
+    "a failed first arrival cannot recapture a later read: $kind (checkpointed restart: $checkpointed)",
+    async ({ createdAt, set, baseline, active, checkpointed }) => {
+      const f = fixture();
+      let owner = f.make();
+      await owner.ready;
+      const key = `msg:${"a".repeat(64)}`;
+      const marker = peerUnreadMarker(f, key);
+      if (checkpointed) {
+        const update = vi.mocked(f.storage.update).getMockImplementation();
+        if (!update) throw new Error("Missing fixture storage");
+        let failed = false;
+        vi.mocked(f.storage.update).mockImplementation(async (change) => {
+          const next = change(f.journal());
+          if (!failed && next.state.overrides[key]) {
+            failed = true;
+            throw new Error("disk full");
+          }
+          return update(() => next);
+        });
+      } else
+        f.host.decode.mockRejectedValueOnce(new Error("decode unavailable"));
+      owner.accept([marker]);
+      await owner.learnHomes({});
+      expect(owner.owed()).toBe(true);
+      if (checkpointed) {
+        expect(f.journal()?.peerOverlaps?.[0]?.baseline).toBe(0);
+        owner.dispose();
+        owner = f.make();
+        await owner.ready;
+      }
+      const held = holdUpdate(f);
+      const automaticRead = owner.read(key, 11, () => true);
+      try {
+        await held.started;
+        owner.accept([
+          createdAt === 100
+            ? marker
+            : peerUnreadMarker(f, key, 0, { createdAt, set }),
+        ]);
+        held.release();
+        await automaticRead;
+      } finally {
+        held.release();
+      }
+      await owner.learnHomes({});
+      expect(f.journal()?.state.overrides[key]?.baseline).toBe(baseline);
+      expect(
+        overrideActive(
+          owner.state().overrides[key],
+          owner.state().frontiers[key],
+        ),
+      ).toBe(active);
+    },
+  );
+  it("does not recapture a queued read under a newer envelope after first arrival commits", async () => {
+    const f = fixture();
+    const owner = f.make();
+    await owner.ready;
+    const key = `msg:${"a".repeat(64)}`;
+    const held = holdUpdate(f);
+    owner.accept([peerUnreadMarker(f, key)]);
+    try {
+      await held.started;
+      const automaticRead = owner.read(key, 11, () => true);
+      owner.accept([peerUnreadMarker(f, key, 0, { createdAt: 101 })]);
+      held.release();
+      await automaticRead;
+    } finally {
+      held.release();
+    }
+    await owner.learnHomes({});
+    expect(f.journal()?.state.overrides[key]?.baseline).toBe(0);
+    expect(
+      overrideActive(
+        owner.state().overrides[key],
+        owner.state().frontiers[key],
+      ),
+    ).toBe(false);
+  });
   it("a surviving window publishes broadcast intent and reports pending until readback", async () => {
     vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
     const f = fixture();
@@ -894,6 +2394,83 @@ describe("durable read-state owner", () => {
     await restarted.ready;
     expect(restarted.floor()).toBe(floor);
   });
+  it("rejects a captured reply when retention drops its mark despite a retained thread frontier", async () => {
+    const f = fixture();
+    const rootId = (READ_RESERVE_KEYS - 1).toString(16).padStart(64, "0");
+    const selectedKey = `msg:${"e".repeat(64)}`;
+    const selectedAt = 6000;
+    const overrideKey = "manual";
+    const override = { [overrideKey]: { set: 2, clear: 0, baseline: 0 } };
+    const journal = newReadJournal();
+    let channels: Record<string, number> = {};
+    for (let n = 0; n < 1000; n++) {
+      const key = `c${n}`.padEnd(128, "x");
+      try {
+        channels = retainRead(
+          [{ frontiers: { ...channels, [key]: 100 }, overrides: override }],
+          {},
+          journal.clientId,
+        ).state.frontiers;
+      } catch {
+        break;
+      }
+    }
+    const reserve = Object.fromEntries(
+      Array.from({ length: READ_RESERVE_KEYS }, (_, n) => [
+        `thread:${n.toString(16).padStart(64, "0")}`,
+        n === READ_RESERVE_KEYS - 1 ? selectedAt : 100 + n,
+      ]),
+    );
+    f.setJournal({
+      ...journal,
+      revision: 1,
+      state: {
+        frontiers: channels,
+        overrides: override,
+      },
+      localUnread: { [selectedKey]: 1 },
+      reserve,
+    });
+    const owner = f.make();
+    await owner.ready;
+    const before = f.journal();
+
+    await expect(
+      owner.readMessages(
+        [
+          {
+            key: selectedKey,
+            timestamp: selectedAt,
+            channelId: "target-room",
+            rootId,
+          },
+        ],
+        undefined,
+        () => true,
+        false,
+        undefined,
+        [selectedKey],
+        { preserveCapturedSet: true },
+      ),
+    ).rejects.toBeInstanceOf(CapturedReadNotRetainedError);
+
+    expect(f.journal()).toEqual(before);
+    expect(owner.floor()).toBe(0);
+    expect(owner.state().frontiers[selectedKey]).toBeUndefined();
+    expect(
+      effectiveFrontier(owner.state(), selectedKey, "target-room"),
+    ).toBeUndefined();
+    expect(owner.localUnread(selectedKey)).toBe(1);
+
+    owner.dispose();
+    const reloaded = f.make();
+    await reloaded.ready;
+    expect(reloaded.localUnread(selectedKey)).toBe(1);
+    expect(reloaded.state().frontiers[selectedKey]).toBeUndefined();
+    expect(
+      effectiveFrontier(reloaded.state(), selectedKey, "target-room"),
+    ).toBeUndefined();
+  });
   it("preserves the reserve through remote replay, local unread and concurrent mutations", async () => {
     const f = fixture();
     f.setJournal({ ...newReadJournal(), reserve: { "msg:old": 20 } });
@@ -1109,6 +2686,83 @@ describe("durable read-state owner", () => {
     expect(() =>
       readJournal({ ...newReadJournal(), homes: { [id]: 5 } }, f.key.pubkey),
     ).toThrow("mark channels");
+  });
+  it.each([1, 5001])(
+    "loads old journals and round-trips valid overlap metadata (%i records)",
+    (count) => {
+      const f = fixture();
+      const old = readJournal(newReadJournal(), f.key.pubkey);
+      expect(old.peerOverlaps).toBeUndefined();
+      const item = {
+        coordinate: `read-state:${"b".repeat(32)}`,
+        key: `msg:${"a".repeat(64)}`,
+        set: 1,
+        baseline: 11,
+        version: { id: "c".repeat(64), created_at: 100 },
+      };
+      const entries = Array.from({ length: count }, (_, set) => ({
+        ...item,
+        set,
+      }));
+      const raw = {
+        ...old,
+        peerOverlaps: entries.map((entry) => ({ ...entry, ignored: true })),
+      };
+      const saved = readJournal(raw, f.key.pubkey);
+      expect(saved.peerOverlaps).toEqual(entries);
+      raw.peerOverlaps.forEach((item) => {
+        item.baseline = 99;
+      });
+      expect(saved.peerOverlaps?.[0]?.baseline).toBe(11);
+      expect(
+        readJournal(JSON.parse(JSON.stringify(saved)), f.key.pubkey),
+      ).toEqual(saved);
+    },
+  );
+  it.each([
+    { coordinate: "read-state:not-a-slot" },
+    { key: "room" },
+    { key: "msg:" },
+    { key: `msg:${"é".repeat(127)}` },
+    { set: -1 },
+    { set: 1.5 },
+    { baseline: 0x100000000 },
+    { version: { id: "bad", created_at: 100 } },
+    { version: { id: "c".repeat(64), created_at: -1 } },
+  ])("rejects corrupt pending overlap entries: %j", (patch) => {
+    const f = fixture();
+    expect(() =>
+      readJournal(
+        {
+          ...newReadJournal(),
+          peerOverlaps: [
+            {
+              coordinate: `read-state:${"b".repeat(32)}`,
+              key: `msg:${"a".repeat(64)}`,
+              set: 1,
+              baseline: 11,
+              version: { id: "c".repeat(64), created_at: 100 },
+              ...patch,
+            },
+          ],
+        },
+        f.key.pubkey,
+      ),
+    ).toThrow("read overlap");
+  });
+  it("rejects duplicate and non-array recovery metadata instead of dropping intent", () => {
+    const f = fixture();
+    const item = {
+      coordinate: `read-state:${"b".repeat(32)}`,
+      key: `msg:${"a".repeat(64)}`,
+      set: 1,
+      baseline: 11,
+      version: { id: "c".repeat(64), created_at: 100 },
+    };
+    for (const peerOverlaps of [{}, [item, item]])
+      expect(() =>
+        readJournal({ ...newReadJournal(), peerOverlaps }, f.key.pubkey),
+      ).toThrow();
   });
   it("rejects saved corruption and changed signatures without overwriting it", () => {
     const f = fixture();
@@ -1756,6 +3410,7 @@ async function otherDeviceMarker(f: ReturnType<typeof fixture>) {
   const device = f.make({
     reader: { read: vi.fn(async () => []) },
     storage: {
+      capture: async () => structuredClone(other),
       update: async (change) => {
         other = readJournal(change(other), f.key.pubkey);
         return other;

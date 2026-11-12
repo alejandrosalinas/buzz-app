@@ -386,11 +386,27 @@ export function AgentsPage({
     teams.some((team) => team.id === editingTeam)
       ? editingTeam
       : undefined;
+  // Leaving the editor drops its unsaved edits, so one with them asks first,
+  // as an agent's panel does; the leave waits in `leavingTeam` until Discard
+  // changes. The editor reports them through `onTeamBusy` below.
+  const teamDirty = useRef(false);
+  const [leavingTeam, setLeavingTeam] = useState<{ then(): void }>();
+  const leaveTeam = (then: () => void) => {
+    if (teamDirty.current) setLeavingTeam({ then });
+    else then();
+  };
   // Leaving Teams drops the editor, whose unsaved draft goes with it.
   const changeTab = (next: Tab) => {
-    if (next !== "teams") setEditingTeam(undefined);
-    if (next !== "marketplace") setSharedSelection(undefined);
-    setTab(next);
+    const show = () => {
+      if (next !== "marketplace") setSharedSelection(undefined);
+      setTab(next);
+    };
+    if (next === "teams") show();
+    else
+      leaveTeam(() => {
+        setEditingTeam(undefined);
+        show();
+      });
   };
   // Opened for one of your agents, such as from a card sent in chat.
   const routedAgent =
@@ -406,31 +422,12 @@ export function AgentsPage({
   // An editor with unsaved edits or a Save running, which Back leaves open
   // as it leaves an agent's panel.
   const teamBusy = useRef(false);
-  const onTeamBusy = useCallback((busy: boolean) => {
+  const onTeamBusy = useCallback((busy: boolean, dirty: boolean) => {
     teamBusy.current = busy;
+    teamDirty.current = dirty;
+    // The prompt is stale once nothing is left to discard behind it.
+    if (!dirty) setLeavingTeam(undefined);
   }, []);
-  // Read as a team's visit arrives, not a reason to apply it again.
-  const leave = useRef({ browse, editingTeam });
-  leave.current = { browse, editingTeam };
-  useEffect(() => {
-    if (!routedEntry) return;
-    const { browse, editingTeam } = leave.current;
-    if (!routedTeam) {
-      // Back past a team's visit closes its editor; a new team has none.
-      if (!teamBusy.current)
-        setEditingTeam((open) => (open === "new" ? open : undefined));
-      return;
-    }
-    // Another team's visit leaves a busy editor open too; its own versions
-    // still open in it.
-    if (teamBusy.current && editingTeam !== routedTeam) return;
-    // An agent's unsaved edits are asked about first, as choosing another is.
-    browse(undefined, () => {
-      setSharedSelection(undefined);
-      setTab("teams");
-      setEditingTeam(routedTeam);
-    });
-  }, [routedTeam, routedEntry]);
   // Opening a team is a visit Back and Forward move between, and closing its
   // editor ends the visit.
   const editTeam = (id: string | undefined) => {
@@ -484,6 +481,29 @@ export function AgentsPage({
       page,
     );
   };
+  // Read as a team's visit arrives, or as a held leave runs, not a reason
+  // to apply them again.
+  const leave = useRef({ browse, editingTeam, editTeam });
+  leave.current = { browse, editingTeam, editTeam };
+  useEffect(() => {
+    if (!routedEntry) return;
+    const { browse, editingTeam } = leave.current;
+    if (!routedTeam) {
+      // Back past a team's visit closes its editor; a new team has none.
+      if (!teamBusy.current)
+        setEditingTeam((open) => (open === "new" ? open : undefined));
+      return;
+    }
+    // Another team's visit leaves a busy editor open too; its own versions
+    // still open in it.
+    if (teamBusy.current && editingTeam !== routedTeam) return;
+    // An agent's unsaved edits are asked about first, as choosing another is.
+    browse(undefined, () => {
+      setSharedSelection(undefined);
+      setTab("teams");
+      setEditingTeam(routedTeam);
+    });
+  }, [routedTeam, routedEntry]);
   useEffect(() => {
     // Back to an agent's visit leaves a busy team editor open too.
     if (!routedAgent || !routedEntry || teamBusy.current) return;
@@ -828,6 +848,10 @@ export function AgentsPage({
               editing={editing}
               removing={removing}
               onEdit={editTeam}
+              // Closing drops the editor's unsaved edits, so it asks first;
+              // a leave the prompt held closes through the latest `editTeam`,
+              // as the visit it would end may have moved on meanwhile.
+              onDone={() => leaveTeam(() => leave.current.editTeam(undefined))}
               onRemove={removeTeam}
               onSaved={endTeamVisits}
               onBusy={onTeamBusy}
@@ -978,6 +1002,22 @@ export function AgentsPage({
           }}
         />
       )}
+      {leavingTeam && editing && (
+        <DiscardChanges
+          description={
+            editing === "new"
+              ? "Your new team will be lost."
+              : `Your unsaved changes to ${
+                  teams.find((team) => team.id === editing)?.name ?? "this team"
+                } will be lost.`
+          }
+          onKeep={() => setLeavingTeam(undefined)}
+          onDiscard={() => {
+            setLeavingTeam(undefined);
+            leavingTeam.then();
+          }}
+        />
+      )}
       {creating && (
         <AgentCreateDialog
           agents={agents}
@@ -1038,6 +1078,8 @@ type InventoryProps = {
   newAgent: ReactNode;
   /** The agent explicitly saved as this community's Bestie. */
   bestie?: string | undefined;
+  celebratingBestie?: string | undefined;
+  onBestieCelebrated?: ((pubkey: string) => void) | undefined;
   onMakeBestie?: ((pubkey: string) => void) | undefined;
   /** Asks before saving no Bestie; absent where none can be saved. */
   onRemoveBestie?: ((pubkey: string, name: string) => void) | undefined;
@@ -1054,14 +1096,27 @@ function DefaultAgentInventory({
   scope,
   ...props
 }: InventoryProps & { session: RelaySession; scope: string }) {
+  const [celebration, setCelebration] = useState<{
+    scope: string;
+    pubkey: string;
+  }>();
   // Keep Morgan's automatic fallback/adoption behavior active even though the
-  // Bestie pill names only the explicit account-saved choice.
+  // Bestie star marks only the explicit account-saved choice.
   useDefaultAgent(session, scope);
   // A remote agent is asked about before it is made Bestie.
   const bestie = useBestieChoice(
     session,
     scope,
     (pubkey) => props.agents.find((agent) => agent.pubkey === pubkey)?.place,
+    (pubkey) => {
+      // Celebrate only this successful choice, never account restoration or sync.
+      if (
+        document.visibilityState === "visible" &&
+        !document.documentElement.hasAttribute("data-keyboard-navigation") &&
+        !window.matchMedia("(prefers-reduced-motion: reduce)").matches
+      )
+        setCelebration({ scope, pubkey });
+    },
   );
   return (
     <>
@@ -1070,7 +1125,19 @@ function DefaultAgentInventory({
         key={scope}
         scope={scope}
         session={session}
-        bestie={bestie.saved}
+        // The saved store notifies before the success callback enables motion.
+        // Do not mount the new badge in that intermediate render.
+        bestie={bestie.saved === bestie.savingBestie ? undefined : bestie.saved}
+        celebratingBestie={
+          celebration?.scope === scope ? celebration.pubkey : undefined
+        }
+        onBestieCelebrated={(pubkey) =>
+          setCelebration((current) =>
+            current?.pubkey === pubkey && current.scope === scope
+              ? undefined
+              : current,
+          )
+        }
         defaultChoices={
           new Set(bestie.choices.selectable.map((agent) => agent.pubkey))
         }
@@ -1192,6 +1259,8 @@ function InventoryGrid({
   busy,
   newAgent,
   bestie,
+  celebratingBestie,
+  onBestieCelebrated,
   defaultChoices,
   onMakeBestie,
   onRemoveBestie,
@@ -1268,7 +1337,11 @@ function InventoryGrid({
                 enabled={!!scope}
               >
                 <InventoryCard
-                  tag={isBestie ? "Bestie" : undefined}
+                  isBestie={isBestie}
+                  celebrateBestie={
+                    isBestie && celebratingBestie === agent.pubkey
+                  }
+                  onBestieCelebrated={() => onBestieCelebrated?.(agent.pubkey)}
                   bestie={
                     onMakeBestie
                       ? {
@@ -2458,6 +2531,7 @@ function Teams({
   editing,
   removing,
   onEdit,
+  onDone,
   onRemove,
   onSaved,
   onBusy,
@@ -2471,10 +2545,12 @@ function Teams({
   editing: string | undefined;
   /** A team while its delete runs, which may have left `teams`. */
   removing: Team | undefined;
-  onEdit(id: string | undefined): void;
+  onEdit(id: string): void;
+  /** Closes the editor, asking about its unsaved edits first. */
+  onDone(): void;
   onRemove(team: Team): Promise<void>;
   onSaved(id: string): void;
-  onBusy(busy: boolean): void;
+  onBusy(busy: boolean, dirty: boolean): void;
   historyPresentation?: HistoryPresentation | undefined;
   newTeam: ReactNode;
 }) {
@@ -2492,7 +2568,7 @@ function Teams({
         historyPresentation={historyPresentation}
         onBusy={onBusy}
         onSaved={onSaved}
-        onDone={() => onEdit(undefined)}
+        onDone={onDone}
       />
     );
   const byKey = new Map(saved.map((agent) => [agent.pubkey, agent]));
@@ -2543,7 +2619,11 @@ function TeamEditor({
   /** Deletes the team, keeping this editor open until that ends. */
   onRemove(team: Team): Promise<void>;
   historyPresentation?: HistoryPresentation | undefined;
-  onBusy(busy: boolean): void;
+  /**
+   * Whether edits are unsaved or a Save runs, and whether edits are unsaved
+   * with no Save running, which closing asks about.
+   */
+  onBusy(busy: boolean, dirty: boolean): void;
   /** Ends the saved team's visits, even once this editor is gone. */
   onSaved(id: string): void;
   onDone(): void;
@@ -2586,15 +2666,16 @@ function TeamEditor({
   const [opened, setOpened] = useState(team);
   const nameEdited = !!opened && name !== opened.name;
   const membersEdited = !!opened && !sameMembers(members, opened.members);
-  const busy =
-    pending ||
-    (opened
-      ? nameEdited || membersEdited || instructions !== opened.instructions
-      : !!(name.trim() || instructions || members.length));
+  const edited = opened
+    ? nameEdited || membersEdited || instructions !== opened.instructions
+    : !!(name.trim() || instructions || members.length);
+  const busy = pending || edited;
+  // A Save closes this editor itself once done, so nothing is asked then.
+  const dirty = edited && !pending;
   useEffect(() => {
-    onBusy(busy);
-    return () => onBusy(false);
-  }, [busy, onBusy]);
+    onBusy(busy, dirty);
+    return () => onBusy(false, false);
+  }, [busy, dirty, onBusy]);
   // A revert takes its instructions, and the saved name and members unless
   // edited here. An edit over a newer saved change keeps the opened version,
   // so Save is refused as a conflict rather than undoing that change.
@@ -2700,7 +2781,14 @@ function TeamEditor({
       onKeyDown={(event) => {
         // Not while Save runs, as its button keeps focus while loading, nor
         // under the dialog: before focus moves into it, its Escape starts here.
-        if (event.key === "Escape" && !pending && !deleting) onDone();
+        // Shift+Escape is Mark all as read's, bound on the window.
+        if (event.key !== "Escape" || event.shiftKey || pending || deleting)
+          return;
+        // The Discard changes prompt this may open adds its Escape listener
+        // to the document while this event is still bubbling, and would
+        // close on the very key that opened it; the key stops here.
+        event.stopPropagation();
+        onDone();
       }}
     >
       <SideHeader

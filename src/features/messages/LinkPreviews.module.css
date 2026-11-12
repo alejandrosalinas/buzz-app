@@ -1,0 +1,12 @@
+.previews {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: var(--space-half);
+  margin-top: var(--space-half);
+  min-width: 0;
+  max-width: 100%;
+}
+.previews > * {
+  max-width: 100%;
+}

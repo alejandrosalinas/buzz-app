@@ -47,13 +47,20 @@ it("shows and clears the connected call's voice error alongside window errors", 
   expect(screen.queryByRole("alert")).not.toBeInTheDocument();
 });
 
-it("rests a seated agent smaller, rings it while thinking and restores it for speech", () => {
+it("starts normally, listens while you talk, thinks, and pulses like a human", () => {
   const agent = {
     key: "agent",
     name: "Agent",
     picture: null,
     own: false,
     listening: true,
+    level: 0,
+  };
+  const human = {
+    key: "human",
+    name: "Human",
+    picture: null,
+    own: true,
     level: 0,
   };
   const view: HuddleView = {
@@ -63,29 +70,57 @@ it("rests a seated agent smaller, rings it while thinking and restores it for sp
     muted: false,
     level: 0,
     dark: false,
-    participants: [agent],
+    participants: [human, agent],
   };
   const mounted = render(<HuddleWindowView view={view} act={vi.fn()} />);
-  const art = () =>
-    mounted.container.querySelector<HTMLElement>('[class*="bubbleArtwork"]');
-  const scale = () => art()?.style.getPropertyValue("--voice-scale");
-  const update = (changes: Partial<typeof agent> & { thinking?: boolean }) =>
+  const art = (key = "agent") =>
+    mounted.container.querySelector<HTMLElement>(
+      `${key === "human" ? "[data-self]" : '[data-participant="agent"]'} [class*="bubbleArtwork"]`,
+    );
+  const scale = (key = "agent") =>
+    art(key)?.style.getPropertyValue("--voice-scale");
+  const update = (
+    changes: Partial<typeof agent> & { thinking?: boolean } = {},
+    humanLevel = 0,
+    muted = false,
+  ) =>
     mounted.rerender(
       <HuddleWindowView
-        view={{ ...view, participants: [{ ...agent, ...changes }] }}
+        view={{
+          ...view,
+          muted,
+          participants: [
+            { ...human, level: humanLevel },
+            { ...agent, ...changes },
+          ],
+        }}
         act={vi.fn()}
       />,
     );
+
+  expect(scale()).toBe("1");
+  expect(scale()).toBe(scale("human"));
+  expect(screen.queryByRole("img", { name: /listening to you/ })).toBeNull();
+  update({}, 0.3);
   expect(scale()).toBe("0.8");
-  expect(art()?.hasAttribute("data-thinking")).toBe(false);
+  expect(Number(scale("human"))).toBeGreaterThan(1);
+  expect(
+    screen.getByRole("img", { name: "Agent, listening to you" }),
+  ).toBeInTheDocument();
+  update({}, 0.3, true);
+  expect(scale()).toBe("1");
+  update({ listening: false }, 0.3);
+  expect(scale()).toBe("1");
   update({ thinking: true });
   expect(scale()).toBe("0.8");
   expect(art()?.hasAttribute("data-thinking")).toBe(true);
   update({ thinking: true, level: 0.3 });
   expect(Number(scale())).toBeGreaterThan(1);
   expect(art()?.hasAttribute("data-thinking")).toBe(false);
-  update({});
-  expect(scale()).toBe("0.8");
-  update({ listening: false });
-  expect(scale()).toBe("1");
+  // Speech and the gaps between words use the same range as a human.
+  for (const level of [0.2, 0.6, 0, 1, 0.4, 0]) {
+    update({ level }, level);
+    if (level === 0) expect(scale()).toBe("1");
+    expect(scale()).toBe(scale("human"));
+  }
 });

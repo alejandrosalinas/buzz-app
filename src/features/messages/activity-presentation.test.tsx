@@ -153,3 +153,138 @@ it("maps each request to its agents' latest public replies", () => {
   expect(replyRequests.has("update")).toBe(false);
   expect(repliedAgents.has("later")).toBe(false);
 });
+
+it("binds an agent update to the request it claims only when that is a loaded human request in its conversation", () => {
+  const human = "h".repeat(64);
+  const message = (
+    id: string,
+    authorId: string,
+    extra: Partial<ChannelMessage> = {},
+  ) =>
+    ({
+      id,
+      channelId: "channel",
+      authorId,
+      createdAt: 1,
+      content: id,
+      mentions: [],
+      attachments: [],
+      reactions: [],
+      participants: [],
+      replyCount: 0,
+      ...extra,
+    }) as ChannelMessage;
+  // Normal sends reply to the thread root, whichever request they answer.
+  const update = (
+    id: string,
+    request: string | undefined,
+    threadRootId = "root",
+    extra: Partial<ChannelMessage> = {},
+  ) =>
+    message(id, agent, {
+      audience: "agents",
+      threadRootId,
+      replyParentId: threadRootId,
+      ...(request ? { request } : {}),
+      ...extra,
+    });
+  const { byRow } = activityPresentation(
+    [
+      message("root", human),
+      update("old", undefined),
+      // A skewed or tied clock can sort a claim before the request it names.
+      update("skewed", "followUp"),
+      message("followUp", human, { threadRootId: "root" }),
+      message("elsewhere", human, { threadRootId: "otherRoot" }),
+      message("otherChannel", human, {
+        channelId: "other",
+        threadRootId: "root",
+      }),
+      message("agentRoot", agent),
+      message("agentFollowUp", human, { threadRootId: "agentRoot" }),
+      update("exact", "followUp"),
+      update("toRoot", "root"),
+      update("toThreadElsewhere", "elsewhere"),
+      update("toOtherChannel", "otherChannel"),
+      update("toAgentUpdate", "old"),
+      update("toUnloaded", "f".repeat(64)),
+      update("toAgentRoot", "agentRoot", "agentRoot", {
+        replyParentId: "agentFollowUp",
+      }),
+    ],
+    undefined,
+    new Set([agent]),
+    "root",
+  );
+  const request = (id: string) => byRow.get(id)?.requestId;
+  expect(request("exact")).toBe("followUp");
+  expect(request("skewed")).toBe("followUp");
+  expect(request("toRoot")).toBe("root");
+  // Untagged history and unverifiable claims keep their reply link.
+  for (const id of [
+    "old",
+    "toThreadElsewhere",
+    "toOtherChannel",
+    "toAgentUpdate",
+    "toUnloaded",
+  ])
+    expect(request(id)).toBe("root");
+  expect(request("toAgentRoot")).toBe("agentFollowUp");
+
+  // A displayed level may claim a request loaded at another level, still
+  // within the same conversation.
+  const nested = message("nested", human, {
+    threadRootId: "root",
+    replyParentId: "old",
+  });
+  const level = [
+    update("flattened", "nested"),
+    update("toElsewhere", "elsewhere"),
+    update("toOtherAgent", "otherAgent"),
+  ];
+  const levelRequest = (loaded?: ChannelMessage[]) => {
+    const { byRow } = activityPresentation(
+      level,
+      undefined,
+      new Set([agent]),
+      "root",
+      undefined,
+      loaded,
+    );
+    return (id: string) => byRow.get(id)?.requestId;
+  };
+  const loaded = [
+    message("root", human),
+    update("old", undefined),
+    nested,
+    message("elsewhere", human, { threadRootId: "otherRoot" }),
+    // An unknown agent's message at another level is not a human request.
+    message("otherAgent", "o".repeat(64), {
+      threadRootId: "root",
+      replyParentId: "old",
+      agentEnvelope: true,
+    }),
+    ...level,
+  ];
+  expect(levelRequest(loaded)("flattened")).toBe("nested");
+  expect(levelRequest(loaded)("toElsewhere")).toBe("root");
+  expect(levelRequest(loaded)("toOtherAgent")).toBe("root");
+  expect(levelRequest()("flattened")).toBe("root");
+
+  // Top-level conversations claim top-level requests, not thread replies.
+  const flat = (id: string, request: string) =>
+    message(id, agent, { audience: "agents", request });
+  const { byRow: flatRows } = activityPresentation(
+    [
+      message("first", human),
+      message("reply", human, { threadRootId: "first" }),
+      message("second", human),
+      flat("answersFirst", "first"),
+      flat("toThreadReply", "reply"),
+    ],
+    undefined,
+    new Set([agent]),
+  );
+  expect(flatRows.get("answersFirst")?.requestId).toBe("first");
+  expect(flatRows.get("toThreadReply")?.requestId).toBe("second");
+});

@@ -1,11 +1,17 @@
 // @vitest-environment jsdom
 import "@testing-library/jest-dom/vitest";
 import { afterEach, expect, it } from "vitest";
-import { act, cleanup, render, screen } from "@testing-library/react";
+import {
+  act,
+  cleanup,
+  render,
+  renderHook,
+  screen,
+} from "@testing-library/react";
 import type { SessionSnapshot } from "./service";
 import userEvent from "@testing-library/user-event";
 import { vi } from "vitest";
-import { CommunitySignIn } from "./CommunitySignIn";
+import { CommunitySignIn, useExplainedRefusal } from "./CommunitySignIn";
 import { federatedFixture } from "./testing";
 afterEach(cleanup);
 it.each(["storage-unavailable", "storage-denied"])(
@@ -27,6 +33,23 @@ it.each(["storage-unavailable", "storage-denied"])(
     expect(h.service.signIn).not.toHaveBeenCalled();
   },
 );
+it("says an unreadable saved sign-in is not a permissions problem, and that signing in can't fix it", () => {
+  const h = federatedFixture();
+  h.publish({ status: "unavailable", failure: "storage-corrupt" });
+  render(
+    <CommunitySignIn
+      identity={h.service}
+      error="Federated sign-in is required"
+      retry={vi.fn()}
+    />,
+  );
+  const alert = screen.getByRole("alert");
+  expect(alert).toHaveTextContent(
+    "Buzz can’t read its saved sign-in for this server, and signing in again may not replace it. If this keeps happening, contact support.",
+  );
+  expect(alert).not.toHaveTextContent("credential permissions");
+  expect(alert).not.toHaveTextContent("storage-corrupt");
+});
 it.each([null, "Builderlab"])(
   "names server %s and requires explicit sign-in before retrying admission",
   async (organization) => {
@@ -114,7 +137,9 @@ it.each(["binding-mismatch", "authorization-denied"])(
     expect(alert).not.toHaveTextContent("Builderlab hosting");
     // The others on that server, never the refusing one or another server's.
     expect(
-      screen.getByText("Switching accounts also affects: will."),
+      screen.getByText(
+        "will also uses this account. Switching may change your access there.",
+      ),
     ).toBeVisible();
     await userEvent
       .setup()
@@ -294,3 +319,23 @@ it.each([
     expect(retry).toHaveBeenCalledOnce();
   },
 );
+
+it("keeps an explained refusal hidden until its error clears, so a resolving sign-in never shows it raw", () => {
+  const h = federatedFixture();
+  const refusal = "Federated sign-in is required";
+  const { result, rerender } = renderHook(
+    ({ error }) => useExplainedRefusal(h.service, error),
+    { initialProps: { error: refusal } },
+  );
+  expect(result.current).toBe(true);
+  // Signed in before the retry clears the error: still explained.
+  act(() => {
+    h.publish({ status: "signed-in" });
+  });
+  expect(result.current).toBe(true);
+  rerender({ error: "" });
+  expect(result.current).toBe(false);
+  // A new refusal is judged fresh: signed in, nothing explains it.
+  rerender({ error: refusal });
+  expect(result.current).toBe(false);
+});

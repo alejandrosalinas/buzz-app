@@ -69,6 +69,7 @@ function fixture(configuredNames = false) {
     snapshot: () => snapshot,
     subscribe: () => () => {},
     retry() {},
+    tryAgain() {},
     disconnect() {},
     clearCache: async () => {},
   };

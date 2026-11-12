@@ -9,6 +9,7 @@ import {
 import { test, expect } from "./fixture.mjs";
 import { open } from "./timeline.mjs";
 import { createServer } from "./vite-server.mjs";
+import { animationsSettled } from "./animations.mjs";
 const button = (page, name) => page.getByRole("button", { name, exact: true });
 test.use({
   enabledPlugins: ["buzz.workflows"],
@@ -40,11 +41,7 @@ test("segmented selections slide but window resizing follows the selected tab im
       await page.setViewportSize({ width: 1280, height: 900 });
       const list = page.getByRole("tablist", { name: label, exact: true });
       await list.getByRole("tab").first().click();
-      await list.locator(".buzz-tabs-indicator").evaluate(async (element) => {
-        await Promise.all(
-          element.getAnimations().map((animation) => animation.finished),
-        );
-      });
+      await animationsSettled(list.locator(".buzz-tabs-indicator"));
       const capture = await list.evaluateHandle((list) => {
         const indicator = list.querySelector(".buzz-tabs-indicator");
         if (!indicator) throw new Error("Missing segmented indicator");

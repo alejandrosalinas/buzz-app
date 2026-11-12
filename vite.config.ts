@@ -108,11 +108,6 @@ export default defineConfig(async ({ command, mode }) => {
     .filter(Boolean)
     .map(relayOrigin)
     .join(" ");
-  const ownerMcpCommunities = (env.BUZZ_OWNER_MCP_COMMUNITIES ?? "")
-    .split(/\s+/)
-    .filter(Boolean)
-    .map(relayOrigin)
-    .join(" ");
   const workflowRestrictedCommunities = (
     env.BUZZ_WORKFLOW_RESTRICTED_COMMUNITIES ?? ""
   )
@@ -153,6 +148,16 @@ export default defineConfig(async ({ command, mode }) => {
         "BUZZ_DATABRICKS_HOST must be an https:// URL without credentials.",
       );
   }
+  // Packagers may link their mobile app's store listings from the mobile card.
+  const [mobileIos, mobileAndroid] = (
+    ["BUZZ_MOBILE_APP_IOS_URL", "BUZZ_MOBILE_APP_ANDROID_URL"] as const
+  ).map((name) => {
+    const value = env[name]?.trim() ?? "";
+    const url = value && URL.canParse(value) ? new URL(value) : null;
+    if (value && (url?.protocol !== "https:" || url.username || url.password))
+      throw new Error(`${name} must be an https:// URL without credentials.`);
+    return value;
+  });
   // Opt-in seed: replaces first run's Builderlab account requests, key backup
   // and recovery, so the first-run screens can be walked against a real account
   // whose binding must not change. Builds never see it. The full list is in
@@ -206,8 +211,6 @@ export default defineConfig(async ({ command, mode }) => {
       "import.meta.env.VITE_BUZZ_EXTERNAL_MCP_COMMUNITIES": JSON.stringify(
         externalMcpCommunities,
       ),
-      "import.meta.env.VITE_BUZZ_OWNER_MCP_COMMUNITIES":
-        JSON.stringify(ownerMcpCommunities),
       "import.meta.env.VITE_BUZZ_WORKFLOW_RESTRICTED_COMMUNITIES":
         JSON.stringify(workflowRestrictedCommunities),
       "import.meta.env.VITE_BUZZ_BUILDERLAB_URL": JSON.stringify(builderlabUrl),
@@ -221,6 +224,9 @@ export default defineConfig(async ({ command, mode }) => {
       "import.meta.env.VITE_BUZZ_OPEN_RELAY": JSON.stringify(openOrigin),
       "import.meta.env.VITE_BUZZ_DATABRICKS_HOST":
         JSON.stringify(databricksHost),
+      "import.meta.env.VITE_BUZZ_MOBILE_APP_IOS_URL": JSON.stringify(mobileIos),
+      "import.meta.env.VITE_BUZZ_MOBILE_APP_ANDROID_URL":
+        JSON.stringify(mobileAndroid),
       "import.meta.env.VITE_BUZZ_FIRST_RUN_ACCOUNT":
         JSON.stringify(firstRunAccount),
     },

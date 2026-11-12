@@ -1,3 +1,4 @@
+import { writeJSON } from "../../features/agent-protection/json-stream";
 import type { Model } from "./config";
 import type {
   HostProcess,
@@ -235,7 +236,7 @@ export class AppServer {
     if (this.failure) return Promise.reject(this.failure);
     if (!this.process)
       return Promise.reject(new Error("Codex is not connected"));
-    return this.process.write(`${JSON.stringify(message)}\n`);
+    return writeJSON(this.process, message);
   }
   request<T = unknown>(method: string, params: unknown = {}): Promise<T> {
     if (this.failure) return Promise.reject(this.failure);

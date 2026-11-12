@@ -13,6 +13,7 @@ import userEvent from "@testing-library/user-event";
 import { afterEach, expect, it, vi } from "vitest";
 import { provideNavigation } from "../features/navigation/service";
 import { NotificationsService } from "../features/notifications/service";
+import { DEFAULT_SOUND } from "../features/notifications/sound";
 import { NotificationSettings } from "./NotificationSettings";
 import { PluginRuntime } from "../plugins/runtime";
 
@@ -472,4 +473,50 @@ it("selects and restores Silent for every category, stops previews, and can rest
   await user.click(await screen.findByRole("option", { name: "flutter" }));
   expect(play).toHaveBeenCalledTimes(2);
   expect(service.snapshot().preferences.sounds.direct).toBe("flutter");
+});
+
+it("restores a saved sound name this build lacks with alerts on and the default sound", () => {
+  // The payload a #2877 build writes, with "klaxon" standing in for its "buzz"
+  // default so the seed stays unknown to every build.
+  localStorage.setItem(
+    `buzz-notification-preferences.v1:${"a".repeat(64)}`,
+    JSON.stringify({
+      enabled: true,
+      notifyWhileViewing: false,
+      sound: true,
+      sounds: {
+        mention: "klaxon",
+        direct: "klaxon",
+        thread: "klaxon",
+        agent: "klaxon",
+      },
+      categories: { mention: true, direct: true, thread: true, agent: true },
+    }),
+  );
+  const ctx = new Context();
+  contexts.push(ctx);
+  const runtime = new PluginRuntime(ctx, async () => ({ apply() {} }));
+  ctx.effect(() => () => runtime.dispose());
+  const service = new NotificationsService(
+    ctx,
+    provideNavigation(ctx).navigation,
+    {
+      label: "Browser",
+      permission: async () => "granted",
+      requestPermission: async () => "granted",
+      show: async () => {},
+      dispose() {},
+    },
+  );
+  service.selectViewer("a".repeat(64));
+  render(<NotificationSettings notifications={service} />, {
+    wrapper: ToastProvider,
+  });
+  expect(screen.getByRole("switch", { name: "Desktop alerts" })).toBeChecked();
+  expect(
+    screen.queryByRole("button", { name: "Retry saving choices" }),
+  ).not.toBeInTheDocument();
+  expect(
+    screen.getByRole("combobox", { name: "Direct messages" }),
+  ).toHaveTextContent(DEFAULT_SOUND);
 });

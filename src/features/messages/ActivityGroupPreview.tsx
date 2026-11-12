@@ -15,6 +15,7 @@ import { RemoteAgentHint, RemoteWorkIcon } from "./RemoteAgentHint";
 import { useActivityIndicator } from "./use-activity-indicator";
 import type { RelaySession } from "../relay/session";
 import { ShimmerText } from "../../shared/design-system/ui/ShimmerText";
+import { TypingDots } from "../../shared/design-system/ui/TypingDots";
 import type { ActivityPresentation } from "./activity-presentation";
 import type { ChannelMessage, Profile } from "../relay/contracts";
 import { avatarMedia } from "../../shared/avatar-source";
@@ -78,6 +79,27 @@ export function ActivityGroupPreview({
     !!group.requestId,
     group.presentedParticipants,
   );
+  // While collapsed, this group's dots are the working cue for its request's
+  // working agents, so the conversation shows no second one for that request
+  // until a newer message follows the group. Expanded, the working update
+  // shows them instead.
+  useActivityTypingReplacement(
+    session
+      ? {
+          session,
+          channelId: row.channelId,
+          threadRootId: row.threadRootId,
+          pubkey: row.authorId,
+          requestId: group.requestId,
+          presence: true,
+        }
+      : undefined,
+    !!group.requestId &&
+      !!group.workingParticipants.length &&
+      !expanded &&
+      !group.followingMessage,
+    group.workingParticipants,
+  );
   const primary = history[0]?.authorId ?? row.authorId;
   const profile = profiles.get(primary);
   const named = (id: string) =>
@@ -130,12 +152,15 @@ export function ActivityGroupPreview({
         onToggle={onToggle}
         label={`${expanded ? "Collapse" : "Show"} activity history: ${summaryLabel}`}
         icon={
-          <RemoteWorkIcon
-            session={session}
-            viewer={session?.viewer}
-            pubkey={row.authorId}
-            active={working || live}
-          />
+          <>
+            <RemoteWorkIcon
+              session={session}
+              viewer={session?.viewer}
+              pubkey={row.authorId}
+              active={working || live}
+            />
+            {working && <TypingDots size="message" />}
+          </>
         }
         summary={
           outcomes.length ? (

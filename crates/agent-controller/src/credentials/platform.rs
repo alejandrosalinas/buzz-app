@@ -239,7 +239,7 @@ fn store_error(error: buzz_credential_store::Error) -> Failure {
         Error::Absent => Failure::Absent,
         Error::Occupied => Failure::Occupied,
         Error::Denied => Failure::Denied,
-        Error::Corrupt => Failure::Corrupt,
+        Error::Corrupt | Error::Ambiguous => Failure::Corrupt,
         Error::Unavailable | Error::Changed => Failure::Unavailable,
         Error::Busy => Failure::Busy,
     }

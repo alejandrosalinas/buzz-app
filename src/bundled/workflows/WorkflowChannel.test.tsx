@@ -1,6 +1,13 @@
 // @vitest-environment jsdom
 import "@testing-library/jest-dom/vitest";
-import { act, cleanup, render, screen, within } from "@testing-library/react";
+import {
+  act,
+  cleanup,
+  fireEvent,
+  render,
+  screen,
+  within,
+} from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, expect, it, vi } from "vitest";
 import { WorkflowChannel } from "./WorkflowChannel";
@@ -9,6 +16,7 @@ import {
   fixtureChannel,
   fixtureDefinition,
   fixtureViewer,
+  fixtureYaml,
 } from "./fixtures";
 
 vi.stubGlobal(
@@ -304,4 +312,196 @@ it("drops a run status when another configuration replaces the draft", async () 
   );
   await user.click(screen.getByRole("button", { name: "Leave draft" }));
   expect(screen.queryByText(runStatus)).not.toBeInTheDocument();
+});
+
+const archivedReason = "This channel is archived, so its workflows can't run.";
+
+function archivedEditor(yaml = fixtureYaml, archived = true) {
+  const fixture = createWorkflowFixture();
+  const remove = vi.fn();
+  const element = (archivedNow: boolean) => (
+    <WorkflowChannel
+      capability={fixture.capability}
+      channelId={fixtureChannel}
+      channel={{
+        name: "Fixture channel",
+        ...(archivedNow && { archived: true as const }),
+      }}
+      viewer={fixtureViewer}
+      initialSelection={{ ...fixtureDefinition, yaml }}
+      onClose={() => {}}
+      onDelete={remove}
+    />
+  );
+  const { rerender } = render(element(archived));
+  return {
+    fixture,
+    remove,
+    archive: () => rerender(element(true)),
+  };
+}
+
+it("can't turn a workflow on in an archived channel, but saves its edits while it's off", async () => {
+  const { fixture } = archivedEditor();
+  const user = userEvent.setup();
+  const editor = await screen.findByRole("dialog", { name: "Message helper" });
+  const run = within(editor).getByRole("button", { name: "Run now" });
+  expect(run).toHaveAttribute("aria-disabled", "true");
+  expect(run).toHaveAccessibleDescription(archivedReason);
+  const enable = within(editor).getByRole("switch", {
+    name: "Enabled in configuration",
+  });
+  expect(enable).not.toBeChecked();
+  expect(enable).toHaveAttribute("aria-disabled", "true");
+  expect(enable).toHaveAccessibleDescription(archivedReason);
+  await user.click(enable);
+  expect(enable).not.toBeChecked();
+  await user.type(
+    within(editor).getByRole("textbox", { name: "Description" }),
+    "Kept for the archive",
+  );
+  const save = within(editor).getByRole("button", { name: "Save changes" });
+  expect(save).toBeEnabled();
+  await user.click(save);
+  expect(fixture.calls.save).toBe(1);
+  expect(fixture.input()?.yaml).toContain("enabled: false");
+  expect(fixture.input()?.yaml).toContain("Kept for the archive");
+  expect(fixture.calls.trigger).toBe(0);
+});
+
+it("blocks saving an enabled workflow in an archived channel until it's turned off, and keeps Delete", async () => {
+  const saveReason = `${archivedReason} Turn this workflow off to save it.`;
+  const { fixture, remove } = archivedEditor(
+    fixtureYaml.replace("enabled: false", "enabled: true"),
+  );
+  const user = userEvent.setup();
+  const editor = await screen.findByRole("dialog", { name: "Message helper" });
+  const save = within(editor).getByRole("button", { name: "Save changes" });
+  expect(save).toBeDisabled();
+  expect(
+    within(editor).getByText(saveReason, { selector: "[role=status]" }),
+  ).toBeVisible();
+  const enable = within(editor).getByRole("switch", {
+    name: "Enabled in configuration",
+  });
+  expect(enable).toBeChecked();
+  expect(enable).not.toHaveAttribute("aria-disabled");
+  expect(enable).toHaveAccessibleDescription(saveReason);
+  await user.click(
+    within(editor).getByRole("button", { name: "Workflow actions" }),
+  );
+  await user.click(
+    await screen.findByRole("menuitem", { name: "Delete workflow" }),
+  );
+  await user.click(
+    within(
+      screen.getByRole("alertdialog", { name: "Delete this workflow?" }),
+    ).getByRole("button", { name: "Cancel" }),
+  );
+  expect(screen.queryByRole("alertdialog")).toBeNull();
+
+  await user.click(enable);
+  expect(enable).not.toBeChecked();
+  // Like the landing's switch, it can't be turned back on here.
+  expect(enable).toHaveAttribute("aria-disabled", "true");
+  expect(enable).toHaveAccessibleDescription(archivedReason);
+  expect(within(editor).queryByText(saveReason)).toBeNull();
+  expect(
+    within(editor).getByRole("button", { name: "Run now" }),
+  ).toHaveAttribute("aria-disabled", "true");
+  expect(save).toBeEnabled();
+  await user.click(save);
+  expect(fixture.calls.save).toBe(1);
+  expect(fixture.input()?.yaml).toContain("enabled: false");
+  expect(fixture.calls.trigger).toBe(0);
+  expect(remove).not.toHaveBeenCalled();
+});
+
+it("doesn't save an enabled workflow when its channel is archived during the activation confirmation", async () => {
+  const { fixture, archive } = archivedEditor(fixtureYaml, false);
+  const user = userEvent.setup();
+  const editor = await screen.findByRole("dialog", { name: "Message helper" });
+  await user.click(
+    within(editor).getByRole("switch", { name: "Enabled in configuration" }),
+  );
+  await user.click(
+    within(editor).getByRole("button", { name: "Save changes" }),
+  );
+  const confirm = await screen.findByRole("alertdialog", {
+    name: "This workflow may run often",
+  });
+  archive();
+  await user.click(
+    within(confirm).getByRole("button", { name: "Save enabled workflow" }),
+  );
+  expect(fixture.calls.save).toBe(0);
+});
+
+it("blocks saving a workflow turned on in the YAML tab of an archived channel", async () => {
+  const { fixture } = archivedEditor();
+  const user = userEvent.setup();
+  const editor = await screen.findByRole("dialog", { name: "Message helper" });
+  await user.click(within(editor).getByRole("tab", { name: "YAML" }));
+  fireEvent.change(
+    within(editor).getByRole("textbox", { name: "Workflow YAML" }),
+    {
+      target: { value: fixtureYaml.replace("enabled: false", "enabled: true") },
+    },
+  );
+  const save = within(editor).getByRole("button", { name: "Save changes" });
+  expect(save).toBeDisabled();
+  expect(
+    within(editor).getByText(
+      `${archivedReason} Turn this workflow off to save it.`,
+      {
+        selector: "[role=status]",
+      },
+    ),
+  ).toBeVisible();
+  await user.click(save);
+  expect(fixture.calls.save).toBe(0);
+});
+
+it("keeps a rejected save's and unreadable YAML's reasons ahead of the archived one", async () => {
+  const saveReason = `${archivedReason} Turn this workflow off to save it.`;
+  const { fixture, archive } = archivedEditor(
+    fixtureYaml.replace("enabled: false", "enabled: true"),
+    false,
+  );
+  const user = userEvent.setup();
+  const editor = await screen.findByRole("dialog", { name: "Message helper" });
+  await user.type(
+    within(editor).getByRole("textbox", { name: "Description" }),
+    "Rejected note",
+  );
+  await user.click(
+    within(editor).getByRole("button", { name: "Save changes" }),
+  );
+  act(() => fixture.finish("rejected"));
+  archive();
+  expect(
+    within(editor).getByText(
+      "Draft retained. Review the error below before continuing.",
+      { selector: "[role=status]" },
+    ),
+  ).toBeVisible();
+  expect(within(editor).queryByText(saveReason)).toBeNull();
+
+  cleanup();
+  archivedEditor();
+  const reopened = await screen.findByRole("dialog", {
+    name: "Message helper",
+  });
+  await user.click(within(reopened).getByRole("tab", { name: "YAML" }));
+  fireEvent.change(
+    within(reopened).getByRole("textbox", { name: "Workflow YAML" }),
+    { target: { value: "name: [" } },
+  );
+  expect(
+    within(reopened).getByText(
+      "Correct the YAML before changing the name or configuration.",
+      { selector: "[role=status]" },
+    ),
+  ).toBeVisible();
+  expect(within(reopened).queryByText(saveReason)).toBeNull();
 });

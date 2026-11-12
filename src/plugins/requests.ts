@@ -2,6 +2,8 @@
 // change that starts or deletes plugin code is a request the person using
 // Buzz confirms on a card in the agent's conversation, or in Settings, since
 // plugins are not sandboxed.
+import { gitScope } from "./git-scope";
+import { samePluginRelease } from "./same-release";
 import type {
   Catalog,
   ManagedPlugins,
@@ -140,7 +142,12 @@ export function createPluginRequests({
     const refusal = conflict(id);
     if (refusal) throw new Error(refusal);
   };
-  async function check(repository: string, reference: string) {
+  async function check(
+    repository: string,
+    reference: string,
+    commit?: string,
+    path?: string,
+  ) {
     if (UNTRIMMED.test(repository))
       throw new Error(
         "repository must not contain whitespace or control characters",
@@ -149,7 +156,10 @@ export function createPluginRequests({
       throw new Error(
         "Ask your owner to add plugins from Buzz-hosted repositories in Settings",
       );
-    const preview = await gitImports().checkGit(repository, reference);
+    const scope = gitScope(commit, path);
+    const preview = scope.length
+      ? await gitImports().checkGit(repository, reference, undefined, ...scope)
+      : await gitImports().checkGit(repository, reference);
     if (!preview?.candidates.length)
       throw new Error(
         ["No built plugins found.", ...(preview?.warnings ?? [])].join(" "),
@@ -160,8 +170,9 @@ export function createPluginRequests({
     repository: string,
     reference: string,
     wanted: string | undefined,
+    path?: string,
   ) {
-    const preview = await check(repository, reference);
+    const preview = await check(repository, reference, wanted, path);
     const commit = preview.commit?.toLowerCase();
     if (!commit) throw new Error("The repository did not report a commit");
     if (wanted && wanted.toLowerCase() !== commit)
@@ -175,6 +186,7 @@ export function createPluginRequests({
       input.repository,
       reference,
       input.commit,
+      input.path,
     );
     const paths = preview.candidates.map((item) => item.path).join(", ");
     const candidate = input.path
@@ -233,6 +245,7 @@ export function createPluginRequests({
       recorded.repository,
       reference,
       input.commit,
+      recorded.path,
     );
     const where = reference || "The default branch";
     const candidate = preview.candidates.find(
@@ -240,7 +253,7 @@ export function createPluginRequests({
     );
     if (!candidate)
       throw new Error(`${where} has no ${id} at ${recorded.path}`);
-    if (candidate.revision === plugin.revision)
+    if (samePluginRelease(candidate, plugin))
       throw new Error(`${id} is already at ${where}'s version`);
     return {
       pluginId: id,

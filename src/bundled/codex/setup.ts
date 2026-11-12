@@ -2,6 +2,7 @@
 // keeping that copy on the latest release. Each step runs as a declared
 // process; the copy lives apart from any `codex` the user installed, and
 // shares their `~/.codex` sign-in and settings.
+import { withProviderWords } from "../../features/agents/failure-words";
 import type {
   HostProcess,
   HostRequest,
@@ -150,6 +151,31 @@ export async function checkCodex(spawn: Spawn): Promise<CodexStatus> {
   } catch {
     return { state: "signed-out", version };
   }
+}
+
+/** A failed turn's notice as the conversation reads it, in Markdown: a
+ * missing or refused sign-in links to `settings`, where Codex signs in once
+ * for every Codex agent. Signed out, Codex reaches OpenAI with no credentials
+ * and is told "Missing bearer or basic authentication"; a refused API key ends
+ * in "Incorrect API key provided", and a ChatGPT sign-in that stopped working
+ * in one of Codex's "… could not be refreshed …. Please [log out and] sign in
+ * again" messages, read as one sentence and the next so that two errors can't
+ * join into one. An MCP server's OAuth refresh failing is not Codex's sign-in,
+ * and says otherwise. The explanation comes first, then Codex's own words,
+ * without the notice's "Codex could not finish: " and the period it adds. */
+export function explainTurn(notice: string, settings: string) {
+  const explanation = /Missing bearer or basic authentication/i.test(notice)
+    ? `Codex isn't signed in. Head to [Settings](${settings}) to sign in.`
+    : /Incorrect API key provided|could not be refreshed\b[^.\n]*\. Please (?:log out and )?sign in again/i.test(
+          notice,
+        )
+      ? `OpenAI rejected Codex's sign-in. It may have expired or been revoked. Head to [Settings](${settings}) to sign in again.`
+      : undefined;
+  if (!explanation) return notice;
+  const said =
+    /^Codex could not (?:start|finish): ([\s\S]*)\.$/.exec(notice)?.[1] ??
+    notice;
+  return withProviderWords(explanation, "Codex", said);
 }
 
 /** Runs `codex` as the given release rather than the one in use. */

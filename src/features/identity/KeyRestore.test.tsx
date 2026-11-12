@@ -76,6 +76,30 @@ it("when a backup failed to come back, does not claim none holds the key and ret
   expect(cancelOrder).toBeLessThan(beginOrder ?? -1);
 });
 
+it.each([
+  "Restore was canceled. Try again.",
+  "Sign-in timed out. Try again.",
+  "Couldn't reach Builderlab. Check your connection and try again.",
+])("names why the restore failed: %s", async (error) => {
+  const stub = mount({ status: "error", error });
+  expect(screen.getByRole("alert")).toHaveTextContent(
+    `${error} Or enter your private key if you have a copy.`,
+  );
+  expect(
+    screen.getByRole("button", { name: "Enter my private key" }),
+  ).toBeEnabled();
+  await userEvent.click(screen.getByRole("button", { name: "Try again" }));
+  await waitFor(() => expect(stub.beginRecovery).toHaveBeenCalledTimes(1));
+});
+
+it("keeps manual key entry, not a retry, when backup recovery is unavailable", () => {
+  mount({ status: "error", error: "Backup recovery is unavailable." });
+  expect(screen.getByRole("alert")).toHaveTextContent(
+    "Backup restoration isn’t available for this account. Enter your private key to continue.",
+  );
+  expect(screen.queryByRole("button", { name: "Try again" })).toBeNull();
+});
+
 it("starts no new attempt when the live one could not be canceled", async () => {
   const stub = mount(unmatched(1), false);
   await userEvent.click(screen.getByRole("button", { name: "Try again" }));

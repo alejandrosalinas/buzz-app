@@ -1,5 +1,11 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { type EventWatch, timerSpent, timerState } from "./attention";
+import {
+  type EventWatch,
+  OBJECT_LIMIT,
+  timerSpent,
+  timerState,
+} from "./attention";
+import { AGENT_BYTES } from "./attention-objects";
 import { migrateWatchKeywords } from "./migrate-keywords";
 import { RECORD_PREFIX, STORAGE_KEY, readRecords } from "./store";
 import { memoryStorage } from "./test-fakes";
@@ -130,7 +136,7 @@ describe("migrateWatchKeywords", () => {
     const attention: Record<string, unknown> = {
       "watch/builds": stored("watch/builds", { ...watch, keywords: ["x"] }),
     };
-    for (let i = 0; i < 99; i++)
+    for (let i = 0; i < OBJECT_LIMIT - 1; i++)
       attention[`watch/w${i}`] = stored(`watch/w${i}`, watch);
     const storage = seed(attention);
     const before = storage.getItem(`${RECORD_PREFIX}${agent}`);
@@ -148,20 +154,27 @@ describe("migrateWatchKeywords", () => {
     const attention: Record<string, unknown> = {
       "watch/builds": stored("watch/builds", { ...watch, keywords: ["x"] }),
     };
-    // Just under the limit before the notice: 17 Interests of 15 KB each.
-    for (let i = 0; i < 17; i++)
+    // Just under the limit before the notice: Interests of 15 KB each.
+    for (let i = 0; i < Math.floor(AGENT_BYTES / 15_400); i++)
       attention[`interest/i${i}`] = stored(`interest/i${i}`, {
         type: "interest",
         instructions: "x".repeat(15_300),
       });
+    const used = new TextEncoder().encode(
+      JSON.stringify([attention, {}]),
+    ).length;
+    attention["interest/pad"] = stored("interest/pad", {
+      type: "interest",
+      instructions: "x".repeat(AGENT_BYTES - used - 400),
+    });
     const storage = seed(attention);
     const before = storage.getItem(`${RECORD_PREFIX}${agent}`);
-    expect(before?.length).toBeLessThan(256 * 1024);
+    expect(before?.length).toBeLessThan(AGENT_BYTES);
     await migrateWatchKeywords(storage, NOW);
     expect(storage.getItem(`${RECORD_PREFIX}${agent}`)).toBe(before);
     expect(console.error).toHaveBeenCalledWith(
       expect.stringMatching(
-        /watch\/builds: the notice timer would pass the limit of 256 KB/,
+        `watch/builds: the notice timer would pass the limit of ${AGENT_BYTES / 1024} KB`,
       ),
     );
   });

@@ -9,6 +9,13 @@ import {
   waitFor,
   within,
 } from "@testing-library/react";
+import { useState } from "react";
+import {
+  WorkspaceCompositionContext,
+  RegionWorkspace,
+  RegionChats,
+  type ComposeWorkspaces,
+} from "../../features/channel-navigation/WorkspaceComposition";
 import userEvent from "@testing-library/user-event";
 import { afterEach, expect, it, vi } from "vitest";
 import { createSidebarPreferencesStore } from "../../features/relay/sidebar-preferences-store";
@@ -111,8 +118,10 @@ function fixture(projectName = "Work") {
       { id: "chat", title: "Planning" },
       { id: "other", title: "Existing chat" },
     ],
+    compose?: ComposeWorkspaces,
   ) => (
     <SoloWorkspaces
+      compose={compose}
       onNew={onNew}
       session={
         {
@@ -356,6 +365,85 @@ it("opens the exact project from an empty project's New chat row", async () => {
     row.focus();
     await user.keyboard("{Enter}");
     expect(h.onNew).toHaveBeenCalledExactlyOnceWith("work");
+  } finally {
+    store.dispose();
+  }
+});
+
+it("shares a workspace frame while keeping selection, disclosure and chat creation separate", async () => {
+  const h = fixture();
+  const store = h.store();
+  const onTask = vi.fn();
+  const onSelect = vi.fn();
+  await store.queries.ensure();
+  await store.queries.assign("chat", "work");
+  function View() {
+    const [selected, select] = useState(false);
+    return h.view(
+      store.queries,
+      "workspace-composition",
+      undefined,
+      undefined,
+      (parts) => (
+        <WorkspaceCompositionContext value={parts}>
+          <RegionWorkspace
+            id="work"
+            selected={selected}
+            onSelect={() => {
+              onSelect();
+              select(true);
+            }}
+            onNewTask={onTask}
+          >
+            <button type="button">Workspace task</button>
+          </RegionWorkspace>
+          <RegionChats />
+        </WorkspaceCompositionContext>
+      ),
+    );
+  }
+  render(<View />);
+  const user = userEvent.setup();
+  try {
+    const title = await screen.findByRole("button", { name: "Work" });
+    expect(screen.getAllByRole("button", { name: "Work" })).toHaveLength(1);
+    await user.click(
+      screen.getByRole("button", { name: "Hide tasks and chats in Work" }),
+    );
+    expect(screen.queryByRole("button", { name: "Workspace task" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Planning" })).toBeNull();
+    expect(onSelect).not.toHaveBeenCalled();
+    await user.click(title);
+    expect(onSelect).toHaveBeenCalledOnce();
+    expect(title).toHaveAttribute("aria-current", "page");
+    expect(
+      screen.getByRole("button", { name: "Show tasks and chats in Work" }),
+    ).toHaveAttribute("aria-expanded", "false");
+    const card = title.closest("[data-navigation-card]");
+    expect(card).toHaveAttribute("data-tone", "tonal");
+    await user.click(
+      screen.getByRole("button", { name: "Show tasks and chats in Work" }),
+    );
+    expect(card).toContainElement(
+      screen.getByRole("button", { name: "Workspace task" }),
+    );
+    expect(card).toContainElement(
+      screen.getByRole("button", { name: "Planning" }),
+    );
+    await user.click(screen.getByRole("button", { name: "New task in Work" }));
+    expect(onTask).toHaveBeenCalledOnce();
+    await user.click(screen.getByRole("button", { name: "Actions for Work" }));
+    expect(screen.queryByRole("menuitem", { name: "New task" })).toBeNull();
+    await user.keyboard("{Escape}");
+    expect(onSelect).toHaveBeenCalledOnce();
+    expect(
+      screen.queryByRole("button", { name: "New chat in Work" }),
+    ).toBeNull();
+    const create = screen.getAllByRole("button", { name: /New chat/ });
+    expect(create).toHaveLength(1);
+    expect(create[0]).toHaveAccessibleName("New chat in Chats");
+    await user.click(screen.getByRole("button", { name: "New chat in Chats" }));
+    expect(h.onNew).toHaveBeenCalledExactlyOnceWith(undefined);
   } finally {
     store.dispose();
   }

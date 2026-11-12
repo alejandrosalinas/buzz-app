@@ -21,6 +21,7 @@ import {
   composerMarkdownContext,
 } from "./composer-document";
 import { messageLinkParts } from "./message-link-parts";
+import { parseBuzzLink } from "../navigation/buzz-links";
 import { messageReferences } from "./message-references";
 import { EditableInput, type EditableInputProps } from "./EditableInput";
 
@@ -334,8 +335,20 @@ export function RichComposerInput({
       profileLinks.set(start, { pubkey, label: label.replace(/^@/, "") });
       add(start, end, undefined, true);
     }
-    messageLinkParts(context.text, undefined, (start, end) =>
-      add(start, end, undefined, true),
+    // A labeled channel link is one chip, like a mention: editing never
+    // exposes its Markdown or separates its label from its channel.
+    messageLinkParts(
+      context.text,
+      (start, end, _label, url) => {
+        const link = parseBuzzLink(url);
+        add(
+          start,
+          end,
+          undefined,
+          !(link?.format === "legacy" && !link.messageId),
+        );
+      },
+      (start, end) => add(start, end, undefined, true),
     );
     const inputs = [profiles, directory.named, directory.agents];
     if (

@@ -88,6 +88,8 @@ import {
 /** Relay connection. Implementations verify signatures; callers never see raw JSON. */
 export interface RelayWriter {
   readonly kinds?: readonly number[];
+  /** True only when the host proves that publication did not deliver the event. */
+  isNotSent?(error: unknown): boolean;
   sign(event: EventTemplate, signal: AbortSignal): Promise<RelayEvent>;
   /** Accepted receipt text is ephemeral; callers must never journal it. */
   publish(
@@ -1278,6 +1280,7 @@ export async function connectBrokerTransport(
       ? {
           configArtifacts: {
             kinds: [ARTIFACT_KIND],
+            isNotSent: (error: unknown) => error instanceof PublishNotSent,
             async sign(template: EventTemplate, signal: AbortSignal) {
               if (template.kind !== ARTIFACT_KIND)
                 throw new Error("Not an artifact");

@@ -35,7 +35,10 @@ it does after the reader scrolls that close to the end.
 Profiles and GitHub use the same rule. Their read-only target and optional
 thread context are carried as `detail` in the scoped conversation address;
 Back/Forward restores selection and reload resolves the panel through the
-existing registry. A new link replaces the transient Profile/GitHub detail;
+existing registry. Plugins that specialize canonical profile targets and opt in with
+`component.profileHistory = true` keep the same history behavior. Unmarked catch-all
+panels retain their existing local behavior.
+A new link replaces the transient Profile/GitHub detail;
 opening a thread clears it. Replacement does not retire the earlier visit, so
 Back/Forward can reconstruct it. Explicitly retained tabs keep their existing rules.
 Replacing the live session within the same account/community reconstructs the

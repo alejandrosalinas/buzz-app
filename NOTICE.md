@@ -1,5 +1,11 @@
 # Source attribution
 
+The agent-card foil texture in `src/features/agents/assets/card-foil.webp`,
+portrait palette sampling, and reveal/hover treatment are adapted from
+[Block Buzz PR #5790](https://github.com/block/buzz/pull/5790), revision
+`0c7cea1f91a681f3751af1ac25a7e15d0e99d36b`. The texture is the first embedded
+image in `desktop/src/features/agents/assets/buzz-trading-card-template.svg`.
+
 The relay read model in `src/features/relay` and development read broker in
 `browser-host` are adapted from the supplied Astra example. The channel layout
 and virtualizer behavior are adapted from that example's Channels view.
@@ -28,6 +34,9 @@ The Emoji Mart picker configuration and search-input focus/correction behavior i
 `desktop/src/features/custom-emoji/ui/EmojiPicker.tsx` at revision
 `b9392d9d78744df365f9276e1ffe8c1baa5ea903`. The adapter adds scoped custom IDs,
 explicit dictionary cleanup, and lazy loading for the session-owned catalog.
+
+The chart grammar, option sanitizer and data-row tables in `src/bundled/charts`
+are adapted from a Charts plugin by Alessandro Joabar (GitHub `sandro-sq`).
 
 OneDrive is a trademark of Microsoft.
 
@@ -148,9 +157,10 @@ trademarks of OpenAI; goose is a trademark of LF Projects; GitHub and Octocat
 are trademarks of GitHub, Inc. Their inclusion identifies the corresponding
 integrations and does not imply endorsement.
 
-The Huddles, Voice Notes, Usage, Mermaid diagrams, Pi, TypeSafe, Builderlab and
-Agent Attention UI illustrations were supplied separately by Taylor Ho and resized
-for the catalog; the generation attribution above does not cover these eight assets.
+The Huddles, Voice Notes, Usage, Mermaid diagrams, Pi, TypeSafe, Builderlab,
+Agent Attention UI, Shared compute and Focus illustrations were supplied separately
+by Taylor Ho and resized for the catalog; the generation attribution above does not
+cover these ten assets.
 
 ## Embedded callback typeface
 

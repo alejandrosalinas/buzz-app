@@ -422,6 +422,8 @@ it("saves a thinking level goose lists for the model, and marks one it does not"
     thinking: {
       "": { current: "medium", levels: ["off", "low", "medium", "high"] },
       "plain-model": { current: "off", levels: ["off"] },
+      // goose reports "off" when no level is set, yet sends none then.
+      "unset-model": { current: "off", levels: ["off", "low", "high"] },
     },
   });
   const { SettingsTab } = createTabs({
@@ -468,6 +470,21 @@ it("saves a thinking level goose lists for the model, and marks one it does not"
       screen.getByRole("combobox", { name: "Thinking" }),
     ).toHaveTextContent("High (unavailable)"),
   );
+
+  // An unset level reads as goose's default, not as thinking turned off.
+  rerender(
+    <SettingsTab
+      key="unset"
+      agent={agent({ ...DEFAULT_CONFIG, model: "unset-model" })}
+      save={save}
+    />,
+  );
+  const unset = screen.getByRole("combobox", { name: "Thinking" });
+  await waitFor(() => expect(unset).toHaveTextContent(/^Default$/));
+  await user.click(unset);
+  expect(
+    (await screen.findAllByRole("option")).map((option) => option.textContent),
+  ).toEqual(["Default", "Off", "Low", "High"]);
 });
 
 it("offers Create agent a Thinking row with goose's levels for the chosen model", async () => {
@@ -510,7 +527,7 @@ it("offers Create agent a Thinking row with goose's levels for the chosen model"
   await waitFor(() =>
     expect(
       screen.getByRole("combobox", { name: "Thinking" }),
-    ).toHaveTextContent("Off · Default"),
+    ).toHaveTextContent(/^Default$/),
   );
 });
 
@@ -836,6 +853,7 @@ function gooseHistory(ids: readonly string[] = ["s1"], page?: number) {
       title: `Gander · #general · ${sessionId}`,
       cwd: "/home/test/.buzz",
       updatedAt: "2027-01-15T08:00:00Z",
+      tags: { "buzz.agent": GANDER, "buzz.conversation": `chan/${ROOT}` },
       conversation: [
         {
           role: "user",
@@ -946,16 +964,11 @@ function activity(
   };
 }
 
-const searches = (fake: ReturnType<typeof fakeSpawn>) =>
+/** The `session/list` requests goose was sent. */
+const listings = (fake: ReturnType<typeof fakeSpawn>) =>
   fake.geese
     .flatMap((goose) => goose.received)
     .filter((message) => message.method === "session/list");
-/** goose's keyword searches, which read every session's messages. */
-const keyword = (fake: ReturnType<typeof fakeSpawn>) =>
-  searches(fake).filter(
-    (message) =>
-      (message.params as { _meta?: { query?: string } })._meta?.query,
-  );
 
 it("lists the agent's saved conversations and reads one's transcript by id, without searching goose", async () => {
   const fake = gooseHistory();
@@ -970,26 +983,29 @@ it("lists the agent's saved conversations and reads one's transcript by id, with
     await screen.findByText("Hi from goose", { selector: "summary span" }),
   ).toBeInTheDocument();
   expect(screen.getAllByText(/@Gander what's up\?/).length).toBeGreaterThan(0);
-  expect(searches(fake)).toEqual([]);
+  expect(listings(fake)).toEqual([]);
 });
 
-it("searches goose's history for a conversation with no saved session only when asked", async () => {
+it("finds a conversation with no saved session by its goose tags", async () => {
   const fake = gooseHistory();
   const done = vi.fn();
   activity(fake, { saved: [] }, undefined, {
     conversation: { channelId: "chan", rootId: ROOT },
     initialTranscript: { opening: 1, done },
   });
-  const search = await screen.findByRole("button", {
-    name: "Search older sessions",
-  });
-  expect(done).toHaveBeenCalledTimes(1);
-  expect(searches(fake)).toEqual([]);
-  await userEvent.setup().click(search);
   expect(
     await screen.findByText("Hi from goose", { selector: "summary span" }),
   ).toBeInTheDocument();
-  expect(searches(fake)).toHaveLength(1);
+  expect(done).toHaveBeenCalledTimes(1);
+  expect(listings(fake).map((message) => message.params)).toEqual([
+    {
+      cwd: "/home/test/.buzz",
+      _meta: {
+        types: ["acp"],
+        tags: { "buzz.agent": GANDER, "buzz.conversation": `chan/${ROOT}` },
+      },
+    },
+  ]);
 });
 
 it("cancels reading goose's history when Activity is left", async () => {
@@ -1045,7 +1061,7 @@ it("lists conversations by channel name, with running and standalone sessions, o
   expect(
     await screen.findByText("Hi from timer", { selector: "summary span" }),
   ).toBeInTheDocument();
-  expect(keyword(fake)).toEqual([]);
+  expect(listings(fake)).toEqual([]);
 });
 
 it("lists a conversation with more than ten sessions once", () => {
@@ -1089,7 +1105,7 @@ it("follows the open conversation's newest session on Refresh", async () => {
   expect(
     await screen.findByText("Hi from s2", { selector: "summary span" }),
   ).toBeInTheDocument();
-  expect(searches(fake)).toEqual([]);
+  expect(listings(fake)).toEqual([]);
 });
 
 it("finds a thread's conversation in its channel's saved session", async () => {
@@ -1106,7 +1122,7 @@ it("finds a thread's conversation in its channel's saved session", async () => {
   expect(
     await screen.findByText("Hi from goose", { selector: "summary span" }),
   ).toBeInTheDocument();
-  expect(searches(fake)).toEqual([]);
+  expect(listings(fake)).toEqual([]);
 });
 
 it("opens a channel-scoped agent's channel from a thread, following its first save", async () => {
@@ -1120,27 +1136,22 @@ it("opens a channel-scoped agent's channel from a thread, following its first sa
       initialTranscript: { opening: 1, done: vi.fn() },
     },
   );
+  // The thread's session is not the channel's.
   expect(
-    await screen.findByText(/Buzz saved no goose session/),
+    await screen.findByText(/goose has no session for this conversation/),
   ).toBeInTheDocument();
   change({ saved: [{ key: "chan", at: 1, sessions: ["s1"] }] });
   expect(
     await screen.findByText("Hi from goose", { selector: "summary span" }),
   ).toBeInTheDocument();
-  expect(searches(fake)).toEqual([]);
 });
 
-it("searches a thread-scoped agent's thread past an empty saved channel record", async () => {
+it("finds a thread-scoped agent's thread past an empty saved channel record", async () => {
   const fake = gooseHistory();
   activity(fake, { saved: [{ key: "chan", at: 1, sessions: [] }] }, undefined, {
     conversation: { channelId: "chan", rootId: ROOT },
     initialTranscript: { opening: 1, done: vi.fn() },
   });
-  await userEvent
-    .setup()
-    .click(
-      await screen.findByRole("button", { name: "Search older sessions" }),
-    );
   expect(
     await screen.findByText("Hi from goose", { selector: "summary span" }),
   ).toBeInTheDocument();
@@ -1202,10 +1213,7 @@ it("says when goose no longer has a conversation's saved sessions", async () => 
       screen.getByRole("button", { name: "View transcript: chan · channel" }),
     );
   expect(
-    await screen.findByText(/goose no longer has the sessions Buzz saved/),
-  ).toBeInTheDocument();
-  expect(
-    screen.getByRole("button", { name: "Search older sessions" }),
+    await screen.findByText(/goose has no session for this conversation/),
   ).toBeInTheDocument();
 });
 

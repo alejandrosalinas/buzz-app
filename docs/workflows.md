@@ -106,6 +106,12 @@ See the [capability contract](../src/features/workflows/types.ts).
   configuration (the editor's Run now is unavailable while the draft has
   unsaved changes), and on-demand run/trace history in
   20-row pages with the relay's exact `(before,beforeId)` cursor.
+- Archived channels: the relay accepts saves and runs there, but every run
+  fails. Their group and Recently updated rows say Archived. Run now and
+  turning a workflow on are unavailable in rows, details and the editor, whose
+  Save is blocked only while the draft is enabled; turning off and Delete stay
+  available. New workflow omits them; the landing keeps them so an open editor
+  keeps its draft.
 - No approval UI, lifecycle negotiation, plugin command-replay API or JSON
   trigger inputs.
 

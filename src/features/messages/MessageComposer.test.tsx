@@ -1,4 +1,5 @@
 // @vitest-environment jsdom
+import { MESSAGE_TOKENS_TAG, signedMessageTokenTags } from "./message-tokens";
 import { Context } from "@deepseek-ai/cordis";
 import { PluginRuntime } from "../../plugins/runtime";
 import { ConversationService } from "../conversation/service";
@@ -48,9 +49,12 @@ import type {
   CompletionPending,
   CompletionResolution,
   CompletionResult,
+  ComposerAnnotator,
+  ComposerAnnotatorProps,
   InlineRenderer,
 } from "../conversation/contracts";
 import { MENTION_RESOLVE_TIMEOUT_MS } from "../conversation/completion";
+import { bundledContribution } from "../../plugins/provenance";
 import { mentionQuery } from "../../bundled/mentions/mention-query";
 import { MentionCompletion } from "../../bundled/mentions/MentionCompletion";
 import type { MentionRecipient } from "./mention-draft";
@@ -4017,6 +4021,7 @@ const sessionAgents = (
     efforts: readonly { id: string; label: string }[];
   }[] = [{ id: "fast", label: "Fast", efforts: [] }],
   pubkeys: readonly string[] = [first.pubkey],
+  includeSessionControls = true,
 ) => {
   const snapshot = {
     status: "ready",
@@ -4040,12 +4045,16 @@ const sessionAgents = (
     {
       key: "test/agent",
       models: () => ({ current: "fast", models }),
-      sessionControls: {
-        scope: () => scope,
-        state: () => state,
-        run: async () => {},
-        subscribe,
-      },
+      ...(includeSessionControls
+        ? {
+            sessionControls: {
+              scope: () => scope,
+              state: () => state,
+              run: async () => {},
+              subscribe,
+            },
+          }
+        : {}),
     },
   ];
   const session = vi.fn<Agents["session"]>(async () => {});
@@ -5881,10 +5890,15 @@ it("retries an unreadable initial Solo preference without silently sending defau
   });
 });
 
-it("uses the supported Solo model and effort when saved choices are unavailable", async () => {
+it("discloses supported fallbacks for unavailable saved Solo choices", async () => {
   const { mountChat, modelButton, send } = soloModelPreferenceHarness();
+  const removedModelPick = {
+    model: "removed",
+    effort: "high",
+    type: "test/agent",
+  };
   writeView("scope", "solo:model-picks:channel", {
-    [first.pubkey]: { model: "removed", effort: "high", type: "test/agent" },
+    [first.pubkey]: removedModelPick,
   });
   const unsupported = mountChat();
   await unsupported.user.type(unsupported.input(), "a");
@@ -5892,8 +5906,20 @@ it("uses the supported Solo model and effort when saved choices are unavailable"
     screen.getByRole("button", { name: "First Honey" }),
   );
   const trigger = await screen.findByRole("button", { name: /Model.*effort/ });
-  expect(trigger).not.toHaveAttribute("data-selected");
+  expect(trigger).toHaveAttribute("data-selected", "");
+  expect(trigger).toHaveAccessibleDescription(
+    /Saved model is unavailable\. Using Fast with the provider's default effort\./,
+  );
+  expect(readView("scope", "solo:model-picks:channel", null)).toEqual({
+    [first.pubkey]: removedModelPick,
+  });
   await unsupported.user.click(trigger);
+  const modelStatus = within(screen.getByRole("dialog")).getByRole("status", {
+    name: "Saved model and effort availability",
+  });
+  expect(modelStatus).toHaveTextContent(
+    /Saved model is unavailable\. Using Fast with the provider's default effort\./,
+  );
   expect(modelButton()).toHaveTextContent("Fast");
   expect(
     await screen.findByLabelText("Effort for Honey in this chat"),
@@ -5906,17 +5932,46 @@ it("uses the supported Solo model and effort when saved choices are unavailable"
     [first.pubkey],
     [],
   );
+  expect(readView("scope", "solo:model-picks:channel", null)).toEqual({
+    [first.pubkey]: removedModelPick,
+  });
 
   unsupported.unmount();
+  const removedEffortPick = {
+    model: "deep",
+    effort: "ultra",
+    type: "test/agent",
+  };
   writeView("scope", "solo:model-picks:channel", {
-    [first.pubkey]: { model: "deep", effort: "ultra", type: "test/agent" },
+    [first.pubkey]: removedEffortPick,
   });
   const unsupportedEffort = mountChat();
   await unsupportedEffort.user.type(unsupportedEffort.input(), "b");
   await unsupportedEffort.user.click(
     screen.getByRole("button", { name: "First Honey" }),
   );
-  await screen.findByRole("button", { name: /Model.*effort/ });
+  const effortTrigger = await screen.findByRole("button", {
+    name: /Model.*effort/,
+  });
+  await waitFor(() =>
+    expect(effortTrigger).toHaveAccessibleDescription(
+      /Saved effort is unavailable for Deep\. Using Deep with the provider's default effort\./,
+    ),
+  );
+  await unsupportedEffort.user.click(effortTrigger);
+  const effortStatus = within(screen.getByRole("dialog")).getByRole("status", {
+    name: "Saved model and effort availability",
+  });
+  expect(effortStatus).toHaveTextContent(
+    /Saved effort is unavailable for Deep\. Using Deep with the provider's default effort\./,
+  );
+  expect(
+    await screen.findByLabelText("Effort for Honey in this chat"),
+  ).toHaveAttribute("aria-valuetext", "Default");
+  expect(readView("scope", "solo:model-picks:channel", null)).toEqual({
+    [first.pubkey]: removedEffortPick,
+  });
+  await unsupportedEffort.user.keyboard("{Escape}");
   await send(unsupportedEffort);
   await waitFor(() =>
     expect(unsupportedEffort.messages.send).toHaveBeenCalledOnce(),
@@ -5928,8 +5983,277 @@ it("uses the supported Solo model and effort when saved choices are unavailable"
   expect(unsupportedEffort.messages.send.mock.calls[0]?.at(-1)).toEqual({
     [first.pubkey]: { model: "deep" },
   });
+  expect(readView("scope", "solo:model-picks:channel", null)).toEqual({
+    [first.pubkey]: removedEffortPick,
+  });
   unsupportedEffort.unmount();
 });
+
+it.each([
+  {
+    description: "a removed saved model",
+    savedPick: { model: "removed", effort: "high", type: "test/agent" },
+    expected:
+      /Saved model is unavailable\. Send omits model and effort overrides; the agent or provider decides which model runs\./,
+  },
+  {
+    description: "an unavailable effort-only pick",
+    savedPick: { effort: "high", type: "test/agent" },
+    expected:
+      /Saved effort is unavailable\. Send omits model and effort overrides; the agent or provider decides which model runs\./,
+  },
+])(
+  "does not promise the first listed model when no current model is available for $description",
+  async ({ savedPick, expected }) => {
+    const models = [{ id: "fast", label: "Fast", efforts: [] }];
+    const readyAgents = sessionAgents("channel", models);
+    const type = readyAgents.types()[0];
+    if (!type) throw new Error("The fixture agent type should exist.");
+    const noCurrentTypes = [
+      { ...type, models: () => ({ current: "", models }) },
+    ];
+    const agents = {
+      ...readyAgents,
+      types: () => noCurrentTypes,
+    } as Agents;
+    const { mountChat, send } = soloModelPreferenceHarness(agents);
+    writeView("scope", "solo:model-picks:channel", {
+      [first.pubkey]: savedPick,
+    });
+    const composer = mountChat();
+    await composer.user.type(composer.input(), "a");
+    await composer.user.click(
+      screen.getByRole("button", { name: "First Honey" }),
+    );
+
+    const trigger = await screen.findByRole("button", {
+      name: /Model.*effort/,
+    });
+    expect(trigger).toHaveAccessibleDescription(expected);
+    await composer.user.click(trigger);
+    expect(
+      within(screen.getByRole("dialog")).getByRole("status", {
+        name: "Saved model and effort availability",
+      }),
+    ).toHaveTextContent(expected);
+    await send(composer);
+
+    await waitFor(() => expect(composer.messages.send).toHaveBeenCalledOnce());
+    expect(composer.messages.send.mock.calls[0]?.slice(0, 4)).toEqual([
+      "channel",
+      expect.stringContaining("a"),
+      [first.pubkey],
+      [],
+    ]);
+    expect(composer.messages.send.mock.calls[0]).toHaveLength(4);
+    expect(readView("scope", "solo:model-picks:channel", null)).toEqual({
+      [first.pubkey]: savedPick,
+    });
+    composer.unmount();
+  },
+);
+
+it("waits for a saved Solo pick's catalog before disclosing its fallback", async () => {
+  let resolveModels!: (models: Models) => void;
+  const pendingModels = new Promise<Models>((resolve) => {
+    resolveModels = resolve;
+  });
+  const readyAgents = sessionAgents("channel");
+  const type = readyAgents.types()[0];
+  if (!type) throw new Error("The fixture agent type should exist.");
+  const delayedTypes = [{ ...type, models: () => pendingModels }];
+  const agents = {
+    ...readyAgents,
+    types: () => delayedTypes,
+  } as Agents;
+  const { mountChat, write } = soloModelPreferenceHarness(agents);
+  const savedPick = {
+    model: "removed",
+    effort: "high",
+    type: "test/agent",
+  };
+  writeView("scope", "solo:model-picks:channel", {
+    [first.pubkey]: savedPick,
+  });
+  const h = mountChat();
+  try {
+    await write(h, "Wait for the catalog");
+    const trigger = await screen.findByRole("button", {
+      name: "Model, effort, and session controls for this chat",
+    });
+    expect(trigger).not.toHaveAttribute("data-selected");
+    expect(trigger).not.toHaveAccessibleDescription(
+      /Saved model is unavailable/,
+    );
+    await h.user.click(trigger);
+    const dialog = within(screen.getByRole("dialog"));
+    const availability = dialog.getByRole("status", {
+      name: "Saved model and effort availability",
+    });
+    expect(availability).toHaveTextContent(/^\s*$/);
+    expect(
+      screen.getByText("Loading model and effort…").closest("[role=status]"),
+    ).toHaveAttribute("aria-busy", "true");
+    expect(
+      screen.queryByText(/Saved model is unavailable/),
+    ).not.toBeInTheDocument();
+
+    await act(async () => {
+      resolveModels({
+        current: "fast",
+        models: [{ id: "fast", label: "Fast", efforts: [] }],
+      });
+      await pendingModels;
+    });
+    const status = await dialog.findByRole("status", {
+      name: "Saved model and effort availability",
+    });
+    expect(status).toBe(availability);
+    expect(status).toHaveTextContent(
+      /Saved model is unavailable\. Using Fast\./,
+    );
+    expect(status).toBeVisible();
+    expect(trigger).toHaveAttribute("data-selected", "");
+    expect(trigger).toHaveAccessibleDescription(
+      /Saved model is unavailable\. Using Fast\./,
+    );
+    expect(readView("scope", "solo:model-picks:channel", null)).toEqual({
+      [first.pubkey]: savedPick,
+    });
+  } finally {
+    h.unmount();
+    resolveModels({
+      current: "fast",
+      models: [{ id: "fast", label: "Fast", efforts: [] }],
+    });
+    await pendingModels;
+  }
+});
+
+it("shows an unavailable Solo pick when the catalog has no selectable controls", async () => {
+  const { mountChat } = soloModelPreferenceHarness(
+    sessionAgents(
+      "channel",
+      [{ id: "fast", label: "Fast", efforts: [] }],
+      [first.pubkey],
+      false,
+    ),
+  );
+  const removedPick = {
+    model: "removed",
+    effort: "high",
+    type: "test/agent",
+  };
+  writeView("scope", "solo:model-picks:channel", {
+    [first.pubkey]: removedPick,
+  });
+
+  const composer = mountChat();
+  await composer.user.type(composer.input(), "a");
+  await composer.user.click(
+    screen.getByRole("button", { name: "First Honey" }),
+  );
+
+  const trigger = await screen.findByRole("button", { name: /Model.*effort/ });
+  expect(trigger).toHaveAccessibleDescription(
+    /Saved model is unavailable\. Using Fast\./,
+  );
+  await composer.user.click(trigger);
+  const dialog = within(screen.getByRole("dialog"));
+  const status = dialog.getByRole("status", {
+    name: "Saved model and effort availability",
+  });
+  expect(status).toHaveTextContent(/Saved model is unavailable\. Using Fast\./);
+  const cardNotice = dialog
+    .getAllByText(/Saved model is unavailable\. Using Fast\./)
+    .find((node) => node.closest("[data-agent-model-card]"));
+  expect(cardNotice).toBeDefined();
+  if (!cardNotice)
+    throw new Error("The fallback notice should be in its card.");
+  expect(cardNotice).toBeVisible();
+  expect(cardNotice.closest("[data-agent-model-card]")).toHaveClass(
+    "floating-surface",
+  );
+  expect(screen.getByText(/Fast · No thinking options/)).toBeVisible();
+  expect(readView("scope", "solo:model-picks:channel", null)).toEqual({
+    [first.pubkey]: removedPick,
+  });
+  await composer.user.click(
+    within(screen.getByRole("dialog")).getByRole("button", {
+      name: "Reset model and effort",
+    }),
+  );
+  expect(readView("scope", "solo:model-picks:channel", null)).toEqual({});
+  expect(composer.input()).toHaveFocus();
+  composer.unmount();
+});
+
+it.each([true, false])(
+  "does not claim a supported fallback when the loaded catalog has no models (session controls: %s)",
+  async (includeSessionControls) => {
+    const { mountChat, send } = soloModelPreferenceHarness(
+      sessionAgents("channel", [], [first.pubkey], includeSessionControls),
+    );
+    const savedPick = {
+      model: "removed",
+      effort: "high",
+      type: "test/agent",
+    };
+    writeView("scope", "solo:model-picks:channel", {
+      [first.pubkey]: savedPick,
+    });
+    const composer = mountChat();
+    const publish = vi.fn<Outbox["send"]>(() => "sent");
+    composer.messages.send.mockImplementation(
+      createMessages(
+        { supports: () => true, send: publish } as unknown as Outbox,
+        first.pubkey,
+        () => undefined,
+        () => [],
+        () => {},
+      ).send,
+    );
+    await composer.user.type(composer.input(), "Use the agent default");
+    await composer.user.click(
+      screen.getByRole("button", { name: "First Honey" }),
+    );
+
+    const trigger = await screen.findByRole("button", {
+      name: /Model.*effort/,
+    });
+    expect(trigger).toHaveAccessibleDescription(
+      /Saved model is unavailable\. No supported model is listed in the loaded catalog\. Send omits model and effort overrides and uses the agent's defaults\./,
+    );
+    await composer.user.click(trigger);
+    const availability = within(screen.getByRole("dialog")).getByRole(
+      "status",
+      {
+        name: "Saved model and effort availability",
+      },
+    );
+    expect(availability).toHaveTextContent(
+      /No supported model is listed in the loaded catalog\. Send omits model and effort overrides and uses the agent's defaults\./,
+    );
+    expect(screen.getByText("Model unavailable")).toBeVisible();
+    expect(screen.getByRole("button", { name: "Send message" })).toBeEnabled();
+    expect(readView("scope", "solo:model-picks:channel", null)).toEqual({
+      [first.pubkey]: savedPick,
+    });
+
+    await send(composer);
+    await waitFor(() => expect(composer.messages.send).toHaveBeenCalledOnce());
+    expect(publish).toHaveBeenCalledOnce();
+    expect(
+      publish.mock.calls[0]?.[0].tags.filter(
+        ([name]) => name === "model" || name === "effort",
+      ),
+    ).toEqual([]);
+    expect(readView("scope", "solo:model-picks:channel", null)).toEqual({
+      [first.pubkey]: savedPick,
+    });
+    composer.unmount();
+  },
+);
 
 it.each(
   ["inventory", "type"].flatMap((missing) =>
@@ -6106,10 +6430,20 @@ it("keeps saved Solo choices after catalog failure and retries before sending", 
   });
   const h = mountChat();
   await write(h, "Keep my choices");
-  await openPicker(h);
-  await screen.findByText(
-    /Model unavailable|Model and effort could not be loaded/,
+  const trigger = await screen.findByRole("button", {
+    name: "Model, effort, and session controls for this chat",
+  });
+  expect(trigger).not.toHaveAttribute("data-selected");
+  expect(trigger).not.toHaveAccessibleDescription(
+    /Saved model is unavailable|Saved effort is unavailable/,
   );
+  await openPicker(h);
+  await screen.findByText("Model and effort could not be loaded.");
+  expect(
+    screen.queryByText(
+      /Saved model is unavailable|Saved effort is unavailable/,
+    ),
+  ).not.toBeInTheDocument();
   await send(h);
   expect(h.messages.send).not.toHaveBeenCalled();
   expect(await screen.findByRole("alert")).toHaveTextContent(
@@ -11795,6 +12129,47 @@ it("compares before local edits and Send even if the storage event has not arriv
   expect(h.input()).toHaveValue("Saved elsewhere");
 });
 
+it("saves a content-free conflict trace and preserves Keep my draft", async () => {
+  const h = mount();
+  h.fill("Private local body");
+  const invoke = vi.fn().mockRejectedValue(new Error("unavailable"));
+  vi.stubGlobal("isTauri", true);
+  vi.stubGlobal("__TAURI_INTERNALS__", { invoke });
+  try {
+    localStorage.setItem(
+      'buzz-view.v1:["scope","draft:channel"]',
+      JSON.stringify("Private saved body"),
+    );
+    await h.user.click(screen.getByRole("button", { name: "Send message" }));
+    await waitFor(() => expect(invoke).toHaveBeenCalled());
+    const [command, payload] = invoke.mock.calls.at(-1) ?? [];
+    expect(command).toBe("draft_diagnostics_save");
+    const serialized = JSON.stringify(payload);
+    expect(serialized).not.toMatch(/Private|scope|channel|text|recipients/);
+    expect(payload).toMatchObject({
+      records: expect.arrayContaining([
+        expect.objectContaining({
+          operation: "send-start-conflict",
+          expected: "object",
+          current: "string",
+          sameExpected: false,
+          sameNext: false,
+        }),
+      ]),
+    });
+    expect(h.messages.send).not.toHaveBeenCalled();
+    expect(screen.getByRole("button", { name: "Send message" })).toBeDisabled();
+    await h.user.click(screen.getByRole("button", { name: "Keep my draft" }));
+    expect(h.input()).toHaveValue("Private local body");
+    expect(readView("scope", "draft:channel", "")).toMatchObject({
+      text: "Private local body",
+    });
+    expect(screen.getByRole("button", { name: "Send message" })).toBeEnabled();
+  } finally {
+    vi.unstubAllGlobals();
+  }
+});
+
 it("keeps the original draft after synchronous outbox rejection without a persistence callback", async () => {
   const retired = vi.fn();
   const h = mount({ onDraftSaved: retired });
@@ -14135,6 +14510,63 @@ it("guards automatic recipient changes using the current draft prose", () => {
   act(() => expect(replace?.([second])).toBe(true));
 });
 
+it("inserts a bundled provider's chip as one atom and signs it into the sent message", async () => {
+  const publishes: ComposerCompletionProps["publish"][] = [];
+  function Completion({ publish }: ComposerCompletionProps) {
+    useLayoutEffect(() => {
+      publishes.push(publish);
+    }, [publish]);
+    return null;
+  }
+  const provider: Contribution<ComposerCompletion> = {
+    id: "folders",
+    key: "buzz.mentions/folders",
+    pluginId: "buzz.mentions",
+    revision: "bundled",
+    title: "Folder",
+    match: ({ text, start }) => mentionQuery(text, start),
+    component: Completion,
+  };
+  bundledContribution(provider);
+  const providers = [provider];
+  const empty: [] = [];
+  const none = { snapshot: () => empty, subscribe: () => () => {} };
+  const h = mount();
+  h.retarget({
+    extensions: {
+      tools: none,
+      inline: none,
+      completions: { snapshot: () => providers, subscribe: () => () => {} },
+    },
+  });
+  h.fill("Use @no");
+  const folder = { kind: "folder", id: "/notes", label: "@notes" };
+  act(() => {
+    publishes.at(-1)?.({
+      items: [{ id: "notes", label: "notes", edit: { token: folder } }],
+    } as unknown as CompletionResult);
+  });
+  fireEvent.keyDown(h.input(), { key: "Enter" });
+  // The chip's text is the folder's path; the chip shows its label.
+  expect(h.input()).toHaveValue("Use /notes ");
+  expect(
+    within(h.input()).getByRole("img", { name: "Folder @notes" }),
+  ).toHaveTextContent(/^@notes$/);
+  // The relay writer reads the chips the composer is signing as it sends.
+  let signed: string[][] = [];
+  h.messages.send.mockImplementation(() => {
+    signed = signedMessageTokenTags();
+    return "channel-id";
+  });
+  h.submit();
+  await waitFor(() => expect(h.messages.send).toHaveBeenCalledTimes(1));
+  // The chip sends its text, the folder's path, in place of its label.
+  expect(h.messages.send.mock.calls[0]?.[1]).toBe("Use /notes ");
+  expect(signed).toEqual([[MESSAGE_TOKENS_TAG, JSON.stringify([folder])]]);
+  // Nothing is left for a later, unrelated send.
+  expect(signedMessageTokenTags()).toEqual([]);
+});
+
 /** A mention provider the test publishes for, over the real `@` syntax. */
 function mountPendingMention(
   options: Partial<MessageComposerProps> = {},
@@ -15707,6 +16139,18 @@ describe("oversized paste feedback", () => {
     expect(screen.queryByRole("alert")).toBeNull();
   });
 
+  it("retires feedback when an edit replaces the draft", () => {
+    const h = mount({}, undefined, first.pubkey);
+    h.setRows([editableMessage()]);
+    pasteText(h.input(), "x".repeat(16001));
+    expect(screen.getByRole("alert")).toHaveTextContent(
+      /This paste would make your message too long/,
+    );
+    fireEvent.keyDown(h.input(), { key: "ArrowUp" });
+    expect(h.input()).toHaveValue("Original message");
+    expect(screen.queryByRole("alert")).toBeNull();
+  });
+
   it("offers a file only when the composer supports attachments", () => {
     const h = mount();
     h.retarget({ session: { ...h.session, attachments: { upload: vi.fn() } } });
@@ -15737,4 +16181,72 @@ describe("oversized paste feedback", () => {
       screen.getByRole("region", { name: "Chat attachments" }),
     ).toBeVisible();
   });
+});
+
+it("shows an annotator's marks in the composer and retires them with the destination", async () => {
+  const empty: [] = [];
+  const none = { snapshot: () => empty, subscribe: () => () => {} };
+  // A headless annotator that marks "teh" in channel drafts; in a thread it
+  // publishes nothing, so marks there could only be left over.
+  function Fixture({
+    observation,
+    publish,
+    threadRootId,
+  }: ComposerAnnotatorProps) {
+    useEffect(() => {
+      if (threadRootId) return;
+      const start = observation.text.indexOf("teh");
+      publish(
+        start < 0
+          ? []
+          : [
+              {
+                start,
+                end: start + 3,
+                text: "teh",
+                label: "Possible misspelling",
+                kind: "spelling",
+                replacements: [{ text: "the" }],
+              },
+            ],
+      );
+    }, [observation, publish, threadRootId]);
+    return null;
+  }
+  const annotators: readonly Contribution<ComposerAnnotator>[] = [
+    {
+      id: "fixture",
+      key: "example.annotator/fixture",
+      pluginId: "example.annotator",
+      revision: "1",
+      title: "Fixture annotator",
+      component: Fixture,
+    },
+  ];
+  const h = mount({
+    extensions: {
+      tools: none,
+      inline: none,
+      completions: none,
+      annotators: { snapshot: () => annotators, subscribe: () => () => {} },
+    },
+  });
+  h.fill("teh cat");
+  await waitFor(() =>
+    expect(
+      h.input().querySelector('[aria-invalid="spelling"]'),
+    ).toHaveTextContent("teh"),
+  );
+  act(() => h.input().setSelectionRange(1, 1));
+  fireEvent.keyDown(h.input(), { key: ".", ctrlKey: true });
+  fireEvent.click(await screen.findByRole("menuitem", { name: "the" }));
+  expect(h.input()).toHaveValue("the cat");
+  h.fill("teh dog");
+  await waitFor(() =>
+    expect(h.input().querySelector('[aria-invalid="spelling"]')).not.toBeNull(),
+  );
+  h.retarget({ threadRootId: "root" });
+  await waitFor(() =>
+    expect(h.input().querySelector('[aria-invalid="spelling"]')).toBeNull(),
+  );
 });

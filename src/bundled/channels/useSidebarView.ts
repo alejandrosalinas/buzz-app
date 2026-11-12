@@ -99,6 +99,7 @@ export function useSidebarView(
   scope: string,
   ready: boolean,
   location?: string,
+  preserve = false,
 ) {
   const [view, setView] = useState(() => restore(scope));
   const intent = useRef(view);
@@ -126,7 +127,9 @@ export function useSidebarView(
     [scope],
   );
   // The destination waiting for its entry to render.
-  const reveal = useRef<string | undefined>(undefined);
+  const reveal = useRef<{ location: string; explicit?: true } | undefined>(
+    undefined,
+  );
   // Until the first reveal or scroll, the saved destination keeps the
   // restored position.
   const restored = useRef(view.location);
@@ -148,8 +151,12 @@ export function useSidebarView(
       // The user's position now belongs to the destination they navigated
       // to, so returning there keeps it instead of revealing again.
       if (reveal.current)
-        intent.current = { ...intent.current, location: reveal.current };
-      reveal.current = restored.current = undefined;
+        intent.current = {
+          ...intent.current,
+          location: reveal.current.location,
+        };
+      reveal.current = undefined;
+      restored.current = undefined;
     };
     viewport.addEventListener("scroll", scrolled, { passive: true });
     return () => viewport.removeEventListener("scroll", scrolled);
@@ -169,8 +176,11 @@ export function useSidebarView(
   // only if the user scrolls there.
   useLayoutEffect(() => {
     latestLocation.current = location;
-    reveal.current = location === restored.current ? undefined : location;
-  }, [location]);
+    reveal.current =
+      preserve || location === undefined || location === restored.current
+        ? undefined
+        : { location };
+  }, [location, preserve]);
   // The entry can render after navigation (roster startup, a new DM), so
   // retry after each commit until it exists. Runs after the restore above.
   const attempt = useRef(() => {});
@@ -184,20 +194,28 @@ export function useSidebarView(
   // Only an explicit reveal of the current destination may reclaim the viewport.
   const revealAgain = useCallback(() => {
     if (latestLocation.current === undefined) return;
-    reveal.current = latestLocation.current;
+    reveal.current = { location: latestLocation.current, explicit: true };
     attempt.current();
   }, []);
-  const retryReveal = useCallback(() => attempt.current(), []);
+  const retryReveal = useCallback(() => {
+    // Children can retry before this hook's layout effects clear an old reveal.
+    if (
+      !preserve ||
+      (reveal.current?.explicit && reveal.current.location === location)
+    )
+      attempt.current();
+  }, [preserve, location]);
   useLayoutEffect(() => {
     attempt.current = () => {
       if (!ready || !reveal.current || !list.current) return;
       for (const prepare of preparations.current)
-        if (!prepare(reveal.current)) return;
+        if (!prepare(reveal.current.location)) return;
       const top = revealCurrent(list.current);
       if (top === false) return;
       moved.current = scroll(list.current, top) ?? moved.current;
-      intent.current = { ...intent.current, location: reveal.current };
-      reveal.current = restored.current = undefined;
+      intent.current = { ...intent.current, location: reveal.current.location };
+      reveal.current = undefined;
+      restored.current = undefined;
     };
     attempt.current();
   });

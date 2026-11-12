@@ -7,6 +7,7 @@ struct FakeStore {
     reads: StdMutex<usize>,
     /// Reads fail, as a locked or refused Keychain does.
     unreadable: StdMutex<bool>,
+    undeletable: StdMutex<bool>,
 }
 impl KeyStore for Arc<FakeStore> {
     fn read(&self) -> Result<Option<Zeroizing<String>>, String> {
@@ -18,6 +19,13 @@ impl KeyStore for Arc<FakeStore> {
     }
     fn replace(&self, key: &str) -> Result<(), String> {
         *self.key.lock().unwrap() = Some(key.into());
+        Ok(())
+    }
+    fn delete(&self) -> Result<(), String> {
+        if *self.undeletable.lock().unwrap() {
+            return Err("locked".into());
+        }
+        *self.key.lock().unwrap() = None;
         Ok(())
     }
 }
@@ -70,6 +78,34 @@ async fn a_check_rereads_a_key_replaced_or_removed_elsewhere() {
     assert_eq!(kept(key.key().await).as_deref(), Some("sk-ant-new"));
     *store.key.lock().unwrap() = None;
     assert!(!key.configured().await.unwrap());
+    assert_eq!(kept(key.key().await), None);
+}
+
+#[tokio::test]
+async fn clearing_removes_the_stored_and_cached_key_and_is_repeatable() {
+    let store = Arc::new(FakeStore::default());
+    let key = host(&store);
+    key.set("sk-ant-saved").await.unwrap();
+    key.clear().await.unwrap();
+    assert!(store.key.lock().unwrap().is_none());
+    assert_eq!(kept(key.key().await), None);
+    assert!(!host(&store).configured().await.unwrap());
+    key.clear().await.unwrap();
+    key.set("sk-ant-new").await.unwrap();
+    assert_eq!(kept(key.key().await).as_deref(), Some("sk-ant-new"));
+}
+
+#[tokio::test]
+async fn a_failed_delete_keeps_the_saved_key_until_retry_succeeds() {
+    let store = Arc::new(FakeStore::default());
+    let key = host(&store);
+    key.set("sk-ant-saved").await.unwrap();
+    *store.undeletable.lock().unwrap() = true;
+    assert_eq!(key.clear().await, Err("locked".into()));
+    assert_eq!(kept(key.key().await).as_deref(), Some("sk-ant-saved"));
+    assert_eq!(store.key.lock().unwrap().as_deref(), Some("sk-ant-saved"));
+    *store.undeletable.lock().unwrap() = false;
+    key.clear().await.unwrap();
     assert_eq!(kept(key.key().await), None);
 }
 

@@ -2,15 +2,17 @@
 
 Accepted: 2026-11-03.
 
-Changing a shipped bundled plugin from default-on to default-off must affect only
-fresh local installs. An upgrade must preserve its previous effective enabled
-state, including for people who never changed a plugin setting. Explicit On/Off
+Changing a shipped bundled plugin's default must affect only fresh local
+installs. An upgrade must preserve its previous effective enabled state, including
+for people who never changed a plugin setting. Explicit On/Off
 choices always take precedence, except that Channels remains required.
 
 Disabling a plugin can stop behavior as well as remove navigation. For example,
 Reminders owns local due notifications, and Workflows provides the controls for
 managing workflows that run on the relay. Keeping their data is insufficient if
-an upgrade silently removes the feature that makes it usable.
+an upgrade silently removes the feature that makes it usable. Enabling a plugin
+can add navigation and behavior too, so a new default-on policy must not silently
+enable it for existing users.
 
 ## Storage contract
 
@@ -24,7 +26,9 @@ Use the existing plugin settings stores and native registry lock; do not add
 activation-time usage queries or a second preference owner.
 
 The initial migration backfills Reminders and Workflows as On for existing
-profiles without a saved flag. Other missing flags use their declared defaults.
+profiles without a saved flag. Bestie starts On for fresh installs, but existing
+profiles without a saved flag retain its former Off state. Other missing flags
+use their declared defaults.
 When changing another shipped default, include its previous value in this legacy
 backfill if users can upgrade directly from a release that did not persist it.
 Tests must cover that upgrade path as well as profiles with a complete snapshot.

@@ -206,6 +206,7 @@ const settingsIdentity = () =>
       snapshot: () => undefined,
       subscribe: () => () => {},
       ready: async () => ({ builderlab: false }),
+      refresh: async () => ({ builderlab: false }),
     },
     exportKey: vi.fn(),
     wipeRefusal: async () => "Erasing is unavailable in this test",
@@ -224,7 +225,7 @@ it("clears the real settings form when the displayed owner changes", async () =>
   expect(screen.getByLabelText("Application public key (hex)")).toHaveValue("");
 });
 
-it("discards an in-flight signer result when leaving Security to sign out in Identity", async () => {
+it("discards an in-flight signer result when leaving Security to remove the key in Identity", async () => {
   let complete!: (result: unknown) => void;
   vi.mocked(invoke)
     .mockResolvedValueOnce(viewer)
@@ -242,10 +243,13 @@ it("discards an in-flight signer result when leaving Security to sign out in Ide
   view.rerender(
     <IdentitySettings viewer={viewer} identity={settingsIdentity()} />,
   );
-  await user.click(screen.getByRole("button", { name: "Sign out of Buzz" }));
+  await user.click(screen.getByRole("button", { name: "More options" }));
+  await user.click(screen.getByRole("button", { name: "Remove from device" }));
   await act(async () => complete(tag));
   expect(
-    screen.getByRole("alertdialog", { name: "Sign out of Buzz?" }),
+    screen.getByRole("alertdialog", {
+      name: "Remove your key from this device?",
+    }),
   ).toBeInTheDocument();
   expect(screen.queryByLabelText("Ownership proof")).not.toBeInTheDocument();
   expect(

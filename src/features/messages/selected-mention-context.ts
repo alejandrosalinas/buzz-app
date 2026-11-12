@@ -4,3 +4,6 @@ import type { MentionRecipient } from "./mention-draft";
 export const SelectedMentionContext = createContext<
   readonly MentionRecipient[]
 >([]);
+/** The agents a send from this composer addresses, as its session controls
+ * show them; empty while editing. Host-internal. */
+export const AddressedAgentsContext = createContext<readonly string[]>([]);

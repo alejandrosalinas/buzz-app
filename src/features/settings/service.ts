@@ -1,6 +1,7 @@
 // Plugin-owned cards inside existing host Settings. No persistence.
 import { Service, type Context } from "@deepseek-ai/cordis";
 import type { ComponentType } from "react";
+import type { PageNavigation } from "../navigation/service";
 import type { ChatCircleIcon } from "../../shared/design-system/icons";
 import {
   createContributions,
@@ -13,8 +14,12 @@ export type SettingsCard = {
   icon?: typeof ChatCircleIcon;
   component: ComponentType<{
     active(): boolean;
+    /** The current Settings visit; route data is presentation only. */
+    navigation?: PageNavigation | undefined;
     community?: { id: string; name: string };
   }>;
+  /** Account status/link inside Identity; the plugin retains its session owner. */
+  identityRow?: ComponentType<{ active(): boolean }>;
   /** Show this card under a labelled account-level group instead of the selected community. */
   group?: string;
   /** Separate permission-gated controls from ordinary settings for the selected community. */
@@ -101,6 +106,8 @@ export class SettingsCardsService extends Service implements SettingsCards {
       !/^[a-z0-9][a-z0-9._-]*$/.test(card.id) ||
       !card.title?.trim() ||
       typeof card.component !== "function" ||
+      (card.identityRow !== undefined &&
+        typeof card.identityRow !== "function") ||
       (card.group !== undefined &&
         (typeof card.group !== "string" || !card.group.trim())) ||
       (card.section !== undefined && card.section !== "administration") ||

@@ -4,7 +4,11 @@ import { mkdtempSync, readFileSync, realpathSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
-import { buzzPin, cliTarget } from "../../scripts/build-buzz-cli.mjs";
+import {
+  buzzPin,
+  cliBuildDir,
+  cliTarget,
+} from "../../scripts/build-buzz-cli.mjs";
 
 const read = (path) =>
   readFileSync(new URL(`../../${path}`, import.meta.url), "utf8");
@@ -65,6 +69,12 @@ test("linked worktrees share the main checkout's buzz CLI build", (t) => {
   );
 });
 
+test("each block/buzz revision builds in its own directory", () => {
+  const other = "0e6037c74d67930de36143ed4661f469039d8dc7";
+  assert.equal(cliBuildDir("/t", rev), join("/t", "buzz-cli-build", rev));
+  assert.notEqual(cliBuildDir("/t", rev), cliBuildDir("/t", other));
+});
+
 test("desktop builds stage buzz after the other helpers", () => {
   const { beforeBuildCommand } = JSON.parse(
     read("src-tauri/tauri.conf.json"),
@@ -76,7 +86,7 @@ test("desktop builds stage buzz after the other helpers", () => {
 });
 
 test("every release job checks that its packaged buzz exists and runs", () => {
-  const release = read(".github/workflows/release.yml");
+  const release = read(".github/workflows/desktop-build.yml");
   for (const check of [
     'cli="$app/Contents/Resources/bin/buzz"',
     '"$cli" --help',

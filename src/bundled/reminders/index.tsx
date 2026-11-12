@@ -4,6 +4,7 @@ import type { RelaySession } from "../../features/relay/session";
 import type { Reminder, Reminders } from "../../features/relay/reminders";
 import type { OpenTarget } from "../../features/navigation/targets";
 import { plainText } from "../../features/notifications/content";
+import { CountBadge } from "../../shared/design-system/ui/CountBadge";
 import { AlarmIcon } from "../../shared/design-system/icons/index";
 import {
   countDue,
@@ -124,6 +125,7 @@ export const apply: PluginModule["apply"] = (ctx) => {
       // Every reminder notification opens in the community it came from.
       if (scope) {
         const { channels } = list;
+        const home: OpenTarget = { version: 1, kind: "page", ...page, scope };
         for (const reminder of dueSince(reminders, baseline, now)) {
           const sourceKey = keyOf(reminder);
           if (shown.has(sourceKey)) continue;
@@ -139,11 +141,11 @@ export const apply: PluginModule["apply"] = (ctx) => {
                 channelId: message.channelId,
                 messageId: message.eventId,
               }
-            : { version: 1, kind: "page", ...page, scope };
-          void notify
-            .submit({
+            : home;
+          const alert = (to: OpenTarget) =>
+            notify.submit({
               sourceKey,
-              target,
+              target: to,
               title:
                 channel && channel.channelType !== "dm" && channel.name
                   ? `Reminder due · #${channel.name}`
@@ -155,7 +157,18 @@ export const apply: PluginModule["apply"] = (ctx) => {
                   }),
                   plainText(reminder.note ?? ""),
                 ].find(Boolean) || "A reminder is waiting",
-            })
+            });
+          // Access refuses the message when the viewer isn't in its channel, so
+          // that reminder opens Reminders instead of never alerting. The retry
+          // follows any refusal, so it relies on every other one refusing the
+          // page too: a closed service, a missing or different viewer, a stale
+          // category, the `seen` key (it ignores the target kind), the pending
+          // cap, the development pause, alerts or this category off, and the
+          // Focus gate; denied permission drops both at delivery. So a page
+          // alert appears only when access refused the message. A future gate
+          // that allows pages but blocks conversations would be routed around.
+          void alert(target)
+            .then((admitted) => admitted || !message || alert(home))
             .catch(() => {});
         }
       }
@@ -221,11 +234,7 @@ export const apply: PluginModule["apply"] = (ctx) => {
     const { state } = useReminders(relay);
     const at = useSyncExternalStore(subscribeClock, readClock, readClock);
     const due = countDue(state.reminders, at);
-    return due ? (
-      <span className={styles.badge} role="img" aria-label={`${due} due`}>
-        {due}
-      </span>
-    ) : null;
+    return <CountBadge count={due} label={`${due} due`} />;
   }
 
   ctx.pages.register({

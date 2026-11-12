@@ -3,6 +3,7 @@ import { activityPromptThread } from "./activity-transcript";
 import type { EventData } from "../relay/events";
 import { threadReference } from "../relay/thread-reference";
 import type { LiveSnapshot } from "../relay/live";
+import { freshTurnTriggers, turnTriggerIds } from "./turn-triggers";
 import {
   ACTIVITY_HISTORY_AGE_MS,
   observerFrame,
@@ -71,6 +72,8 @@ type Turn = Omit<ActivityTurn, "state" | "requests"> & {
   ended: boolean;
   epoch: number;
   unresolvedTriggers?: readonly string[];
+  /** A turn_started frame set triggers; a second one makes the turn ambiguous. */
+  started?: boolean;
 };
 const object = (value: unknown): Record<string, unknown> | undefined =>
   value !== null && typeof value === "object" && !Array.isArray(value)
@@ -80,12 +83,36 @@ const text = (value: unknown): value is string =>
   typeof value === "string" && value.length > 0 && value.length <= 256;
 const starts = new Set([
   "turn_started",
+  // A message the agent's harness added to this running turn (remote steering).
+  "turn_steered",
   "turn_liveness",
   "acp_read",
   "acp_write",
   "session_resolved",
 ]);
 const ends = new Set(["turn_completed", "turn_error", "agent_panic"]);
+/** A start's or steer's messages join the turn's triggers; nothing removes one. */
+function triggerFields(
+  previous: Turn | undefined,
+  added: readonly string[] | undefined,
+): Required<
+  Pick<Turn, "triggeringEventIds" | "requests" | "unresolvedTriggers">
+> {
+  const known = previous?.triggeringEventIds ?? [];
+  const fresh = freshTurnTriggers(known, added);
+  return {
+    triggeringEventIds: fresh.length ? [...known, ...fresh] : known,
+    requests: previous?.requests ?? [],
+    unresolvedTriggers: [...(previous?.unresolvedTriggers ?? []), ...fresh],
+  };
+}
+function withTriggers(previous: Turn, added: readonly string[]): Turn {
+  const fields = triggerFields(previous, added);
+  return fields.triggeringEventIds.length ===
+    (previous.triggeringEventIds?.length ?? 0)
+    ? previous
+    : { ...previous, ...fields };
+}
 
 /** Session-owned live evidence. Plugin activation owns demand, not sockets or keys. */
 export function createAgentActivity(
@@ -288,14 +315,34 @@ export function createAgentActivity(
     if (!Number.isFinite(timestamp) || timestamp > Date.now() + 5000) return;
     const key = `${agent}:${item.turnId}`;
     const previous = turns.get(key);
+    const payload = object(item.payload);
+    const added =
+      item.kind === "turn_started" || item.kind === "turn_steered"
+        ? turnTriggerIds(payload?.triggeringEventIds)
+        : undefined;
     // Terminal evidence wins even when a delayed earlier heartbeat arrives later.
     if (
       previous?.ended ||
       (previous && previous.timestamp > timestamp && !ends.has(item.kind))
-    )
+    ) {
+      // Membership is not progress: a late start or steer still names the
+      // messages its turn ran for, without reviving or refreshing it. A late
+      // second start makes the turn ambiguous, as one in order would.
+      if (!added || !previous) return;
+      let merged: Turn;
+      if (item.kind === "turn_steered") merged = withTriggers(previous, added);
+      else if (item.kind !== "turn_started") return;
+      else if (previous.started)
+        merged = previous.ambiguous
+          ? previous
+          : { ...previous, ambiguous: true };
+      else merged = { ...withTriggers(previous, added), started: true };
+      if (merged === previous) return;
+      associate(merged);
+      turns.set(key, merged);
       return;
+    }
     if (!previous && timestamp <= evidenceFloor) return;
-    const payload = object(item.payload);
     const root = payload?.threadRootEventId;
     const legacyRoot =
       item.kind === "acp_write" && !previous?.threadRootId
@@ -305,32 +352,17 @@ export function createAgentActivity(
       item.kind === "session_resolved" && text(payload?.sessionId)
         ? payload.sessionId
         : item.sessionId;
-    const triggers =
-      item.kind === "turn_started"
-        ? payload?.triggeringEventIds
-        : previous?.triggeringEventIds;
-    const triggeringEventIds =
-      Array.isArray(triggers) &&
-      triggers.length <= 64 &&
-      triggers.every(
-        (id) => typeof id === "string" && /^[0-9a-f]{64}$/.test(id),
-      )
-        ? (triggers as string[])
-        : undefined;
     const turn: Turn = {
-      ...(triggeringEventIds
-        ? {
-            triggeringEventIds,
-            requests: previous?.requests ?? [],
-            unresolvedTriggers:
-              previous?.unresolvedTriggers ?? triggeringEventIds,
-          }
+      ...(previous?.triggeringEventIds || added
+        ? triggerFields(previous, added)
+        : {}),
+      ...(previous?.started || (item.kind === "turn_started" && added)
+        ? { started: true }
         : {}),
       agent,
       turnId: item.turnId,
       ...(previous?.ambiguous ||
-      (item.kind === "turn_started" &&
-        previous?.triggeringEventIds !== undefined)
+      (item.kind === "turn_started" && previous?.started)
         ? { ambiguous: true }
         : {}),
       ...(typeof root === "string" && /^[0-9a-f]{64}$/.test(root)
@@ -577,34 +609,43 @@ export function createAgentActivity(
         // Malformed thread tags must not become channel-wide working evidence.
         if (event.tags.some(([name]) => name === "e") && !reference) continue;
         const threadRootId = reference?.rootId;
-        const key = JSON.stringify([event.pubkey, channelId, threadRootId]);
-        const previous = typing.get(key);
-        if (
-          previous &&
-          (timestamp < previous.timestamp ||
-            (event.kind === 20002 &&
-              !previous.working &&
-              timestamp <= previous.timestamp + 2000))
-        )
-          continue;
-        changed = true;
-        typing.delete(key);
-        typing.set(
-          key,
-          Object.freeze({
-            agent: event.pubkey,
-            channelId,
-            threadRootId,
-            timestamp,
-            startedAt:
-              previous?.working && now < previous.expiresAt
-                ? previous.startedAt
-                : timestamp,
-            working: event.kind === 20002,
-            expiresAt: Math.min(timestamp, now) + TYPING_FRESH_MS,
-          }),
-        );
-        if (typing.size > ACTIVITY_TURN_LIMIT) {
+        // A reply in a thread also ends the agent's channel-level typing: its
+        // pulses and replies can be filed apart for the same turn. Other
+        // threads keep theirs.
+        const scopes =
+          event.kind === 9 && threadRootId
+            ? [threadRootId, undefined]
+            : [threadRootId];
+        for (const threadRootId of scopes) {
+          const key = JSON.stringify([event.pubkey, channelId, threadRootId]);
+          const previous = typing.get(key);
+          if (
+            previous &&
+            (timestamp < previous.timestamp ||
+              (event.kind === 20002 &&
+                !previous.working &&
+                timestamp <= previous.timestamp + 2000))
+          )
+            continue;
+          changed = true;
+          typing.delete(key);
+          typing.set(
+            key,
+            Object.freeze({
+              agent: event.pubkey,
+              channelId,
+              threadRootId,
+              timestamp,
+              startedAt:
+                previous?.working && now < previous.expiresAt
+                  ? previous.startedAt
+                  : timestamp,
+              working: event.kind === 20002,
+              expiresAt: Math.min(timestamp, now) + TYPING_FRESH_MS,
+            }),
+          );
+        }
+        while (typing.size > ACTIVITY_TURN_LIMIT) {
           const oldest = typing.keys().next().value;
           if (oldest) typing.delete(oldest);
         }

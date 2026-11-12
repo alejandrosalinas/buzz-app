@@ -2,6 +2,7 @@ import type { RelaySession } from "../relay/session";
 import type { Agents } from "./service";
 import type { RequestWork } from "./request-work";
 import type { LocalWork } from "./local-activity";
+import { localWorkRoot } from "./local-activity";
 import { activityTranscript } from "./activity-transcript";
 
 export type WorkStopAgents = Pick<Agents, "interruptible" | "interrupt">;
@@ -81,7 +82,9 @@ export function conversationWorkStops(
       activity,
       agents,
     );
-    return control ? [{ control, work, threadRootId: work.threadRootId }] : [];
+    return control
+      ? [{ control, work, threadRootId: localWorkRoot(work) }]
+      : [];
   });
   // Local lifecycle evidence owns this agent's state, including settled work.
   if (local.length || snapshot.status !== "listening") return result;

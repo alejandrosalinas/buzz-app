@@ -24,6 +24,7 @@ import {
   type ToolServer,
 } from "./goose";
 import { GooseSetup } from "./setup";
+import { GooseHistory, sessionTags } from "./transcript";
 
 const BIN = process.env.GOOSE_ACP_BIN;
 
@@ -179,7 +180,7 @@ type Send = {
 
 /** A goose whose Buzz tool calls and own requests are recorded; sends
  * succeed without reaching a relay. */
-async function live() {
+async function live(env?: Readonly<Record<string, string | null>>) {
   const calls: Call[] = [];
   const tools: ToolServer = async (conversation, message) => {
     calls.push({
@@ -196,7 +197,11 @@ async function live() {
     return respond(undefined, {}, message);
   };
   const cwd = mkdtempSync(join(tmpdir(), "buzz-goose-"));
-  const goose = await GooseProcess.start(spawn, { cwd, serve });
+  const goose = await GooseProcess.start(spawn, {
+    cwd,
+    serve,
+    ...(env && { env }),
+  });
   const requests: { method: string; ok?: boolean }[] = [];
   /** What each request that succeeded answered, in order. */
   const results: { method: string; result: unknown }[] = [];
@@ -230,6 +235,164 @@ const homeSetup = () =>
   });
 
 describe.skipIf(!BIN)("goose-acp", () => {
+  it("enables a deferred Buzz tool before executing it", {
+    timeout: 180_000,
+  }, async () => {
+    const catalogs: string[][] = [];
+    const provider = createServer(async (request, response) => {
+      if (request.method === "GET") {
+        response.writeHead(200, { "Content-Type": "application/json" });
+        response.end(
+          JSON.stringify({
+            object: "list",
+            data: [{ id: "gpt-4o", object: "model" }],
+          }),
+        );
+        return;
+      }
+      let body = "";
+      for await (const chunk of request) body += chunk;
+      const input = JSON.parse(body) as {
+        tools?: { function: { name: string } }[];
+      };
+      catalogs.push((input.tools ?? []).map((tool) => tool.function.name));
+      const step = catalogs.length;
+      const call =
+        step === 1
+          ? {
+              id: "enable-interest",
+              type: "function",
+              function: {
+                name: "enable_tools",
+                arguments: JSON.stringify({
+                  tool_names: ["buzz__interest_list"],
+                }),
+              },
+            }
+          : {
+              id: "list-interests",
+              type: "function",
+              function: {
+                name: "buzz__interest_list",
+                arguments: "{}",
+              },
+            };
+      const delta =
+        step <= 2
+          ? { role: "assistant", tool_calls: [{ index: 0, ...call }] }
+          : { role: "assistant", content: "done" };
+      response.writeHead(200, { "Content-Type": "text/event-stream" });
+      for (const choice of [
+        { index: 0, delta, finish_reason: null },
+        {
+          index: 0,
+          delta: {},
+          finish_reason: step <= 2 ? "tool_calls" : "stop",
+        },
+      ]) {
+        response.write(
+          `data: ${JSON.stringify({
+            id: `response-${step}`,
+            object: "chat.completion.chunk",
+            created: 1,
+            model: "gpt-4o",
+            choices: [choice],
+          })}\n\n`,
+        );
+      }
+      response.end("data: [DONE]\n\n");
+    });
+    await new Promise<void>((resolve) =>
+      provider.listen(0, "127.0.0.1", resolve),
+    );
+    const address = provider.address();
+    if (!address || typeof address === "string")
+      throw new Error("No provider address");
+    const { goose, cwd, tools, calls } = await live({
+      OPENAI_API_KEY: "local-test-only",
+      OPENAI_HOST: `http://127.0.0.1:${address.port}`,
+      OPENAI_BASE_PATH: "v1/chat/completions",
+      OPENAI_BASE_URL: null,
+      GOOSE_DISABLE_SESSION_NAMING: "true",
+    });
+    try {
+      const session = await goose.open({
+        cwd,
+        tools,
+        choice: () => ({ provider: "openai", model: "gpt-4o" }),
+        systemPrompt: "You are a Buzz agent.",
+      });
+      const result = await session.send("List my interests, then reply done.");
+      expect(result.ok).toBe(true);
+      expect(catalogs).toHaveLength(3);
+      expect(catalogs[0]).toContain("enable_tools");
+      expect(catalogs[0]).toContain("buzz__send");
+      expect(catalogs[0]).not.toContain("buzz__interest_list");
+      expect(catalogs[1]).toContain("buzz__interest_list");
+      expect(
+        calls.some(
+          (call) =>
+            call.method === "tools/call" &&
+            (call.params as Send).name === "interest_list",
+        ),
+      ).toBe(true);
+      const exported = (await goose.request("_goose/unstable/session/export", {
+        sessionId: session.id,
+        format: "json",
+      })) as { data: string };
+      type Content = {
+        type: string;
+        id?: string;
+        toolCall?: { status: string; value: { name: string } };
+        toolResult?: {
+          status: string;
+          value: {
+            isError?: boolean;
+            structuredContent?: { enabled: string[] };
+          };
+        };
+      };
+      const history = JSON.parse(exported.data) as {
+        conversation: { role: string; content: Content[] }[];
+      };
+      const events = history.conversation.flatMap((message) =>
+        message.content.map((content) => ({ role: message.role, ...content })),
+      );
+      const enabledAt = events.findIndex(
+        (event) =>
+          event.role === "assistant" &&
+          event.type === "toolRequest" &&
+          event.toolCall?.status === "success" &&
+          event.toolCall.value.name === "enable_tools",
+      );
+      expect(enabledAt).toBeGreaterThanOrEqual(0);
+      const activation = events.findIndex(
+        (event) =>
+          event.type === "toolResponse" &&
+          event.id === events[enabledAt]?.id &&
+          event.toolResult?.status === "success" &&
+          event.toolResult.value.isError !== true &&
+          event.toolResult.value.structuredContent?.enabled.includes(
+            "buzz__interest_list",
+          ),
+      );
+      expect(activation).toBeGreaterThan(enabledAt);
+      const executedAt = events.findIndex(
+        (event) =>
+          event.role === "assistant" &&
+          event.type === "toolRequest" &&
+          event.toolCall?.status === "success" &&
+          event.toolCall.value.name === "buzz__interest_list",
+      );
+      expect(executedAt).toBeGreaterThan(activation);
+    } finally {
+      await goose.kill();
+      await new Promise<void>((resolve, reject) =>
+        provider.close((error) => (error ? reject(error) : resolve())),
+      );
+    }
+  });
+
   it("answers with the Buzz tools, the Buzz prompt and a title", {
     timeout: 180_000,
   }, async () => {
@@ -288,6 +451,51 @@ describe.skipIf(!BIN)("goose-acp", () => {
       const last = sends().at(-1);
       expect(last?.arguments?.final).toBe(true);
       expect(last?.arguments?.text).toContain(code);
+    } finally {
+      await goose.kill();
+    }
+  });
+
+  it("finds a conversation's session by the tags it opened with", {
+    timeout: 180_000,
+  }, async () => {
+    const { goose, cwd, tools } = await live();
+    const agent = "a".repeat(64);
+    const place = { channelId: "chan", root: "b".repeat(64) };
+    try {
+      const session = await goose.open({
+        cwd,
+        title: "Ada · #general · bbbbbbbb",
+        tools,
+        systemPrompt: "",
+        tags: sessionTags(agent, `${place.channelId}/${place.root}`),
+      });
+      // goose lists only sessions with messages.
+      expect(
+        await session.send("Reply with the single word ok."),
+      ).toMatchObject({
+        ok: true,
+      });
+      await goose.close(session);
+      const history = new GooseHistory({
+        spawn,
+        resolveDirectory: async (path) => path.replace(/^~/, homedir()),
+      });
+      const signal = new AbortController().signal;
+      // No saved id goose still has: the tags find it.
+      const read = await history.transcript(
+        { agent, workspace: cwd, place, sessions: ["gone"] },
+        signal,
+      );
+      expect(read?.turns.map((turn) => turn.sessionId)).toEqual([session.id]);
+      // Another thread, and another agent, find nothing.
+      for (const lookup of [
+        { agent, place: { ...place, root: "c".repeat(64) } },
+        { agent: "d".repeat(64), place },
+      ])
+        expect(
+          await history.transcript({ ...lookup, workspace: cwd }, signal),
+        ).toBeUndefined();
     } finally {
       await goose.kill();
     }

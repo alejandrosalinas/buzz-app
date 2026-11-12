@@ -572,6 +572,18 @@ html[data-keyboard-navigation]
   padding: 0;
   text-align: start;
 }
+/* The "Review step" link carries a full validation message; wrap it in the
+   sequence column instead of running under the inspector. */
+.workflow-builder .workflow-canvas > .buzz-button {
+  max-width: 100%;
+  height: auto;
+  white-space: normal;
+  text-align: start;
+}
+.workflow-builder .workflow-canvas > .buzz-button .buzz-button-label {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
 .workflow-flow {
   margin: 0;
   max-width: 28rem;

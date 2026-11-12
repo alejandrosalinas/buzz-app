@@ -14,6 +14,10 @@ import { finalizeEvent, getPublicKey } from "nostr-tools/pure";
 import { hexToBytes } from "nostr-tools/utils";
 import { CANVAS_MAX_EVENT_BYTES } from "../features/channel-templates/canvas-limits.ts";
 import { eventsDto } from "../features/relay/events";
+import {
+  effectiveEditDto,
+  effectiveEditFilter,
+} from "../features/relay/effective-edit";
 import type {
   BuzzClient,
   BuzzEvent,
@@ -166,6 +170,16 @@ export function nodeClient(
     key: pubkey,
     query: async (filters) =>
       eventsDto(await request("/query", JSON.stringify(filters))),
+    async effectiveEdit(id, channel) {
+      return effectiveEditDto(
+        await request(
+          "/query",
+          JSON.stringify(effectiveEditFilter(id, channel)),
+        ),
+        id,
+        channel,
+      );
+    },
     async searchProfiles(query, limit) {
       const response = await send(
         "/profiles/search",

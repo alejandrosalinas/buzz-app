@@ -26,6 +26,8 @@ afterEach(cleanup);
 it.each([
   ["Gemini 3 Pro", "Gemini", GoogleLogoIcon],
   ["Claude Sonnet 5", "Claude", ClaudeLogoIcon],
+
+  ["Fable 5.2", "Claude", ClaudeLogoIcon],
   ["GPT-6", "OpenAI", CodexLogoIcon],
 ] as const)(
   "matches the selected %s icon to its family submenu with an opaque catalog ID",
@@ -209,6 +211,24 @@ it("keeps mixed-vendor options aligned without an unknown trigger icon", async (
       .getByRole("option", { name: "Claude" })
       .querySelector(".buzz-select-leading svg"),
   ).toBeInTheDocument();
+});
+
+it("shows the Claude mark for a Fable model whose ID omits claude", () => {
+  const reference = render(<ClaudeLogoIcon size={20} />);
+  const artwork = reference.container.querySelector("svg")?.innerHTML;
+  reference.unmount();
+  render(
+    <ModelPicker
+      models={[{ id: "fable", label: "Fable 5.2" }]}
+      value="fable"
+      defaultLabel="Choose model"
+      includeDefault={false}
+      onChange={vi.fn()}
+    />,
+  );
+  expect(control().querySelector(".buzz-select-leading svg")?.innerHTML).toBe(
+    artwork,
+  );
 });
 
 it.each([false, true])(

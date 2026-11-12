@@ -73,7 +73,7 @@
   z-index: -1;
   border-radius: inherit;
   pointer-events: none;
-  background-image: url("./card-grain.png");
+  background-image: url("../../shared/assets/card-grain.png");
   background-size: 128px 128px;
   opacity: 0.02;
 }
@@ -410,15 +410,170 @@ html[data-keyboard-navigation] .card:focus-visible {
     display: none;
   }
 }
-.tag {
+.bestie {
   position: absolute;
-  inset-block-end: calc(100% + var(--space-2));
+  top: var(--space-2);
+  left: var(--space-2);
+  pointer-events: none;
+}
+
+/* Fade in the whole badge while the star celebrates, without moving the pill. */
+.bestie[data-celebrating] {
+  animation: bestie-reveal calc(var(--duration-settle) * 2) ease-out both;
+}
+@keyframes bestie-reveal {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+.bestieStars {
+  position: relative;
   display: inline-flex;
-  align-items: center;
-  flex-shrink: 0;
-  padding: var(--space-1) var(--space-2);
+  width: var(--space-4);
+  height: var(--space-4);
+  flex: 0 0 auto;
+}
+.bestieStar {
+  display: inline-flex;
+}
+.bestie[data-celebrating] .bestieStar {
+  animation: bestie-pop calc(var(--duration-settle) * 4) var(--easing-settle)
+    both;
+}
+.bestie[data-celebrating] .bestieStar > svg {
+  animation: bestie-turn calc(var(--duration-settle) * 4) var(--easing-enter)
+    both;
+}
+@keyframes bestie-turn {
+  0%,
+  12% {
+    transform: rotate(-180deg);
+  }
+  100% {
+    transform: rotate(0deg);
+  }
+}
+.bestieSpark {
+  color: var(--affordance-accent-prominent);
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  opacity: 0;
+  animation: bestie-spark calc(var(--duration-settle) * 4) var(--easing-settle)
+    both;
+}
+.bestieSpark:nth-child(2) {
+  --spark-x: -1.25rem;
+  --spark-y: -1rem;
+  --spark-turn: -24deg;
+}
+.bestieSpark:nth-child(3) {
+  --spark-x: 1.25rem;
+  --spark-y: 0.875rem;
+  --spark-turn: 20deg;
+}
+.bestieDot {
+  width: var(--space-1h);
+  height: var(--space-1h);
   border-radius: var(--radius-pill);
-  color: var(--text-on-accent);
-  background: var(--affordance-accent-prominent);
-  @apply text-caption;
+  background: currentColor;
+}
+.bestieTriangle {
+  width: var(--space-2);
+  height: var(--space-2);
+}
+.bestieSpark:nth-child(4) {
+  --spark-x: -0.625rem;
+  --spark-y: 1.125rem;
+  --spark-turn: -12deg;
+  --spark-opacity: 0.45;
+}
+.bestieSpark:nth-child(5) {
+  --spark-x: 0.625rem;
+  --spark-y: -1.5rem;
+  --spark-turn: 14deg;
+  --spark-opacity: 0.65;
+}
+.bestieSpark:nth-child(6) {
+  --spark-x: -1.5rem;
+  --spark-y: 0.375rem;
+  --spark-turn: -38deg;
+  --spark-opacity: 0.6;
+}
+.bestieSpark:nth-child(7) {
+  --spark-x: 1.5rem;
+  --spark-y: -0.625rem;
+  --spark-turn: 32deg;
+  --spark-opacity: 0.35;
+}
+/* Let the Bestie confirmation close before the celebration begins. */
+.bestie[data-celebrating],
+.bestie[data-celebrating] .bestieStar,
+.bestie[data-celebrating] .bestieStar > svg,
+.bestieSpark {
+  animation-delay: 500ms;
+}
+@keyframes bestie-pop {
+  0%,
+  12% {
+    color: var(--affordance-accent-prominent);
+    opacity: 0;
+    transform: scale(0.95);
+  }
+  32% {
+    color: var(--affordance-accent-prominent);
+    opacity: 1;
+    transform: translateY(-0.375rem) scale(2.4);
+  }
+  48% {
+    color: var(--affordance-accent-prominent);
+    transform: translateY(-0.25rem) scale(2.1);
+  }
+  76% {
+    transform: scale(0.9);
+  }
+  100% {
+    color: inherit;
+    opacity: 1;
+    transform: none;
+  }
+}
+/* Confetti leaves the center and keeps drifting out as it fades. */
+@keyframes bestie-spark {
+  0%,
+  18% {
+    opacity: 0;
+    transform: translate(-50%, -50%) scale(0.95);
+  }
+  36% {
+    opacity: var(--spark-opacity, 1);
+    transform: translate(
+        calc(-50% + var(--spark-x)),
+        calc(-50% + var(--spark-y))
+      )
+      rotate(var(--spark-turn)) scale(1.15);
+  }
+  85%,
+  100% {
+    opacity: 0;
+    transform: translate(
+        calc(-50% + var(--spark-x) * 2),
+        calc(-50% + var(--spark-y) * 2)
+      )
+      rotate(calc(var(--spark-turn) * 2)) scale(0.75);
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .bestie[data-celebrating],
+  .bestie[data-celebrating] .bestieStar,
+  .bestie[data-celebrating] .bestieStar > svg {
+    animation: none;
+  }
+  .bestieSpark {
+    display: none;
+    animation: none;
+  }
 }

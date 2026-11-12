@@ -9,6 +9,7 @@ import {
   waitFor,
 } from "@testing-library/react";
 import { afterEach, expect, it, vi } from "vitest";
+import userEvent from "@testing-library/user-event";
 import { downloadNativeMedia } from "./native-download";
 import { FileAttachment, formatFileSize } from "./FileAttachment";
 
@@ -161,6 +162,42 @@ it.each(["application/octet-stream"])(
 );
 
 const nativeSource = `buzz-media://localhost/${encodeURIComponent(`https://relay.test/media/${"a".repeat(64)}.pdf`)}`;
+
+it("keeps preview and native download as separate keyboard actions", async () => {
+  vi.mocked(downloadNativeMedia).mockClear().mockResolvedValue(undefined);
+  const preview = vi.fn();
+  render(
+    <FileAttachment
+      attachment={{
+        url: "https://relay.test/file",
+        kind: "file",
+        name: "report.pdf",
+        size: 132,
+      }}
+      source={nativeSource}
+      onOpenLink={() => false}
+      onPreview={preview}
+      typeLabel="PDF"
+    />,
+  );
+  const user = userEvent.setup();
+  await user.tab();
+  expect(
+    screen.getByRole("button", { name: "Preview report.pdf" }),
+  ).toHaveFocus();
+  await user.keyboard("{Enter}");
+  expect(preview).toHaveBeenCalledOnce();
+  expect(downloadNativeMedia).not.toHaveBeenCalled();
+  await user.tab();
+  expect(
+    screen.getByRole("button", { name: "Download report.pdf" }),
+  ).toHaveFocus();
+  expect(screen.getByText("PDF · 132 B")).toBeInTheDocument();
+  await user.keyboard("{Enter}");
+  expect(downloadNativeMedia).toHaveBeenCalledWith(nativeSource, "report.pdf");
+  expect(preview).toHaveBeenCalledOnce();
+  expect(await screen.findByText("Saved to Downloads")).toBeInTheDocument();
+});
 
 it("downloads authenticated native documents through the host without navigating", async () => {
   vi.mocked(downloadNativeMedia).mockResolvedValue(undefined);

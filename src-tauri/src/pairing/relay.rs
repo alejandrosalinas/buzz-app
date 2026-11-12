@@ -1,6 +1,8 @@
 use buzz_pairing::{session::KIND_PAIRING, PairingSession};
 use futures_util::{SinkExt, StreamExt};
-use nostr_pairing::{Event, JsonUtil};
+use nostr::event::{Event, IntoEventBuilder};
+use nostr::nips::nip42::ClientAuthentication;
+use nostr::types::RelayUrl;
 use std::time::Duration;
 use tokio_tungstenite::{tungstenite::Message, MaybeTlsStream, WebSocketStream};
 use url::Url;
@@ -125,7 +127,7 @@ pub(super) async fn connect(relay: &Url, limit: Duration) -> Result<Socket, Stri
 pub(super) async fn send(socket: &mut Socket, event: &Event) -> Result<(), String> {
     socket
         .send(Message::Text(
-            format!("[\"EVENT\",{}]", event.as_json()).into(),
+            serde_json::json!(["EVENT", event]).to_string().into(),
         ))
         .await
         .map_err(|_| "The pairing connection closed. Try again.".into())
@@ -156,16 +158,19 @@ impl Authentication {
                     .as_str()
                     .ok_or("Couldn’t authenticate pairing.")?;
                 let event = session
-                    .sign_event(nostr_pairing::EventBuilder::auth(
-                        challenge,
-                        nostr_pairing::RelayUrl::parse(relay.as_str())
-                            .map_err(|_| "Unsupported pairing address.")?,
-                    ))
+                    .sign_event(
+                        ClientAuthentication::new(
+                            challenge,
+                            RelayUrl::parse(relay.as_str())
+                                .map_err(|_| "Unsupported pairing address.")?,
+                        )
+                        .into_event_builder(),
+                    )
                     .map_err(|_| "Couldn’t authenticate pairing.")?;
                 self.id = Some(event.id.to_hex());
                 socket
                     .send(Message::Text(
-                        format!("[\"AUTH\",{}]", event.as_json()).into(),
+                        serde_json::json!(["AUTH", event]).to_string().into(),
                     ))
                     .await
                     .map_err(|_| "Couldn’t authenticate pairing.")?;

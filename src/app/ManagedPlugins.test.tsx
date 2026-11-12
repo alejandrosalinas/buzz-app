@@ -9,6 +9,7 @@ import {
   within,
 } from "@testing-library/react";
 import { StrictMode } from "react";
+import userEvent from "@testing-library/user-event";
 import { afterEach, expect, it, vi } from "vitest";
 import type { PluginManager } from "../plugins/manager";
 import type {
@@ -77,6 +78,7 @@ function harness(options: { git?: ReturnType<typeof vi.fn> } = {}) {
     imports,
     installImport: vi.fn(async () => true),
     change: vi.fn(async () => true),
+    refreshManaged: vi.fn(async () => true),
     snapshot: (): { error: string | null } => ({ error: null }),
   };
   return { manager, imports, git };
@@ -158,7 +160,7 @@ it("reviews at the pinned commit, then installs and enables only after confirmat
     "https://example.com/plugins",
     "v1",
     undefined,
-    commit,
+    { commit, path: "dist" },
   );
   expect(within(dialog).getByText(/Recommended by Example Org/)).toBeVisible();
   expect(manager.installImport).not.toHaveBeenCalled();
@@ -589,7 +591,7 @@ it("reviews again when the recommendation changes while the review is open", asy
     "https://example.com/plugins",
     "v1",
     undefined,
-    other,
+    { commit: other, path: "dist" },
   );
   expect(imports.discard).toHaveBeenCalledWith("preview");
   fireEvent.click(screen.getByRole("button", { name: "Install plugin" }));
@@ -735,11 +737,15 @@ const artifact = {
   url: "https://cdn.example.com/example.managed.json",
   sha256: "c".repeat(64),
 };
-function showRequest(manager: unknown, plugins: Catalog["plugins"] = []) {
+function showRequest(
+  manager: unknown,
+  plugins: Catalog["plugins"] = [],
+  onOpenInstalled?: (id: string) => void,
+) {
   const requests = createPluginInstallRequests();
   const outcome = requests.request(artifact, market);
   const id = requests.snapshot()?.id ?? 0;
-  render(
+  const ui = (plugins: Catalog["plugins"]) => (
     <StrictMode>
       <UrlPluginInstallReview
         plugins={manager as PluginManager}
@@ -750,11 +756,32 @@ function showRequest(manager: unknown, plugins: Catalog["plugins"] = []) {
         holdReview={requests.holdReview}
         request={{ ...requests, id }}
         returnFocus={() => null}
+        onOpenInstalled={onOpenInstalled}
       />
-    </StrictMode>,
+    </StrictMode>
   );
-  return { requests, outcome };
+  const { rerender } = render(ui(plugins));
+  return {
+    requests,
+    outcome,
+    /** Re-renders with a changed catalog, as the manager's next snapshot would. */
+    rerender: (plugins: Catalog["plugins"]) => rerender(ui(plugins)),
+  };
 }
+/** `installed`, recorded as installed from a Git repository. */
+const fromGit = {
+  ...installed,
+  updateSource: {
+    repository: "https://example.com/plugins",
+    reference: "v1",
+    path: "dist",
+  },
+};
+/** `installed`, recorded as installed from a local folder. */
+const fromFolder = {
+  ...installed,
+  updateSource: { root: "/plugins/example", path: "." },
+};
 
 it("reviews a plugin's URL install request and reports the install", async () => {
   const { manager, git } = harness();
@@ -792,7 +819,12 @@ it("cancels a plugin's URL install request when its review closes", async () => 
       }),
     ),
   });
-  const { outcome } = showRequest(manager, [installed]);
+  const { outcome } = showRequest(manager, [
+    {
+      ...installed,
+      updateSource: { url: "https://cdn.example.com/old.json", sha256: "d" },
+    },
+  ]);
   const dialog = await screen.findByRole("dialog");
   await within(dialog).findByRole("button", { name: "Update" });
   fireEvent.keyDown(dialog, { key: "Escape" });
@@ -801,36 +833,191 @@ it("cancels a plugin's URL install request when its review closes", async () => 
   expect(manager.installImport).not.toHaveBeenCalled();
 });
 
-it("refuses a URL install request over a plugin installed from Git", async () => {
-  const { manager } = harness();
-  Object.assign(manager.imports, {
-    url: vi.fn(async () =>
+it.each([true, false])(
+  "reviews a Git-to-URL update without removing or changing enabled=%s",
+  async (enabled) => {
+    const user = userEvent.setup();
+    const { manager } = harness();
+    Object.assign(manager.imports, {
+      url: vi.fn(async () =>
+        preview({
+          commit: null,
+          candidates: [{ path: ".", revision: artifact.sha256, manifest }],
+        }),
+      ),
+    });
+    const { outcome } = showRequest(manager, [{ ...fromGit, enabled }]);
+    const dialog = await screen.findByRole("dialog", {
+      name: "Update Managed example",
+    });
+    expect(
+      await within(dialog).findByText(
+        /switches this plugin from Git to a packaged download/,
+      ),
+    ).toBeVisible();
+    expect(within(dialog).getByText(artifact.url)).toBeVisible();
+    expect(manager.installImport).not.toHaveBeenCalled();
+    expect(manager.change).not.toHaveBeenCalled();
+    if (!enabled)
+      expect(
+        within(dialog).getByText("This plugin will stay disabled."),
+      ).toBeVisible();
+    await user.click(within(dialog).getByRole("button", { name: "Update" }));
+    await expect(outcome).resolves.toBe("updated");
+    expect(manager.installImport).toHaveBeenCalledExactlyOnceWith(
+      "preview",
+      ".",
+    );
+    expect(manager.change).not.toHaveBeenCalled();
+  },
+);
+
+it.each([
+  { updateSource: fromFolder.updateSource, label: "/plugins/example" },
+  { updateSource: null, label: "an unknown source" },
+])(
+  "refuses a URL install request over $label before downloading it",
+  async ({ updateSource, label }) => {
+    const { manager } = harness();
+    const url = vi.fn(async () =>
       preview({
         commit: null,
         candidates: [{ path: ".", revision: artifact.sha256, manifest }],
       }),
-    ),
-  });
-  const { outcome } = showRequest(manager, [
-    {
-      ...installed,
-      updateSource: {
-        repository: "https://example.com/plugins",
-        reference: "v1",
-        path: "dist",
-      },
-    },
-  ]);
-  const dialog = await screen.findByRole("dialog");
-  fireEvent.click(
-    await within(dialog).findByRole("button", { name: "Update" }),
+    );
+    Object.assign(manager.imports, { url });
+    const onOpenInstalled = vi.fn();
+    const { outcome } = showRequest(
+      manager,
+      [{ ...installed, updateSource }],
+      onOpenInstalled,
+    );
+    const dialog = await screen.findByRole("dialog", {
+      name: "Already installed",
+    });
+    expect(dialog).toHaveAccessibleDescription(
+      `Requested by Market. Installed example is already installed from ${label}; remove it first to install it from ${artifact.url}.`,
+    );
+    expect(within(dialog).queryByRole("button", { name: "Update" })).toBeNull();
+    expect(
+      within(dialog).queryByRole("button", { name: "Try again" }),
+    ).toBeNull();
+    fireEvent.click(
+      within(dialog).getByRole("button", { name: "Open plugin" }),
+    );
+    expect(onOpenInstalled).toHaveBeenCalledExactlyOnceWith(manifest.id);
+    await expect(outcome).resolves.toBe("cancelled");
+    expect(screen.queryByRole("dialog")).toBeNull();
+    expect(url).not.toHaveBeenCalled();
+    expect(manager.installImport).not.toHaveBeenCalled();
+  },
+);
+
+it("refuses a link's URL install over a plugin installed from a folder without naming a requester", async () => {
+  const { manager } = harness();
+  const url = vi.fn();
+  Object.assign(manager.imports, { url });
+  render(
+    <UrlPluginInstallReview
+      plugins={manager as unknown as PluginManager}
+      catalog={catalog([fromFolder])}
+      busy={false}
+      source={artifact}
+      requester="A link"
+      returnFocus={() => null}
+    />,
   );
   expect(
-    await within(dialog).findByText(
-      `Installed example is already installed from https://example.com/plugins; remove it first to install it from ${artifact.url}.`,
-    ),
-  ).toBeVisible();
-  expect(manager.installImport).not.toHaveBeenCalled();
-  fireEvent.keyDown(dialog, { key: "Escape" });
-  await expect(outcome).resolves.toBe("cancelled");
+    await screen.findByRole("dialog", { name: "Already installed" }),
+  ).toHaveAccessibleDescription(
+    `Installed example is already installed from /plugins/example; remove it first to install it from ${artifact.url}.`,
+  );
+  expect(url).not.toHaveBeenCalled();
+});
+
+it("installs, rather than updates, once the conflicting plugin is removed while its refusal is open", async () => {
+  const { manager } = harness();
+  const url = vi.fn(async () =>
+    preview({
+      commit: null,
+      candidates: [{ path: ".", revision: artifact.sha256, manifest }],
+    }),
+  );
+  Object.assign(manager.imports, { url });
+  const { outcome, rerender } = showRequest(manager, [fromFolder]);
+  await screen.findByRole("dialog", { name: "Already installed" });
+  expect(url).not.toHaveBeenCalled();
+  rerender([]);
+  const dialog = await screen.findByRole("dialog", {
+    name: "Review Managed example Plugin access",
+  });
+  expect(url).toHaveBeenCalledExactlyOnceWith(artifact.url, artifact.sha256);
+  fireEvent.click(
+    within(dialog).getByRole("button", { name: "Install plugin" }),
+  );
+  await expect(outcome).resolves.toBe("installed");
+  expect(manager.installImport).toHaveBeenCalledExactlyOnceWith("preview", ".");
+  expect(manager.change).toHaveBeenCalledExactlyOnceWith("enable", manifest.id);
+});
+
+it("shows a packaged policy that is still loading", () => {
+  const { manager } = harness();
+  show(manager, { status: "loading", url: "https://plugins.example/p.json" });
+  expect(screen.getByRole("heading")).toHaveTextContent("Recommended plugins");
+  expect(screen.getByRole("status")).toHaveTextContent(
+    "Loading the recommended plugin list",
+  );
+  expect(manager.refreshManaged).not.toHaveBeenCalled();
+});
+
+it("explains a failed first fetch, retries once on open and on request, then shows the recovered policy", async () => {
+  const { manager } = harness();
+  const failed: Policy = {
+    status: "unavailable",
+    url: "https://plugins.example/p.json",
+    reason: "HTTP 503 Service Unavailable",
+  };
+  const view = show(manager, failed, [], { strict: true });
+  expect(
+    screen.getByRole("heading", { name: "Recommended plugins unavailable" }),
+  ).toBeInTheDocument();
+  expect(screen.getByRole("status")).toHaveTextContent(
+    "Buzz couldn’t load the recommended plugin list from https://plugins.example/p.json. HTTP 503 Service Unavailable",
+  );
+  await waitFor(() => expect(manager.refreshManaged).toHaveBeenCalledTimes(1));
+
+  fireEvent.click(screen.getByRole("button", { name: "Retry" }));
+  expect(manager.refreshManaged).toHaveBeenCalledTimes(2);
+
+  view.rerender(
+    <StrictMode>
+      <ManagedPlugins
+        plugins={manager as unknown as PluginManager}
+        managed={ready([entry("missing")])}
+        catalog={catalog()}
+        busy={false}
+      />
+    </StrictMode>,
+  );
+  expect(
+    screen.getByRole("heading", { name: "Recommended by Example Org" }),
+  ).toBeInTheDocument();
+  expect(screen.queryByRole("button", { name: "Retry" })).toBeNull();
+  expect(manager.refreshManaged).toHaveBeenCalledTimes(2);
+});
+
+it("disables Retry and waits to retry while plugin storage is busy", () => {
+  const { manager } = harness();
+  show(
+    manager,
+    {
+      status: "unavailable",
+      url: "https://plugins.example/p.json",
+      reason: "offline",
+    },
+    [],
+    { busy: true },
+  );
+  expect(screen.getByRole("button", { name: "Retry" })).toBeDisabled();
+  expect(manager.refreshManaged).not.toHaveBeenCalled();
 });

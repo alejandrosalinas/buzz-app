@@ -14,6 +14,11 @@ import { writeView } from "../../shared/view-state";
 import { conversationTarget, soloDraftTarget } from "./routes";
 import type { Contribution } from "../../plugins/contributions";
 import type { ChatIcon, ChatMenu } from "../conversation/service";
+import { Context } from "@deepseek-ai/cordis";
+import {
+  SidebarRowsService,
+  type SidebarRowContribution,
+} from "./sidebar-rows-service";
 
 import {
   fixture,
@@ -27,12 +32,396 @@ import {
   viewer,
 } from "../../app/shell/sidebar-testing";
 stubAvatarBrowserApis();
-afterEach(() => {
+const rowOwners: Context[] = [];
+afterEach(async () => {
   cleanup();
+  for (const owner of rowOwners.splice(0)) await owner.fiber.dispose();
   for (const owner of owners.splice(0)) owner.dispose();
   localStorage.clear();
   vi.unstubAllGlobals();
+  vi.restoreAllMocks();
 });
+
+async function contributedRows(contribution?: SidebarRowContribution) {
+  const root = new Context();
+  rowOwners.push(root);
+  let active = true;
+  const listeners = new Set<() => void>();
+  root.provide("pluginStatus", {
+    isActive: () => active,
+    subscribe(listener: () => void) {
+      listeners.add(listener);
+      return () => listeners.delete(listener);
+    },
+  });
+  const rows = new SidebarRowsService(root);
+  const fiber = root
+    .extend({ pluginOwner: { id: "fixture.rows", revision: "one" } })
+    .plugin((ctx) => {
+      if (contribution) ctx.reflect.get("sidebarRows")?.register(contribution);
+    });
+  await fiber.await();
+  return {
+    rows,
+    fiber,
+    listeners,
+    dispose: () => root.fiber.dispose(),
+    disable() {
+      act(() => {
+        active = false;
+        for (const listener of listeners) listener();
+      });
+    },
+  };
+}
+
+it.each([false, true])(
+  "decorates ordinary Solo rows through the %s combined host with live metadata",
+  async (combined) => {
+    const seen = vi.fn();
+    const plugin = await contributedRows({
+      version: 1,
+      id: "details",
+      render(row, Default) {
+        seen(row);
+        return (
+          <div data-plugin-row={row.id}>
+            {Default}
+            <span>
+              {row.kind}:{row.sectionKey}:
+              {row.channel.lastActivityAt ?? "unknown"}:
+              {row.unread.observedCount ?? "unknown"}
+            </span>
+          </div>
+        );
+      },
+    });
+    const f = fixture(
+      combined,
+      false,
+      undefined,
+      undefined,
+      0,
+      undefined,
+      undefined,
+      { sidebarRows: plugin.rows },
+    );
+    const row = screen.getByRole("button", { name: /^Planning/ });
+    expect(row.closest("[data-plugin-row]")).toHaveAttribute(
+      "data-plugin-row",
+      id,
+    );
+    expect(seen).toHaveBeenCalledWith(
+      expect.objectContaining({
+        id,
+        kind: "solo",
+        sectionKey: "",
+        label: "Planning",
+      }),
+    );
+    f.roster((channels) =>
+      channels.map((channel) =>
+        channel.id === id ? { ...channel, lastActivityAt: 123 } : channel,
+      ),
+    );
+    expect(screen.getByText("solo::123:2")).toBeInTheDocument();
+    f.clearUnread();
+    expect(screen.getByText("solo::123:0")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /^Planning/ })).toBe(row);
+    f.activity({
+      ...f.activitySnapshot,
+      status: "listening",
+      turns: [
+        {
+          channelId: id,
+          agent,
+          turnId: "one",
+          timestamp: Date.now(),
+          state: "working",
+        },
+      ],
+    });
+    expect(
+      within(row).getByRole("img", { name: /working/ }),
+    ).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /^Planning/ })).toBe(row);
+    await act(() => plugin.fiber.dispose());
+    expect(row.isConnected).toBe(false);
+    expect(
+      screen
+        .getByRole("button", { name: /^Planning/ })
+        .closest("[data-plugin-row]"),
+    ).toBeNull();
+    cleanup();
+    expect(f.listeners.size).toBe(0);
+    await plugin.dispose();
+    expect(plugin.listeners.size).toBe(0);
+  },
+);
+
+it("keeps the original Solo DOM when the capability has no render contributions", async () => {
+  const html = () =>
+    document
+      .querySelector(`[data-solo-project=""]`)
+      ?.innerHTML.replace(/base-ui-_r_[a-z0-9]+_/g, "base-ui-generated");
+  fixture();
+  const expected = html();
+  cleanup();
+  const plugin = await contributedRows({
+    version: 1,
+    id: "sort-only",
+    sortModes: [{ id: "reverse", label: "Reverse", compare: () => -1 }],
+  });
+  fixture(false, false, undefined, undefined, 0, undefined, undefined, {
+    sidebarRows: plugin.rows,
+  });
+  expect(html()).toBe(expected);
+});
+
+it("hides the whole Solo entry and skips it as a successor, then restores it on disable", async () => {
+  const plugin = await contributedRows({
+    version: 1,
+    id: "hide",
+    render: (row, Default) => (row.id === id ? null : Default),
+  });
+  const f = fixture(
+    true,
+    false,
+    undefined,
+    undefined,
+    0,
+    undefined,
+    undefined,
+    { sidebarRows: plugin.rows },
+  );
+  expect(screen.queryByRole("button", { name: /^Planning/ })).toBeNull();
+  expect(
+    screen.queryByRole("button", { name: "Actions for Planning" }),
+  ).toBeNull();
+  expect(document.querySelector(`[data-solo-menu-id="${id}"]`)).toBeNull();
+  expect(f.handoff()?.soloNeighbors.current?.(other)).not.toContain(id);
+  plugin.disable();
+  expect(screen.getByRole("button", { name: /^Planning/ })).toBeInTheDocument();
+  expect(
+    screen.getByRole("button", { name: "Actions for Planning" }),
+  ).toBeInTheDocument();
+  expect(f.handoff()?.soloNeighbors.current?.(other)).toContain(id);
+});
+
+it.each(["neighbor", "heading", "moved"])(
+  "recovers focus after plugin hiding to the %s without stealing it",
+  async (destination) => {
+    const plugin = await contributedRows({
+      version: 1,
+      id: "live-hide",
+      render: (row, Default) =>
+        row.channel.lastActivityAt === 1 ? null : Default,
+    });
+    const f = fixture(
+      false,
+      false,
+      undefined,
+      undefined,
+      0,
+      undefined,
+      undefined,
+      {
+        sidebarRows: plugin.rows,
+      },
+    );
+    screen.getByRole("button", { name: /^Planning/ }).focus();
+    await act(async () => {
+      f.roster((channels) =>
+        channels.map((channel) =>
+          channel.id === id || destination === "heading"
+            ? { ...channel, lastActivityAt: 1 }
+            : channel,
+        ),
+      );
+      if (destination === "moved")
+        screen.getByRole("button", { name: "Chats" }).focus();
+    });
+    expect(screen.queryByRole("button", { name: /^Planning/ })).toBeNull();
+    expect(
+      screen.getByRole("button", {
+        name: destination === "neighbor" ? /^Other/ : "Chats",
+      }),
+    ).toHaveFocus();
+  },
+);
+
+it.each(["throw", "invalid", "descendant", "disable"])(
+  "retains Solo focus through a live %s transition",
+  async (failure) => {
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    function Broken(): never {
+      throw new Error("broken decoration");
+    }
+    const plugin = await contributedRows({
+      version: 1,
+      id: "live-failure",
+      render(row, Default) {
+        if (row.id === id && row.channel.lastActivityAt === 1) {
+          if (failure === "throw") throw new Error("broken renderer");
+          if (failure === "invalid") return "invalid" as never;
+          if (failure === "descendant") return <Broken />;
+        }
+        return <div>{Default}</div>;
+      },
+    });
+    const f = fixture(
+      false,
+      false,
+      undefined,
+      undefined,
+      0,
+      undefined,
+      undefined,
+      {
+        sidebarRows: plugin.rows,
+      },
+    );
+    screen.getByRole("button", { name: /^Planning/ }).focus();
+    await act(async () => {
+      if (failure === "disable") plugin.disable();
+      else
+        f.roster((channels) =>
+          channels.map((channel) =>
+            channel.id === id ? { ...channel, lastActivityAt: 1 } : channel,
+          ),
+        );
+    });
+    expect(screen.getByRole("button", { name: /^Planning/ })).toHaveFocus();
+    if (failure !== "disable") {
+      await act(async () =>
+        f.roster((channels) =>
+          channels.map((channel) =>
+            channel.id === id ? { ...channel, lastActivityAt: 2 } : channel,
+          ),
+        ),
+      );
+      expect(screen.getByRole("button", { name: /^Planning/ })).toHaveFocus();
+    }
+  },
+);
+
+it("reports the saved Solo workspace id rather than its drag target key", async () => {
+  const seen = vi.fn();
+  const plugin = await contributedRows({
+    version: 1,
+    id: "workspace",
+    render(row, Default) {
+      seen(row);
+      return Default;
+    },
+  });
+  const f = fixture(
+    false,
+    false,
+    undefined,
+    undefined,
+    0,
+    undefined,
+    undefined,
+    { sidebarRows: plugin.rows },
+  );
+  const preferences = f.session.soloPreferences.snapshot();
+  Object.assign(preferences, {
+    data: {
+      ...preferences.data,
+      sections: [{ id: "work", name: "Work" }],
+      assignments: { [id]: "work" },
+    },
+  });
+  seen.mockClear();
+  f.replaceSession();
+  expect(seen).toHaveBeenCalledWith(
+    expect.objectContaining({ id, kind: "solo", sectionKey: "work" }),
+  );
+  expect(seen).toHaveBeenCalledWith(
+    expect.objectContaining({ id: other, sectionKey: "" }),
+  );
+});
+
+it("retains selection, menu keyboard access, and rename through the opaque host element", async () => {
+  const plugin = await contributedRows({
+    version: 1,
+    id: "wrap",
+    render: (_, Default) => <div data-plugin-row="wrapped">{Default}</div>,
+  });
+  const f = fixture(
+    false,
+    false,
+    undefined,
+    undefined,
+    0,
+    undefined,
+    undefined,
+    { sidebarRows: plugin.rows },
+  );
+  const user = userEvent.setup();
+  Object.assign(f.session, {
+    channelDetails: { ...f.session.channelDetails, available: true },
+  });
+  f.replaceSession();
+  const row = screen.getByRole("button", { name: /^Other/ });
+  expect(row).toHaveAttribute("aria-current", "page");
+  fireEvent.keyDown(row, { key: "ContextMenu" });
+  await user.click(await screen.findByRole("menuitem", { name: "Rename" }));
+  expect(screen.getByRole("textbox", { name: "Chat name" })).toHaveValue(
+    "Other",
+  );
+  await user.keyboard("{Escape}");
+  expect(screen.getByRole("button", { name: /^Other/ })).toHaveFocus();
+  fireEvent.click(screen.getByRole("button", { name: /^Planning/ }), {
+    detail: 0,
+  });
+  expect(f.open).toHaveBeenLastCalledWith(conversationTarget(scope, id));
+});
+
+it.each(["throw", "invalid", "descendant"])(
+  "restores the complete host Solo row after a %s renderer failure",
+  async (failure) => {
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    function Broken(): never {
+      throw new Error("broken decoration");
+    }
+    const plugin = await contributedRows({
+      version: 1,
+      id: "broken",
+      render(row, Default) {
+        if (row.id !== id) return <div data-plugin-row="other">{Default}</div>;
+        if (failure === "throw") throw new Error("broken renderer");
+        if (failure === "invalid") return "invalid" as never;
+        return <Broken />;
+      },
+    });
+    const f = fixture(
+      false,
+      false,
+      undefined,
+      undefined,
+      0,
+      undefined,
+      undefined,
+      { sidebarRows: plugin.rows },
+    );
+    const row = screen.getByRole("button", { name: /^Planning/ });
+    expect(
+      screen.getByRole("button", { name: "Actions for Planning" }),
+    ).toBeInTheDocument();
+    expect(
+      screen
+        .getByRole("button", { name: /^Other/ })
+        .closest("[data-plugin-row]"),
+    ).toBeInTheDocument();
+    f.clearUnread();
+    const restored = screen.getByRole("button", { name: /^Planning/ });
+    if (failure !== "descendant") expect(restored).toBe(row);
+    fireEvent.click(restored, { detail: 0 });
+    expect(f.open).toHaveBeenLastCalledWith(conversationTarget(scope, id));
+  },
+);
 
 it.each(["unavailable", "cached", "readOnly"])(
   "immediately opens a narrow Solo row when rename is %s",
@@ -283,20 +672,26 @@ it.each([
   },
 );
 
-it.each(["new", "linked", "agent"])(
-  "shows and selects the ordinary New chat draft row for %s",
+it.each(["new", "linked", "agent", "region"])(
+  "selects ordinary drafts without marking a region draft as New chat (%s)",
   async (route) => {
     const f = fixture();
     writeView(scope, "solo:collapsed-projects", [""]);
     const target = soloDraftTarget(
       scope,
-      route === "agent"
-        ? { agent }
-        : route === "linked"
-          ? { linked: "33333333-3333-4333-8333-333333333333" }
-          : {},
+      route === "region"
+        ? { region: "buzz.region:example:tasks" }
+        : route === "agent"
+          ? { agent }
+          : route === "linked"
+            ? { linked: "33333333-3333-4333-8333-333333333333" }
+            : {},
     );
     act(() => f.navigate(target));
+    if (route === "region") {
+      expect(screen.queryByRole("button", { name: "New chat" })).toBeNull();
+      return;
+    }
     const draft = await screen.findByRole("button", { name: "New chat" });
     expect(draft).toHaveAttribute("aria-current", "page");
     expect(draft).toHaveAttribute("data-selected", "true");

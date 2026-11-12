@@ -29,7 +29,7 @@ export type FakeProcess = {
   /** Calls one of the plugin's tools and resolves with its answer. */
   tool(
     params: object,
-    method?: "tool" | "prompt" | "security",
+    method?: string,
   ): Promise<{ result?: unknown; error?: string }>;
   /** Exits, saying `stderr` last. */
   exit(code: number | null, stderr?: string): void;

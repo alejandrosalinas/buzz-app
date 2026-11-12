@@ -213,6 +213,38 @@ const keysOf = (
 const keySet = (key: string): ReadonlySet<string> =>
   new Set(key ? key.split(":") : []);
 
+/** Requests whose live work a mounted row presents in this channel, as
+ * `agent\nrequestId` keys: the conversation's cue skips only covered work. */
+export function usePresentedRequests(
+  session: object | undefined,
+  channelId: string,
+) {
+  const store = useContext(ActivityPresentation);
+  const getKey = () =>
+    [
+      ...new Set(
+        (store?.snapshot() ?? empty)
+          .filter(
+            (entry) =>
+              !!entry.presence &&
+              !!entry.requestId &&
+              entry.session === session &&
+              entry.channelId === channelId,
+          )
+          .map((entry) => `${entry.pubkey}\n${entry.requestId}`),
+      ),
+    ].join("\t");
+  const key = useSyncExternalStore(
+    store?.subscribe ?? noopSubscribe,
+    getKey,
+    emptyKey,
+  );
+  return useMemo(
+    (): ReadonlySet<string> => new Set(key ? key.split("\t") : []),
+    [key],
+  );
+}
+
 /** Recorded history owns request controls only while that history is mounted. */
 export function useRecordedActivityAgents(
   session: object,

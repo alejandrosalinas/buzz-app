@@ -4,10 +4,11 @@
 import { invoke } from "@tauri-apps/api/core";
 import type { HostResponse } from "../../../features/host/service";
 import { oauthTarget } from "../oauth/browser";
-import type {
-  BuilderlabRequest,
-  BuilderlabSession,
-  Credential,
+import {
+  UNAUTHORIZED,
+  type BuilderlabRequest,
+  type BuilderlabSession,
+  type Credential,
 } from "../session";
 import { boundKey, type Account, type Backend } from "./api";
 
@@ -96,8 +97,7 @@ export function createNativeBackend(
       body: JSON.stringify(body),
     });
     ensureCurrent(credential);
-    if (response.status === 401)
-      throw new Error("Your Builderlab session expired. Sign in again.");
+    if (response.status === 401) throw new Error(UNAUTHORIZED);
     const value = parse(response.body);
     const ok = response.status >= 200 && response.status < 300;
     // Structured `{ error: { code, ... } }` bodies pass through for friendly UI messages.

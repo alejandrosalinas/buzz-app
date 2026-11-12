@@ -1,6 +1,7 @@
 import type { Context } from "@deepseek-ai/cordis";
 import type {} from "./status";
 import type {} from "./api";
+import { bundledContribution, isBundledOwner } from "./provenance";
 
 export type Contribution<T> = Readonly<
   T & { key: string; pluginId: string; revision: string }
@@ -86,6 +87,7 @@ export function createContributions<T extends { id: string }>(root: Context) {
         pluginId: owner.id,
         revision: owner.revision,
       });
+      if (isBundledOwner(owner)) bundledContribution(entry);
       const remove = ctx.effect(() => {
         entries = [...entries, entry];
         publish();

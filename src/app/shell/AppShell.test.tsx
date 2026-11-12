@@ -518,7 +518,7 @@ it("shows global pages in the side dock and keeps the conversation mounted acros
   }
   const pages = [
     { id: "channels", pluginId: "buzz.channels", title: "Channels" },
-    { id: "inbox", pluginId: "buzz.inbox", title: "Inbox" },
+    { id: "reminders", pluginId: "buzz.reminders", title: "Reminders" },
     { id: "bestie", pluginId: "buzz.bestie", title: "Bestie" },
   ].map((page) => ({
     ...page,
@@ -551,8 +551,8 @@ it("shows global pages in the side dock and keeps the conversation mounted acros
   const tabs = within(dock).getAllByRole("tab");
   expect(tabs.map((tab) => tab.textContent)).toEqual([
     "Bestie",
-    "Inbox",
     "Messages",
+    "Reminders",
   ]);
   expect(screen.getByRole("tablist")).toHaveAttribute(
     "aria-orientation",
@@ -564,12 +564,12 @@ it("shows global pages in the side dock and keeps the conversation mounted acros
   expect(screen.getByRole("button", { name: "Search Buzz" })).toHaveTextContent(
     "Search",
   );
-  tabs[0]?.focus();
+  tabs[1]?.focus();
   await user.keyboard("{ArrowDown}");
-  expect(tabs[1]).toHaveFocus();
+  expect(tabs[2]).toHaveFocus();
   expect(onSelect).not.toHaveBeenCalled();
   await user.keyboard("{Enter}");
-  expect(onSelect).toHaveBeenLastCalledWith("buzz.inbox/inbox", {
+  expect(onSelect).toHaveBeenLastCalledWith("buzz.reminders/reminders", {
     focus: "preserve",
   });
   view.rerender(tree());
@@ -594,7 +594,7 @@ it.each([
     const onSelect = vi.fn();
     const pages = [
       { id: "channels", pluginId: "buzz.channels", title: "Channels" },
-      { id: "inbox", pluginId: "buzz.inbox", title: "Activity" },
+      { id: "bestie", pluginId: "buzz.bestie", title: "Bestie" },
       {
         id: "drafts-sent",
         pluginId: "buzz.drafts-and-sent",
@@ -628,7 +628,7 @@ it.each([
     const dock = screen.getByRole("navigation", { name: "Apps dock" });
     const messages = within(dock).getByRole("tab", { name: "Messages" });
     expect(messages).toHaveAttribute("aria-selected", "true");
-    expect(within(dock).getByRole("tab", { name: "Activity" })).toHaveAttribute(
+    expect(within(dock).getByRole("tab", { name: "Bestie" })).toHaveAttribute(
       "aria-selected",
       "false",
     );
@@ -679,7 +679,7 @@ it("keeps Messages selected when a page listed in its sidebar supplies its own s
       <AppShell
         pages={[
           page("buzz.channels", "channels", "Channels"),
-          page("buzz.inbox", "inbox", "Activity"),
+          page("buzz.bestie", "bestie", "Bestie"),
           playground,
         ]}
         selected={playground.key}
@@ -710,7 +710,7 @@ it("keeps Messages selected when a page listed in its sidebar supplies its own s
   const dock = screen.getByRole("navigation", { name: "Apps dock" });
   const messages = within(dock).getByRole("tab", { name: "Messages" });
   expect(messages).toHaveAttribute("aria-selected", "true");
-  expect(within(dock).getByRole("tab", { name: "Activity" })).toHaveAttribute(
+  expect(within(dock).getByRole("tab", { name: "Bestie" })).toHaveAttribute(
     "aria-selected",
     "false",
   );

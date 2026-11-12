@@ -64,6 +64,13 @@
   overflow: hidden;
   text-align: left;
 }
+.group {
+  padding: var(--space-1h) var(--space-2) var(--space-1);
+  color: var(--text-subtle);
+  font-size: var(--text-caption);
+  line-height: var(--text-caption--line-height);
+  letter-spacing: var(--text-caption--letter-spacing);
+}
 .label small {
   display: block;
   color: var(--text-subtle);
@@ -116,6 +123,16 @@
   width: 1em;
   height: 1em;
   margin-inline-start: var(--space-1);
+}
+.identityMarks {
+  display: inline-flex;
+  flex-shrink: 0;
+  align-items: center;
+  gap: var(--space-1);
+  margin-inline-start: var(--space-1);
+}
+.identityMarks:empty {
+  display: none;
 }
 .name {
   display: block;

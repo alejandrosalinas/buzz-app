@@ -316,6 +316,24 @@ impl FederatedIdentity {
             generation.stop.cancel();
         }
     }
+    /// NIP-FA: a manual retry asks the issuer again. Forgets the refusals
+    /// cached for a canonical relay, under any session revision or viewer;
+    /// automatic retries keep them. An acquisition still in progress, and an
+    /// assertion already issued, stay.
+    pub(crate) fn forget_refusals(&self, relay: &str) {
+        let suffix = format!(":{relay}");
+        self.0
+            .assertions
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .retain(|key, entry| {
+                !key.ends_with(&suffix)
+                    || !entry
+                        .result
+                        .try_lock()
+                        .is_ok_and(|result| matches!(&*result, Some(Err(f)) if refused(f)))
+            });
+    }
     /// Whether a canonical relay requires NIP-FI, from the discovery shared
     /// with people's requests. A failure is reported and not kept.
     pub(crate) async fn requires_federated_identity(&self, relay: &str) -> Result<bool, String> {
@@ -1197,6 +1215,7 @@ mod tests {
             Arc::new(Memory::default()),
             vec![peer.clone()],
             None,
+            None,
         );
         let identity = IdentityHost::fixture();
         peer.discovered("wss://peer.example", true);
@@ -1774,6 +1793,60 @@ mod tests {
             }
             assert_eq!(server.await.unwrap().len(), 1);
         }
+    }
+
+    #[tokio::test]
+    async fn a_manual_retry_asks_again_after_a_cached_refusal() {
+        use super::super::tests::{adapter_with_status, at_adapter, Memory};
+        let denied = serde_json::json!({"error":"authorization_denied"});
+        let (base, server) = adapter_with_status(vec![(403, denied.clone()), (403, denied)]).await;
+        let host = at_adapter(Arc::new(Memory::default()), base);
+        signed_in(&host);
+        let identity = IdentityHost::fixture();
+        let relay = "wss://relay.example";
+        host.discovered(relay, true);
+        let url = Url::parse(relay).unwrap();
+        let ask = || async {
+            host.assertion_for_relay(&identity, &url)
+                .await
+                .err()
+                .as_deref()
+                .map(str::to_owned)
+        };
+        assert_eq!(ask().await.as_deref(), Some("authorization-denied"));
+        // Another community's retry, or an automatic one, repeats the refusal.
+        host.forget_refusals("wss://other.example");
+        assert_eq!(ask().await.as_deref(), Some("authorization-denied"));
+        // This community's manual retry asks the issuer again, once.
+        host.forget_refusals(relay);
+        assert_eq!(ask().await.as_deref(), Some("authorization-denied"));
+        assert_eq!(ask().await.as_deref(), Some("authorization-denied"));
+        let served = tokio::time::timeout(std::time::Duration::from_secs(5), server)
+            .await
+            .expect("the manual retry asks the issuer again");
+        assert_eq!(served.unwrap().len(), 2);
+    }
+
+    #[tokio::test]
+    async fn a_manual_retry_keeps_an_issued_assertion() {
+        use super::super::tests::{adapter, at_adapter, Memory};
+        let identity = IdentityHost::fixture();
+        let viewer = identity.viewer().await.unwrap();
+        let relay = "wss://relay.example";
+        let minted = now().unwrap() as u64;
+        let expires = minted + 60;
+        let (base, server) = adapter(vec![serde_json::json!({"assertion":jwt(&viewer,relay,minted,expires),"nostr_pubkey":viewer,"expires_at":expires})]).await;
+        let host = at_adapter(Arc::new(Memory::default()), base);
+        signed_in(&host);
+        host.discovered(relay, true);
+        let url = Url::parse(relay).unwrap();
+        let first = host.assertion_for_relay(&identity, &url).await.unwrap();
+        host.forget_refusals(relay);
+        // Served from the cache: the adapter answers only once.
+        let again = host.assertion_for_relay(&identity, &url).await.unwrap();
+        assert!(first.header().is_some());
+        assert_eq!(again.header(), first.header());
+        assert_eq!(server.await.unwrap().len(), 1);
     }
 
     #[tokio::test]

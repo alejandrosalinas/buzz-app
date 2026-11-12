@@ -1,5 +1,13 @@
-import { useSyncExternalStore } from "react";
+import { BuilderlabIdentityRow } from "./login/IdentityRow";
+import {
+  useLayoutEffect,
+  useState,
+  useSyncExternalStore,
+  type ReactNode,
+} from "react";
+import type { OverviewObserver, OverviewSnapshot } from "./overview";
 import type { PluginModule } from "../../plugins/api";
+import type { PageNavigation } from "../../features/navigation/service";
 import { handoffFederatedBackupSession } from "../../features/identity/backup";
 import { nativeIdentityEnabled } from "../../features/identity/service";
 import { Login } from "./login/Login";
@@ -14,14 +22,18 @@ import { createKnownCommunitiesClient } from "./known-communities/client";
 import { startKnownCommunitiesSync } from "./known-communities/sync";
 import { offerBuilderlabDecisions } from "./decisions";
 import type { AgentProviderSnapshot } from "../../features/agents/service";
-import { Header, InlineHeader } from "../../shared/design-system/ui/Header";
-import { SettingsGroup } from "../../shared/design-system/ui/SettingsGroup";
+import { InlineHeader } from "../../shared/design-system/ui/Header";
+import { useAgentsSnapshot } from "../../features/agents/react";
+import { agentTarget } from "../agents/routes";
+import { BuilderlabSettings, ManagementHeader } from "./BuilderlabSettings";
 import { BuilderlabLogoIcon } from "../../shared/design-system/icons";
 import { HostedCommunities } from "./communities/HostedCommunities";
 import { brokerApi, createApi } from "./communities/api";
 import { createNativeBackend } from "./communities/native";
 import { hostedAgentSettings } from "./service";
 import { applyApps } from "./apps";
+
+const CREATE_DISMISSED = "builderlab:create-dismissed";
 
 export const inject = [
   "host",
@@ -184,14 +196,41 @@ export const apply: PluginModule["apply"] = (ctx) => {
       : loginAvailable
         ? createApi(createNativeBackend(session, () => linking))
         : null);
-  const Communities = ({ active }: { active(): boolean }) => {
+  const Communities = ({
+    active,
+    onOverview,
+    navigation,
+    initialCreate,
+    onCreateClose,
+  }: {
+    active(): boolean;
+    onOverview: OverviewObserver;
+    navigation: ReactNode;
+    initialCreate: boolean;
+    onCreateClose(): void;
+  }) => {
     const state = useSyncExternalStore(session.subscribe, session.snapshot);
-    if (!communities) return null;
+    useLayoutEffect(() => {
+      if (
+        active() &&
+        (!communities ||
+          (communities !== brokerApi && state.status !== "signed-in"))
+      )
+        onOverview({ kind: "empty" });
+    }, [active, onOverview, state.status]);
+    const heading = (
+      <ManagementHeader navigation={navigation} title="Communities" />
+    );
+    if (!communities) return heading;
     if (communities === brokerApi)
       return (
         <HostedCommunities
+          initialCreate={initialCreate}
+          onCreateClose={onCreateClose}
+          navigation={navigation}
           api={communities}
           active={active}
+          onOverview={onOverview}
           join={ctx.communityJoin?.open}
         />
       );
@@ -199,6 +238,9 @@ export const apply: PluginModule["apply"] = (ctx) => {
       state.status === "signed-in" && dev ? session.viewerSession() : undefined;
     return state.status === "signed-in" ? (
       <HostedCommunities
+        initialCreate={initialCreate}
+        onCreateClose={onCreateClose}
+        navigation={navigation}
         key={
           viewer && "broker" in viewer
             ? viewer.broker.revision
@@ -206,26 +248,44 @@ export const apply: PluginModule["apply"] = (ctx) => {
         }
         api={communities}
         active={active}
+        onOverview={onOverview}
         join={ctx.communityJoin?.open}
         sharedSignIn
       />
-    ) : null;
+    ) : (
+      heading
+    );
   };
-  ctx.settingsCards.register({
-    id: "login",
-    title: "Builderlab",
-    icon: BuilderlabLogoIcon,
-    group: "Plugins",
-    component: ({ active }) => (
-      <section aria-labelledby="builderlab-title">
-        <Header
-          id="builderlab-title"
-          title="Builderlab"
-          subtitle="One Builderlab account for hosted communities, remote agents and apps."
-        />
-        <InlineHeader title="Account" />
-        <SettingsGroup layout="form">
+  const Settings = ({
+    active,
+    navigation,
+  }: {
+    active(): boolean;
+    navigation?: PageNavigation | undefined;
+  }) => {
+    const state = useSyncExternalStore(session.subscribe, session.snapshot);
+    const route =
+      navigation?.target.kind === "settings"
+        ? navigation.target.route
+        : undefined;
+    const createRequested =
+      route?.version === 1 && route.params === "create-community";
+    const saved = useAgentsSnapshot(ctx.agents);
+    const [communityOverview, setCommunityOverview] =
+      useState<OverviewSnapshot>({ kind: "pending" });
+    const [agentOverview, setAgentOverview] = useState<OverviewSnapshot>({
+      kind: "pending",
+    });
+    return (
+      <BuilderlabSettings
+        key={navigation?.entryId}
+        active={active}
+        initialSection={createRequested ? "communities" : undefined}
+        keepAccountVisible={state.status !== "signed-in"}
+        summaries={{ communities: communityOverview, agents: agentOverview }}
+        account={
           <Login
+            notice
             showHeading={false}
             session={session}
             available={loginAvailable}
@@ -237,10 +297,63 @@ export const apply: PluginModule["apply"] = (ctx) => {
             active={active}
             openIdentity={openIdentity}
           />
-        </SettingsGroup>
-        <Communities active={active} />
-        <RemoteAgents client={agents} session={session} active={active} />
-      </section>
-    ),
+        }
+        communities={(back) => (
+          <Communities
+            initialCreate={
+              createRequested && navigation?.position(CREATE_DISMISSED) !== true
+            }
+            onCreateClose={() => {
+              if (createRequested)
+                navigation?.savePosition(CREATE_DISMISSED, true);
+            }}
+            navigation={back}
+            active={active}
+            onOverview={setCommunityOverview}
+          />
+        )}
+        agents={
+          <RemoteAgents
+            client={agents}
+            session={session}
+            active={active}
+            onOverview={setAgentOverview}
+            savedAgents={saved?.agents ?? []}
+            openAgent={(pubkey) => {
+              if (active() && ctx.agents.find(pubkey))
+                void ctx.navigation.open(agentTarget(pubkey));
+            }}
+            showHeading={false}
+            openAgents={() => {
+              if (active())
+                void ctx.navigation.open({
+                  version: 1,
+                  kind: "page",
+                  pluginId: "buzz.agents",
+                  pageId: "agents",
+                });
+            }}
+          />
+        }
+      />
+    );
+  };
+  ctx.settingsCards.register({
+    id: "login",
+    title: "Builderlab",
+    icon: BuilderlabLogoIcon,
+    group: "Plugins",
+    ...(nativeBuilderlab() && !unavailable
+      ? {
+          identityRow: ({ active }: { active(): boolean }) => (
+            <BuilderlabIdentityRow
+              session={session}
+              active={active}
+              openSettings={() => openSettings("block.builderlab/login")}
+            />
+          ),
+        }
+      : {}),
+    component: Settings,
   });
 };

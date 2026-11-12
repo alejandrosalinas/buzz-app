@@ -54,28 +54,28 @@ it("waits for the account choice before showing the chooser", async () => {
     "Reading your saved choice.",
   );
   expect(
-    screen.queryByRole("button", { name: "Create agent" }),
+    screen.queryByRole("button", { name: "Create an agent" }),
   ).not.toBeInTheDocument();
   await act(async () => choice.resolve(undefined));
   expect(
-    await screen.findByRole("button", { name: "Create agent" }),
+    await screen.findByRole("button", { name: "Create an agent" }),
   ).toBeVisible();
 });
 
-it("replaces hosted setup with the manual Bestie chooser", async () => {
+it("offers first-agent creation without automatically opening its dialog", async () => {
   const h = await bestieFixture(native.invoke);
   renderPage(h);
   expect(
-    await screen.findByRole("heading", { name: "Choose your bestie agent" }),
+    await screen.findByRole("heading", {
+      name: "Create your first agent",
+    }),
   ).toBeVisible();
   expect(
     screen.getByText(
-      "This is your primary agent in Buzz. They’ll get special placement and extra capabilities in the app.",
+      "Buzz is better with your agents. Create one to get started.",
     ),
   ).toBeVisible();
-  expect(
-    screen.getByText("Choose an eligible agent or create a new one:"),
-  ).toBeVisible();
+  expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
   expect(
     screen.queryByRole("button", { name: "Set up Bestie" }),
   ).not.toBeInTheDocument();
@@ -104,6 +104,8 @@ it("opens the existing new-agent dialog from the chooser", async () => {
   const h = await bestieFixture(native.invoke);
   renderPage(h);
   const user = userEvent.setup();
-  await user.click(await screen.findByRole("button", { name: "Create agent" }));
+  await user.click(
+    await screen.findByRole("button", { name: "Create an agent" }),
+  );
   expect(screen.getByRole("dialog", { name: "Create agent" })).toBeVisible();
 });

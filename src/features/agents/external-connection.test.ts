@@ -483,6 +483,7 @@ it("keeps a replacement grant visible while an older failure closes", async () =
   connection.bind({ connect, deny: async () => {} });
   connection.open(request, "viewer");
   const failed = connection.approve("first-agent");
+  const firstId = connection.snapshot().grant?.id;
   try {
     await started.promise;
     connection.open(
@@ -502,6 +503,7 @@ it("keeps a replacement grant visible while an older failure closes", async () =
     agent: "second-agent",
     phase: "connected",
   });
+  expect(connection.snapshot().grant?.id).not.toBe(firstId);
   expect(connection.snapshot().error).toBeUndefined();
   await connection.revoke();
   expect(second.close).toHaveBeenCalledOnce();

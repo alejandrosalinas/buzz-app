@@ -172,6 +172,7 @@ function session(scope: string) {
     {
       outboxStorage: { load: () => [], save() {} },
       readStateStorage: {
+        capture: async () => structuredClone(journal),
         async update(change) {
           journal = change(journal);
           return journal;
@@ -307,6 +308,7 @@ const relay: RelayData = {
     };
   },
   retry() {},
+  tryAgain() {},
   disconnect() {},
   clearCache: () => owner.clearCache(),
 };

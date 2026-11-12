@@ -1,20 +1,11 @@
 import { hoverMessage } from "./message-actions.mjs";
 import { test, expect } from "./fixture.mjs";
 import { open } from "./timeline.mjs";
+import { animationsSettled } from "./animations.mjs";
 
 const opened = async (menu) => {
   await expect(menu).toBeVisible();
-  await menu.evaluate((node) =>
-    Promise.all(
-      node
-        .getAnimations({ subtree: true })
-        .filter(
-          (animation) =>
-            animation.effect?.getComputedTiming().endTime !== Infinity,
-        )
-        .map((animation) => animation.finished),
-    ),
-  );
+  await animationsSettled(menu, { subtree: true });
 };
 test.use({
   productionBroker: true,
@@ -65,17 +56,7 @@ test("the verified owner confirms a NIP-09 delete for an agent message", async (
   await expect(
     confirmation.getByRole("button", { name: "Cancel" }),
   ).toBeFocused();
-  await confirmation.evaluate((dialog) =>
-    Promise.all(
-      dialog
-        .getAnimations({ subtree: true })
-        .filter(
-          (animation) =>
-            animation.effect?.getComputedTiming().endTime !== Infinity,
-        )
-        .map((animation) => animation.finished),
-    ),
-  );
+  await animationsSettled(confirmation, { subtree: true });
   await expect
     .poll(() =>
       app.report.publications.filter(({ event: item }) => item.kind === 5),

@@ -59,7 +59,7 @@ const shortAge = (createdAt: number, now = Date.now()) => {
   });
 };
 
-/** Recent activity, shown while the pointer rests on the dock's Activity bell. */
+/** Recent activity, shown while the pointer rests on the sidebar's Activity row. */
 export function InboxPreview({
   relay,
   navigator,
@@ -92,7 +92,7 @@ export function InboxPreview({
       </p>
       {connection.status === "error" && !connection.denied && (
         <div className={styles.notice}>
-          <Button size="sm" onClick={relay.retry}>
+          <Button size="sm" onClick={relay.tryAgain}>
             Retry connection
           </Button>
         </div>

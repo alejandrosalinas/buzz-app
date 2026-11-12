@@ -269,6 +269,14 @@ Tests, fixtures, docs and examples use example values (`example.org`,
 `example-org`). Reviewers treat a violation as a blocking
 finding.
 
+The same applies to everything published here: issues, PR titles and
+descriptions, commit messages, comments and reviews. Never include details from
+internal discussions. That means no quotes or paraphrases of private chat
+threads, no links to internal chats, messages or meetings, no attribution of
+opinions to colleagues, and no internal planning or deliberation. Describe the
+problem from its observable behavior, the public source and public issues and
+PRs.
+
 ## Commit attribution and DCO
 
 Every PR commit needs a `Signed-off-by` (the hosted **DCO Check** fails without

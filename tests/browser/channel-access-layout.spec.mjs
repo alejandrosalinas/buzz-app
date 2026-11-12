@@ -1,5 +1,6 @@
 import { test, expect } from "./fixture.mjs";
 import { openPage } from "./navigation.mjs";
+import { animationsSettled } from "./animations.mjs";
 
 test.use({
   productionBroker: true,
@@ -73,11 +74,7 @@ test("general access starts the member list and footer actions stay reachable wi
   expect(await audience.evaluate((node) => !!node.closest("header"))).toBe(
     false,
   );
-  await dialog.evaluate(async (node) => {
-    await Promise.all(
-      node.getAnimations().map((animation) => animation.finished),
-    );
-  });
+  await animationsSettled(dialog);
   for (const [width, height, scale, theme] of [
     [1440, 950, 1, "light"],
     [1440, 950, 1, "dark"],

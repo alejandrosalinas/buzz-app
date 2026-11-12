@@ -312,6 +312,29 @@ test.describe("pages inside one second", () => {
       };
     });
   }
+  // A pause in geometry is not completion of the deferred page measurements.
+  // Wait for Virtua's offsets to reflect the mounted rows' actual heights
+  // before taking an independent baseline for growth.
+  async function measured(page) {
+    await expect
+      .poll(() =>
+        history(page).evaluate((element) => {
+          const items = Array.from(element.querySelector("ol").children);
+          return items.every((item, index) => {
+            const next = items[index + 1];
+            return (
+              !next ||
+              Math.abs(
+                next.getBoundingClientRect().top -
+                  item.getBoundingClientRect().bottom,
+              ) < 1
+            );
+          });
+        }),
+      )
+      .toBe(true);
+    await settle(page);
+  }
 
   test("a held pointer scrolls across the page without being pulled back", async ({
     page,
@@ -555,33 +578,64 @@ test.describe("pages inside one second", () => {
     } finally {
       await page.evaluate(() => window.releaseFrames());
     }
-    // A pause in geometry is not completion of the deferred page measurements.
-    // Wait for Virtua's offsets to reflect the mounted rows' actual heights
-    // before taking an independent baseline for the growth below the reader.
-    await expect
-      .poll(() =>
-        history(page).evaluate((element) => {
-          const items = Array.from(element.querySelector("ol").children);
-          return items.every((item, index) => {
-            const next = items[index + 1];
-            return (
-              !next ||
-              Math.abs(
-                next.getBoundingClientRect().top -
-                  item.getBoundingClientRect().bottom,
-              ) < 1
-            );
-          });
-        }),
-      )
-      .toBe(true);
-    await settle(page);
+    await measured(page);
     const measuredHeight = await history(page).evaluate((e) => e.scrollHeight);
     const beforeGrowth = await grow(page);
     await expect
       .poll(() => history(page).evaluate((e) => e.scrollHeight))
       .toBeGreaterThan(measuredHeight);
     await expectAnchor(page, beforeGrowth);
+  });
+
+  test("a drag released before a render that holds its row again ends the hold", async ({
+    page,
+    app,
+  }) => {
+    const pending = await reading(page, app, 1400);
+    const box = await history(page).boundingBox();
+    await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
+    await page.mouse.down();
+    const height = await history(page).evaluate((e) => e.scrollHeight);
+    await holdFrames(page);
+    try {
+      pending.release();
+      await expect
+        .poll(() => history(page).evaluate((e) => e.scrollHeight))
+        .toBeGreaterThan(height);
+      await history(page).evaluate(
+        (e) =>
+          new Promise((resolve) => {
+            e.addEventListener("scrollend", resolve, { once: true });
+            e.scrollTop -= 300;
+          }),
+      );
+      await page.mouse.up();
+      // The timeline renders new rows before the page's rows measure, and
+      // holds the reader's row again for them.
+      app.append("primary", "alpha", undefined, true, false);
+      await expect(latest(page)).toHaveText("1 new message");
+    } finally {
+      await page.evaluate(() => window.releaseFrames());
+    }
+    await measured(page);
+    const before = await anchor(page);
+    // The reader's row and the rows after it in view grow below their
+    // paragraphs. A hold left on any of them would move the reader's row.
+    await history(page).evaluate((e, id) => {
+      const bottom = e.getBoundingClientRect().bottom;
+      const rows = [...e.querySelectorAll("[data-message-id]")];
+      for (const row of rows.slice(
+        rows.findIndex((row) => row.dataset.messageId === id),
+      )) {
+        const paragraph = row.querySelector("p");
+        if (paragraph.getBoundingClientRect().bottom > bottom) break;
+        const extra = document.createElement("div");
+        extra.style.height = "300px";
+        paragraph.after(extra);
+      }
+    }, before.id);
+    await settle(page);
+    await expectAnchor(page, before);
   });
 
   test("a cancelled drag ends the hold", async ({ page, app }) => {

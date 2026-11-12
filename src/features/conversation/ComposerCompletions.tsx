@@ -26,14 +26,20 @@ import type {
   ComposerCompletion,
   ComposerCompletionProps,
   CompletionContext,
-  CompletionEdit,
   CompletionQuery,
   CompletionResult,
   ComposerObservation,
   ContributionReader,
+  IdentityMark,
 } from "./contracts";
 import { ContributionBoundary, contributionKey } from "./ContributionBoundary";
-import { completionResult, matchCompletion } from "./completion";
+import { IdentityMarks } from "./IdentityMarks";
+import {
+  completionResult,
+  matchCompletion,
+  type HostCompletionEdit,
+  type HostCompletionResult,
+} from "./completion";
 import type { CompletionEditor } from "./useCompletionEditor";
 import styles from "./Completions.module.css";
 import { Tooltip } from "../../shared/design-system/ui/Tooltip";
@@ -89,14 +95,14 @@ function EmojiCompletionName({
  * popup closed starts empty: `ComposerCompletions` evicts the store in its
  * closed render, so a carried result means only a continuing open query. */
 function createDisplay() {
-  let shown: { key: string; result: CompletionResult | undefined } = {
+  let shown: { key: string; result: HostCompletionResult | undefined } = {
     key: "",
     result: undefined,
   };
   const listeners = new Set<() => void>();
   return {
     read: (key: string) => (shown.key === key ? shown.result : undefined),
-    set(key: string, result: CompletionResult | undefined) {
+    set(key: string, result: HostCompletionResult | undefined) {
       shown = { key, result };
       for (const listener of listeners) listener();
     },
@@ -152,6 +158,7 @@ function channelCompletionInProse(
 
 export function ComposerCompletions({
   registry,
+  identityMarks,
   editor,
   input,
   replace,
@@ -159,6 +166,7 @@ export function ComposerCompletions({
   ...context
 }: CompletionContext & {
   registry: ContributionReader<ComposerCompletion>;
+  identityMarks?: ContributionReader<IdentityMark> | undefined;
   editor: CompletionEditor;
   input: RefObject<ComposerInputElement | null>;
   /** Chip ranges and the draft text they were measured against. */
@@ -168,9 +176,10 @@ export function ComposerCompletions({
     recipients: readonly Readonly<{ start: number; end: number }>[];
     /** Mentions still resolving; their `@` is no more an open query. */
     pending?: readonly Readonly<{ start: number; end: number }>[] | undefined;
+    tokens?: readonly Readonly<{ start: number; end: number }>[] | undefined;
   }>;
   replace(
-    edit: CompletionEdit,
+    edit: HostCompletionEdit,
     query: CompletionQuery,
     observation: ComposerObservation,
     key?: string,
@@ -206,6 +215,7 @@ export function ComposerCompletions({
     matchCompletion(providers, observation, context, [
       ...resolved.recipients,
       ...(resolved.pending ?? []),
+      ...(resolved.tokens ?? []),
     ]);
   const open =
     !!match &&
@@ -242,6 +252,7 @@ export function ComposerCompletions({
       <OwnedCompletion
         {...context}
         registry={registry}
+        identityMarks={identityMarks}
         display={display}
         provider={match.provider}
         query={match.query}
@@ -257,6 +268,7 @@ export function ComposerCompletions({
 function OwnedCompletion({
   provider,
   registry,
+  identityMarks,
   display,
   query,
   observation,
@@ -268,6 +280,7 @@ function OwnedCompletion({
 }: CompletionContext & {
   provider: Contribution<ComposerCompletion>;
   registry: ContributionReader<ComposerCompletion>;
+  identityMarks?: ContributionReader<IdentityMark> | undefined;
   display: ReturnType<typeof createDisplay>;
   query: CompletionQuery;
   observation: ComposerObservation;
@@ -277,7 +290,7 @@ function OwnedCompletion({
     Pick<PointerEvent, "clientX" | "clientY"> | undefined
   >;
   replace(
-    edit: CompletionEdit,
+    edit: HostCompletionEdit,
     query: CompletionQuery,
     observation: ComposerObservation,
     key?: string,
@@ -308,7 +321,7 @@ function OwnedCompletion({
     () => display.read(trigger),
   );
   // This lifetime's own publication; a carried display is never acted on.
-  const latest = useRef<CompletionResult | undefined>(undefined);
+  const latest = useRef<HostCompletionResult | undefined>(undefined);
   // Only user navigation pins an ID; automatic selection follows the first result.
   const [selected, setSelected] = useState<string | typeof RETRY>();
   const [keyboardSelection, setKeyboardSelection] = useState<string>();
@@ -353,7 +366,7 @@ function OwnedCompletion({
     let owned = true;
     setPublish(() => (incoming: CompletionResult) => {
       if (!owned || !active()) return false;
-      const next = completionResult(incoming);
+      const next = completionResult(incoming, provider);
       latest.current = next;
       revealSelection.current = true;
       display.set(trigger, next);
@@ -375,7 +388,7 @@ function OwnedCompletion({
       live.current = false;
       latest.current = undefined;
     };
-  }, [active, display, trigger]);
+  }, [active, display, provider, trigger]);
   // A carried result stands only until this query's provider has run its
   // mount effects, which precede this one; a provider that has not published
   // by then leaves the popup closed, as for a first query, so a stale display
@@ -566,7 +579,18 @@ function OwnedCompletion({
               ref={list}
               className={styles.list}
             >
-              {items.map((item, i) => (
+              {items.flatMap((item, i) => [
+                item.group && item.group !== items[i - 1]?.group && (
+                  // Read as the description of each row it heads.
+                  <div
+                    key={`group:${item.id}`}
+                    id={`${id}-group-${i}`}
+                    aria-hidden="true"
+                    className={styles.group}
+                  >
+                    {item.group}
+                  </div>
+                ),
                 // The textarea owns keyboard focus/selection via aria-activedescendant.
                 // biome-ignore lint/a11y/useKeyWithClickEvents: Keyboard acceptance belongs to the focused textarea.
                 <div
@@ -584,6 +608,10 @@ function OwnedCompletion({
                   // which its label no longer spells out.
                   data-completion-id={item.id}
                   key={item.id}
+                  aria-describedby={
+                    item.group &&
+                    `${id}-group-${items.findIndex((row) => row.group === item.group)}`
+                  }
                   onPointerDown={(event) => {
                     if (event.button === 0) event.preventDefault();
                   }}
@@ -618,6 +646,14 @@ function OwnedCompletion({
                       // Only the name ellipsizes; the agent mark stays visible.
                       <span className={styles.nameRow}>
                         <span className={styles.name}>{item.label}</span>
+                        {mention && item.edit.mention && (
+                          <IdentityMarks
+                            registry={identityMarks}
+                            pubkey={item.edit.mention.pubkey}
+                            profiles={context.session.profiles}
+                            className={styles.identityMarks}
+                          />
+                        )}
                         {item.agent && (
                           <span aria-hidden="true" className={styles.agentMark}>
                             <RobotIcon />
@@ -639,8 +675,8 @@ function OwnedCompletion({
                       Enter
                     </span>
                   )}
-                </div>
-              ))}
+                </div>,
+              ])}
               {result?.retry && (
                 // biome-ignore lint/a11y/useKeyWithClickEvents: Keyboard acceptance belongs to the focused textarea.
                 <div

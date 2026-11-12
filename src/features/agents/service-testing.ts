@@ -216,6 +216,7 @@ export function fakeRelay(origin = "https://relay.example.test") {
         ___: AbortSignal,
       ) => true,
     ),
+    presence: { remoteRuntimes: vi.fn<(keys: Iterable<string>) => void>() },
   } as unknown as RelaySession;
   let snapshot: RelaySnapshot = {
     status: "ready",
@@ -539,6 +540,9 @@ export function fakeNative(identities: AgentIdentity[] = []) {
     ),
     publishProfile: vi.fn(async (_: Membership) => {}),
     query: vi.fn<AgentsNative["query"]>(async () => []),
+    effectiveEdit: vi.fn<AgentsNative["effectiveEdit"]>(async () => {
+      throw new Error("No effective edit fixture");
+    }),
     searchProfiles: vi.fn(async () => undefined),
     upload: vi.fn(async () => ({ url: "", sha256: "", size: 0, type: "" })),
     media: vi.fn(async () => ({ path: "", type: "", size: 0 })),

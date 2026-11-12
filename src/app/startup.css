@@ -1,6 +1,7 @@
 /* Parser-loaded before the application graph. Palette stays design-system owned. */
 @layer theme, base, components, utilities;
 @import "../shared/design-system/styles/tokens.css";
+@import "../shared/design-system/styles/typography.css";
 @import "../shared/styles/tokens.css";
 
 @layer base {
@@ -61,4 +62,95 @@ html[data-welcome-intro] .buzz-launch {
 }
 html[data-welcome-intro] .buzz-launch picture {
   visibility: hidden;
+}
+
+/* Startup that can't finish (public/launch-init.js). The app bundle may never
+   have loaded, so these use only the tokens above and plain elements. */
+.buzz-startup-failure {
+  box-sizing: border-box;
+  min-height: 100dvh;
+  display: grid;
+  place-items: center;
+  padding: var(--space-8);
+  background: var(--bg-app);
+  color: var(--text);
+  font-family: var(--font-sans);
+  font-size: var(--text-body);
+  line-height: var(--text-body--line-height);
+}
+.buzz-startup-content {
+  display: grid;
+  gap: var(--space-5);
+  width: 100%;
+  max-width: 30rem;
+}
+.buzz-startup-message {
+  display: grid;
+  gap: var(--space-2);
+}
+.buzz-startup-message h1 {
+  margin: 0;
+  font-size: var(--text-heading);
+  line-height: var(--text-heading--line-height);
+  letter-spacing: var(--text-heading--letter-spacing);
+  font-weight: var(--text-heading--font-weight);
+}
+.buzz-startup-message p,
+.buzz-launch-slow p {
+  margin: 0;
+  color: var(--text-subtle);
+}
+.buzz-startup-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+}
+.buzz-startup-button {
+  min-height: var(--size-control);
+  border: 0;
+  border-radius: var(--radius-capsule);
+  padding: var(--space-2) var(--space-6);
+  background: var(--affordance-subtle);
+  color: var(--text-standard);
+  font: inherit;
+  cursor: pointer;
+}
+.buzz-startup-button[data-prominent] {
+  background: var(--affordance-prominent);
+  color: var(--text-on-prominent);
+}
+.buzz-startup-button:focus-visible {
+  outline: 2px solid var(--border-focus);
+  outline-offset: 2px;
+}
+.buzz-startup-details summary {
+  width: fit-content;
+  color: var(--text-subtle);
+  cursor: pointer;
+}
+.buzz-startup-details pre {
+  max-height: 40dvh;
+  overflow: auto;
+  margin: var(--space-2) 0 0;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  font-family: var(--font-mono);
+  font-size: var(--text-body-sm);
+  line-height: var(--text-body-sm--line-height);
+  -webkit-user-select: text;
+  user-select: text;
+}
+/* Below the centred mark, which stays where it was. */
+.buzz-launch-slow {
+  position: absolute;
+  inset-inline: 0;
+  top: calc(50% + 4.5rem);
+  display: grid;
+  justify-items: center;
+  gap: var(--space-3);
+  padding-inline: var(--space-6);
+  text-align: center;
+  font-family: var(--font-sans);
+  font-size: var(--text-body);
+  line-height: var(--text-body--line-height);
 }

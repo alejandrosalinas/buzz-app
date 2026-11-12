@@ -82,24 +82,59 @@ async function toggleActivity(element) {
     };
   };
   const samples = [sample()];
+  const running = () =>
+    element
+      .querySelector('[class*="audienceBody"]')
+      ?.getAnimations()
+      .find((candidate) => candidate.transitionProperty === "height");
   // Capture the real CSS transition before it advances. Sampling its
   // progress explicitly keeps loaded runners from skipping the handoff.
-  const transition = new Promise((resolve) => {
+  // Each frame also looks for it, in case its transitionrun event was missed,
+  // and a toggle that starts none fails with the panel's state instead of
+  // waiting out the test.
+  const transition = new Promise((resolve, reject) => {
+    const deadline = performance.now() + 5_000;
+    let frame;
+    const done = (animation) => {
+      cancelAnimationFrame(frame);
+      element.removeEventListener("transitionrun", capture);
+      animation.pause();
+      resolve(animation);
+    };
     const capture = (event) => {
       if (
         event.propertyName !== "height" ||
         !event.target.className.includes("audienceBody")
       )
         return;
-      const animation = event.target
-        .getAnimations()
-        .find((candidate) => candidate.transitionProperty === "height");
-      if (!animation) return;
-      animation.pause();
+      const animation = running();
+      if (animation) done(animation);
+    };
+    const poll = () => {
+      const animation = running();
+      if (animation) return done(animation);
+      if (performance.now() < deadline) {
+        frame = requestAnimationFrame(poll);
+        return;
+      }
       element.removeEventListener("transitionrun", capture);
-      resolve(animation);
+      const panel = element.querySelector('[class*="audienceBody"]');
+      reject(
+        new Error(
+          `The toggle started no height transition: ${JSON.stringify({
+            connected: element.isConnected,
+            expanded: element.querySelector("button").ariaExpanded,
+            panel: panel && {
+              attributes: panel.getAttributeNames(),
+              height: getComputedStyle(panel).height,
+              transition: getComputedStyle(panel).transition,
+            },
+          })}`,
+        ),
+      );
     };
     element.addEventListener("transitionrun", capture);
+    frame = requestAnimationFrame(poll);
   });
   element.querySelector("button").click();
   const animation = await transition;
@@ -442,6 +477,13 @@ test("activity details keep readable text through both handoffs and survive new 
     await expect(step).toBeVisible();
     for (const width of [1280, 480]) {
       await page.setViewportSize({ width, height: 1000 });
+      // The page sees the new size in a later rendering update, then remeasures
+      // its rows and Virtua restores the reading position. A toggle clicked
+      // before then opens during that reflow; in a CI WebKit run, that opening
+      // never reported the height transition sampled below. Toggle at the
+      // settled width.
+      await expect.poll(() => page.evaluate(() => innerWidth)).toBe(width);
+      await virtuaIdle(page);
       for (const open of [true, false]) {
         const painted = await step.evaluate(toggleActivity);
         expect(painted).toHaveLength(7);

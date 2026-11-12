@@ -41,6 +41,7 @@ type PopoverPopupProps = Omit<
     | "align"
     | "sideOffset"
     | "alignOffset"
+    | "collisionBoundary"
     | "collisionPadding"
     | "collisionAvoidance"
     | "anchor"
@@ -59,6 +60,7 @@ export function PopoverPopup({
   align = "start",
   sideOffset = 8,
   alignOffset,
+  collisionBoundary,
   collisionPadding = 8,
   collisionAvoidance,
   anchor,
@@ -79,6 +81,7 @@ export function PopoverPopup({
         align={align}
         sideOffset={sideOffset}
         alignOffset={alignOffset}
+        collisionBoundary={collisionBoundary}
         collisionPadding={collisionPadding}
         collisionAvoidance={collisionAvoidance}
         anchor={anchor}

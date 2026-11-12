@@ -6,6 +6,7 @@ import type { Outbox } from "./outbox";
 import { MessageProjection } from "./message-projection";
 import { createRelayProfiler, type RelayProfiler } from "./profiling";
 import { isTransientFailure, ReadError, readErrorKind } from "./errors";
+import { refusalOfError } from "./http-admission";
 import type {
   ChannelReference,
   ChannelList,
@@ -167,6 +168,11 @@ const DISCOVERY_LIMIT = 500;
  * of twice this, the relay's maximum, leaves room for strays; a filter that
  * reaches it proves only the channels whose creation arrived. */
 const CREATION_READ_CHANNELS = 250;
+/** Backoff before a background creator-proof read retries after finding no
+ * receipt or failing: doubling from a minute to an hour, jittered up to half
+ * again so clients that missed together retry apart. */
+const CREATION_RETRY_MS = 60_000;
+const CREATION_RETRY_MAX_MS = 3_600_000;
 // Public channel metadata for name search, read a page at a time up to a
 // bound; matches resolve exactly.
 const PUBLIC_CHANNEL_PAGE = 500;
@@ -207,7 +213,8 @@ const publicRank = (name: string, needle: string, exact?: boolean) =>
       ? MatchRank.exact
       : undefined
     : matchRank(name, needle);
-const FRESH_FOR = 60_000;
+/** How long a completed read answers a repeated trigger without asking again. */
+export const FRESH_FOR = 60_000;
 /** Pages a reconnect catch-up reads back from the head before it gives up on
  * reaching the rows the reader kept across the disconnect. */
 const CATCH_UP_PAGES = 5;
@@ -922,10 +929,40 @@ export function createChannelStore(
       if (!discovery?.authorized(id) && unchangedPreview(id, version))
         denyChannel(id, new Error("Conversation is unavailable"));
   }
+  /** Ends a window's reads and leaves it showing only the refusal. */
+  function closeWindow(state: WindowState, error: unknown) {
+    state.generation++;
+    state.controller?.abort();
+    state.noticeRead?.controller.abort();
+    state.events = [];
+    state.notices.clear();
+    state.noticeCursor = undefined;
+    state.floor = undefined;
+    state.traffic.clear();
+    setWindow(state, {
+      status: "error",
+      rows: EMPTY_ROWS,
+      error: describe(error),
+      loadingOlder: false,
+      refreshing: undefined,
+    });
+  }
   function denyChannel(channelId: string, error: unknown) {
     // A chat still starting is not there to deny yet; only a refused or
     // missing create ends it (see channelWrites.start).
     if (discovery?.isPending(channelId)) return;
+    // The community refused the account, not this channel. Its owner (the
+    // relay service's deny) ends the session and decides what saved data
+    // survives: it keeps it for an ended sign-in. Until then, stop showing
+    // this channel's rows and preview, but keep its access and saved copy.
+    if (refusalOfError(error)) {
+      heads.delete(channelId);
+      tails.delete(channelId);
+      const state = windows.get(channelId);
+      if (state) closeWindow(state, error);
+      setList(list);
+      return;
+    }
     accessVersions.set(channelId, (accessVersions.get(channelId) ?? 0) + 1);
     discovery?.deny(channelId);
     allowed?.delete(channelId);
@@ -933,22 +970,7 @@ export function createChannelStore(
       heads.delete(channelId);
       tails.delete(channelId);
       const state = windows.get(channelId);
-      if (state) {
-        state.generation++;
-        state.controller?.abort();
-        state.noticeRead?.controller.abort();
-        state.events = [];
-        state.notices.clear();
-        state.noticeCursor = undefined;
-        state.floor = undefined;
-        state.traffic.clear();
-        setWindow(state, {
-          status: "error",
-          rows: EMPTY_ROWS,
-          error: describe(error),
-          loadingOlder: false,
-        });
-      }
+      if (state) closeWindow(state, error);
       setList(
         {
           ...list,
@@ -1501,9 +1523,31 @@ export function createChannelStore(
       await profiles;
     }
   }
-  // Background reads deduplicate metadata versions; strong resolution revisits proof.
-  type CreationRead = { version: string; complete: boolean };
+  // A channel's creator and creation receipt never change, so background reads
+  // are per channel, not per metadata version: every membership change
+  // republishes 39000 to each online member. A receipt is final. A miss may be
+  // replica lag, so a later version retries once its backoff (`retryAt`,
+  // monotonic ms) passes. Strong resolution revisits proof.
+  type CreationRead = { complete: boolean; misses: number; retryAt?: number };
   const creationReads = new Map<string, CreationRead>();
+  /** Whether a background read may run now: none ran, or a miss backed off. */
+  function retries(id: string) {
+    const read = creationReads.get(id);
+    return (
+      !read || (read.retryAt !== undefined && performance.now() >= read.retryAt)
+    );
+  }
+  function missed(read: CreationRead) {
+    read.complete = true;
+    read.misses++;
+    read.retryAt =
+      performance.now() +
+      Math.min(
+        CREATION_RETRY_MS * 2 ** (read.misses - 1),
+        CREATION_RETRY_MAX_MS,
+      ) *
+        (1 + Math.random() / 2);
+  }
   async function readCreations(
     events: readonly RelayEvent[],
     settings?: ChannelReadOptions,
@@ -1521,11 +1565,13 @@ export function createChannelStore(
         discovery.metadataVersion(id)?.id !== event.id ||
         discovery.get(id)?.parentChannelId ||
         !identity.creator ||
-        (settings?.consistency !== "strong" &&
-          creationReads.get(id)?.version === event.id)
+        (settings?.consistency !== "strong" && !retries(id))
       )
         return [];
-      const read = { version: event.id, complete: false };
+      const read: CreationRead = {
+        complete: false,
+        misses: creationReads.get(id)?.misses ?? 0,
+      };
       creationReads.set(id, read);
       pending.set(id, read);
       return [{ id, creator: identity.creator }];
@@ -1593,9 +1639,10 @@ export function createChannelStore(
               read &&
               creationReads.get(id) === read &&
               (!cut || proved.has(id))
-            )
-              read.complete = true;
-            else if (read && creationReads.get(id) === read)
+            ) {
+              if (proved.has(id)) read.complete = true;
+              else missed(read);
+            } else if (read && creationReads.get(id) === read)
               creationReads.delete(id);
           }
         }
@@ -1604,10 +1651,13 @@ export function createChannelStore(
     })()
       .catch((error) => {
         // Unavailable proof leaves an ordinary channel. A later metadata refresh
-        // may retry; never turn a failed proof read into loss of channel access.
+        // may retry after backing off; never turn a failed proof read into loss
+        // of channel access. A cancelled read proved and cost nothing.
         for (const [id, read] of pending)
-          if (!read.complete && creationReads.get(id) === read)
-            creationReads.delete(id);
+          if (!read.complete && creationReads.get(id) === read) {
+            if (isAbort(error)) creationReads.delete(id);
+            else missed(read);
+          }
         throw error;
       })
       .finally(() => controllers.delete(controller));
@@ -2103,7 +2153,12 @@ export function createChannelStore(
           };
       if (error instanceof ReadError && error.retryAfterMs !== undefined)
         listRetryAt = performance.now() + error.retryAfterMs;
-      if (denyAllOnFailure && readErrorKind(error) === "denied") {
+      if (
+        denyAllOnFailure &&
+        readErrorKind(error) === "denied" &&
+        // A community-wide refusal belongs to the relay service (see denyChannel).
+        !refusalOfError(error)
+      ) {
         discovery.denyAll();
         transport.revokeAccess(() => {
           for (const id of allowed ?? [])

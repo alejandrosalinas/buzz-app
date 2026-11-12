@@ -5,6 +5,9 @@ const encoded = new Map<string, string>();
 
 /** The full npub of a hex public key, or undefined for anything else. */
 export function canonicalPublicKey(pubkey: string): string | undefined {
+  // Only valid lowercase keys are cached, so a hit needs no validation.
+  const cached = encoded.get(pubkey);
+  if (cached) return cached;
   if (!/^[0-9a-f]{64}$/i.test(pubkey)) return undefined;
   const key = pubkey.toLowerCase();
   let npub = encoded.get(key);

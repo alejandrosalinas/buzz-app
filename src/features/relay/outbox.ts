@@ -86,7 +86,8 @@ export interface Outbox {
     replacement?: Replacement,
   ): Promise<void>;
   retry(id: string, active?: () => boolean): void;
-  dismiss(id: string): Promise<void>;
+  /** owner: the recovery its caller owns and releases with an unconfirmed send. */
+  dismiss(id: string, owner?: OutboxRecovery): Promise<void>;
   /** Durable explicit dismissal, with delivery evidence at removal. */
   observeDismiss(listener: (item: OutgoingEvent) => void): () => void;
 }
@@ -1075,12 +1076,17 @@ export function createOutbox(
         dismissListeners.delete(listener);
       };
     },
-    dismiss(id: string) {
+    dismiss(id: string, owner?: OutboxRecovery) {
       const pending = dismissing.get(id);
       if (pending) return pending;
       if (closed || attempts.has(id)) return Promise.resolve();
       const item = visible.find((item) => item.event.id === id);
-      if (item?.recovery && item.delivery !== "failed")
+      if (
+        item?.recovery &&
+        item.delivery !== "failed" &&
+        (item.recovery.key !== owner?.key ||
+          item.recovery.value !== owner.value)
+      )
         return Promise.reject(
           new Error(
             item.event.kind === 9000

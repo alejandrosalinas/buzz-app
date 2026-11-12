@@ -2,6 +2,7 @@ import { finalizeEvent } from "nostr-tools";
 import { hoverMessage } from "./message-actions.mjs";
 import { test, expect } from "./fixture.mjs";
 import { open } from "./timeline.mjs";
+import { animationsSettled } from "./animations.mjs";
 
 const localAgentKey =
   "79be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798";
@@ -192,7 +193,8 @@ test("local agent receipt, work and failure agree across sidebar, thread and exa
 test("Stop in a message's activity ends its local work quietly", async ({
   page,
   app,
-}, testInfo) => {
+  browserName,
+}) => {
   await open(page, app);
   await expect
     .poll(() => page.evaluate(() => !!window.localAgentFixture))
@@ -239,74 +241,30 @@ test("Stop in a message's activity ends its local work quietly", async ({
       ),
     event.id,
   );
-  await activity.hover();
-  const popup = page.getByRole("dialog", {
-    name: "Agent activity",
-    exact: true,
-  });
-  const stop = popup.getByRole("button", {
+  const row = thread.locator(`[data-message-id="${event.id}"]`);
+  const stop = row.getByRole("button", {
     name: "Stop Local tester",
     exact: true,
   });
-  await expect(stop).toBeVisible();
+  await page.mouse.move(0, 0);
+  const restingBox = await activity.boundingBox();
+  await row
+    .getByRole("region", { name: "Agent activity on this message" })
+    .hover();
   await expect(stop).toHaveText("Stop");
-  // The small action sits inside a padded slot; its hit area stays unobscured.
-  await expect
-    .poll(() =>
-      stop.evaluate((element) => {
-        const button = element.getBoundingClientRect();
-        const slot = element.parentElement.getBoundingClientRect();
-        return (
-          slot.height > button.height &&
-          slot.width > button.width &&
-          element.contains(
-            document.elementFromPoint(
-              button.x + button.width / 2,
-              button.y + button.height / 2,
-            ),
-          )
-        );
-      }),
-    )
-    .toBe(true);
-  await expect(popup).not.toHaveAttribute("data-starting-style", "");
-  const preview = popup.getByText(/^Reading /);
-  await expect(preview).toBeVisible();
-  const line = await preview.evaluate((element) => {
-    const style = getComputedStyle(element);
-    return {
-      height: element.getBoundingClientRect().height,
-      lineHeight: Number.parseFloat(style.lineHeight),
-      clipped: element.scrollWidth > element.clientWidth,
-      ellipsis: style.textOverflow,
-    };
-  });
-  expect(line.height).toBeLessThan(line.lineHeight * 1.5);
-  expect(line.clipped).toBe(true);
-  expect(line.ellipsis).toBe("ellipsis");
-  // Stop stays inside the popup, after its row's preview.
-  const [box, frame, text] = await Promise.all([
-    stop.boundingBox(),
-    popup.boundingBox(),
-    preview.boundingBox(),
-  ]);
-  expect(box.x).toBeGreaterThanOrEqual(text.x + text.width);
-  expect(box.x + box.width).toBeLessThanOrEqual(frame.x + frame.width);
-  const row = thread.locator(`[data-message-id="${event.id}"]`);
-  const around = await row.boundingBox();
-  const left = Math.min(frame.x, around.x) - 16;
-  const top = Math.min(frame.y, around.y) - 16;
-  await page.screenshot({
-    path: testInfo.outputPath("local-activity-stop.png"),
-    clip: {
-      x: Math.max(0, left),
-      y: Math.max(0, top),
-      width:
-        Math.max(frame.x + frame.width, around.x + around.width) + 16 - left,
-      height:
-        Math.max(frame.y + frame.height, around.y + around.height) + 16 - top,
-    },
-  });
+  await expect(
+    page.getByRole("dialog", { name: "Agent activity", exact: true }),
+  ).toHaveCount(0);
+  expect((await activity.boundingBox()).width).toBe(restingBox.width);
+  await stop.click({ trial: true });
+  await page.mouse.move(0, 0);
+  await activity.focus();
+  await page.keyboard.press(
+    browserName === "webkit" && process.platform === "darwin"
+      ? "Alt+Tab"
+      : "Tab",
+  );
+  await expect(stop).toBeFocused();
   await stop.focus();
   await stop.press("Enter");
   await expect
@@ -325,9 +283,6 @@ test("Stop in a message's activity ends its local work quietly", async ({
   ).toBeFocused();
   const note = row.getByText("Stopped", { exact: true });
   await expect(note).toBeVisible();
-  await row.screenshot({
-    path: testInfo.outputPath("local-activity-stopped.png"),
-  });
   await expect(
     page.locator('[data-channel-id="alpha"] [data-channel-working]'),
   ).toHaveCount(0);
@@ -364,7 +319,9 @@ test("Stop in a channel response activity stops its work", async ({
   );
   const summary = row.getByRole("button", { name: /^View agent activity:/ });
   await expect(summary).toBeVisible();
-  await expect(row.getByRole("button", { name: /^Stop/ })).toHaveCount(0);
+  await expect(
+    row.getByRole("button", { name: "Stop Local tester" }),
+  ).toHaveCount(1);
   // Recorded updates must not remove the only control that can stop this turn.
   const key = new Uint8Array(32);
   key[31] = 1;
@@ -549,13 +506,15 @@ test("opens an active message's empty thread without losing its activity preview
   const response = row.getByRole("button", { name: /^View agent activity:/ });
   await row.hover();
   await expect(trigger).toBeVisible();
-  await response.hover();
+  await response.locator("..").hover();
   const preview = page.getByRole("dialog", {
     name: "Agent activity",
     exact: true,
   });
-  await expect(preview).toBeVisible();
-  await page.keyboard.press("Escape");
+  await expect(preview).toHaveCount(0);
+  await expect(
+    row.getByRole("button", { name: "Stop Local tester" }).locator(".."),
+  ).toHaveCSS("opacity", "1");
   await hoverMessage(row);
   await trigger.click();
   const thread = page.getByRole("complementary", {
@@ -570,13 +529,11 @@ test("opens an active message's empty thread without losing its activity preview
   await expect(root).toContainText(request.content);
   const activity = root.getByRole("button", { name: /^View agent activity:/ });
   await expect(activity).toBeVisible();
-  await activity.click();
-  await expect(preview).toBeVisible();
-  await expect(
-    preview.getByRole("button", { name: "View activity for Local tester" }),
-  ).toBeVisible();
-  await page.keyboard.press("Escape");
+  await activity.locator("..").hover();
   await expect(preview).toHaveCount(0);
+  await expect(
+    root.getByRole("button", { name: "Stop Local tester" }).locator(".."),
+  ).toHaveCSS("opacity", "1");
   // The tab title may be the loaded message preview, not literally "Thread".
   await page
     .locator(
@@ -592,13 +549,23 @@ test("opens an active message's empty thread without losing its activity preview
     thread.getByRole("textbox", { name: "Reply to thread", exact: true }),
   ).toBeVisible();
   await expect(activity).toBeVisible();
+  // Reopening schedules composer focus after the pane becomes visible.
+  // Observe that handoff before sending a key to another control.
+  await expect(
+    thread.getByRole("textbox", { name: "Reply to thread", exact: true }),
+  ).toBeFocused();
+  await activity.press("Enter");
+  await expect(
+    page.getByRole("tab", { name: "Activity", selected: true }),
+  ).toBeVisible();
+  await expect(preview).toHaveCount(0);
   await page.evaluate(
     (id) => window.localAgentFixture.finish(id, true),
     request.id,
   );
 });
 
-for (const focusOn of ["bubble", "popup", "composer"]) {
+for (const focusOn of ["bubble", "stop", "composer"]) {
   test(`finishing activity retires keyboard controls without stealing focus: ${focusOn}`, async ({
     page,
     app,
@@ -641,14 +608,7 @@ for (const focusOn of ["bubble", "popup", "composer"]) {
     });
     await expect(bubble).toBeVisible();
     // Finish entrance and hold only the exit so the intermediate state is testable.
-    await message.locator("section").evaluate(async (element) => {
-      await Promise.all(
-        element
-          .getAnimations({ subtree: true })
-          .filter((a) => a.effect.getTiming().iterations !== Infinity)
-          .map((a) => a.finished),
-      );
-    });
+    await animationsSettled(message.locator("section"), { subtree: true });
     // Hold the actual exit animation before its first frame, rather than racing
     // a delayed animationstart event on a busy runner. Release in finally.
     const exitGate = await page.addStyleTag({
@@ -658,11 +618,8 @@ for (const focusOn of ["bubble", "popup", "composer"]) {
       name: "Agent activity",
       exact: true,
     });
-    if (focusOn === "popup") {
-      await bubble.click();
-      await popup
-        .getByRole("button", { name: "View activity for Local tester" })
-        .focus();
+    if (focusOn === "stop") {
+      await message.getByRole("button", { name: "Stop Local tester" }).focus();
     } else if (focusOn === "bubble") await bubble.focus();
     else await composer.focus();
     const section = message.locator("section");
@@ -703,10 +660,10 @@ test("finishing a channel response hands focus back only when it owns focus", as
     name: "Message #Alpha",
     exact: true,
   });
-  for (const focusOn of ["summary", "popup", "composer"]) {
+  for (const focusOn of ["summary", "stop", "composer"]) {
     // Exercise immediate popup removal without depending on an exit animation.
     await page.emulateMedia({
-      reducedMotion: focusOn === "popup" ? "reduce" : "no-preference",
+      reducedMotion: focusOn === "stop" ? "reduce" : "no-preference",
     });
     const request = app.sign({
       kind: 9,
@@ -727,12 +684,8 @@ test("finishing a channel response hands focus back only when it owns focus", as
       exact: true,
     });
     await expect(summary).toBeVisible();
-    if (focusOn === "popup") {
-      // Pin the popup open: this case checks focus handoff, not hover intent.
-      await summary.click();
-      await popup
-        .getByRole("button", { name: "View activity for Local tester" })
-        .focus();
+    if (focusOn === "stop") {
+      await row.getByRole("button", { name: "Stop Local tester" }).focus();
     } else if (focusOn === "summary") await summary.focus();
     else await composer.focus();
     await page.evaluate(

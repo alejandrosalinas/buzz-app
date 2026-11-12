@@ -5,13 +5,14 @@ One Builderlab account for communities and agents that Builderlab hosts for you,
 ## Getting started
 
 1. Go to **Settings → Plugins → Builderlab** and choose **Sign in with Builderlab**.
-2. To host a community, choose **Create community** under **Communities**. Buzz opens the join for the new community at once; publish your profile there and it opens and appears in the community picker. **Copy address** shares the address with others.
+2. To host a community, open **Communities** and choose **Create**. Buzz opens the join for the new community at once; publish your profile there and it opens and appears in the community picker. **Copy address** in its **…** menu shares the address with others. The copy hint dismisses with Escape; **Refresh** sits beside search.
 3. To host an agent, in **Agents** choose **New agent** and pick **Builderlab** under **Remote** in the **Harness** menu. It can answer while your desktop is off, but cannot open files on your computer.
 4. If signed out, choose the small **Sign in** button beside Harness. Model, Thinking and Create agent stay disabled until sign-in completes. Choose a model and thinking level, optionally add instructions, then choose **Create agent**. Review the introduction and choose **Let’s go** to create it.
 5. Edit model settings and instructions later in **Identity**. Opening it attempts sign-in automatically if needed. The compact action beside Harness shows a spinner that cancels browser sign-in on click. The resting signed-out hint explains that sign-in enables editing while messaging still works. Cancellation, timeout and login failures wait for an explicit inline retry. Sheets are reserved for settings or account-access errors. Instructions appear after sign-in. Native account-access errors open **Identity → Organization sign-in** without ending the shared session. In live development, **Use another account** ends the broker session and opens `/logout` in your browser. A cancellable spinner then waits three seconds before showing **Retry** beside Harness. Sign in with the other account in the browser, return to Buzz, then click Retry to check broker access.
 
 While signed in, Identity shows a cloud beside “Remote agent”, with “Runs on a
-Builderlab machine” underneath. Workspace in Settings explains that the remote
+Builderlab machine” underneath and a “See usage and billing” link to your Builderlab
+server's site. Workspace in Settings explains that the remote
 runtime is shared with your other agents in the workspace by default, alongside
 availability and file access. These hints stay hidden while signed out or signing in.
 Current remote activity steps show a cloud that pulses while working and stays
@@ -191,7 +192,10 @@ agents are not migrated into this type.
   through the forwarder as this plugin's bundled installation
   (`bundledFederatedIdentity`). That grant exists only while this plugin is
   enabled, so with it turned off that sign-in refuses before opening the
-  browser.
+  browser. Only app-owned code calls as that installation. Settings' Identity
+  page reads the backed-up key that way, and the pairing plugin's mobile card
+  gets only the app's yes-or-no `builderlabPhone.restoresOnPhone`, never the
+  session itself.
   A successful first-run sign-in continues into the app-owned setup steps
   described in [identity](../../../docs/identity.md): the app reads the key
   bound to the account, the destinations saved to it (this plugin's
@@ -211,7 +215,17 @@ agents are not migrated into this type.
   display, and sign-out.
 - `agents/` lists the signed-in account's remote agents beneath login, with
   refresh and retry. Settings directs people to the **Agents** tab to create,
-  edit instructions and delete agents. Listing does not activate agents or
+  edit instructions and delete agents. A left caret beside each management title
+  returns to the overview. Remote agents show their count beside the title and
+  reuse saved community avatars. Rows show model and an In Agents label when
+  the current inventory has a matching record; absence makes no persistence claim.
+  Readiness appears beside the model. Configured means a valid model selection and
+  provider Active status; avatar presence badges are not used for readiness.
+  Saved rows open their Agents pane; their separate menus offer View Agent.
+  Copy key is available in every row menu.
+  Creation dates and full keys are omitted from this compact list.
+  Hosted communities use the same passive layout with an address and action menu.
+  Listing does not activate agents or
   publish community registrations. Requests go through `session.request`;
   sign-out and navigation discard late results.
   The client also supplies the hosted adapter's Beekeeper operations. Pending

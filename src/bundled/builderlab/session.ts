@@ -8,6 +8,7 @@ import {
 import type { BuilderlabViewerSession } from "../../features/browser/api";
 import type { FederatedIdentity } from "../../features/federated-identity/service";
 import type { HostResponse } from "../../features/host/service";
+import { serverName } from "../../features/federated-identity/community-servers";
 
 export type Account = Capabilities &
   Readonly<{
@@ -49,6 +50,8 @@ export type BuilderlabRequest = Readonly<{
  * Neither hands its token to consumers.
  */
 export type BuilderlabSession = Readonly<{
+  /** Display name of the native sign-in provider, from its build configuration. */
+  providerName?: string | undefined;
   /** Also keeps permissions fresh: reading a signed-in snapshot whose
    * permissions are over a minute old starts re-reading them, and the
    * snapshot says `checkingPermissions` until that settles. */
@@ -129,6 +132,11 @@ export async function federatedAccount(
 }
 
 const ACCOUNT_FAILED = "Could not load your Builderlab account. Try again.";
+
+/** A Builderlab call refused with HTTP 401. Native rechecks the session on a
+ * 401 and ends it, which shows sign-in, only when the issuer says it ended;
+ * otherwise only that call was refused, so this claims no expiry. */
+export const UNAUTHORIZED = "Builderlab didn’t accept this request. Try again.";
 
 /**
  * The FI build's Builderlab session over the shared native NIP-FI session.
@@ -272,6 +280,10 @@ export function createNativeSession(
   const stop = identity.subscribe(project);
   project();
   const session: BuilderlabSession = {
+    get providerName() {
+      const authority = identity.snapshot().authority;
+      return authority ? serverName(authority) : undefined;
+    },
     snapshot() {
       if (
         credential &&

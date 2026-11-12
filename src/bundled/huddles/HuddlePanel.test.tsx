@@ -88,6 +88,7 @@ it("releases unsent files on close while retaining the saved panel text draft", 
     snapshot: () => snapshot,
     subscribe: () => () => {},
     retry() {},
+    tryAgain() {},
     disconnect() {},
     async clearCache() {},
   };

@@ -28,6 +28,26 @@ it("keys the added tools whatever order plugins started in", () => {
   ).not.toBe(key);
 });
 
+// The retired owner-read tools, listed here rather than taken from a catalog.
+const RETIRED_OWNER_TOOLS = [
+  "owner_channel_list",
+  "owner_channel_get",
+  "owner_member_list",
+  "owner_read",
+  "owner_canvas_get",
+  "owner_canvas_history",
+];
+
+it("neither lists nor mentions the retired owner-read tools", () => {
+  const names = sessionTools([tool("notes_add")]).map((each) => each.name);
+  const hint = sessionHint([tool("notes_add")]);
+  for (const name of RETIRED_OWNER_TOOLS) {
+    expect(names).not.toContain(name);
+    expect(hint).not.toContain(name);
+  }
+  expect(hint).not.toMatch(/owner's (own )?access|with your access/);
+});
+
 it("loads the Buzz tools up front, and attention and plugins' tools on search", () => {
   const tools = sessionTools([tool("notes_add")]);
   const load = (name: string) => tools.find((each) => each.name === name)?.load;
@@ -37,7 +57,26 @@ it("loads the Buzz tools up front, and attention and plugins' tools on search", 
   );
   expect(load("notes_add")).toBe("search");
   expect(sessionHint([tool("notes_add"), tool("tasks_create")])).toContain(
-    "tools plugins add (notes_add, tasks_create)",
+    "tools from enabled plugins",
+  );
+});
+
+it("keeps the namespace hint within 1024 characters with many plugin tools", () => {
+  const added = Array.from({ length: 100 }, (_, index) =>
+    tool(`example_plugin_action_${index}`),
+  );
+  expect(sessionHint(added).length).toBeLessThanOrEqual(1024);
+  expect(
+    sessionTools(added).filter(({ name }) =>
+      name.startsWith("example_plugin_"),
+    ),
+  ).toEqual(
+    added.map(({ name, description, inputSchema }) => ({
+      name,
+      description,
+      inputSchema,
+      load: "search",
+    })),
   );
 });
 

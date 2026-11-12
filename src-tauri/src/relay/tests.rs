@@ -770,7 +770,11 @@ fn isolated_agent_ipc_probe() {
     assert_eq!(resolved["relayUrl"], "wss://relay.test");
     #[cfg(unix)]
     {
-        let library = invoke("relay_agent_library", serde_json::json!({})).unwrap();
+        let library = invoke(
+            "relay_agent_library",
+            serde_json::json!({"community":"https://relay.test"}),
+        )
+        .unwrap();
         assert_eq!(
             library,
             serde_json::json!({"definitions": [], "identities": []})
@@ -781,20 +785,47 @@ fn isolated_agent_ipc_probe() {
             .unwrap()
             .join("agents/identities.json");
         assert!(path.starts_with(std::env::var("HOME").unwrap()));
-        let saved = serde_json::json!([{
-            "pubkey": "a".repeat(64), "relay": "wss://relay.test", "owner": public,
-            "auth": "private attestation", "type": "plugin/agent", "name": "Current agent",
-            "picture": "https://images.example/current.png"
-        }])
+        let saved = serde_json::json!([
+            {
+                "pubkey": "a".repeat(64), "relay": "wss://elsewhere.test", "owner": public,
+                "auth": "private attestation", "type": "plugin/agent", "name": "Elsewhere"
+            },
+            {
+                "pubkey": "b".repeat(64), "relay": "wss://relay.test", "owner": "c".repeat(64),
+                "auth": "private attestation", "type": "plugin/agent", "name": "Other account"
+            },
+            {
+                "pubkey": "a".repeat(64), "relay": "wss://relay.test", "owner": public,
+                "auth": "private attestation", "type": "plugin/agent", "name": "Current agent",
+                "picture": "https://images.example/current.png"
+            }
+        ])
         .to_string();
         std::fs::create_dir_all(path.parent().unwrap()).unwrap();
         std::fs::write(&path, &saved).unwrap();
         assert_eq!(
-            invoke("relay_agent_library", serde_json::json!({})).unwrap(),
+            invoke(
+                "relay_agent_library",
+                serde_json::json!({"community":"https://relay.test"})
+            )
+            .unwrap(),
             serde_json::json!({"definitions": [], "identities": [{
                 "pubkey": "a".repeat(64), "name": "Current agent", "avatar": "https://images.example/current.png"
             }]})
         );
+        assert_eq!(
+            invoke(
+                "relay_agent_library",
+                serde_json::json!({"community":"https://new.test"})
+            )
+            .unwrap(),
+            serde_json::json!({"definitions": [], "identities": []})
+        );
+        assert!(invoke(
+            "relay_agent_library",
+            serde_json::json!({"community":"https://relay.test/path"})
+        )
+        .is_err());
         assert_eq!(std::fs::read_to_string(&path).unwrap(), saved);
         std::fs::remove_file(&path).unwrap();
         assert!(app
@@ -1122,6 +1153,47 @@ fn shared_kind_five_signer_accepts_message_and_reaction_deletion_only_in_broker_
     assert!(validate_event("https://relay.test", &event).is_err());
     event.tags[1][1] = id;
     event.tags.push(vec!["a".into(), "30620:other:id".into()]);
+    assert!(validate_event("https://relay.test", &event).is_err());
+}
+
+#[test]
+fn shared_kind_five_signer_accepts_one_reaction_deletion_without_a_channel() {
+    let id = "a".repeat(64);
+    let mut event = EventTemplate {
+        kind: 5,
+        created_at: 123,
+        content: String::new(),
+        tags: vec![
+            vec!["e".into(), id.clone()],
+            vec!["k".into(), "7".into()],
+            vec!["client-id".into(), "intent".into()],
+        ],
+    };
+    assert!(validate_event("https://relay.test", &event).is_ok());
+    event.tags.pop();
+    assert!(validate_event("https://relay.test", &event).is_ok());
+    // Only reactions, and only one target, as the relay accepts.
+    event.tags[1][1] = "9".into();
+    assert!(validate_event("https://relay.test", &event).is_err());
+    event.tags[1][1] = "7".into();
+    event.tags.push(vec!["e".into(), "b".repeat(64)]);
+    assert!(validate_event("https://relay.test", &event).is_err());
+    event.tags.pop();
+    event.tags[0][1] = "A".repeat(64);
+    assert!(validate_event("https://relay.test", &event).is_err());
+    event.tags[0][1] = id.clone();
+    event.tags.push(vec!["k".into(), "9".into()]);
+    assert!(validate_event("https://relay.test", &event).is_err());
+    event.tags.pop();
+    event
+        .tags
+        .push(vec!["a".into(), format!("30175:{}:pm", "c".repeat(64))]);
+    assert!(validate_event("https://relay.test", &event).is_err());
+    event.tags.pop();
+    event.content = "reason".into();
+    assert!(validate_event("https://relay.test", &event).is_err());
+    event.content.clear();
+    event.created_at = 9_007_199_254_740_992;
     assert!(validate_event("https://relay.test", &event).is_err());
 }
 
@@ -1880,7 +1952,7 @@ async fn webp_thumbnails_fall_back_to_jpeg_only_when_missing() {
     let webp = format!("/media/{hash}.thumb.webp");
     let jpeg = format!("/media/{hash}.thumb.jpg");
     let (base, paths) = thumbnail_server("404 Not Found");
-    let response = serve_media(
+    let (served, response) = serve_media(
         &IdentityHost::fixture(),
         None,
         base.join(&webp).unwrap(),
@@ -1889,7 +1961,8 @@ async fn webp_thumbnails_fall_back_to_jpeg_only_when_missing() {
     .await
     .unwrap();
     assert_eq!(response.body(), b"jpeg");
-    assert_eq!(*paths.lock().unwrap(), [webp.clone(), jpeg]);
+    assert_eq!(served, base.join(&jpeg).unwrap());
+    assert_eq!(*paths.lock().unwrap(), [webp.clone(), jpeg.clone()]);
 
     let (base, paths) = thumbnail_server("401 Unauthorized");
     let status = serve_media(
@@ -1905,6 +1978,25 @@ async fn webp_thumbnails_fall_back_to_jpeg_only_when_missing() {
 
     let png = Url::parse(&format!("https://relay.test/media/{hash}.png")).unwrap();
     assert_eq!(jpeg_thumb(&png), None);
+}
+
+#[tokio::test]
+async fn saved_webp_thumbnails_fall_back_to_jpeg_under_its_name() {
+    let hash = "a".repeat(64);
+    let (base, _) = thumbnail_server("404 Not Found");
+    let dir = tempfile::tempdir().unwrap();
+    let url = base.join(&format!("/media/{hash}.thumb.webp")).unwrap();
+    let saved = save_media(
+        &IdentityHost::fixture(),
+        None,
+        url,
+        dir.path().to_owned(),
+        "",
+    )
+    .await
+    .unwrap();
+    assert_eq!(saved, dir.path().join(format!("{hash}.thumb.jpg")));
+    assert_eq!(std::fs::read(&saved).unwrap(), b"jpeg");
 }
 
 #[test]
@@ -4613,5 +4705,35 @@ async fn a_plugin_request_refused_without_the_users_sign_in_is_not_their_refusal
         if refusal.community == "https://plugin-refusal-marker.test" {
             break;
         }
+    }
+}
+
+#[test]
+fn huddle_end_requires_one_parent_and_a_distinct_room() {
+    let parent = "00000000-0000-4000-8000-000000000001";
+    let room = "00000000-0000-4000-8000-000000000002";
+    let mut event = EventTemplate {
+        kind: 48103,
+        created_at: 1,
+        content: serde_json::json!({"ephemeral_channel_id": room}).to_string(),
+        tags: vec![vec!["h".into(), parent.into()]],
+    };
+    assert!(validate_event("https://relay.test", &event).is_ok());
+    event
+        .tags
+        .push(vec!["client-id".into(), uuid::Uuid::new_v4().to_string()]);
+    event.tags.push(vec!["ms".into(), "999".into()]);
+    assert!(validate_event("https://relay.test", &event).is_ok());
+    event.tags.push(vec!["h".into(), room.into()]);
+    assert!(validate_event("https://relay.test", &event).is_err());
+    event.tags.pop();
+    for content in [
+        "{}".to_string(),
+        "bad".into(),
+        serde_json::json!({"ephemeral_channel_id":parent}).to_string(),
+        serde_json::json!({"ephemeral_channel_id":"bad"}).to_string(),
+    ] {
+        event.content = content;
+        assert!(validate_event("https://relay.test", &event).is_err());
     }
 }

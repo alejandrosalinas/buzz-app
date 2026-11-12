@@ -1,3 +1,4 @@
+import { sessionTools } from "../../buzz-mcp/session-tools";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   GooseProcess,
@@ -98,6 +99,11 @@ describe("GooseProcess", () => {
     expect(process.options.cwd).toBe("/work");
     expect(process.options.env).toMatchObject({
       GOOSE_MODE: "auto",
+      GOOSE_TOOL_DEFERRAL: "lookup",
+      GOOSE_TOOL_DEFERRAL_ALWAYS_LOAD: sessionTools()
+        .filter((tool) => tool.load === "always")
+        .map((tool) => `buzz__${tool.name}`)
+        .join(","),
       BUZZ_PRIVATE_KEY: null,
       BUZZ_AUTH_TAG: null,
       BUZZ_RELAY_URL: null,
@@ -320,11 +326,11 @@ describe("GooseProcess", () => {
     const session = await open();
     session.conversation = "channel/root";
     const response = await process.mcp(session.id, "tools/list");
-    expect(tools).toHaveBeenCalledWith("channel/root", {
-      id: 1,
-      method: "tools/list",
-      params: {},
-    });
+    expect(tools).toHaveBeenCalledWith(
+      "channel/root",
+      { id: 1, method: "tools/list", params: {} },
+      expect.objectContaining({ aborted: true }),
+    );
     // goose matches the reply to its request by the id it sent.
     expect(response).toEqual({
       jsonrpc: "2.0",

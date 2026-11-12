@@ -1,6 +1,7 @@
 import { beforeEach, expect, it, vi } from "vitest";
 import { emojiAvatar } from "../profiles/avatar-upload";
-import { importedEmojiPicture, legacyEmojiPicture } from "./import-picture";
+import { legacyEmojiPicture } from "../../shared/avatar-source";
+import { importedEmojiPicture } from "./import-picture";
 
 vi.mock("../profiles/avatar-upload", () => ({ emojiAvatar: vi.fn() }));
 beforeEach(() => {

@@ -10,6 +10,27 @@ export function apply(ctx: Context) {
   const h = React.createElement;
   const ui = ctx.conversation;
   const relay = ctx.relay;
+  function RetainedReplies() {
+    const [open, setOpen] = React.useState(false);
+    return h(ui.ui.ReplyBranch, {
+      message: h("p", { "data-message-id": "example-root" }, "Example root"),
+      layout: "thread",
+      summary: h(ui.ui.ReplySummary, {
+        count: 1,
+        participants: [],
+        resolveName: (_id, fallback) => fallback,
+        media: () => undefined,
+      }),
+      label: "View 1 reply",
+      collapseLabel: "Collapse example reply",
+      hasReplies: true,
+      open,
+      depth: 0,
+      onExpand: () => setOpen(true),
+      onCollapse: () => setOpen(false),
+      children: h("p", { "data-message-id": "example-reply" }, "Example reply"),
+    });
+  }
   const target = "consumer://message/inspect";
   ctx.panels.register({
     id: "inspect",
@@ -54,6 +75,7 @@ export function apply(ctx: Context) {
         { title: ui.format.fullTimestamp(Date.now() / 1000) },
         `Consumer dates ${ui.format.dayGroupLabel(Date.now() / 1000)}, ${ui.format.itemTimestamp(Date.now() / 1000 - 86_400)}, ${ui.format.relativeTimestamp(Date.now() / 1000 - 300)}`,
       ),
+      h(RetainedReplies),
       h(
         "label",
         null,

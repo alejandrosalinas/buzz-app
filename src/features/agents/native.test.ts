@@ -113,6 +113,60 @@ it("admits the community's events through the relay verifier", async () => {
   });
 });
 
+it("reads effective edit state through the agent-authenticated native query", async () => {
+  const edit = signed(agent, {
+    kind: 40003,
+    content: "no files",
+    tags: [
+      ["h", "c"],
+      ["e", message.id.toUpperCase()],
+    ],
+  });
+  vi.mocked(invoke).mockResolvedValueOnce({
+    effective_edit: 1,
+    original: message,
+    edit,
+  });
+  const current = await native.effectiveEdit(member, message.id, "c");
+  expect(current.id).toBe(edit.id);
+  expect(hasEventProof(current)).toBe(true);
+  expect(current.tags.filter((t) => t[0] === "imeta")).toEqual([]);
+  expect(invoke).toHaveBeenLastCalledWith("app_agent_query", {
+    ...member,
+    filters: [
+      {
+        kinds: [9, 40002, 40008, 45001, 45003],
+        ids: [message.id],
+        "#h": ["c"],
+        effective_edit: 1,
+        consistency: "strong",
+      },
+    ],
+  });
+});
+
+it.each([
+  ["old relay", [message]],
+  [
+    "unsigned original",
+    {
+      effective_edit: 1,
+      original: { ...message, sig: "0".repeat(128) },
+      edit: null,
+    },
+  ],
+  ["wrong channel", { effective_edit: 1, original: message, edit: null }],
+])("rejects effective state from %s", async (fault, response) => {
+  vi.mocked(invoke).mockResolvedValueOnce(response);
+  await expect(
+    native.effectiveEdit(
+      member,
+      message.id,
+      fault === "wrong channel" ? "other" : "c",
+    ),
+  ).rejects.toThrow();
+});
+
 it.each([
   ["a forged signature", [{ ...message, sig: "0".repeat(128) }]],
   ["edited content", [{ ...message, content: "bye" }]],

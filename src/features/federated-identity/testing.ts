@@ -35,7 +35,8 @@ export function federatedFixture(
     return state;
   };
   let logins = 0;
-  const service: FederatedIdentity = {
+  const service: FederatedIdentity &
+    Required<Pick<FederatedIdentity, "recheck" | "askAgain">> = {
     apiAvailable: true,
     snapshot: () => state,
     subscribe: (listener) => {
@@ -61,6 +62,8 @@ export function federatedFixture(
         email: null,
       });
     }),
+    recheck: vi.fn(async () => state),
+    askAgain: vi.fn(async (_relay: string) => {}),
     signOut: vi.fn(async (options?: { revision?: string }) => {
       if (!options?.revision || options.revision === state.revision)
         publish({

@@ -42,11 +42,11 @@ Solo chats include ordinary incoming top-level messages, excluding agent-only co
 
 ### Open Activity with a filter
 
-Four shortcuts ("Open unread in Activity" and so on) open the Activity page with its filters applied, including from the composer, like Slack's: ⌘⇧A (Ctrl+Shift+A elsewhere) opens All activity with Unread on, and ⌘⇧T, ⌘⇧M and ⌘⇧K open Threads, Mentions and DMs. Threads, Mentions and DMs keep the saved Unread choice; Sender is never changed. They are rebindable in Settings → Shortcuts. The shortcut opens `buzz.inbox/inbox` with a versioned route (`{ attention?, activity?, sender? }`) that the page validates, and a plain open from the app dock carries none and leaves saved filters alone. Omitted fields keep their saved choice. Plugins and `buzz://plugin?id=buzz.inbox&page=inbox&route.<key>=<value>` links use the same route. The page applies a route once per presentation of the visit, but not when Back/Forward returns to it, which keeps the filters as they were left, using the same saved choices as the toolbar, so pressing a shortcut again after changing the filters by hand applies it again, even though the host treats an identical address as the same history entry.
+Four shortcuts ("Open unread in Activity" and so on) open the Activity page with its filters applied, including from the composer, like Slack's: ⌘⇧A (Ctrl+Shift+A elsewhere) opens All activity with Unread on, and ⌘⇧T, ⌘⇧M and ⌘⇧K open Threads, Mentions and DMs. Threads, Mentions and DMs keep the saved Unread choice; Sender is never changed. They are rebindable in Settings → Shortcuts. The shortcut opens `buzz.inbox/inbox` with a versioned route (`{ attention?, activity?, sender? }`) that the page validates, and a plain open from the sidebar carries none and leaves saved filters alone. Omitted fields keep their saved choice. Plugins and `buzz://plugin?id=buzz.inbox&page=inbox&route.<key>=<value>` links use the same route. The page applies a route once per presentation of the visit, but not when Back/Forward returns to it, which keeps the filters as they were left, using the same saved choices as the toolbar, so pressing a shortcut again after changing the filters by hand applies it again, even though the host treats an identical address as the same history entry.
 
-### Dock preview
+### Sidebar preview
 
-Resting a pointer on the Activity bell in the app dock opens a card of recent
+Resting a pointer on the Activity row in the Messages sidebar opens a card of recent
 conversations through the page contract's `preview`. It reads the same `session.unread.inbox()`
 and `session.inboxFeed` projection as the page, with All activity and Everyone,
 newest first and bounded to 50 rows after mixing conversations and reactions, as on the

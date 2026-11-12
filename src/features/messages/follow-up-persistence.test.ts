@@ -19,6 +19,7 @@ import {
   followUpStorage,
   type FollowUpMessage,
 } from "./follow-up-storage";
+import { messageTokenTags } from "./message-tokens";
 
 const secret = new Uint8Array(32).fill(7);
 const viewer = getPublicKey(secret);
@@ -329,6 +330,50 @@ it("restores ordered payloads in the same account/community without automaticall
       .map((row) => row.text),
   ).toEqual(["Second"]);
 });
+
+it("restores a queued message's chips and signs them on the recovered send", async () => {
+  const token = {
+    kind: "folder" as const,
+    id: "/example/repos/notes",
+    label: "notes",
+  };
+  fixture().enqueue({ ...message, tokens: [token] });
+  const restored = fixture();
+  await restored.owner.ready;
+  const row = restored.queue.snapshot()[0];
+  if (!row) throw new Error("Queued message was not restored");
+  expect(row.message?.tokens).toEqual([token]);
+  restored.queue.sendNow(row.id);
+  await vi.waitFor(() => expect(restored.publish).toHaveBeenCalledOnce());
+  const [event] = restored.publish.mock.calls[0] as unknown as [
+    { tags: string[][] },
+  ];
+  expect(event.tags).toContainEqual(messageTokenTags([token])[0]);
+});
+
+it.each([
+  {},
+  [{ kind: "unknown", id: "broken", label: "Broken" }],
+  Array(33).fill({ kind: "folder", id: "/f", label: "f" }),
+])(
+  "keeps saved messages with invalid or oversized chips unsent and unchanged: %j",
+  async (tokens) => {
+    followUpStorage(scope).save({
+      ...message,
+      id: "invalid-tokens",
+      createdAt: 1,
+      tokens: tokens as unknown as NonNullable<FollowUpMessage["tokens"]>,
+    });
+    const key = `buzz-view.v1:${JSON.stringify([scope, "follow-up:invalid-tokens"])}`;
+    const saved = localStorage.getItem(key);
+    const restored = fixture();
+    await restored.owner.ready.catch(() => {});
+    expect(restored.queue.storageError()).toContain("could not be read");
+    expect(restored.queue.snapshot()).toEqual([]);
+    expect(restored.send).not.toHaveBeenCalled();
+    expect(localStorage.getItem(key)).toBe(saved);
+  },
+);
 
 it("refuses enqueue on save failure and leaves no in-memory-only queued row", () => {
   const h = fixture();

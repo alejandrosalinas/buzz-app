@@ -172,6 +172,42 @@ it("keeps the native missing-model message and forwards input focus to Model", a
   expect(h.submit).toHaveBeenCalledOnce();
 });
 
+it.each([
+  [
+    "https://builderlab.example",
+    "builderlab.example",
+    "https://builderlab.example/",
+  ],
+  [
+    "https://login.example/deployment/",
+    "login.example/deployment",
+    "https://login.example/deployment/",
+  ],
+])(
+  "says the agent runs on the Builderlab account and links %s's site",
+  async (server, name, href) => {
+    vi.stubEnv("VITE_BUZZ_BUILDERLAB_URL", server);
+    await fixture(false);
+    expect(
+      screen.getByText(
+        /Runs on your Builderlab account\. Usage and billing are at/,
+      ),
+    ).toBeInTheDocument();
+    const link = screen.getByRole("link", { name });
+    expect(link).toHaveAttribute("href", href);
+    expect(link).toHaveAttribute("target", "_blank");
+  },
+);
+
+it("shows the instruction limit as accessible field help", async () => {
+  await fixture(false);
+  const instructions = screen.getByRole("textbox", {
+    name: "Instructions Optional",
+  });
+  expect(screen.getByText("Up to 20,000 characters.")).toBeVisible();
+  expect(instructions).toHaveAccessibleDescription("Up to 20,000 characters.");
+});
+
 it("loads the catalog and keeps instructions alongside explicit model and effort choices", async () => {
   const h = await fixture();
   expect(h.ready).toHaveBeenLastCalledWith(false);

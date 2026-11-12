@@ -20,6 +20,11 @@ import { MessageMarkdown } from "../../features/messages/MessageMarkdown";
 import { LinkLabel } from "../links/InlineLink";
 import { ChannelCompletion } from "./ChannelCompletion";
 import {
+  chosenWorkspace,
+  WorkspaceCompletion,
+  type WorkspaceCompletionTarget,
+} from "../../features/conversation/workspace-completion";
+import {
   composerClipboard,
   buzzCopyDocument,
 } from "../../features/messages/composer-clipboard";
@@ -685,3 +690,96 @@ it.each([true, false])(
       );
   },
 );
+function workspaces(names: readonly string[] | undefined) {
+  const toSections = (next: readonly string[]) =>
+    next.map((name, order) => ({ id: name.toLowerCase(), name, order }));
+  let sections = names && toSections(names);
+  const listeners = new Set<() => void>();
+  const target = {
+    preferences: {
+      snapshot: () =>
+        sections
+          ? { status: "ready", data: { sections, assignments: {} } }
+          : { status: "loading" },
+      subscribe: (listener: () => void) => {
+        listeners.add(listener);
+        return () => listeners.delete(listener);
+      },
+    },
+    choose: vi.fn(),
+  } as unknown as WorkspaceCompletionTarget;
+  return {
+    target,
+    listeners,
+    set(next: readonly string[]) {
+      sections = toSections(next);
+    },
+    /** Completes the held workspace read. */
+    load(next: readonly string[]) {
+      sections = toSections(next);
+      act(() => {
+        for (const listener of [...listeners]) listener();
+      });
+    },
+  };
+}
+it("lists a new chat's workspaces first, by the channel name rule", () => {
+  const t = fixture([channel("dev"), channel("design-reviews")]);
+  const w = workspaces(["Docs", "Design", "Billing"]);
+  render(
+    <WorkspaceCompletion.Provider value={w.target}>
+      {t.element("d")}
+    </WorkspaceCompletion.Provider>,
+  );
+  expect(t.result().items.map((item) => item.id)).toEqual([
+    "workspace:design",
+    "workspace:docs",
+    "design-reviews",
+    "dev",
+  ]);
+  const [first] = t.result().items;
+  expect(first?.label).toBe("Design");
+  expect(first?.detail).toBe("Workspace");
+  expect(first && chosenWorkspace(first.edit)).toBe("design");
+  w.set(["Docs"]);
+  expect(first?.canSelect?.("Enter")).toBe(false);
+});
+it("adds workspace rows that load after `#` opens, and stops listening on unmount", () => {
+  const t = fixture([channel("dev")]);
+  const w = workspaces(undefined);
+  const view = render(
+    <WorkspaceCompletion.Provider value={w.target}>
+      {t.element("d")}
+    </WorkspaceCompletion.Provider>,
+  );
+  expect(t.result().items.map((item) => item.id)).toEqual(["dev"]);
+  w.load(["Design"]);
+  expect(t.result().items.map((item) => item.id)).toEqual([
+    "workspace:design",
+    "dev",
+  ]);
+  view.unmount();
+  expect(w.listeners.size).toBe(0);
+});
+it("offers no workspace rows outside a new chat", () => {
+  const t = fixture([channel("dev")]);
+  render(t.element("d"));
+  expect(t.result().items.map((item) => item.id)).toEqual(["dev"]);
+});
+it("lets workspace rows take their place within the row limit", () => {
+  const t = fixture(
+    Array.from({ length: 20 }, (_, i) =>
+      channel(`d${String(i).padStart(2, "0")}`),
+    ),
+  );
+  const w = workspaces(["Design", "Docs"]);
+  render(
+    <WorkspaceCompletion.Provider value={w.target}>
+      {t.element("d")}
+    </WorkspaceCompletion.Provider>,
+  );
+  const ids = t.result().items.map((item) => item.id);
+  expect(ids).toHaveLength(20);
+  expect(ids.slice(0, 2)).toEqual(["workspace:design", "workspace:docs"]);
+  expect(t.result().status).toBe("Keep typing to narrow the list.");
+});

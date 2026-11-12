@@ -4,6 +4,7 @@ import { open, wheel, virtuaIdle } from "./timeline.mjs";
 import { closeSettings } from "./navigation.mjs";
 import { npubEncode } from "nostr-tools/nip19";
 import { finalizeEvent, generateSecretKey, getPublicKey } from "nostr-tools";
+import { animationsSettled } from "./animations.mjs";
 test.use({
   productionBroker: true,
   // Navigation can publish read positions through the real broker.
@@ -562,11 +563,7 @@ test.describe("thread activity", () => {
     await expect(threadStatus).toBeEmpty();
     await expect(channelTrigger).toHaveCount(0);
     // Finish panel entrance before starting the eight-second working signal.
-    await page.locator("[data-panel-dock]").evaluate(async (element) => {
-      await Promise.all(
-        element.getAnimations().map((animation) => animation.finished),
-      );
-    });
+    await animationsSettled(page.locator("[data-panel-dock]"));
     const typing = sendTyping(root.id);
     await expect(threadTrigger).toHaveAccessibleName(onlyAgent);
     await expect(threadStatus).toHaveText(/ is working$/);
@@ -682,8 +679,12 @@ test.describe("thread activity", () => {
     app.observer(activity("turn_completed", "alpha", "parallel-two"), key);
     sendEvent(9, root.id, key, "Thread work finished");
     await expect(threadTrigger).toHaveCount(0);
-    sendTyping();
-    await expect(marker).toBeVisible();
+    // A thread reply also quiets the agent's channel-level typing for two
+    // seconds, so channel work shows from its first pulse after that.
+    await expect(async () => {
+      sendTyping();
+      await expect(marker).toBeVisible({ timeout: 1000 });
+    }).toPass({ timeout: 10_000 });
     const workingBox = await marker.boundingBox();
     expect(workingBox).toEqual(
       expect.objectContaining({ width: 26, height: 15 }),
@@ -831,11 +832,7 @@ test.describe("thread activity", () => {
     await expect(humanTyping(thread)).not.toContainText("Worker");
     await expect(workingStatus).toHaveText(/ are working\. .+ is typing$/);
     await page.setViewportSize({ width: 390, height: 844 });
-    await page.locator("[data-panel-dock]").evaluate(async (element) => {
-      await Promise.all(
-        element.getAnimations().map((animation) => animation.finished),
-      );
-    });
+    await animationsSettled(page.locator("[data-panel-dock]"));
     for (const key of keys) publish(key, roots[0]);
     publish(human, roots[0]);
     await expect(threadTrigger).toHaveAccessibleName(
@@ -901,16 +898,24 @@ test.describe("thread activity", () => {
       .click();
     // The channel composer uses the same floating control and popup rows.
     const channelStatus = composer.locator("[data-agent-working-status]");
-    publish(keys[0]);
-    await expect(channelTrigger).toHaveAccessibleName(
-      "Activity: Worker 1 working",
-    );
+    // Their thread replies also quieted the agents' channel-level typing for
+    // two seconds, so channel work shows from the first pulse after that.
+    await expect(async () => {
+      publish(keys[0]);
+      await expect(channelTrigger).toHaveAccessibleName(
+        "Activity: Worker 1 working",
+        { timeout: 1000 },
+      );
+    }).toPass({ timeout: 10_000 });
     await expect(channelStatus).toHaveText("Worker 1 is working");
     await expect(humanTyping(composer)).toHaveCount(0);
-    publish(keys[1]);
-    await expect(channelTrigger).toHaveAccessibleName(
-      "Activity: 2 agents working",
-    );
+    await expect(async () => {
+      publish(keys[1]);
+      await expect(channelTrigger).toHaveAccessibleName(
+        "Activity: 2 agents working",
+        { timeout: 1000 },
+      );
+    }).toPass({ timeout: 10_000 });
     await expect(channelStatus).toHaveText(
       /^Worker [12], Worker [12] are working$/,
     );

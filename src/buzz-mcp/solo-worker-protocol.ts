@@ -1,6 +1,6 @@
 // The Solo worker control protocol, version 1: the records a controller agent
 // (C) and its owner's Buzz (H, on device D) exchange as kind 9 messages in their
-// private control channel (K), so C can run H's Nexus workers in their Solo
+// private control channel (K), so C can run H's workers in their Solo
 // chats. C signs requests; H's Buzz signs grant acknowledgements and responses.
 // This file is the whole wire contract, with no I/O, so both sides can run
 // the same checks. Authority lives in the owner's Buzz; nothing here grants it.

@@ -35,7 +35,6 @@ test("shared navigation preserves drafts and history across Solo and header page
   await composer.fill("Keep this draft");
   const topbar = page.getByRole("navigation", { name: "Apps dock" });
   await expect(topbar.getByRole("tab")).toHaveText([
-    "Activity",
     "Messages",
     "Reminders",
     "Agents",
@@ -188,16 +187,16 @@ test("shared navigation preserves drafts and history across Solo and header page
   await expect(
     page.getByRole("complementary", { name: "Sidebar", exact: true }),
   ).toBeVisible();
-  const inbox = topbar.getByRole("tab", { name: "Activity", exact: true });
-  await inbox.click();
-  await expect(inbox).toHaveAttribute("aria-selected", "true");
+  const workflows = topbar.getByRole("tab", { name: "Workflows", exact: true });
+  await workflows.click();
+  await expect(workflows).toHaveAttribute("aria-selected", "true");
   await expect(messages).toHaveAttribute("aria-selected", "false");
   await page.reload();
-  await expect(inbox).toHaveAttribute("aria-selected", "true");
+  await expect(workflows).toHaveAttribute("aria-selected", "true");
   await reminders.click();
   await expect(reminders).toHaveAttribute("aria-selected", "true");
   await page.goBack();
-  await expect(inbox).toHaveAttribute("aria-selected", "true");
+  await expect(workflows).toHaveAttribute("aria-selected", "true");
   await page.goForward();
   await expect(reminders).toHaveAttribute("aria-selected", "true");
   await messages.click();

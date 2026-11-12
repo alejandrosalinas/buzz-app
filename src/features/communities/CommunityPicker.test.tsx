@@ -1289,6 +1289,7 @@ it("shows only the active community until opened and routes creation through Hos
     version: 1,
     kind: "settings",
     section: "block.builderlab/login",
+    route: { version: 1, params: "create-community" },
   });
   expect(h.select).not.toHaveBeenCalled();
   await waitFor(() =>
@@ -1332,6 +1333,7 @@ it("returns focus to the trigger when the host reopens the switcher after a choi
     version: 1,
     kind: "settings",
     section: "block.builderlab/login",
+    route: { version: 1, params: "create-community" },
   });
   await waitFor(() =>
     expect(document.getElementById("main-content")).toHaveFocus(),

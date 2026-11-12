@@ -10,6 +10,14 @@ import type {
   ProtectedSpawn,
 } from "./models";
 
+import {
+  isTextSource,
+  jsonPieces,
+  snapshotJSON,
+  writeJSON,
+  type TextSource,
+} from "./json-stream";
+
 export type ProtectionBinding = Readonly<{ provider: string; policy: unknown }>;
 export type ProtectionAction = Readonly<{
   kind: "context" | "tool" | "tool-result";
@@ -35,12 +43,14 @@ export type ProtectionRequest = ProtectionAction &
 /** A denial its provider explained, for Buzz to show people. */
 export type ProtectionDenial = Readonly<{ allowed: false; reason: string }>;
 export type ProtectionProvider = Readonly<{
-  phases?(policy: unknown): ProtectionPhases;
-  /** Checks one immutable action. Failure, removal and cancellation deny it. */
-  check(
-    request: ProtectionRequest,
+  /** Streaming admission. No total size limit is imposed by Buzz. The provider
+   * must consume the complete JSON evidence before approving. */
+  checkEvidence(
+    request: Omit<ProtectionRequest, "content">,
+    evidence: TextSource,
     signal: AbortSignal,
   ): Promise<boolean | ProtectionDenial>;
+  phases?(policy: unknown): ProtectionPhases;
   processProtection: ProcessProtection;
   /** Runtime owner to a process declared by this protection plugin. */
   runtimeProcesses?: Readonly<Record<string, string>>;
@@ -56,6 +66,11 @@ export type AgentProtection = Readonly<{
   spawn: ProtectedSpawn;
   assertAvailable(): void;
   check(action: ProtectionAction, signal: AbortSignal): Promise<void>;
+  checkEvidence(
+    action: Omit<ProtectionAction, "content">,
+    evidence: TextSource,
+    signal: AbortSignal,
+  ): Promise<void>;
 }>;
 /** Its message is all the agent sees; `reason` is the provider's explanation,
  * for people. */
@@ -102,6 +117,8 @@ const blank = (): ProtectionDefaults => ({ revision: 0, defaults: null });
 export class AgentProtectionService extends Service {
   readonly available = true;
   readonly version = 3;
+  readonly writeJSON = writeJSON;
+  readonly encodeJSON = jsonPieces;
   private providers = new Map<
     string,
     {
@@ -212,15 +229,13 @@ export class AgentProtectionService extends Service {
       throw new Error("The selected review model's runtime is unavailable");
     if (
       typeof prompt.system !== "string" ||
-      typeof prompt.input !== "string" ||
+      (typeof prompt.input !== "string" && !isTextSource(prompt.input)) ||
       (prompt.outputSchema !== undefined &&
         (!prompt.outputSchema ||
           typeof prompt.outputSchema !== "object" ||
           Array.isArray(prompt.outputSchema)))
     )
       throw new Error("Invalid model completion prompt");
-    if (new TextEncoder().encode(JSON.stringify(prompt)).length > 768 * 1024)
-      throw new Error("Model completion context is too large");
     const protection = this.providers.get(caller);
     // The same spawn for every review, so the runtime can keep its worker;
     // revoking the provider kills it.
@@ -234,7 +249,23 @@ export class AgentProtectionService extends Service {
         id: model.id,
         ...(model.provider === undefined ? {} : { provider: model.provider }),
       },
-      copy(prompt),
+      {
+        ...copy({
+          system: prompt.system,
+          ...(prompt.outputSchema ? { outputSchema: prompt.outputSchema } : {}),
+        }),
+        input: isTextSource(prompt.input)
+          ? {
+              read: async function* () {
+                for await (const part of (prompt.input as TextSource).read()) {
+                  signal.throwIfAborted();
+                  yield part;
+                }
+                signal.throwIfAborted();
+              },
+            }
+          : prompt.input,
+      },
       signal,
       spawn,
     );
@@ -279,7 +310,7 @@ export class AgentProtectionService extends Service {
   register(value: ProtectionProvider) {
     const id = this.plugin();
     if (
-      typeof value.check !== "function" ||
+      typeof value.checkEvidence !== "function" ||
       !value.processProtection ||
       !Array.isArray(value.processProtection.readOnlyPaths) ||
       !Array.isArray(value.processProtection.hiddenPaths)
@@ -410,6 +441,78 @@ export class AgentProtectionService extends Service {
       )
         throw new Error("The required protection plugin is unavailable");
     };
+    const inspect = async (
+      action: ProtectionAction,
+      stopped: AbortSignal,
+      input?: TextSource,
+    ) => {
+      stopped.throwIfAborted();
+      assertAvailable();
+      if (phases[action.kind] === false) return;
+      if (!provider)
+        throw new Error("The required protection plugin is unavailable");
+      const deadline = new AbortController();
+      const signal = AbortSignal.any([
+        stopped,
+        provider.abort.signal,
+        deadline.signal,
+      ]);
+      const { content, ...metadata } = action;
+      const request = copy({
+        ...metadata,
+        policy: binding.policy,
+        agent: { id: agent.pubkey, pubkey: agent.pubkey, name: agent.name },
+        relay: agent.relay,
+        runtime: agent.type,
+      });
+      const owned = input ? undefined : snapshotJSON(content);
+      let consumed = false,
+        reading = false;
+      const evidence: TextSource = {
+        read: async function* () {
+          if (reading) throw new Error("Evidence can be consumed only once");
+          reading = true;
+          for await (const part of input ? input.read() : jsonPieces(owned)) {
+            signal.throwIfAborted();
+            yield part;
+          }
+          signal.throwIfAborted();
+          consumed = true;
+        },
+      };
+      let stop!: () => void;
+      const cancelled = new Promise<never>((_, reject) => {
+        stop = () => reject(new Error("Protected action was cancelled"));
+        signal.addEventListener("abort", stop, { once: true });
+        if (signal.aborted) stop();
+      });
+      let allowed: unknown = false;
+      let reason: string | undefined;
+      const timeout = setTimeout(
+        () =>
+          deadline.abort(
+            new DOMException(
+              "The operation was aborted due to timeout",
+              "TimeoutError",
+            ),
+          ),
+        310_000,
+      );
+      try {
+        allowed = await Promise.race([
+          provider.value.checkEvidence(request, evidence, signal),
+          cancelled,
+        ]);
+        reason = explanation(allowed);
+      } catch {
+        /* A failed checker denies. */
+      } finally {
+        clearTimeout(timeout);
+        signal.removeEventListener("abort", stop);
+      }
+      signal.throwIfAborted();
+      if (allowed !== true || !consumed) throw new ProtectionDenied(reason);
+    };
     return Object.freeze({
       key,
       phases: Object.freeze(phases),
@@ -431,63 +534,13 @@ export class AgentProtectionService extends Service {
           hiddenPaths: [],
         },
       ),
-      check: async (action: ProtectionAction, stopped: AbortSignal) => {
-        stopped.throwIfAborted();
-        assertAvailable();
-        if (phases[action.kind] === false) return;
-        if (!provider)
-          throw new Error("The required protection plugin is unavailable");
-        const deadline = new AbortController();
-        const signal = AbortSignal.any([
-          stopped,
-          provider.abort.signal,
-          deadline.signal,
-        ]);
-        const request = copy({
-          ...action,
-          policy: binding.policy,
-          agent: { id: agent.pubkey, pubkey: agent.pubkey, name: agent.name },
-          relay: agent.relay,
-          runtime: agent.type,
-        });
-        if (
-          new TextEncoder().encode(JSON.stringify(request)).length >
-          256 * 1024
-        )
-          throw new Error("Protected action is too large");
-        let stop!: () => void;
-        const cancelled = new Promise<never>((_, reject) => {
-          stop = () => reject(new Error("Protected action was cancelled"));
-          signal.addEventListener("abort", stop, { once: true });
-          if (signal.aborted) stop();
-        });
-        let allowed: unknown = false;
-        let reason: string | undefined;
-        const timeout = setTimeout(
-          () =>
-            deadline.abort(
-              new DOMException(
-                "The operation was aborted due to timeout",
-                "TimeoutError",
-              ),
-            ),
-          310_000,
-        );
-        try {
-          allowed = await Promise.race([
-            provider.value.check(request, signal),
-            cancelled,
-          ]);
-          reason = explanation(allowed);
-        } catch {
-          /* A failed checker denies. */
-        } finally {
-          clearTimeout(timeout);
-          signal.removeEventListener("abort", stop);
-        }
-        signal.throwIfAborted();
-        if (allowed !== true) throw new ProtectionDenied(reason);
-      },
+      check: (action: ProtectionAction, signal: AbortSignal) =>
+        inspect(action, signal),
+      checkEvidence: (
+        action: Omit<ProtectionAction, "content">,
+        evidence: TextSource,
+        signal: AbortSignal,
+      ) => inspect({ ...action, content: undefined }, signal, evidence),
     });
   }
 }

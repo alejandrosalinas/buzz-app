@@ -50,6 +50,17 @@ async fn bounded<T: Send + 'static>(
     .map_err(|error| error.to_string())?
 }
 
+/// Lists a folder with directory resolution's limit on blocking work, and
+/// answers its caller with `late` after the read timeout.
+pub(crate) async fn bounded_listing<T: Send + 'static>(
+    late: &'static str,
+    work: impl FnOnce() -> Result<T, String> + Send + 'static,
+) -> Result<T, String> {
+    tokio::time::timeout(READ_TIMEOUT, bounded(&DIRECTORIES, work))
+        .await
+        .map_err(|_| late.to_string())?
+}
+
 /// `path`, absolute or `~/…` (`~\…` too on Windows), or else relative to
 /// `cwd`, which is one of those.
 fn locate(path: &str, cwd: Option<&str>) -> Result<PathBuf, String> {
@@ -154,6 +165,27 @@ pub(crate) async fn plugin_host_resolve_directory(
 ) -> Result<String, String> {
     granted(manager, id, revision).await?;
     bounded(&DIRECTORIES, move || directory(&path)).await
+}
+
+/// Lists the repositories folder for a plugin that declares `host.files`,
+/// checking that grant before touching the filesystem. The app's renderer
+/// supplies the folder its community and account configured; the plugin never
+/// chooses `path`.
+#[tauri::command]
+pub(crate) async fn plugin_host_repository_folders<R: tauri::Runtime>(
+    app: tauri::AppHandle<R>,
+    manager: tauri::State<'_, PluginManager>,
+    id: String,
+    revision: String,
+    path: String,
+) -> Result<Vec<crate::repositories_folder::RepositoryFolder>, String> {
+    use tauri::Manager as _;
+    granted(manager, id, revision).await?;
+    let home = app.path().home_dir().ok();
+    bounded_listing(crate::repositories_folder::LATE, move || {
+        crate::repositories_folder::folders(&path, home.as_deref())
+    })
+    .await
 }
 
 // One admitted byte operation; waiting never clones a raw save body. Tokio's
@@ -711,6 +743,62 @@ mod tests {
             dunce::canonicalize(&path).unwrap().to_str().unwrap()
         );
         assert!(directory("relative").is_err());
+    }
+
+    #[test]
+    fn repository_folders_check_the_file_grant_before_listing() {
+        let list = |fixture: &managed_tests::Fixture, command: &str, body: serde_json::Value| {
+            fixture
+                .ipc(
+                    command,
+                    tauri::ipc::InvokeBody::Json(body),
+                    Default::default(),
+                )
+                .map(|body| body.deserialize::<serde_json::Value>().unwrap())
+        };
+        let granted = managed_tests::Fixture::new(false, true);
+        let root = dunce::canonicalize(granted.temp.path())
+            .unwrap()
+            .join("repos");
+        std::fs::create_dir_all(root.join("checkout")).unwrap();
+        let path = root.to_str().unwrap();
+        let expected = serde_json::json!([{
+            "name": "checkout",
+            "path": root.join("checkout").to_str().unwrap(),
+            "displayPath": root.join("checkout").to_str().unwrap(),
+        }]);
+        let plugin = |fixture: &managed_tests::Fixture, revision: &str, path: &str| {
+            let body =
+                serde_json::json!({ "id": "example.bytes", "revision": revision, "path": path });
+            list(fixture, "plugin_host_repository_folders", body)
+        };
+        assert_eq!(plugin(&granted, &granted.revision, path).unwrap(), expected);
+        assert!(plugin(&granted, "stale", path).is_err());
+        assert_eq!(
+            list(
+                &granted,
+                "repositories_folder_list",
+                serde_json::json!({ "path": path })
+            )
+            .unwrap(),
+            expected
+        );
+        // Refused before any filesystem work: a missing folder reports the grant.
+        let ungranted = managed_tests::Fixture::new(false, false);
+        let missing = root.join("absent");
+        assert_eq!(
+            plugin(&ungranted, &ungranted.revision, missing.to_str().unwrap()).unwrap_err(),
+            "\"Files are not declared\""
+        );
+        assert_eq!(
+            plugin(&ungranted, &ungranted.revision, path).unwrap_err(),
+            "\"Files are not declared\""
+        );
+        assert!(
+            plugin(&granted, &granted.revision, missing.to_str().unwrap())
+                .unwrap_err()
+                .contains("unavailable")
+        );
     }
 }
 

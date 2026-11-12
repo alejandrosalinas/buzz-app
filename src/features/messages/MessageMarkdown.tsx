@@ -306,7 +306,35 @@ type HtmlNode = {
   tagName?: string;
   properties?: Record<string, unknown>;
   children?: HtmlNode[];
+  value?: string;
 };
+const blockTags = new Set([
+  ...["p", "ul", "ol", "li", "blockquote", "pre", "hr", "section"],
+  ...["table", "h1", "h2", "h3", "h4", "h5", "h6"],
+]);
+const isBlock = (node: HtmlNode | undefined) =>
+  node?.type === "root" || blockTags.has(node?.tagName ?? "");
+/** Bodies keep authored spaces (`white-space: pre-wrap`), so drop the newlines
+ * the renderer writes only as markup: between blocks and after a `<br>`. */
+function rehypeMarkupNewlines() {
+  return function visit(node: HtmlNode) {
+    const children = node.children;
+    if (!children) return;
+    node.children = children.flatMap((child, index) => {
+      if (child.type !== "text") {
+        visit(child);
+        return [child];
+      }
+      const before = index ? children[index - 1] : node;
+      const after = children[index + 1] ?? node;
+      let value = child.value ?? "";
+      if (before?.tagName === "br" || isBlock(before))
+        value = value.replace(/^\n/, "");
+      if (isBlock(after)) value = value.replace(/\n$/, "");
+      return value ? [{ ...child, value }] : [];
+    });
+  };
+}
 /** Lists and quotes the slot descends into, so their last line keeps it. */
 const editedSlotContainers = new Set(["ul", "ol", "li", "blockquote"]);
 /** Leave a slot after the body's last rendered line for the edited marker:
@@ -880,7 +908,7 @@ const MarkdownBody = memo(function MarkdownBody({
           [remarkInlineContent, protectedContent],
           remarkLiteralHtml,
         ],
-        rehypePlugins: [rehypeEditedSlot],
+        rehypePlugins: [rehypeMarkupNewlines, rehypeEditedSlot],
         components: markdownComponents,
         skipHtml: true,
         // The live anchor renderer validates URLs. Cached parsing cannot decide

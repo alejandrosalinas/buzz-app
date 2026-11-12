@@ -18,7 +18,10 @@ import { createJoinJournal, type PendingJoin } from "./join-journal";
 import { admitCommunity, completeJoin, type Current } from "./join";
 import { consentAsked, type JoinPolicy } from "./join-policy";
 import { ACCOUNT_CONSENT, accountConsents } from "./account-consent";
-import { CommunitySignIn } from "../federated-identity/CommunitySignIn";
+import {
+  CommunitySignIn,
+  useExplainedRefusal,
+} from "../federated-identity/CommunitySignIn";
 import type { FederatedIdentity } from "../federated-identity/service";
 import { OnboardingBack } from "../identity/OnboardingBack";
 import { OnboardingScreen } from "../identity/OnboardingScreen";
@@ -201,6 +204,13 @@ export function CommunityDialog({
   }
   async function submit() {
     if (uploading || unavailable) return;
+    // Continue is a person's action, so it asks the community's issuer
+    // again instead of repeating a refusal cached this session (even one an
+    // edit has since cleared from view). A community native can't route
+    // (not a secure origin) has none cached.
+    const askAgain = async (url: string) => {
+      await federatedIdentity?.askAgain?.(url)?.catch(() => {});
+    };
     if (step === "destination") {
       await work(async (signal) => {
         const entered = parsePastedInvite(url);
@@ -217,6 +227,7 @@ export function CommunityDialog({
           setNeedsInvite(true);
         }
         setDestination(next);
+        await askAgain(next.url);
         // Transport text names neither the host nor a next step, and differs by engine.
         const explained = (reason: unknown) =>
           isTransientFailure(reason)
@@ -278,7 +289,10 @@ export function CommunityDialog({
       });
     } else if (step === "access") {
       if (!allowed || !destination) return;
-      await work(() => admit(id, destination.url, policy));
+      await work(async () => {
+        await askAgain(destination.url);
+        await admit(id, destination.url, policy);
+      });
     } else {
       if (!profile.name.trim()) return;
       await work(async () => {
@@ -287,6 +301,7 @@ export function CommunityDialog({
         else {
           if (!destination || !original)
             throw new Error("Choose a community first");
+          await askAgain(destination.url);
           const done = await completeJoin({
             community: id,
             membership: {
@@ -317,6 +332,11 @@ export function CommunityDialog({
     mode === "join" &&
     !!original?.exists &&
     profilesEqual(profile, original.profile);
+  const refusalIdentity =
+    (destination && federatedIdentity?.forCommunity?.(destination.url)) ||
+    federatedIdentity;
+  // An explained refusal replaces the raw error, so it shows once.
+  const explained = useExplainedRefusal(refusalIdentity, error);
   const looking = busy && step === "destination";
   // While busy, the primary action names the operation its step started.
   const [action, actionPending] =
@@ -474,7 +494,7 @@ export function CommunityDialog({
               step === "destination" && (
                 <Field
                   label="Community URL"
-                  error={error || undefined}
+                  error={(!explained && error) || undefined}
                   description={
                     connectionFrom
                       ? undefined
@@ -583,21 +603,19 @@ export function CommunityDialog({
                 disabled={busy}
               />
             )}
-            {error && step !== "destination" && (
+            {error && step !== "destination" && !explained && (
               <p role="alert" className={styles.error}>
                 {error}
               </p>
             )}
             {error && (
               <CommunitySignIn
-                identity={
-                  (destination &&
-                    federatedIdentity?.forCommunity?.(destination.url)) ||
-                  federatedIdentity
-                }
+                identity={refusalIdentity}
                 error={error}
                 relay={destination?.url}
                 memberships={client.memberships}
+                // Continue asks the issuer again (`askAgain` in submit).
+                asksAgain={!!federatedIdentity?.askAgain}
                 // Sign-in only clears the refusal: Continue then runs the current
                 // step with current input, never one captured before the login.
                 retry={() => setError("")}

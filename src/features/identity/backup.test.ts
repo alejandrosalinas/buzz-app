@@ -378,3 +378,37 @@ it("never shows native text when the status cannot be read or consent written", 
   // The credential is never handed over without consent.
   expect(commands(unwritten).at(-1)).toBe("nsec_backup_set_choice");
 });
+
+it("refreshes public management metadata without replacing the watcher or regressing a newer identity", async () => {
+  const first: BackupStatus = {
+    ...at(1, 0, "idle"),
+    management: {
+      pubkey: "ab".repeat(32),
+      policy: "self-managed",
+      initialBackupConfirmed: false,
+    },
+  };
+  const host = native(first);
+  const store = host.store();
+  await store.ready();
+  const release = host.holdState({ ...first, seq: 2 });
+  const refresh = store.refresh();
+  await vi.waitFor(() =>
+    expect(
+      host.send.mock.calls.filter(([name]) => name === "nsec_backup_state"),
+    ).toHaveLength(2),
+  );
+  const next: BackupStatus = {
+    ...first,
+    seq: 3,
+    management: {
+      pubkey: "cd".repeat(32),
+      policy: "organization-managed",
+      initialBackupConfirmed: false,
+    },
+  };
+  host.watchers[0]?.onmessage(next);
+  release();
+  await expect(refresh).resolves.toEqual(next);
+  expect(host.watchers).toHaveLength(1);
+});

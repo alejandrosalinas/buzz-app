@@ -86,6 +86,7 @@ export function createCommunities(
   nativeConnect?: (id: string, signal: AbortSignal) => Promise<ReadTransport>,
   localAgents?: LocalAgentSource,
   verifyStored?: ReadTransport["verifyStored"],
+  askAgain?: (relay: string) => Promise<void>,
 ) {
   const connect = live
     ? (id: string, signal: AbortSignal) =>
@@ -187,6 +188,7 @@ export function createCommunities(
         viewer ? { viewer, scope: communityDestination(id).url } : undefined,
         localAgents,
         verifyStored,
+        askAgain,
       );
       sessions.set(id, session);
       sessionScopes.set(id, scope);
@@ -230,6 +232,7 @@ export function createCommunities(
       };
     },
     retry: () => current().retry(),
+    tryAgain: () => current().tryAgain(),
     disconnect: () => current().disconnect(),
     clearCache: () => current().clearCache(),
   };

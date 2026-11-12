@@ -19,7 +19,10 @@ import {
 } from "../profiles/target";
 import { ActivityIndicatorPresentation } from "../conversation/typing-presentation";
 import { ActivityGroupPreview } from "./ActivityGroupPreview";
-import { activityPresentation } from "./activity-presentation";
+import {
+  activityPresentation,
+  useActivityPresentation,
+} from "./activity-presentation";
 import type { ChannelMessage } from "../relay/contracts";
 import { TypingIndicator } from "./TypingIndicator";
 
@@ -1021,6 +1024,47 @@ it("announces split human and agent activity once from the composer", () => {
   );
 });
 
+it.each([false, true])(
+  "opens the conversation for a rootless plugin wake (stoppable=%s)",
+  async (stoppable) => {
+    const f = fixture();
+    const user = userEvent.setup();
+    const open = vi.fn(() => true);
+    f.update([], {
+      local: [
+        {
+          scope: "test",
+          agent,
+          channelId: "channel",
+          messageId: "f".repeat(64),
+          threadRootId: "f".repeat(64),
+          syntheticMessage: true,
+          soloChat: true,
+          state: "working",
+          startedAt: 1,
+          ...(stoppable ? { stoppable: true } : {}),
+        },
+      ],
+    });
+    render(
+      <TypingIndicator
+        session={f.session}
+        channelId="channel"
+        canOpenActivity={() => false}
+        openActivity={open}
+      />,
+    );
+    await user.click(
+      screen.getByRole("button", { name: "Activity: Agent working" }),
+    );
+    await user.click(screen.getByRole("button", { name: /Open .* for Agent/ }));
+    expect(open).toHaveBeenCalledExactlyOnceWith(
+      "buzz://channel/channel",
+      undefined,
+    );
+  },
+);
+
 it("keeps dots beside a local tool step", () => {
   const f = fixture();
   f.update([], {
@@ -1051,22 +1095,19 @@ it("keeps dots beside a local tool step", () => {
 });
 
 it.each([undefined, root])(
-  "keeps dots after progress replies and expanded activity in scope %s",
+  "lets history presenting a request's work be its one working cue, keeping other requests' cues, in scope %s",
   (threadRootId) => {
     const f = fixture();
-    f.update([], {
-      local: [
-        {
-          scope: "test",
-          agent,
-          channelId: "channel",
-          messageId: root,
-          threadRootId: root,
-          state: "working",
-          startedAt: 1,
-        },
-      ],
-    });
+    const work = {
+      scope: "test",
+      agent,
+      channelId: "channel",
+      messageId: root,
+      threadRootId: root,
+      state: "working" as const,
+      startedAt: 1,
+    };
+    f.update([], { local: [work] });
     const row: ChannelMessage = {
       id: "step",
       channelId: "channel",
@@ -1083,22 +1124,29 @@ it.each([undefined, root])(
       replyCount: 0,
     };
     const { audience: _audience, ...reply } = row;
-    const group = activityPresentation(
-      [row, { ...reply, id: "reply", content: "Still checking" }],
-      f.session.agentActivity.snapshot(),
-      new Set([agent]),
-    ).groups[0];
-    if (!group) throw new Error("Missing activity group");
-    const preview = (expanded: boolean) => (
-      <ActivityIndicatorPresentation>
+    const replied = [row, { ...reply, id: "reply", content: "Still checking" }];
+    const agents = new Set([agent]);
+    function History({ followed }: { followed: boolean }) {
+      const group = useActivityPresentation(
+        followed ? replied : [row],
+        f.session.agentActivity,
+        agents,
+      ).groups[0];
+      if (!group) throw new Error("Missing activity group");
+      return (
         <ActivityGroupPreview
           session={f.session}
           group={group}
           profiles={new Map()}
           media={() => undefined}
-          expanded={expanded}
+          expanded={false}
           onToggle={() => {}}
         />
+      );
+    }
+    const preview = (mounted: boolean, followed = false) => (
+      <ActivityIndicatorPresentation>
+        {mounted && <History followed={followed} />}
         <TypingIndicator
           session={f.session}
           channelId="channel"
@@ -1107,27 +1155,40 @@ it.each([undefined, root])(
         />
       </ActivityIndicatorPresentation>
     );
-    const view = render(preview(false));
+    const cue = () =>
+      screen.queryByRole("button", { name: /Activity: .*working/ });
+    const dots = () => document.querySelectorAll('[data-state="working"]');
+    const view = render(preview(true));
     expect(screen.getByText("Checking the fix")).toHaveAttribute(
       "data-active",
       "true",
     );
+    expect(cue()).toBeNull();
+    expect(dots()).toHaveLength(1);
     expect(
-      screen
-        .getByRole("button", { name: /Activity: .*working/ })
-        .querySelector("[data-state]"),
-    ).not.toBeNull();
+      screen.getByRole("button", { name: /Show activity history/ }),
+    ).toContainElement(dots()[0] as HTMLElement);
+    // The same agent's other request here has no presentation of its own.
+    f.update([], {
+      local: [work, { ...work, messageId: "follow-up", startedAt: 2 }],
+    });
+    expect(cue()).toBeVisible();
+    f.update([], { local: [work] });
+    expect(cue()).toBeNull();
+    // Without mounted history, the conversation shows the work again.
+    view.rerender(preview(false));
+    expect(cue()).toBeVisible();
     view.rerender(preview(true));
-    expect(screen.getByText("Collapse")).toBeVisible();
-    expect(
-      screen.getByRole("button", { name: /Activity: .*working/ }),
-    ).toBeVisible();
-    const work = f.session.agentActivity.snapshot().local?.[0];
-    if (!work) throw new Error("Missing local work");
+    expect(cue()).toBeNull();
+    // A newer message below the history leaves its dots out of view of the
+    // conversation's end, so the conversation shows the work there too.
+    view.rerender(preview(true, true));
+    expect(cue()).toBeVisible();
+    view.rerender(preview(true));
+    expect(cue()).toBeNull();
     f.update([], { local: [{ ...work, state: "done" }] });
-    expect(
-      screen.queryByRole("button", { name: /Activity: .*working/ }),
-    ).toBeNull();
+    expect(cue()).toBeNull();
+    expect(dots()).toHaveLength(0);
   },
 );
 

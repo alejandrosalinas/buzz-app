@@ -606,6 +606,37 @@ export const groups: Group[] = [
       ),
     ],
   },
+
+  {
+    id: "charts",
+    title: "Charts",
+    description:
+      "Fenced buzz-chart JSON drawn by the bundled plugin inside the host code frame.",
+    examples: [
+      single(
+        "chart-line",
+        "Series chart",
+        "Two series follow the first chart colors; a data table sits below.",
+        '```buzz-chart\n{"version":1,"type":"line","title":"Weekly reviews","x":"week","y":"reviews","series":"team","data":[{"week":1,"reviews":8,"team":"Web"},{"week":2,"reviews":11,"team":"Web"},{"week":3,"reviews":9,"team":"Web"},{"week":1,"reviews":5,"team":"Relay"},{"week":2,"reviews":6,"team":"Relay"},{"week":3,"reviews":10,"team":"Relay"}],"source":{"name":"Example data"}}\n```',
+        { authorId: agent },
+      ),
+      single(
+        "chart-pie",
+        "ECharts option",
+        "Slices cycle through the four series colors.",
+        '```buzz-chart\n{"version":2,"title":"Review time","height":280,"option":{"series":[{"type":"pie","radius":["40%","70%"],"data":[{"name":"Waiting","value":45},{"name":"Reviewing","value":30},{"name":"Fixing","value":15},{"name":"Merging","value":10}]}]}}\n```',
+        { authorId: agent },
+      ),
+      single(
+        "chart-invalid",
+        "Invalid chart",
+        "The validation error and the source replace the chart.",
+        '```buzz-chart\n{"version":1,"type":"bar"}\n```',
+        { authorId: agent },
+      ),
+    ],
+  },
+
   {
     id: "conversation",
     title: "Conversation context",

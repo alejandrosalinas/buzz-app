@@ -3,7 +3,12 @@ import { schnorr } from "@noble/curves/secp256k1.js";
 import { bytesToHex } from "nostr-tools/utils";
 // Real ChannelsPage, thread reader, shared directory, panel registry and plugin lifecycle.
 // Only the transport is synthetic. No dev broker, saved identity or live relay.
-import { StrictMode, useLayoutEffect, useState } from "react";
+import {
+  StrictMode,
+  useLayoutEffect,
+  useState,
+  type ComponentType,
+} from "react";
 import { createRoot } from "react-dom/client";
 import { Context } from "@deepseek-ai/cordis";
 import { createPluginManager } from "../../src/plugins/manager";
@@ -33,7 +38,11 @@ import {
   signed,
   summary,
 } from "../../src/features/relay/testing";
-import { profileTarget } from "../../src/features/profiles/target";
+import {
+  profileTarget,
+  profilePanelKey,
+  profileActivityViewKey,
+} from "../../src/features/profiles/target";
 import { ToastProvider } from "../../src/shared/design-system/ui/Toast";
 import "../../src/shared/styles/globals.css";
 import { createAppearance } from "../../src/shared/theme/service";
@@ -404,7 +413,63 @@ const manager = createPluginManager(context, {
           },
         },
       ]
-    : bundledPlugins.filter(({ manifest }) => manifest.id === "buzz.profiles"),
+    : [
+        ...bundledPlugins.filter(
+          ({ manifest }) => manifest.id === "buzz.profiles",
+        ),
+        ...(new URLSearchParams(location.search).has("specialized-profile")
+          ? [
+              {
+                manifest: {
+                  id: "example.profiles",
+                  name: "Specialized profiles",
+                  apiVersion: 1,
+                },
+                module: {
+                  inject: ["panels"],
+                  apply(ctx) {
+                    ctx.panels.register({
+                      id: "enriched",
+                      title: "Profile",
+                      order: -10,
+                      matches: (target) =>
+                        !!profilePanelKey(target) ||
+                        !!profileActivityViewKey(target),
+                      component: Object.assign(
+                        (props: PanelProps) => {
+                          const Native = ctx.panels
+                            .snapshot()
+                            .find(
+                              (panel) => panel.key === "buzz.profiles/profile",
+                            )?.component as
+                            | ComponentType<
+                                PanelProps &
+                                  import("../../src/bundled/profiles/ProfilePanel").PersonProfileInfoContent
+                              >
+                            | undefined;
+                          return Native ? (
+                            <Native
+                              {...props}
+                              renderPersonInfo={(content) => (
+                                <>
+                                  <button type="button">
+                                    Extra profile action
+                                  </button>
+                                  {content}
+                                </>
+                              )}
+                            />
+                          ) : null;
+                        },
+                        { profileHistory: true },
+                      ),
+                    });
+                  },
+                },
+              },
+            ]
+          : []),
+      ],
 });
 const panels = new PanelsService(context);
 // Profiles reads Agents to choose agent tabs; this fixture has no agents.
@@ -413,6 +478,7 @@ const pages = new PagesService(context);
 new ConversationService(context);
 Object.assign(window, {
   profilesFixture: {
+    panels,
     report,
     messages: { root: root.id, reply: reply.id },
     holdReply() {

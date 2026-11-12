@@ -281,3 +281,127 @@ test("PR media plays under the packaged media policy in a narrow GitHub panel", 
   ).toBeVisible();
   await page.getByRole("button", { name: "Close fullscreen viewer" }).click();
 });
+
+// Browser-only: a real failed media read of a private repository's sign-in-only
+// link, then its signed link decoding under the enforced packaged media policy.
+// The link order, renewal and no-loop rules live in the colocated RTL tests.
+test.describe("private repository media", () => {
+  // Their own links are not found without a GitHub sign-in; only each of
+  // those responses' own console error passes.
+  test.use({
+    expectedStartupLoadFailure: "https://github.com/user-attachments/assets/",
+  });
+  test("private PR media falls back to its signed links under the packaged media policy", async ({
+    page,
+    context,
+    app,
+  }) => {
+    const config = JSON.parse(
+      await readFile(
+        new URL("../../src-tauri/tauri.conf.json", import.meta.url),
+        "utf8",
+      ),
+    );
+    const mediaPolicy = config.app.security.csp
+      .split(";")
+      .filter((directive) => /^\s*(img|media)-src /.test(directive))
+      .join(";")
+      .trim();
+    await page.route(`${app.origin}/`, async (route) => {
+      const response = await route.fetch();
+      await route.fulfill({
+        response,
+        headers: {
+          ...response.headers(),
+          "content-security-policy": mediaPolicy,
+        },
+      });
+    });
+    const privateTarget = "https://github.com/block/buzz-app/pull/328";
+    const id = (uuid) => `https://github.com/user-attachments/assets/${uuid}`;
+    const signed = (uuid, file) =>
+      `https://private-user-images.githubusercontent.com/1/2-${uuid}.${file}?jwt=fresh`;
+    const imageId = "3f2a9c1e-7b4d-4e8a-9c61-2d5b8e0f4a17";
+    const videoId = "6c1d0b7e-2f3a-4d5e-8b9c-0a1b2c3d4e5f";
+    await page.route(
+      "https://api.github.com/repos/block/buzz-app/pulls/328",
+      (route) =>
+        route.fulfill({
+          json: {
+            title: "Show the order total before paying",
+            state: "open",
+            body: `![Checkout screen](${id(imageId)})\n\n${id(videoId)}`,
+            body_html: `<p><a href="${signed(imageId, "png")}"><img src="${signed(imageId, "png")}" data-canonical-src="${id(imageId)}" alt="Checkout screen"></a></p><video src="${signed(videoId, "mp4")}"></video>`,
+          },
+        }),
+    );
+    await page.route(
+      /https:\/\/api\.github\.com\/repos\/.*\/(?:comments|reviews)\?/,
+      (route) => route.fulfill({ json: [] }),
+    );
+    // Without a GitHub sign-in, a private repository's own links are not found.
+    const unsigned = [];
+    for (const uuid of [imageId, videoId])
+      await context.route(id(uuid), (route) => {
+        unsigned.push(uuid);
+        return route.fulfill({ status: 404 });
+      });
+    for (const [url, path, contentType] of [
+      [signed(imageId, "png"), imagePath, "image/png"],
+      [signed(videoId, "mp4"), videoPath, "video/mp4"],
+    ]) {
+      const bytes = await readFile(path);
+      await context.route(url, (route) => {
+        const range = /^bytes=(\d+)-(\d*)$/.exec(
+          route.request().headers().range ?? "",
+        );
+        if (!range)
+          return route.fulfill({
+            body: bytes,
+            contentType,
+            headers: { "accept-ranges": "bytes" },
+          });
+        const start = Number(range[1]);
+        const last = range[2]
+          ? Math.min(Number(range[2]), bytes.length - 1)
+          : bytes.length - 1;
+        return route.fulfill({
+          status: 206,
+          contentType,
+          headers: {
+            "accept-ranges": "bytes",
+            "content-range": `bytes ${start}-${last}/${bytes.length}`,
+          },
+          body: bytes.subarray(start, last + 1),
+        });
+      });
+    }
+    await page.goto(app.origin);
+    await openPage(page, "Messages");
+    await page
+      .getByRole("textbox", { name: "Message #Alpha", exact: true })
+      .waitFor();
+    await settle(page);
+    app.append("primary", "alpha", privateTarget);
+    const link = page.locator(`a[href="${privateTarget}"]`);
+    await expect(link).toBeAttached();
+    await end(page);
+    await link.click();
+    const panel = page.getByRole("complementary", {
+      name: "GitHub",
+      exact: true,
+    });
+    const image = panel.getByAltText("Checkout screen");
+    await expect(image).toHaveAttribute("src", signed(imageId, "png"));
+    await expect
+      .poll(() => image.evaluate((element) => element.naturalWidth))
+      .toBeGreaterThan(0);
+    const video = panel.locator("video");
+    await expect(video).toHaveAttribute("src", signed(videoId, "mp4"));
+    await expect
+      .poll(() => video.evaluate((element) => element.videoWidth))
+      .toBeGreaterThan(0);
+    await expect(panel.getByRole("status")).toHaveCount(0);
+    expect([...new Set(unsigned)].sort()).toEqual([imageId, videoId].sort());
+  });
+});

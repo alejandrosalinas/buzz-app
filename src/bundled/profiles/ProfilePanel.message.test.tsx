@@ -80,6 +80,7 @@ function fixture(available = true) {
       return () => listeners.delete(listener);
     },
     retry() {},
+    tryAgain() {},
     disconnect() {},
     clearCache: async () => {},
   };

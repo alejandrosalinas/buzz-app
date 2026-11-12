@@ -101,7 +101,9 @@ browser.
   windows. Responses use `no-store` and `no-referrer`. Its Content Security Policy
   permits only embedded image/font data and the exact stylesheet and close-window script
   by hash, with no external assets or network
-  requests. A valid callback shows the headline **Signing you in…** and a
+  requests. Inline hashes use HTML-normalized line endings so Windows CRLF
+  checkouts receive the same styling and script behavior as LF checkouts.
+  A valid callback shows the headline **Signing you in…** and a
   spinner with muted **Closing this window automatically** text for three seconds
   before trying to close its page. The hint reserves its wrapped size through
   script startup and a blocked-close fallback, keeping the panel stationary.

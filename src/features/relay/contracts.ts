@@ -140,6 +140,9 @@ export type ChannelMessage = Readonly<{
   /** Signed `audience` tag of the original event: `agents` is coordination
    * between agents, shown quietly. Absent means everyone; unknown values too. */
   audience?: "agents";
+  /** Signed `buzz:request` tag: the agent's claim of the triggering message
+   * this update belongs to, separate from its flattened reply link. */
+  request?: string;
   /** Signed display metadata for an automatic execution-failure reply. */
   notice?: "execution-failure";
   /** Original kind 40008. Untrusted display metadata; content stays a raw patch. */

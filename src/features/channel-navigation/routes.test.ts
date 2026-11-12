@@ -56,3 +56,34 @@ it("builds Solo draft destinations in the community", () => {
   );
   expect(() => soloDraftTarget("bad")).toThrow();
 });
+
+it("keeps a region draft's label and refuses a malformed or linked one", () => {
+  const region = "buzz.region:example.tasks:tasks";
+  expect(soloDraft({ kind: "solo-draft", region, project: "p" })).toEqual({
+    region,
+    project: "p",
+  });
+  for (const params of [
+    { kind: "solo-draft", region: "buzz.solo" },
+    { kind: "solo-draft", region: "buzz.region:Example:tasks" },
+    { kind: "solo-draft", region: 1 },
+    {
+      kind: "solo-draft",
+      region,
+      linked: "00000000-0000-4000-8000-000000000000",
+    },
+  ])
+    expect(soloDraft(params)).toBeUndefined();
+});
+it("keeps a region lead draft only with its region and workspace", () => {
+  const region = "buzz.region:example:tasks";
+  expect(
+    soloDraft({ kind: "solo-draft", region, project: "p", lead: true }),
+  ).toEqual({ region, project: "p", lead: true });
+  for (const params of [
+    { kind: "solo-draft", region, lead: true },
+    { kind: "solo-draft", project: "p", lead: true },
+    { kind: "solo-draft", region, project: "p", lead: false },
+  ])
+    expect(soloDraft(params)).toBeUndefined();
+});

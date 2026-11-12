@@ -10,6 +10,7 @@ import { watchPageErrors } from "./page-errors.mjs";
 import { createServer, warmUp } from "./vite-server.mjs";
 import { expectMessageActionsHidden } from "./message-actions.mjs";
 import { hoverRow, settle } from "./timeline.mjs";
+import { signPackage } from "../fixtures/plugin-release.mjs";
 
 const root = fileURLToPath(new URL("../../", import.meta.url));
 test("independent packed author consumer and native-installed contribution survive removal, replacement and retarget", async ({
@@ -58,6 +59,8 @@ test("independent packed author consumer and native-installed contribution survi
     const home = join(temp, "home");
     const native = (op, ...args) =>
       JSON.parse(run(binary, [home, op, ...args]));
+    await signPackage(join(source, "dist"));
+    await signPackage(join(toolSource, "dist"));
     const installed = native("install", join(source, "dist"));
     expect(
       installed.catalog.plugins.find(
@@ -108,6 +111,7 @@ test("independent packed author consumer and native-installed contribution survi
                         "Insert updated timestamp",
                       ),
                     );
+                    await signPackage(join(toolSource, "dist"));
                     result = native("install", join(toolSource, "dist"));
                     break;
                   default:
@@ -340,6 +344,25 @@ test("independent packed author consumer and native-installed contribution survi
       page.getByRole("heading", { name: "Test conversation consumer" }),
     ).toBeVisible();
     await expect(draft).toHaveJSProperty("value", "Channels draft");
+    // The packed external consumer must reach native grouping and focus behavior,
+    // not just compile declarations. Editor checks are composition smoke coverage.
+    const groupingEditor = await draft.elementHandle();
+    const replySummary = page.getByRole("button", {
+      name: "View 1 reply",
+    });
+    await expect(replySummary).toHaveText("1 reply");
+    await replySummary.focus();
+    await page.keyboard.press("Enter");
+    await expect(
+      page.getByText("Example reply", { exact: true }),
+    ).toBeFocused();
+    expect(await groupingEditor.evaluate((el) => el.isConnected)).toBe(true);
+    await page.getByRole("button", { name: "Collapse example reply" }).focus();
+    await page.keyboard.press("Enter");
+    await expect(replySummary).toBeFocused();
+    await expect(page.getByText("Example reply", { exact: true })).toBeHidden();
+    await expect(draft).toHaveJSProperty("value", "Channels draft");
+    expect(await groupingEditor.evaluate((el) => el.isConnected)).toBe(true);
     // The independently built page uses the host's date labels.
     await expect(
       page.getByText("Consumer dates Today, Yesterday, 5 minutes ago", {

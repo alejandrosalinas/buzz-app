@@ -1117,6 +1117,32 @@ it("shows a step to take elsewhere as a status, not an error", async () => {
     "Approve this app in your web browser, then select Reload",
   );
   expect(screen.queryByRole("alert")).toBeNull();
+  expect(screen.queryByRole("button", { name: "Open in browser" })).toBeNull();
+});
+
+it("opens a page the website asked for from its notice", async () => {
+  const user = userEvent.setup();
+  const platform = fakePlatform();
+  vi.mocked(platform.status).mockResolvedValue({
+    url: "https://example.com/",
+    title: "",
+    loading: false,
+    error: null,
+    notice: "This app wants to open a Builderlab page in your web browser",
+    held: true,
+  });
+  render(
+    <BrowserHostView
+      url="https://example.com"
+      platform={platform}
+      sessions={new BrowserSessions(platform)}
+      pollInterval={5}
+    />,
+  );
+  await user.click(
+    await screen.findByRole("button", { name: "Open in browser" }),
+  );
+  expect(platform.action).toHaveBeenCalledWith(expect.any(String), "open");
 });
 
 it("ignores status from a replaced session", async () => {

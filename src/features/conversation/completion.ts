@@ -1,13 +1,37 @@
 import type { MentionRecipient } from "../messages/mention-draft";
+import { composerToken, type ComposerToken } from "../messages/composer-token";
 import type { Contribution } from "../../plugins/contributions";
+import { isBundledContribution } from "../../plugins/provenance";
 import type {
   ComposerCompletion,
   ComposerObservation,
   CompletionContext,
+  CompletionEdit,
   CompletionQuery,
   CompletionResult,
   CompletionSuggestion,
 } from "./contracts";
+import { chosenWorkspace } from "./workspace-completion";
+
+/** Host-internal edits, outside the plugin contract: a semantic chip is
+ * accepted only from a provider a bundled plugin registered. */
+export type HostCompletionEdit =
+  | CompletionEdit
+  | Readonly<{
+      token: ComposerToken;
+      text?: never;
+      mention?: never;
+      mentions?: never;
+      pending?: never;
+    }>;
+export type HostCompletionSuggestion = Omit<CompletionSuggestion, "edit"> &
+  Readonly<{
+    edit: HostCompletionEdit;
+    /** The heading the host shows above a run of rows; bundled providers only. */
+    group?: string;
+  }>;
+export type HostCompletionResult = Omit<CompletionResult, "items"> &
+  Readonly<{ items: readonly HostCompletionSuggestion[] }>;
 
 export function matchCompletion(
   providers: readonly Contribution<ComposerCompletion>[],
@@ -66,9 +90,12 @@ function validQuery(
   );
 }
 /** Copy edit primitives so later provider mutation cannot retarget a displayed choice. */
-export function completionResult(result: CompletionResult): CompletionResult {
+export function completionResult(
+  result: HostCompletionResult,
+  provider?: Contribution<ComposerCompletion>,
+): HostCompletionResult {
   const ids = new Set<string>();
-  const items: CompletionSuggestion[] = [];
+  const items: HostCompletionSuggestion[] = [];
   for (const item of (Array.isArray(result?.items) ? result.items : []).slice(
     0,
     50,
@@ -83,7 +110,18 @@ export function completionResult(result: CompletionResult): CompletionResult {
     )
       continue;
     const edit = item.edit;
-    if ("mentions" in edit) {
+    const host = chosenWorkspace(edit) !== undefined;
+    // Provenance is the registered entry, never an id, title or flag the
+    // provider reports about itself.
+    const token =
+      "token" in edit && provider && isBundledContribution(provider)
+        ? composerToken(edit.token)
+        : undefined;
+    if (host) {
+      // Host-made and frozen: kept as is.
+    } else if ("token" in edit) {
+      if (!token) continue;
+    } else if ("mentions" in edit) {
       if (
         !Array.isArray(edit.mentions) ||
         !edit.mentions.length ||
@@ -116,25 +154,38 @@ export function completionResult(result: CompletionResult): CompletionResult {
         ...(typeof item.detail === "string" ? { detail: item.detail } : {}),
         preview: item.preview,
         ...(item.agent === true ? { agent: true } : {}),
+        ...(typeof item.group === "string" &&
+        item.group &&
+        provider &&
+        isBundledContribution(provider)
+          ? { group: item.group }
+          : {}),
         ...(typeof item.disabled === "string"
           ? { disabled: item.disabled }
           : {}),
         ...(typeof item.canSelect === "function"
           ? { canSelect: item.canSelect }
           : {}),
-        edit: Object.freeze(
-          "mentions" in edit && edit.mentions
-            ? {
-                mentions: Object.freeze(
-                  edit.mentions.map((person: MentionRecipient) =>
-                    Object.freeze({ pubkey: person.pubkey, name: person.name }),
-                  ),
-                ),
-              }
-            : "mention" in edit
-              ? { mention: Object.freeze({ ...edit.mention }) }
-              : { text: edit.text },
-        ),
+        edit: host
+          ? edit
+          : Object.freeze(
+              token
+                ? { token }
+                : "mentions" in edit && edit.mentions
+                  ? {
+                      mentions: Object.freeze(
+                        edit.mentions.map((person: MentionRecipient) =>
+                          Object.freeze({
+                            pubkey: person.pubkey,
+                            name: person.name,
+                          }),
+                        ),
+                      ),
+                    }
+                  : "mention" in edit
+                    ? { mention: Object.freeze({ ...edit.mention }) }
+                    : { text: edit.text },
+            ),
       }),
     );
   }

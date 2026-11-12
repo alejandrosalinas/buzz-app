@@ -27,6 +27,7 @@ function harness() {
   const listeners = new Set<() => void>();
   const call: Huddles = {
     voiceError() {},
+    remoteVoiceError() {},
     voiceListening() {},
     voiceThinking() {},
     snapshot: () => snapshot,

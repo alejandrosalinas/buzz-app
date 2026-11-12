@@ -4,6 +4,7 @@ import {
   AgentProtectionService,
   ProtectionDenied,
   type ProtectionRequest,
+  type ProtectionProvider,
 } from "./service";
 import type { Agent } from "../agents/service";
 import type { ProtectedSpawn, ReviewModelProvider } from "./models";
@@ -49,6 +50,30 @@ async function fixture(config: unknown = {}) {
   return { ctx, plugin, security, agent, read, save, update };
 }
 
+function registerChecker(
+  f: Awaited<ReturnType<typeof fixture>>,
+  options: Omit<ProtectionProvider, "checkEvidence"> & {
+    check?: (
+      request: ProtectionRequest,
+      signal: AbortSignal,
+    ) => Promise<boolean | { allowed: false; reason: string }>;
+    checkEvidence?: ProtectionProvider["checkEvidence"];
+  },
+) {
+  const { check, checkEvidence, ...rest } = options;
+  return f.plugin.agentProtection.register({
+    ...rest,
+    checkEvidence:
+      checkEvidence ??
+      (async (metadata, evidence, signal) => {
+        let content = "";
+        for await (const part of evidence.read()) content += part;
+        if (!check) throw new Error("Missing test checker");
+        return check({ ...metadata, content: JSON.parse(content) }, signal);
+      }),
+  });
+}
+
 function processFixture(ctx: Context) {
   const owners: (string | undefined)[] = [];
   const launch = vi.fn<NonNullable<Host["spawn"]>>();
@@ -80,7 +105,7 @@ it("binds the runtime process and containment to the protection provider and kil
   const p = processFixture(f.ctx);
   const paths = { readOnlyPaths: ["/immutable"], hiddenPaths: ["/private"] };
   const runtimeProcesses = { "buzz.claude-code": "protected-engine" };
-  const lease = f.plugin.agentProtection.register({
+  const lease = registerChecker(f, {
     processProtection: paths,
     runtimeProcesses,
     check: async () => true,
@@ -119,7 +144,7 @@ it("kills a supplied runtime whose launch completes after its provider was revok
     await held;
     return p.process;
   });
-  const lease = f.plugin.agentProtection.register({
+  const lease = registerChecker(f, {
     processProtection,
     runtimeProcesses: { "buzz.claude-code": "engine" },
     check: async () => true,
@@ -141,7 +166,7 @@ it("kills a supplied runtime whose launch completes after its provider was revok
 it("uses only the calling protection plugin's review runtime and keeps it until the provider goes", async () => {
   const f = await fixture();
   const p = processFixture(f.ctx);
-  const lease = f.plugin.agentProtection.register({
+  const lease = registerChecker(f, {
     processProtection,
     runtimeProcesses: { "buzz.claude-code": "own-engine" },
     check: async () => true,
@@ -151,7 +176,11 @@ it("uses only the calling protection plugin's review runtime and keeps it until 
     .agentProtection.register({
       processProtection,
       runtimeProcesses: { "buzz.claude-code": "other-engine" },
-      check: async () => true,
+      checkEvidence: async (_metadata, evidence) => {
+        for await (const _part of evidence.read()) {
+        }
+        return true;
+      },
     });
   f.ctx
     .extend({ pluginOwner: { id: "buzz.claude-code", revision: "one" } })
@@ -188,7 +217,7 @@ it("uses only the calling protection plugin's review runtime and keeps it until 
 it("refuses a protected runtime without the plugin's declared engine", async () => {
   const f = await fixture();
   const p = processFixture(f.ctx);
-  f.plugin.agentProtection.register({
+  registerChecker(f, {
     processProtection,
     check: async () => true,
   });
@@ -210,7 +239,7 @@ it("captures hook toggles per binding and still rejects a revoked provider when 
   const f = await fixture();
   const phases = { context: false, tool: true, "tool-result": false };
   const check = vi.fn(async () => true);
-  const lease = f.plugin.agentProtection.register({
+  const lease = registerChecker(f, {
     processProtection,
     phases: () => phases,
     check,
@@ -236,7 +265,7 @@ it("captures hook toggles per binding and still rejects a revoked provider when 
 
 it("isolates native protection bindings for two memberships of one identity", async () => {
   const f = await fixture();
-  f.plugin.agentProtection.register({
+  registerChecker(f, {
     processProtection,
     check: async () => true,
   });
@@ -360,7 +389,7 @@ it("keeps per-agent revisions and another provider's ownership in native custody
 it("binds identity and policy independently of hostile action content", async () => {
   const f = await fixture();
   const check = vi.fn(async (_request: ProtectionRequest) => true);
-  f.plugin.agentProtection.register({ processProtection, check });
+  registerChecker(f, { processProtection, check });
   const policy = { version: 1 };
   const gate = f.security.bind({
     ...f.agent,
@@ -383,7 +412,7 @@ it.each(["requester", "provider"])(
   async (retirement) => {
     const f = await fixture();
     let received!: AbortSignal;
-    const lease = f.plugin.agentProtection.register({
+    const lease = registerChecker(f, {
       processProtection,
       check: async (_request, signal) => {
         received = signal;
@@ -425,7 +454,7 @@ it.each(["requester", "provider"])(
 it("a pending protection check still expires with TimeoutError", async () => {
   const f = await fixture();
   let received!: AbortSignal;
-  f.plugin.agentProtection.register({
+  registerChecker(f, {
     processProtection,
     check: (_request, signal) => {
       received = signal;
@@ -459,7 +488,7 @@ it("denies a missing, failed or non-boolean checker", async () => {
   await expect(
     f.security.bind(bound)?.check(action, new AbortController().signal),
   ).rejects.toThrow("unavailable");
-  f.plugin.agentProtection.register({
+  registerChecker(f, {
     processProtection,
     check: async () => {
       throw new Error("offline");
@@ -472,7 +501,7 @@ it("denies a missing, failed or non-boolean checker", async () => {
 it("keeps a provider's explanation from the agent, as one bounded line", async () => {
   const f = await fixture();
   let decision: unknown;
-  f.plugin.agentProtection.register({
+  registerChecker(f, {
     processProtection,
     check: async () => decision as boolean,
   });
@@ -535,7 +564,7 @@ it("gives no explanation for a check cancelled as its provider explained a denia
   const f = await fixture();
   const stop = new AbortController();
   // The denial settles first; the check was cancelled by the time it is read.
-  f.plugin.agentProtection.register({
+  registerChecker(f, {
     processProtection,
     check: async () => {
       stop.abort();
@@ -560,7 +589,7 @@ it("provider disposal cancels even a checker that ignores its signal, without re
   const started = new Promise<void>((resolve) => {
     entered = resolve;
   });
-  const old = f.plugin.agentProtection.register({
+  const old = registerChecker(f, {
     processProtection,
     check: async () => {
       entered();
@@ -576,7 +605,7 @@ it("provider disposal cancels even a checker that ignores its signal, without re
   const checking = gate.check(action, new AbortController().signal);
   const denied = expect(checking).rejects.toThrow();
   await started;
-  f.plugin.agentProtection.register({
+  registerChecker(f, {
     processProtection,
     check: async () => true,
   });
@@ -641,58 +670,123 @@ it("requires a current requesting identity in the same relay for the agent model
   }
 });
 
-it("preserves complete large actions and bounds serialized review prompts separately", async () => {
+it("streams evidence beyond the former app ceiling", async () => {
   const f = await fixture();
-  const check = vi.fn(async (_request: ProtectionRequest) => true);
-  f.plugin.agentProtection.register({ processProtection, check });
+  let count = 0;
+  const checkEvidence = vi.fn(
+    async (
+      metadata: Omit<ProtectionRequest, "content">,
+      evidence: { read(): AsyncIterable<string> },
+    ) => {
+      expect(metadata.agent.pubkey).toBe(pubkey);
+      expect(metadata).not.toHaveProperty("content");
+      for await (const part of evidence.read()) count += part.length;
+      return true;
+    },
+  );
+  registerChecker(f, { processProtection, checkEvidence });
   const gate = f.security.bind({
     ...f.agent,
     protection: { provider: "security.test", policy: {} },
   });
-  if (!gate) throw new Error("Expected protected handle");
-  const content = `${'"\\😀'.repeat(20000)}final evidence`;
-  await gate.check({ ...action, content }, new AbortController().signal);
-  expect(check.mock.calls[0]?.[0]).toMatchObject({ content });
-  await expect(
-    gate.check(
-      { ...action, content: "x".repeat(256 * 1024) },
-      new AbortController().signal,
-    ),
-  ).rejects.toThrow("too large");
-  expect(check).toHaveBeenCalledOnce();
-  const complete = vi.fn<ReviewModelProvider["complete"]>(async () => ({
-    text: '{"blocked":true,"reason":"review"}',
-    model: { id: "configured" },
-  }));
-  f.ctx
-    .extend({ pluginOwner: { id: "buzz.test", revision: "one" } })
-    .agentProtection.registerModels({
-      label: "Model",
-      models: async () => [],
-      complete,
-    });
-  const request = {
-    ...action,
-    content,
-    agent: { id: pubkey, pubkey, name: "Worker" },
-    runtime: f.agent.type,
-    relay: f.agent.relay,
-    policy: {},
-  };
-  await f.plugin.agentProtection.complete(
-    { runtime: "buzz.test", id: "configured" },
-    { system: "Plugin instructions", input: JSON.stringify(request) },
+  if (!gate?.checkEvidence) throw new Error("Missing streaming gate");
+  const piece = "x".repeat(16384);
+  await gate.checkEvidence(
+    { kind: "tool", session: "large" },
+    {
+      read: async function* () {
+        yield '"';
+        for (let i = 0; i < 17; i++) yield piece;
+        yield '"';
+      },
+    },
     new AbortController().signal,
   );
-  expect(JSON.parse(complete.mock.calls[0]?.[1].input ?? "{}").content).toBe(
-    content,
+  expect(count).toBe(17 * 16384 + 2);
+});
+
+it("denies an early allow and a partial-stream failure", async () => {
+  const f = await fixture();
+  for (const checkEvidence of [
+    async () => true,
+    async (_request: unknown, evidence: { read(): AsyncIterable<string> }) => {
+      for await (const _part of evidence.read()) break;
+      return true;
+    },
+  ]) {
+    registerChecker(f, {
+      processProtection,
+      checkEvidence,
+    });
+    const gate = f.security.bind({
+      ...f.agent,
+      protection: { provider: "security.test", policy: {} },
+    });
+    await expect(
+      gate?.check(action, new AbortController().signal),
+    ).rejects.toBeInstanceOf(ProtectionDenied);
+  }
+});
+
+it("every model runtime accepts replayable review text", async () => {
+  const f = await fixture();
+  const runtime = f.ctx.extend({
+    pluginOwner: { id: "buzz.test", revision: "one" },
+  });
+  const input = {
+    read: async function* () {
+      yield "complete ";
+      yield "evidence";
+    },
+  };
+  const complete = vi.fn<ReviewModelProvider["complete"]>(
+    async (_model, prompt) => {
+      if (typeof prompt.input === "string")
+        throw new Error("Expected a source");
+      let text = "";
+      for await (const part of prompt.input.read()) text += part;
+      expect(text).toBe("complete evidence");
+      return { text: "{}", model: { id: "selected" } };
+    },
   );
-  await expect(
+  runtime.agentProtection.registerModels({
+    label: "Runtime",
+    models: async () => [],
+    complete,
+  });
+  const ask = () =>
     f.plugin.agentProtection.complete(
-      { runtime: "buzz.test", id: "configured" },
-      { system: "Plugin instructions", input: "x".repeat(768 * 1024) },
+      { runtime: "buzz.test", id: "selected" },
+      { system: "Review", input },
       new AbortController().signal,
-    ),
-  ).rejects.toThrow("too large");
-  expect(complete).toHaveBeenCalledOnce();
+    );
+  await ask();
+  await ask();
+  expect(complete).toHaveBeenCalledTimes(2);
+});
+
+it("rejects providers without the required evidence consumer", async () => {
+  const f = await fixture();
+  expect(() =>
+    f.plugin.agentProtection.register({
+      processProtection,
+      check: async () => true,
+    } as unknown as ProtectionProvider),
+  ).toThrow("needs a checker");
+});
+
+it("streams object actions beyond the former request cap", async () => {
+  const f = await fixture();
+  const check = vi.fn(async (request: ProtectionRequest) => {
+    expect(request.content).toBe(`${"x".repeat(1024 * 1024)}tail`);
+    return true;
+  });
+  registerChecker(f, { processProtection, check });
+  await f.security
+    .bind({ ...f.agent, protection: { provider: "security.test", policy: {} } })
+    ?.check(
+      { ...action, content: `${"x".repeat(1024 * 1024)}tail` },
+      new AbortController().signal,
+    );
+  expect(check).toHaveBeenCalledOnce();
 });

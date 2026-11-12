@@ -208,6 +208,14 @@
   overflow-wrap: anywhere;
 }
 
+.pluginRowStatus {
+  display: grid;
+  justify-items: start;
+  gap: var(--space-1);
+  padding-bottom: var(--space-3);
+  overflow-wrap: anywhere;
+}
+
 .pluginName {
   display: inline-flex;
   align-items: center;

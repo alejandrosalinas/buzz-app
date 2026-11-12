@@ -1,0 +1,69 @@
+/* The plot claims the full width a fitted message allows, like the other
+   code-block renderers, and draws into a fixed-height box. */
+.chart {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  width: 100vw;
+  max-width: 100%;
+  margin: 0;
+  padding: var(--space-3);
+  color: var(--text-standard);
+}
+.plot {
+  width: 100%;
+  height: var(--chart-height);
+}
+.expanded .plot {
+  height: max(var(--chart-height), 60vh);
+}
+.meta,
+.note {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+.note {
+  color: var(--text-subtle);
+}
+.chart a {
+  overflow-wrap: anywhere;
+}
+.tableWrap {
+  overflow-x: auto;
+  margin-block: var(--space-2);
+}
+.table {
+  width: 100%;
+  border-collapse: collapse;
+}
+.table caption,
+.table th {
+  text-align: left;
+}
+.table th:last-child:not(:first-child),
+.table td:last-child:not(:first-child) {
+  text-align: right;
+}
+.table th,
+.table td {
+  padding: var(--space-1) var(--space-2);
+}
+.error,
+.source {
+  padding: var(--space-3);
+  font-family: var(--font-mono);
+  font-size: var(--text-mono);
+  line-height: var(--text-mono--line-height);
+  letter-spacing: var(--text-mono--letter-spacing);
+  font-weight: var(--text-mono--font-weight);
+}
+.error {
+  padding-bottom: 0;
+  color: var(--text-danger);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.source {
+  overflow-x: auto;
+  white-space: pre;
+}

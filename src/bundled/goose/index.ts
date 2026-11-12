@@ -8,7 +8,7 @@ import type { PluginModule } from "../../plugins/api";
 import { GooseLogoIcon } from "../../shared/design-system/icons";
 import { type Config, config, DEFAULT_CONFIG, GooseRuntime } from "./runtime";
 import { gooseRun } from "./run";
-import { GooseSetup, REVIEW_REFUSED } from "./setup";
+import { explainTurn, GooseSetup, REVIEW_REFUSED } from "./setup";
 import { createTabs } from "./tabs";
 import { GooseHistory } from "./transcript";
 import { readUsage } from "./usage";
@@ -38,6 +38,12 @@ export const apply: PluginModule["apply"] = (ctx) => {
         }
       : undefined;
   const setup = new GooseSetup(desktop, () => runtime.defaultsChanged());
+  // Failed turns' reports link to where goose's provider keys are set up.
+  runtime.explain = (error) =>
+    explainTurn(
+      error,
+      `buzz://settings?section=agents&provider=${encodeURIComponent(typeKey)}`,
+    );
   ctx.agentProtection.registerModels({
     label: "Goose",
     models: async () => {

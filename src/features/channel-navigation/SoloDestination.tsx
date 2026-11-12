@@ -4,6 +4,7 @@ import {
   type RefObject,
   type FocusEvent,
   createContext,
+  useCallback,
   useContext,
   useLayoutEffect,
   useRef,
@@ -37,6 +38,7 @@ import type { Navigation } from "../navigation/controller";
 import type { ChannelSummary } from "../relay/contracts";
 import type { RelaySession } from "../relay/session";
 import { conversationTarget } from "./routes";
+import { soloSuccessor } from "./solo-successor";
 import type { SoloRegion } from "./solo-navigation-model";
 import type {
   SoloCardProps,
@@ -67,7 +69,9 @@ type ConversationState = Readonly<{
   open(): void;
   canRename: boolean;
   rename(): boolean;
-  focusTarget(): HTMLElement | false;
+  finalFocus(): HTMLElement | false;
+  closeMenu(popup: HTMLElement | null): void;
+  openMenu(): void;
 }>;
 const ConversationContext = createContext<ConversationState | undefined>(
   undefined,
@@ -79,6 +83,15 @@ export function RegionConversation(props: SoloConversationProps) {
   const handoff = useChannelNavigation();
   const root = useRef<HTMLDivElement>(null);
   const restoreRename = useRef(false);
+  const afterClose = useRef<() => void>(undefined);
+  const chosen = useRef(false);
+  const chosenItem = useRef<HTMLElement>(null);
+  const openMenu = useCallback(() => {
+    afterClose.current = undefined;
+    chosen.current = false;
+    chosenItem.current = null;
+  }, []);
+  useLayoutEffect(() => openMenu, [openMenu]);
   const channel = context?.region.channels.find(
     (channel) => channel.id === props.channelId,
   );
@@ -109,12 +122,34 @@ export function RegionConversation(props: SoloConversationProps) {
         onLifecycle={
           handoff
             ? (action) => {
-                if (active())
-                  handoff.openLifecycle(
-                    channel,
-                    action,
-                    focusTarget() || undefined,
-                  );
+                if (!active()) return;
+                const visit = navigator.snapshot();
+                const leavesOpenChat =
+                  action !== "unarchive" &&
+                  visit.entry.target.kind === "conversation" &&
+                  visit.entry.target.channelId === channel.id;
+                const neighbors =
+                  handoff.soloNeighbors.current?.(channel.id) ?? [];
+                const trigger = focusTarget() || undefined;
+                handoff.openLifecycle(channel, action, trigger, undefined, {
+                  close() {
+                    if (trigger?.isConnected)
+                      trigger.focus({ preventScroll: true });
+                  },
+                  completed() {
+                    // The row can unmount before completion. Keep the captured
+                    // Solo visit, unless the user has already navigated away.
+                    if (leavesOpenChat && !visit.attempt.signal.aborted)
+                      void navigator.open(
+                        soloSuccessor(
+                          scope,
+                          session.channels.list().channels,
+                          neighbors,
+                          channel.id,
+                        ),
+                      );
+                  },
+                });
               }
             : undefined
         }
@@ -126,15 +161,19 @@ export function RegionConversation(props: SoloConversationProps) {
             {props.menuActions.slice(0, 6).map((action) => (
               <MenuItem
                 key={action.id}
-                onClick={() => {
-                  if (!active()) return;
-                  try {
-                    void Promise.resolve(action.onSelect()).catch(() => {
-                      if (active()) setError("The action could not run.");
-                    });
-                  } catch {
-                    setError("The action could not run.");
-                  }
+                onClick={(event) => {
+                  chosen.current = true;
+                  chosenItem.current = event.currentTarget;
+                  afterClose.current = () => {
+                    if (!active()) return;
+                    try {
+                      void Promise.resolve(action.onSelect()).catch(() => {
+                        if (active()) setError("The action could not run.");
+                      });
+                    } catch {
+                      setError("The action could not run.");
+                    }
+                  };
                 }}
               >
                 <MenuIcon>{action.icon}</MenuIcon>
@@ -166,7 +205,23 @@ export function RegionConversation(props: SoloConversationProps) {
       setDialog("rename");
       return true;
     },
-    focusTarget,
+    finalFocus: () => (chosen.current ? false : focusTarget()),
+    openMenu,
+    closeMenu(popup) {
+      if (!popup?.contains(chosenItem.current)) return;
+      const action = afterClose.current;
+      afterClose.current = undefined;
+      if (!action || !root.current?.isConnected || !active()) return;
+      const current = document.activeElement;
+      if (
+        current !== document.body &&
+        current !== focusTarget() &&
+        !popup?.contains(current)
+      )
+        return;
+      (focusTarget() || undefined)?.focus({ preventScroll: true });
+      action();
+    },
   };
   return (
     <div
@@ -251,6 +306,7 @@ function ConversationMenu({ children }: { children: ReactNode }) {
   const state = useContext(ConversationContext);
   const [open, setOpen] = useState(false);
   const [anchor, setAnchor] = useState<HTMLElement>();
+  const popup = useRef<HTMLDivElement>(null);
   if (!state) return null;
   if (state.channel.cached)
     return <div className={styles.menu}>{children}</div>;
@@ -258,8 +314,12 @@ function ConversationMenu({ children }: { children: ReactNode }) {
     <ContextMenuRoot
       open={open}
       onOpenChange={(next) => {
+        if (next) state.openMenu();
         setOpen(next);
         if (!next) setAnchor(undefined);
+      }}
+      onOpenChangeComplete={(next) => {
+        if (!next) state.closeMenu(popup.current);
       }}
     >
       <ContextMenuTrigger
@@ -271,6 +331,7 @@ function ConversationMenu({ children }: { children: ReactNode }) {
           ) {
             event.preventDefault();
             event.stopPropagation();
+            state.openMenu();
             setAnchor(event.currentTarget);
             setOpen(true);
           }
@@ -281,7 +342,10 @@ function ConversationMenu({ children }: { children: ReactNode }) {
       <MenuPopup
         aria-label={`Actions for ${state.channel.name}`}
         anchor={anchor}
-        finalFocus={state.focusTarget}
+        ref={(element) => {
+          if (element) popup.current = element;
+        }}
+        finalFocus={state.finalFocus}
       >
         {state.menu}
       </MenuPopup>
@@ -291,9 +355,17 @@ function ConversationMenu({ children }: { children: ReactNode }) {
 
 function ConversationActions() {
   const state = useContext(ConversationContext);
+  const popup = useRef<HTMLDivElement>(null);
   if (!state || state.channel.cached) return null;
   return (
-    <MenuRoot>
+    <MenuRoot
+      onOpenChange={(next) => {
+        if (next) state.openMenu();
+      }}
+      onOpenChangeComplete={(next) => {
+        if (!next) state.closeMenu(popup.current);
+      }}
+    >
       <MenuTrigger
         render={(props) => (
           <IconButton
@@ -309,7 +381,10 @@ function ConversationActions() {
       <MenuPopup
         aria-label={`Actions for ${state.channel.name}`}
         align="end"
-        finalFocus={state.focusTarget}
+        ref={(element) => {
+          if (element) popup.current = element;
+        }}
+        finalFocus={state.finalFocus}
       >
         {state.menu}
       </MenuPopup>

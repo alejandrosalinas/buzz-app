@@ -126,6 +126,7 @@ export function createSoloRegionFixture(viewer = "a".repeat(64)) {
       };
     },
     retry() {},
+    tryAgain() {},
     disconnect() {},
     async clearCache() {},
   };

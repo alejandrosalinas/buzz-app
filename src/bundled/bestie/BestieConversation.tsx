@@ -4,8 +4,13 @@ import {
   useLayoutEffect,
   useRef,
   useState,
+  useSyncExternalStore,
   type ReactNode,
 } from "react";
+import { ChannelHeaderMenu } from "../channels/ChannelHeaderMenu";
+import { ChannelSettingsPanel } from "../channels/ChannelSettingsPanel";
+import { ChannelMembersDialog } from "../channels/ChannelMembersDialog";
+import { UnreadOptions } from "../channels/UnreadBadge";
 import { ChannelBody } from "../channels/ChannelBody";
 import {
   historyPanel,
@@ -49,7 +54,7 @@ import { flushSync } from "react-dom";
 import { PanelWorkspace } from "../../features/panels/PanelWorkspace";
 import type { ChannelSummary } from "../../features/relay/contracts";
 import type { RelaySession } from "../../features/relay/session";
-import { SidebarRightIcon } from "../../shared/design-system/icons";
+import { GearIcon, SidebarRightIcon } from "../../shared/design-system/icons";
 import { IconButton } from "../../shared/design-system/ui/IconButton";
 import {
   bestieBaseTarget,
@@ -58,6 +63,7 @@ import {
   bestieDetailRoute,
   bestieDetailTarget,
 } from "./routes";
+import { FirstAgentWelcome, useFirstAgentWelcome } from "./FirstAgentWelcome";
 import styles from "./PinnedBestie.module.css";
 
 /** Bestie owns its pinned destination; Messages owns conversation tabs and readers. */
@@ -69,7 +75,8 @@ export function BestieConversation({
   navigator,
   navigation,
   channel,
-  bestie,
+  agent,
+  community,
   icon,
 }: {
   session: RelaySession;
@@ -79,9 +86,26 @@ export function BestieConversation({
   navigator: Navigation;
   navigation?: PageNavigation | undefined;
   channel: ChannelSummary;
-  bestie: string;
+  agent: { pubkey: string; name: string; picture?: string | undefined };
+  community?: string | undefined;
   icon: ReactNode;
 }) {
+  const bestie = agent.name;
+  const welcome = useFirstAgentWelcome(scope, agent.pubkey, channel.id);
+  const settingsTrigger = useRef<HTMLButtonElement>(null);
+  const membersTrigger = useRef<HTMLElement | null>(null);
+  const [membersOpen, setMembersOpen] = useState(false);
+  const availablePanels = useSyncExternalStore(
+    host.panels.subscribe,
+    host.panels.snapshot,
+  );
+  const openMembers = () => {
+    membersTrigger.current =
+      document.activeElement instanceof HTMLElement
+        ? document.activeElement
+        : null;
+    setMembersOpen(true);
+  };
   const [sent, setSent] = useState<string>();
   const [composerFocus, focusComposer] = useState(0);
   const trigger = useRef<HTMLElement | null>(null);
@@ -252,7 +276,9 @@ export function BestieConversation({
     profiles: new Map(),
     conversationIcon: () => icon,
     extensions,
-    leadingIds: [],
+    leadingIds: state.settings ? ["settings"] : [],
+    openMembers,
+    onOpenDrawer: () => state.setSettings(undefined),
     continuingVisit: true,
     navigationSignal: navigation?.signal,
     isLive: ownsCurrentVisit,
@@ -353,7 +379,40 @@ export function BestieConversation({
     COMPANION_SPLIT.defaultWidth,
     COMPANION_SPLIT.min,
   );
-  const paneOpen = state.paneOpen && secondary.items.length > 0;
+  const closeSettings = () => {
+    state.setSettings(undefined);
+    secondary.afterClose("settings", settingsTrigger.current);
+  };
+  const sideItems = [
+    ...(state.settings
+      ? [
+          {
+            id: "settings",
+            label: "Channel settings",
+            icon: <GearIcon size="1rem" />,
+            close: closeSettings,
+            content: (
+              <ChannelSettingsPanel
+                channel={channel}
+                scope={scope}
+                session={session}
+                openMembers={openMembers}
+                close={closeSettings}
+                canOpenLink={(target) => !!host.panels.resolve(target)}
+                onOpenLink={(target) =>
+                  secondary.openConversationLink(channel.id, target)
+                }
+              >
+                <UnreadOptions session={session} channelId={channel.id} />
+              </ChannelSettingsPanel>
+            ),
+          },
+        ]
+      : []),
+    ...secondary.items,
+  ];
+  const paneOpen =
+    state.paneOpen && (sideItems.length > 0 || !!secondary.drawer.side);
   const focusAfterClose = useRef(false);
   const closeAll = () => {
     if (!secondary.closeAllTabs()) return false;
@@ -463,9 +522,63 @@ export function BestieConversation({
                     tabMenu={tabMenu}
                     drag={secondary.drag.main}
                     actions={
-                      !paneOpen && secondary.items.length > 0
-                        ? toggle(false)
-                        : undefined
+                      <>
+                        {secondary.drawer.launchers}
+                        <ChannelHeaderMenu
+                          channel={channel}
+                          session={session}
+                          origin={navigation?.signal}
+                          trigger={settingsTrigger}
+                          openDetails={() => {
+                            secondary.drawer.close();
+                            state.setSettings({ channelId: channel.id });
+                          }}
+                          menuPanels={
+                            channel.cached
+                              ? []
+                              : availablePanels.filter((panel) =>
+                                  panel.channelMenu?.eligible(channel, session),
+                                )
+                          }
+                          openMenuPanel={(panel) => {
+                            const connection = host.relay.snapshot();
+                            const current = session.channels
+                              .list()
+                              .channels.find((item) => item.id === channel.id);
+                            if (
+                              !ownsCurrentVisit() ||
+                              connection.status !== "ready" ||
+                              connection.cached ||
+                              connection.session !== session ||
+                              !secondary.drawerContext ||
+                              !current ||
+                              current.cached ||
+                              (current.readOnly &&
+                                current.viewerRole !== "guest") ||
+                              !current.members?.includes(
+                                session.viewer ?? "",
+                              ) ||
+                              !host.panels.snapshot().includes(panel) ||
+                              !panel.channelMenu?.eligible(current, session)
+                            )
+                              return;
+                            secondary.drawer.close();
+                            secondary.open(
+                              {
+                                panel,
+                                channelId: channel.id,
+                                target: channel.id,
+                                channelContext: secondary.drawerContext,
+                              },
+                              true,
+                            );
+                          }}
+                        />
+                        {!paneOpen &&
+                        (sideItems.length > 0 || secondary.drawer.side)
+                          ? toggle(false)
+                          : null}
+                      </>
                     }
                     items={[
                       {
@@ -482,6 +595,15 @@ export function BestieConversation({
                             >
                               <MessageManagementStatus />
                               <ChannelBody
+                                intro={
+                                  welcome ? (
+                                    <FirstAgentWelcome
+                                      name={bestie}
+                                      picture={agent.picture}
+                                      community={community}
+                                    />
+                                  ) : undefined
+                                }
                                 viewer={session.viewer}
                                 cached={!!channel.cached}
                                 revealMessageId={sent}
@@ -509,16 +631,17 @@ export function BestieConversation({
                 open={paneOpen}
                 keepMounted={
                   state.entries.length > 0 ||
-                  (secondary.items.length > 0 && !state.paneOpen)
+                  (sideItems.length > 0 && !state.paneOpen) ||
+                  !!secondary.drawer.side
                 }
                 className={panelStyles.dock}
                 resizeHandle={split.handle}
               >
-                {secondary.items.length > 0 && (
+                {sideItems.length > 0 && (
                   <Panel>
                     <PanelWorkspace
                       label="Bestie panel tabs"
-                      items={secondary.items}
+                      items={sideItems}
                       value={secondary.selectedTab}
                       select={secondary.selectPanelTab}
                       actions={toggle(true)}
@@ -527,8 +650,23 @@ export function BestieConversation({
                     />
                   </Panel>
                 )}
+                {secondary.drawer.side}
               </PanelDock>
             </div>
+            {secondary.drawer.content}
+            {membersOpen && (
+              <ChannelMembersDialog
+                session={session}
+                channelId={channel.id}
+                trigger={membersTrigger}
+                close={() => setMembersOpen(false)}
+                signal={navigation?.signal}
+                canOpenLink={(target) => !!host.panels.resolve(target)}
+                onOpenLink={(target) =>
+                  secondary.openConversationLink(channel.id, target)
+                }
+              />
+            )}
             {secondary.drag.feedback}
             {secondary.hosts}
             <span role="status" className="sr-only">

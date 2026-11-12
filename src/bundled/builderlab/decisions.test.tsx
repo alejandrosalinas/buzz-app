@@ -314,9 +314,14 @@ it.each(["settings", "request", "settings-with-choice"] as const)(
         settings?.rerender(
           <DecisionsSettings decisions={decisions} active={() => true} />,
         );
-        expect(
-          await screen.findByRole("radio", { name: /Builderlab/ }),
-        ).toBeVisible();
+        if (entry === "settings")
+          expect(
+            await screen.findByRole("combobox", { name: "Decision provider" }),
+          ).toHaveTextContent("Builderlab");
+        else
+          expect(
+            await screen.findByRole("radio", { name: /Builderlab/ }),
+          ).toBeVisible();
         if (entry === "settings-with-choice") {
           // Another provider is chosen, so nothing reads Builderlab's
           // permissions until the user picks it.

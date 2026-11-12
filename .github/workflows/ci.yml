@@ -291,24 +291,31 @@ jobs:
       HOME: /root
       BUZZ_BROWSER_FIXTURE_DIR: target/ci-browser-fixture
     # Playwright sizes file-level shards by test count, not duration, so costly
-    # files can share one. WebKit runs slower, so it gets fourteen shards to keep
+    # files can share one. WebKit runs slower, so it gets eighteen shards to keep
     # its slowest well inside this deadline on slower runners, setup included;
-    # Chromium keeps nine.
+    # Chromium keeps nine. Size the WebKit count from a recent run's per-test
+    # durations and `playwright test --list --shard=K/N`: at fourteen, the
+    # slowest shard's summed test time reached 25 minutes (two workers, about
+    # 15 minutes of job time) and hit this deadline with every test passing.
     timeout-minutes: 15
     strategy:
       fail-fast: false
       matrix:
         engine: [chromium, webkit]
-        shard: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14]
+        shard: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18]
         exclude:
           - { engine: chromium, shard: 10 }
           - { engine: chromium, shard: 11 }
           - { engine: chromium, shard: 12 }
           - { engine: chromium, shard: 13 }
           - { engine: chromium, shard: 14 }
+          - { engine: chromium, shard: 15 }
+          - { engine: chromium, shard: 16 }
+          - { engine: chromium, shard: 17 }
+          - { engine: chromium, shard: 18 }
         include:
           - { engine: chromium, shards: 9 }
-          - { engine: webkit, shards: 14 }
+          - { engine: webkit, shards: 18 }
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:

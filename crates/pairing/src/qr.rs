@@ -23,7 +23,7 @@
 //! All characters unsafe in a query-parameter value (`:`, `/`, `?`, `#`,
 //! `&`, `=`, `%`, and space) are percent-encoded.
 
-use nostr::PublicKey;
+use nostr::key::PublicKey;
 use percent_encoding::{percent_decode_str, utf8_percent_encode, NON_ALPHANUMERIC};
 use zeroize::Zeroize;
 
@@ -64,7 +64,7 @@ impl Drop for QrPayload {
 ///
 /// ```
 /// use buzz_pairing::qr::{QrPayload, encode_qr};
-/// use nostr::Keys;
+/// use nostr::key::Keys;
 ///
 /// let keys = Keys::generate();
 /// let payload = QrPayload {
@@ -245,7 +245,7 @@ fn is_lowercase_hex(c: char) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use nostr::Keys;
+    use nostr::key::Keys;
 
     fn make_payload(relays: Vec<String>) -> QrPayload {
         let keys = Keys::generate();

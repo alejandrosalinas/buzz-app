@@ -105,6 +105,7 @@ fn each_community_routes_by_host_to_its_own_server() {
         Arc::new(Memory::default()),
         vec![public.clone()],
         None,
+        None,
     );
     let id = |relay: &str| {
         first
@@ -183,6 +184,7 @@ pub(super) fn customers_listed_in(
             profile: "default".into(),
             record,
         }),
+        None,
     )
 }
 
@@ -385,6 +387,7 @@ async fn signing_out_of_one_server_keeps_the_others_session() {
             store.clone(),
             peers,
             None,
+            None,
         );
         {
             let mut state = server.state();
@@ -465,6 +468,215 @@ fn the_login_start_asks_only_for_the_sign_up_screen_and_forced_login_it_was_give
             format!("{start}{hints}")
         );
     }
+}
+
+/// A server at the adapter `base` that keeps its sign-out mark at `marker`,
+/// as a launch opens it (`FederatedIdentity::open`). Sign-out revokes at
+/// `UNREACHABLE`, never at Builderlab.
+fn marked(store: Arc<Memory>, base: String, marker: &std::path::Path) -> FederatedIdentity {
+    let mut config = host(Arc::new(Memory::default())).0.config.clone().unwrap();
+    config.adapter_base = base;
+    config.identity_origin = UNREACHABLE.into();
+    FederatedIdentity::build(
+        Some(config),
+        "fingerprint".into(),
+        "account".into(),
+        store,
+        Vec::new(),
+        None,
+        Some(marker.into()),
+    )
+}
+/// Whether this server's next sign-in asks for credentials when its caller
+/// doesn't.
+fn asks_for_credentials(server: &FederatedIdentity) -> bool {
+    server.state().asking(LoginStart::default()).force_login
+}
+
+#[tokio::test]
+async fn an_explicit_sign_out_asks_for_credentials_until_a_sign_in_completes_even_after_a_restart()
+{
+    let root = tempfile::tempdir().unwrap();
+    let marker = root.path().join("account.signed-out");
+    let (base, server) = adapter(vec![
+        serde_json::json!({"session_token":"fixture-session-token","expires_at":"2099-01-01T00:00:00Z"}),
+        serde_json::json!({"expires_at":"2099-01-01T00:00:00Z","email":"b@example.com"}),
+    ])
+    .await;
+    let store = Arc::new(Memory::default());
+    let owner = marked(store.clone(), base.clone(), &marker);
+    assert!(!asks_for_credentials(&owner));
+    let session = record();
+    *store.raw.lock().unwrap() = Some(session.raw.clone());
+    {
+        let mut state = owner.state();
+        state.restored = true;
+        owner.install_session(&mut state, session);
+    }
+    assert!(owner.sign_out(None).await.status == Status::SignedOut);
+    assert!(asks_for_credentials(&owner));
+    assert!(marker.exists());
+    // The caller's own hints stay.
+    let asked = owner.state().asking(LoginStart {
+        signup: true,
+        force_login: false,
+    });
+    assert!(asked.signup && asked.force_login);
+
+    // Sign out, quit, launch: still asks.
+    let restarted = marked(store.clone(), base.clone(), &marker);
+    assert!(asks_for_credentials(&restarted));
+    let revision = restarted.snapshot().revision;
+    restarted
+        .finish_login("code", "secret", &revision, &CancellationToken::new())
+        .await
+        .unwrap();
+    assert!(restarted.snapshot().status == Status::SignedIn);
+    assert!(!asks_for_credentials(&restarted));
+    assert!(!marker.exists());
+    assert!(!asks_for_credentials(&marked(store, base, &marker)));
+    server.await.unwrap();
+}
+
+/// Runs a production sign-in at `server`, a plain-HTTP fixture, so the
+/// browser step is refused before any browser opens, and says whether its
+/// start URL asked for credentials (`prompt=login`).
+async fn sign_in_asks_for_credentials(server: &FederatedIdentity) -> bool {
+    let app = tauri::test::mock_builder()
+        .manage(crate::oauth_callback::OAuthCallbackHost::default())
+        .build(crate::app_context())
+        .unwrap();
+    let snapshot = server
+        .sign_in(app.handle(), LoginStart::default())
+        .await
+        .unwrap();
+    assert_eq!(snapshot.failure, Some("browser-unavailable"));
+    let login = server.0.logins.lock().unwrap().pop().unwrap();
+    assert!(login.starts_with("http://"), "{login}");
+    url::Url::parse(&login)
+        .unwrap()
+        .query_pairs()
+        .any(|pair| pair == ("prompt".into(), "login".into()))
+}
+
+#[tokio::test]
+async fn the_production_sign_in_sends_prompt_login_after_a_sign_out_and_a_restart() {
+    let root = tempfile::tempdir().unwrap();
+    let marker = root.path().join("account.signed-out");
+    let store = Arc::new(Memory::default());
+    let owner = marked(store.clone(), UNREACHABLE.into(), &marker);
+    assert!(!sign_in_asks_for_credentials(&owner).await);
+    let session = record();
+    *store.raw.lock().unwrap() = Some(session.raw.clone());
+    {
+        let mut state = owner.state();
+        owner.install_session(&mut state, session);
+    }
+    assert!(owner.sign_out(None).await.status == Status::SignedOut);
+    assert!(sign_in_asks_for_credentials(&owner).await);
+    let restarted = marked(store, UNREACHABLE.into(), &marker);
+    assert!(sign_in_asks_for_credentials(&restarted).await);
+}
+
+#[tokio::test]
+async fn a_restored_session_leaves_the_sign_out_mark_to_a_browser_sign_in() {
+    let root = tempfile::tempdir().unwrap();
+    let marker = root.path().join("account.signed-out");
+    std::fs::write(&marker, b"").unwrap();
+    let (base, server) = adapter(vec![
+        serde_json::json!({"expires_at":"2099-01-01T00:00:00Z","email":"a@example.com"}),
+        serde_json::json!({"expires_at":"2099-01-01T00:00:00Z","email":"a@example.com"}),
+    ])
+    .await;
+    let store = Arc::new(Memory::default());
+    *store.raw.lock().unwrap() = Some(record().raw.clone());
+    // The mark may be newer than the session: keep it.
+    let owner = marked(store.clone(), base.clone(), &marker);
+    assert!(owner.restore().await.status == Status::SignedIn);
+    assert!(asks_for_credentials(&owner));
+    assert!(marker.exists());
+    // Another copy's browser sign-in removed the mark and saved its session:
+    // a copy that signed out here adopts that session and stops asking.
+    let other = marked(store.clone(), base, &marker);
+    assert!(other.sign_out(None).await.status == Status::SignedOut);
+    assert!(asks_for_credentials(&other));
+    std::fs::remove_file(&marker).unwrap();
+    *store.raw.lock().unwrap() = Some(record().raw.clone());
+    let app = tauri::test::mock_builder()
+        .manage(crate::oauth_callback::OAuthCallbackHost::default())
+        .build(crate::app_context())
+        .unwrap();
+    let snapshot = other
+        .sign_in(app.handle(), LoginStart::default())
+        .await
+        .unwrap();
+    assert!(snapshot.status == Status::SignedIn);
+    assert!(!asks_for_credentials(&other));
+    server.await.unwrap();
+}
+
+#[tokio::test]
+async fn a_restore_checked_before_another_copys_sign_out_keeps_its_mark() {
+    let root = tempfile::tempdir().unwrap();
+    let marker = root.path().join("account.signed-out");
+    let (base, server) = adapter(vec![
+        serde_json::json!({"expires_at":"2099-01-01T00:00:00Z","email":"a@example.com"}),
+    ])
+    .await;
+    let store = Arc::new(Memory::default());
+    let session = record();
+    *store.raw.lock().unwrap() = Some(session.raw.clone());
+    // Copy A is signed in; copy B starts restoring the shared session.
+    let a = marked(store.clone(), UNREACHABLE.into(), &marker);
+    {
+        let mut state = a.state();
+        state.restored = true;
+        a.install_session(&mut state, session);
+    }
+    let b = marked(store.clone(), base, &marker);
+    let (held, reading) = std::sync::mpsc::channel();
+    let (release, released) = std::sync::mpsc::channel();
+    *store.read_gate.lock().unwrap() = Some((held, released));
+    let worker = b.clone();
+    let restoring = tokio::spawn(async move { worker.restore().await });
+    tokio::task::spawn_blocking(move || reading.recv().unwrap())
+        .await
+        .unwrap();
+    // B has read the session; A signs out before B's check answers.
+    assert!(a.sign_out(None).await.status == Status::SignedOut);
+    assert!(marker.exists());
+    release.send(()).unwrap();
+    assert!(restoring.await.unwrap().status == Status::SignedIn);
+    server.await.unwrap();
+    assert!(marker.exists());
+    assert!(asks_for_credentials(&b));
+    // Both copies quit; the next launch has no session and still asks.
+    drop((a, b));
+    let fresh = marked(store, UNREACHABLE.into(), &marker);
+    assert!(sign_in_asks_for_credentials(&fresh).await);
+}
+
+#[tokio::test]
+async fn expiry_and_close_leave_the_next_sign_in_to_the_browsers_session() {
+    let root = tempfile::tempdir().unwrap();
+    let marker = root.path().join("account.signed-out");
+    let store = Arc::new(Memory::default());
+    let owner = marked(store.clone(), UNREACHABLE.into(), &marker);
+    let mut expired = record();
+    let session = Arc::get_mut(&mut expired).unwrap();
+    session.record.expires_at = "2000-01-01T00:00:00Z".into();
+    session.raw = Zeroizing::new(serde_json::to_vec(&session.record).unwrap());
+    *store.raw.lock().unwrap() = Some(expired.raw.clone());
+    {
+        let mut state = owner.state();
+        state.restored = true;
+        owner.install_session(&mut state, expired);
+    }
+    assert!(owner.restore().await.status == Status::ReauthenticationRequired);
+    assert!(!asks_for_credentials(&owner));
+    owner.close();
+    assert!(!asks_for_credentials(&owner));
+    assert!(!marker.exists());
 }
 
 #[tokio::test]
@@ -600,7 +812,7 @@ async fn corrupt_storage_is_unavailable_and_public_snapshots_have_no_secret() {
         state.snapshot.status = Status::SignedIn;
     }
     let public = serde_json::to_value(host.snapshot()).unwrap();
-    assert_eq!(public.as_object().unwrap().len(), 8);
+    assert_eq!(public.as_object().unwrap().len(), 9);
     assert!(!public.to_string().contains("fixture-session-token"));
 }
 
@@ -1473,9 +1685,10 @@ async fn signing_in_again_keeps_the_session_until_the_new_one_is_installed() {
     let cancel = {
         let mut state = host.state();
         let cancel = state.cancellation.child_token();
-        state.renewal = Some(cancel.clone());
+        host.set_renewal(&mut state, Some(cancel.clone()));
         cancel
     };
+    assert!(host.snapshot().renewing);
     // The old session still lends its token while the browser flow runs.
     assert_eq!(
         host.with_session(|token, _, _| token.to_string())
@@ -1491,6 +1704,7 @@ async fn signing_in_again_keeps_the_session_until_the_new_one_is_installed() {
     assert_ne!(snapshot.revision, revision);
     assert_eq!(snapshot.expires_at.as_deref(), Some("2099-02-01T00:00:00Z"));
     assert!(host.state().renewal.is_none());
+    assert!(!snapshot.renewing);
     assert_eq!(host.state().callback.as_ref().unwrap().1, guard.1);
     assert_eq!(
         host.with_session(|token, _, _| token.to_string())
@@ -1515,25 +1729,33 @@ async fn a_canceled_or_failed_renewal_leaves_the_session_intact() {
     let renew = || {
         let mut state = host.state();
         let cancel = state.cancellation.child_token();
-        state.renewal = Some(cancel.clone());
+        host.set_renewal(&mut state, Some(cancel.clone()));
         cancel
     };
+    let changes = host.0.changes.subscribe();
 
     let canceled = renew();
+    // The snapshot says the renewal is waiting, so a remounted page can too.
+    assert!(host.snapshot().renewing);
+    assert!(changes.borrow().renewing);
     host.cancel_sign_in();
     assert!(canceled.is_cancelled());
+    assert!(!host.snapshot().renewing);
+    assert!(!changes.borrow().renewing);
     let result = host
         .finish_login("code", "secret", &revision, &canceled)
         .await;
     assert_eq!(host.renewed(&revision, &canceled, result), Ok(()));
 
     let failed = renew();
+    assert!(host.snapshot().renewing);
     let result = host
         .finish_login("code", "secret", &revision, &failed)
         .await;
     assert!(result.is_err());
     // Only the caller hears about it; the snapshot's failure is for others.
     assert!(host.renewed(&revision, &failed, result).is_err());
+    assert!(!host.snapshot().renewing);
 
     let snapshot = host.snapshot();
     assert!(snapshot.status == Status::SignedIn);

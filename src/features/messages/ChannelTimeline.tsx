@@ -24,6 +24,7 @@ import type { RelaySession } from "../relay/session";
 import type { MessageAttention } from "../relay/unread";
 import {
   useCallback,
+  useEffect,
   useLayoutEffect,
   useMemo,
   useRef,
@@ -31,6 +32,7 @@ import {
   useSyncExternalStore,
   Fragment,
   type KeyboardEvent,
+  type ReactNode,
 } from "react";
 import { Virtualizer, type VirtualizerHandle } from "virtua";
 import { MessageRow, type MessageLinkOrigin } from "./MessageRow";
@@ -179,6 +181,8 @@ export type ChannelTimelineProps = {
   /** A parent keyed by connection generation can preserve its timeline on cache promotion. */
   continuityKey?: string | undefined;
   window: ChannelWindow;
+  /** Local presentation at the known history start, outside message semantics. */
+  intro?: ReactNode;
   launchPending?: boolean | undefined;
   /** Solo chats page history on scroll; retain an explicit button for errors. */
   historyControl?: "button" | "scroll";
@@ -234,6 +238,7 @@ function Timeline({
   queries,
   window,
   launchPending,
+  intro,
   historyControl = "button",
   onOpenLink,
   canOpenLink,
@@ -248,6 +253,8 @@ function Timeline({
   startsThreads = true,
 }: ChannelTimelineProps) {
   useMessageSelectionCopy();
+  const shownIntro =
+    !window.hasMore && !window.historyLimited ? intro : undefined;
   const [initialPosition] = useState(() =>
     transient
       ? null
@@ -421,6 +428,9 @@ function Timeline({
       ? chronologicalRows
           .filter(
             (row) =>
+              // Backdated live arrivals and older pages must neither define
+              // nor erase the entry boundary, so only entry rows are classified.
+              baseline.messageIds.has(row.id) &&
               !row.membership &&
               !row.huddle &&
               row.audience !== "agents" &&
@@ -437,8 +447,6 @@ function Timeline({
   const boundaryCandidate = (() => {
     if (!boundaryPending || !ownsMessageVisit || messageVisit?.active !== true)
       return { ready: false };
-    // Later paging cannot recover entry-time read evidence for unloaded rows.
-    if (!messageVisit.entryHistoryComplete) return { ready: true };
     if (
       baseline.revision !== undefined &&
       queries.unread.revision() !== baseline.revision
@@ -449,8 +457,6 @@ function Timeline({
       window.freshness !== "verified" ||
       window.refreshing ||
       window.loadingOlder ||
-      window.hasMore ||
-      window.historyLimited ||
       unreadSync.completeness !== "snapshot"
     )
       return { ready: false };
@@ -459,10 +465,38 @@ function Timeline({
       unreadSnapshot?.freshness !== "observed"
     )
       return { ready: false };
+    // Entry history is complete only when the visit captured a ready, verified,
+    // idle window with no more history. Otherwise (history above the entry
+    // rows, or a cached, refreshing or still-paging window, so a short channel
+    // entered from cache lands here too) the boundary is the store's oldest
+    // unread message, and only when it is an entry row. Later paging cannot
+    // recover entry-time read evidence for rows that were not loaded.
+    if (!messageVisit.entryHistoryComplete) {
+      // Every relay read feeds the store, so until its repair has sampled
+      // history it may know only the loaded rows, and its oldest unread one
+      // can sit in the window below any read row while older ones are unread.
+      // This is the only gate that holds this list's own reading: every
+      // earlier one has passed, so the repair alone is awaited. A repair that
+      // ended without sampling (failed, overflowed, abandoned) settles the
+      // visit with no line, so reading never waits for a later retry.
+      if (!unreadSnapshot.sampled)
+        return unreadSnapshot.sampling
+          ? { ready: false, awaitingRepair: true }
+          : { ready: true };
+      const oldest = unreadSnapshot.oldestUnreadId;
+      if (!oldest || !baseline.messageIds.has(oldest)) return { ready: true };
+    }
     if (!chronologicalRows.length) return { ready: noUnreadEvidence };
+    // A repair batch that fills its limit can stop inside the window, leaving
+    // the first loaded row the oldest unread message the store knows. So the
+    // line needs an entry row above it that a channel-wide read reaches, which
+    // reads every older ordinary row; one read only by its own msg: or thread:
+    // mark says nothing about them. That still leaves mentions, broadcasts,
+    // broadcast replies and messages marked unread, which catch-up's activity:
+    // mark never reads, so a short sample can hide an unread one of those
+    // above the window.
+    let afterRead = messageVisit.entryHistoryComplete;
     for (const { row, attention } of entryAttention) {
-      // Backdated live arrivals must neither define nor erase the entry boundary.
-      if (!baseline.messageIds.has(row.id)) continue;
       if (attention.status === "unknown" || attention.pending)
         return { ready: false };
       // Remote merges do not advance the local revision. Only this prefix can
@@ -478,10 +512,17 @@ function Timeline({
         return { ready: true };
       // Ineligible means no attention category, not that an incoming row is read.
       if (attention.forced || attention.unread)
-        return { ready: true, messageId: row.id };
+        return afterRead ? { ready: true, messageId: row.id } : { ready: true };
+      if (attention.prefixRead) afterRead = true;
     }
     return { ready: true };
   })();
+  // The store repairs only once something has asked it to. The desktop shell
+  // asks on startup; a host that mounts a timeline alone must not hold reading
+  // forever. A finished repair answers at once, so this adds no relay reads.
+  useEffect(() => {
+    if (boundaryCandidate.awaitingRepair) void queries.unread.ensure();
+  }, [boundaryCandidate.awaitingRepair, queries.unread]);
   if (!boundaryMatchesVisit)
     setNewMessageBoundary(
       retainedVisit?.boundary ?? {
@@ -513,7 +554,7 @@ function Timeline({
     if (!ownsMessageVisit || !boundaryMatchesVisit || !messageVisit?.active)
       return;
     for (const { row, attention } of entryAttention) {
-      if (baseline.messageIds.has(row.id) && !baseline.attention.has(row.id))
+      if (!baseline.attention.has(row.id))
         baseline.attention.set(
           row.id,
           attention.status === "unknown" || attention.pending
@@ -747,7 +788,7 @@ function Timeline({
     y: 0,
   });
   const heldReader = useRef<
-    { id: string; y: number; intent: number } | undefined
+    { id: string; y: number; intent: number; ended: boolean } | undefined
   >(undefined);
   const previousBoundaryId = useRef<string | undefined>(undefined);
   const upwardGesture = useRef<false | "candidate" | "moving">(false);
@@ -1082,7 +1123,13 @@ function Timeline({
     latestMessageId: window.rows
       .filter((row) => !row.membership && !row.huddle)
       .at(-1)?.id,
-    enabled: marksRead,
+    // Reading before the entry boundary settles would erase the evidence it
+    // waits for: catch-up reads every loaded row and observe the unread ones,
+    // and either advances the read revision that settles it with no line.
+    // Hold reading while the boundary waits for the repair; re-enabling
+    // schedules dwell at once. A failed repair marks freshness stale, which
+    // an earlier gate catches, so the hold ends with the repair either way.
+    enabled: marksRead && !boundaryCandidate.awaitingRepair,
   });
   // Shift keeps the distance from the end, so it holds the reader only while
   // the rows from their first visible item to the end are kept. Relay pages
@@ -1171,7 +1218,16 @@ function Timeline({
     // The row's offset from the viewport, as last placed by the reader.
     // A live append must not choose a newly inserted row while the older
     // page is still measuring; keep the reader's original row and offset.
-    const anchor = { id, y: reader.current.y, intent: intent.current };
+    // A later render holds the row again under the same input. Input that
+    // ended during an earlier hold sends no further pointerup to end this one.
+    const anchor = {
+      id,
+      y: reader.current.y,
+      intent: intent.current,
+      ended:
+        heldReader.current?.intent === intent.current &&
+        heldReader.current.ended,
+    };
     heldReader.current = anchor;
     const top = () =>
       element
@@ -1238,11 +1294,10 @@ function Timeline({
     // their sizes in the frame after (patches/README.md), whether or not their
     // height changed. Input that ended before then releases the frame after.
     let measured = false;
-    let ended = false;
     let frame = requestAnimationFrame(() => {
       frame = requestAnimationFrame(() => {
         measured = true;
-        if (ended) frame = requestAnimationFrame(() => release());
+        if (anchor.ended) frame = requestAnimationFrame(() => release());
       });
     });
     const hold = new MutationObserver((mutations) => {
@@ -1284,7 +1339,7 @@ function Timeline({
     };
     const done = () => {
       if (measured) release();
-      else ended = true;
+      else anchor.ended = true;
     };
     // A held pointer can drag across more moved rows; it ends when released.
     const end = () => {
@@ -1851,7 +1906,9 @@ function Timeline({
         ref={edge}
         className={styles.edge}
         data-history-space={reserveHistorySpace || undefined}
+        data-intro={!!shownIntro || undefined}
       >
+        {shownIntro}
         {edgeError && <span role="alert">{edgeError}</span>}
         {window.historyLimited ? (
           <span>History window limit reached</span>
@@ -2094,6 +2151,7 @@ function Timeline({
         <div className={styles.timelineEnd} aria-hidden="true" />
       </div>
       {!rows.length &&
+        !shownIntro &&
         !window.hasMore &&
         window.status === "ready" &&
         !window.error &&

@@ -47,6 +47,54 @@ export function saveRepositoriesFolder(
   return path;
 }
 
+export type RepositoryFolder = Readonly<{
+  name: string;
+  path: string;
+  displayPath: string;
+}>;
+
+/** The folder `repositoryFolders` lists for `partition` now. */
+export function repositoriesFolder(partition: string) {
+  const scope = splitPartition(partition);
+  if (!scope)
+    throw new Error(
+      "Choose a connected community and account before listing folders.",
+    );
+  return (
+    readRepositoriesFolder(scope.communityOrigin, scope.viewer) ||
+    DEFAULT_REPOSITORIES_FOLDER
+  );
+}
+
+/** The immediate folders of `partition`'s configured repositories folder, or
+ * of the default one. Native code checks only the folder `list` is given; the
+ * caller's community and account choose it. Rejects if `signal` aborts or the
+ * preference changes meanwhile. Never creates the folder. */
+export async function repositoryFolders(
+  partition: string,
+  signal: AbortSignal,
+  list: (path: string) => Promise<readonly RepositoryFolder[]>,
+) {
+  const path = repositoriesFolder(partition);
+  signal.throwIfAborted();
+  // A stalled listing must not hold the caller past its signal.
+  let abort = () => {};
+  const aborted = new Promise<never>((_, reject) => {
+    abort = () => reject(signal.reason);
+    signal.addEventListener("abort", abort, { once: true });
+  });
+  let rows: readonly RepositoryFolder[];
+  try {
+    rows = await Promise.race([list(path), aborted]);
+  } finally {
+    signal.removeEventListener("abort", abort);
+  }
+  signal.throwIfAborted();
+  if (repositoriesFolder(partition) !== path)
+    throw new Error("The repositories folder changed. Try again.");
+  return rows;
+}
+
 /** Captured agent community/account, never the selected community. No filesystem changes. */
 export function repositoriesContext(partition: string | undefined) {
   const scope = partition && splitPartition(partition);

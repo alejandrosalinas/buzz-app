@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import type { Spawn } from "./goose";
 import { fakeSpawn, flush } from "./goose-testing";
-import { GooseSetup, keyLabel, modelFilter } from "./setup";
+import { explainTurn, GooseSetup, keyLabel, modelFilter } from "./setup";
 import manifest from "./manifest.json";
 
 it("declares protected file reads through the bundled helper with a positional path", () => {
@@ -958,6 +958,31 @@ describe("keyLabel", () => {
     expect(keyLabel("OLLAMA_HOST")).toBe("Host");
     expect(keyLabel("AZURE_OPENAI_ENDPOINT_URL")).toBe("Openai endpoint URL");
     expect(keyLabel("TOKEN")).toBe("Token");
+  });
+});
+
+describe("explainTurn", () => {
+  const settings = "buzz://settings?section=agents&provider=buzz.goose%2Fgoose";
+  const refused = `Goose's provider rejected its API key or sign-in. Head to [Settings](${settings}) to check its provider.`;
+
+  // A deferred handover reports `String(error)`; a failed start, the label.
+  it.each([
+    "Authentication required",
+    "goose could not start: Authentication required",
+    "Error: Authentication required",
+  ])(
+    "links Settings and quotes goose for a refusal reported as %j",
+    (error) => {
+      expect(explainTurn(error, settings)).toBe(
+        `${refused}\n\ngoose said:\n> ${error}`,
+      );
+    },
+  );
+
+  it("leaves a mention of authentication inside other text as goose said it", () => {
+    const error =
+      "Internal error: Tool failed. Authentication required by repo";
+    expect(explainTurn(error, settings)).toBe(error);
   });
 });
 

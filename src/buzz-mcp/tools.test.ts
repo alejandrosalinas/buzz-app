@@ -89,6 +89,11 @@ function fake(
   const client: BuzzClient = {
     key: me,
     pubkey: me,
+    effectiveEdit: vi.fn(async (id: string) => {
+      const found = events.find((event) => event.id === id);
+      if (!found) throw new Error("No effective edit fixture");
+      return found;
+    }),
     query: vi.fn(async (filters: readonly Filter[]) => {
       const newest = [...events, ...kept].sort(
         (a, b) => b.created_at - a.created_at || a.id.localeCompare(b.id),
@@ -152,10 +157,8 @@ it.each([false, true])(
         if (property === "protect")
           return protectedSession ? protect : undefined;
         if (property === "nativeToolGate") return undefined;
-        // The tool list checks whether settings can change and owner tools
-        // apply here.
-        if (property === "settings" || property === "ownerAccess")
-          return undefined;
+        // The tool list checks whether settings can change here.
+        if (property === "settings") return undefined;
         throw new Error(`Help must not access the host: ${String(property)}`);
       },
     });
@@ -369,7 +372,7 @@ it.each(["agent_create", "agent_update"])(
   },
 );
 
-it("refuses an oversized captured file before review or publication", async () => {
+it("enforces a plugin’s captured-file budget before review or publication", async () => {
   const { client, published } = fake(community);
   const ctx = new Context();
   const agent = {
@@ -389,29 +392,30 @@ it("refuses an oversized captured file before review or publication", async () =
       update: async () => {},
     },
   );
-  const check = vi.fn(async () => true);
   ctx
     .extend({ pluginOwner: { id: "security.test", revision: "one" } })
     .agentProtection.register({
       processProtection: { readOnlyPaths: [], hiddenPaths: [] },
-      check,
+      checkEvidence: async (_metadata, evidence) => {
+        let size = 0;
+        for await (const part of evidence.read())
+          size += new TextEncoder().encode(part).length;
+        return size <= 1024;
+      },
     });
   const protection = service.bind(agent);
   if (!protection) throw new Error("Expected protected handle");
   client.protect = (action) =>
     protection.check(action, new AbortController().signal);
-  client.read = vi.fn(async () =>
-    new TextEncoder().encode("x".repeat(256 * 1024)),
-  );
+  client.read = vi.fn(async () => new TextEncoder().encode("x".repeat(1024)));
   try {
     await expect(
       callSessionTool(client, { channel: "chan" }, "send", {
         audience: "everyone",
         path: "large.md",
       }),
-    ).rejects.toThrow("too large");
+    ).rejects.toThrow("denied by its protection policy");
     expect(client.read).toHaveBeenCalledExactlyOnceWith("large.md");
-    expect(check).not.toHaveBeenCalled();
     expect(client.upload).not.toHaveBeenCalled();
     expect(published).toEqual([]);
   } finally {
@@ -438,6 +442,25 @@ it("replies in the current thread and notifies the members it names", async () =
   ]);
 });
 
+// As a model that fills in every optional field sends it.
+it("replies in the current thread when channel and reply are blank", async () => {
+  const { client, published } = fake(community);
+  await callTool(client, { channel: "chan", root }, "send", {
+    audience: "everyone",
+    text: "hi",
+    channel: "",
+    reply: "",
+    path: "",
+    files: [],
+    mentions: [],
+    final: true,
+  });
+  expect(published.at(-1)?.tags).toEqual([
+    ["h", "chan"],
+    ["e", root, "", "reply"],
+  ]);
+});
+
 it("tags a message for agents, and needs the audience said", async () => {
   const { client, published } = fake(community);
   const context = { channel: "chan", root };
@@ -457,6 +480,32 @@ it("tags a message for agents, and needs the audience said", async () => {
   await expect(
     callTool(client, context, "send", { text: "hi", audience: "humans" }),
   ).rejects.toThrow("audience must be everyone or agents");
+  expect(published).toHaveLength(1);
+});
+
+it("signs the turn's triggering request separately from the flattened reply", async () => {
+  const { client, published } = fake(community);
+  const context = { channel: "chan", root };
+  const request = "f".repeat(64);
+  await callTool(client, context, "send", {
+    text: "Checking",
+    audience: "agents",
+    request: request.toUpperCase(),
+  });
+  expect(published[0]?.tags).toEqual([
+    ["h", "chan"],
+    ["e", root, "", "reply"],
+    ["audience", "agents"],
+    ["buzz:request", request],
+  ]);
+  for (const bad of ["", "nope", 7])
+    await expect(
+      callTool(client, context, "send", {
+        text: "hi",
+        audience: "agents",
+        request: bad,
+      }),
+    ).rejects.toThrow("Not an event id");
   expect(published).toHaveLength(1);
 });
 
@@ -624,6 +673,18 @@ it("posts at the channel's top level when given a channel", async () => {
   expect(published[0]?.tags).toEqual([["h", "other"]]);
 });
 
+it("refuses to edit when the host cannot obtain effective attachment state", async () => {
+  const { client, published } = fake(community);
+  delete client.effectiveEdit;
+  await expect(
+    callTool(client, { channel: "chan" }, "edit", {
+      id: root,
+      text: "must not copy the original's attachments",
+    }),
+  ).rejects.toThrow("cannot obtain effective edit state");
+  expect(published).toEqual([]);
+});
+
 it("tags the community emoji a message or edit uses, as the composer does", async () => {
   const stamp = "https://relay/media/stamp.png";
   const emojiSet = (pubkey: string, created_at: number, entries: string[][]) =>
@@ -760,6 +821,26 @@ it("reads the current thread with each message's latest edit", async () => {
     `${nested} from ${alice} "Alice Smith" at 1970-01-01T00:01Z: edited`,
     "The relay returned no older replies.",
   ]);
+});
+
+// As a model that fills in every optional field sends it.
+it("reads the current thread when optional fields are blank or 0", async () => {
+  const { client } = fake(community);
+  const blank = (await callTool(client, { channel: "chan", root }, "read", {
+    channel: "",
+    thread: "",
+    message_url: "",
+    q: "",
+    author: "",
+    since: 0,
+    before: 0,
+    before_id: "",
+    limit: 5,
+  })) as string;
+  expect(blank).toBe(
+    await callTool(client, { channel: "chan", root }, "read", { limit: 5 }),
+  );
+  expect(blank).toContain(`thread ${root} in chan`);
 });
 
 it.each([
@@ -1715,6 +1796,160 @@ it("creates a Solo chat with its members in the create, as Buzz does", async () 
   await expect(
     callTool(client, {}, "channel_get", { channel: plain }),
   ).resolves.toBe(`${plain} ops (stream, private)\nyou: owner`);
+});
+
+it("discovers local workspaces and files only after creating a Solo with explicit members", async () => {
+  const { client, published } = relay();
+  const file = vi.fn(async () => ({ status: "filed" as const }));
+  const list = vi.fn(async () => [{ id: "work", name: "Work" }]);
+  const prepare = vi.fn(async () => file);
+  client.soloWorkspaces = { list, prepare };
+  expect(await callTool(client, {}, "solo_workspace_list", {})).toBe(
+    JSON.stringify([{ id: "work", name: "Work" }]),
+  );
+  const answer = await callTool(client, {}, "channel_create", {
+    name: "triage",
+    visibility: "private",
+    solo: true,
+    members: [alice],
+    workspace: "work",
+  });
+  const id = published[0]?.tags[0]?.[1];
+  expect(prepare).toHaveBeenCalledExactlyOnceWith("work", [alice], id);
+  expect(file).toHaveBeenCalledExactlyOnceWith(id);
+  expect(answer).toBe(
+    `created ${id}\nadded ${alice} Alice Smith\nfiled in workspace work`,
+  );
+  expect(published).toHaveLength(1);
+  expect(published[0]?.kind).toBe(9007);
+});
+
+it("rejects unsupported or invalid workspace placement before publication", async () => {
+  const { client, published } = relay();
+  const args = {
+    name: "triage",
+    visibility: "private",
+    solo: true,
+    members: [alice],
+    workspace: "work",
+  };
+  await expect(callTool(client, {}, "solo_workspace_list", {})).rejects.toThrow(
+    "unavailable on this host",
+  );
+  await expect(callTool(client, {}, "channel_create", args)).rejects.toThrow(
+    "unavailable on this host",
+  );
+  const prepare = vi.fn(async () => {
+    throw new Error("No such workspace");
+  });
+  client.soloWorkspaces = { list: async () => [], prepare };
+  await expect(
+    callTool(client, {}, "channel_create", {
+      ...args,
+      solo: false,
+      members: undefined,
+    }),
+  ).rejects.toThrow("workspace is for Solo");
+  await expect(callTool(client, {}, "channel_create", args)).rejects.toThrow(
+    "No such workspace",
+  );
+  expect(published).toEqual([]);
+});
+
+it.each([
+  "deleted target",
+  "record full",
+  "revision conflict",
+  "community changed",
+])("keeps the created chat ID when filing fails: %s", async (message) => {
+  const { client, published } = relay();
+  const file = vi.fn(async () => {
+    throw new Error(message);
+  });
+  client.soloWorkspaces = { list: async () => [], prepare: async () => file };
+  const answer = await callTool(client, {}, "channel_create", {
+    name: "triage",
+    visibility: "private",
+    solo: true,
+    members: [alice],
+    workspace: "work",
+  });
+  const id = published[0]?.tags[0]?.[1];
+  expect(answer).toContain(`created ${id}`);
+  expect(answer).toContain(
+    `workspace placement unconfirmed and may have completed: ${message}`,
+  );
+  expect(answer).toContain("do not create another chat");
+  expect(published).toHaveLength(1);
+  expect(file).toHaveBeenCalledOnce();
+});
+
+it.each(["not-filed", "unconfirmed"] as const)(
+  "reports structured placement outcome without repeating create: %s",
+  async (status) => {
+    const { client, published } = relay();
+    client.soloWorkspaces = {
+      list: async () => [],
+      prepare: async () => async () => ({ status, error: "placement stopped" }),
+    };
+    const answer = await callTool(client, {}, "channel_create", {
+      name: "triage",
+      visibility: "private",
+      solo: true,
+      members: [alice],
+      workspace: "work",
+    });
+    expect(answer).toContain(`created ${published[0]?.tags[0]?.[1]}`);
+    expect(answer).toContain(
+      status === "not-filed"
+        ? "created, not filed"
+        : "placement unconfirmed and may have completed",
+    );
+    if (status === "unconfirmed")
+      expect(answer).toContain("Inspect or refresh");
+    expect(published).toHaveLength(1);
+  },
+);
+
+it("reports uncertainty after a gated durable placement loses its app lifetime", async () => {
+  const { client, published } = relay();
+  let release!: () => void;
+  const delivered = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  let started!: () => void;
+  const enqueued = new Promise<void>((resolve) => {
+    started = resolve;
+  });
+  let durable = false;
+  client.soloWorkspaces = {
+    list: async () => [],
+    prepare: async () => async () => {
+      durable = true;
+      started();
+      await delivered;
+      throw new Error("retired after durable placement");
+    },
+  };
+  const pending = callTool(client, {}, "channel_create", {
+    name: "triage",
+    visibility: "private",
+    solo: true,
+    members: [alice],
+    workspace: "work",
+  });
+  try {
+    await enqueued;
+    expect(durable).toBe(true);
+    expect(published).toHaveLength(1);
+  } finally {
+    release();
+  }
+  const answer = await pending;
+  expect(answer).toContain(`created ${published[0]?.tags[0]?.[1]}`);
+  expect(answer).toContain("placement unconfirmed and may have completed");
+  expect(answer).toContain("Inspect or refresh");
+  expect(answer).not.toContain("not filed");
 });
 
 it("refuses Solo arguments that do not fit, before publishing", async () => {
@@ -4254,11 +4489,12 @@ it.each(["everyone", "agents"])(
   },
 );
 
-it("tags a nested reply for agents only", async () => {
+it("tags a nested reply for agents only, signing its request", async () => {
   const { client, published } = fake(community);
   await callTool(client, { channel: "chan", root }, "reply_in_subthread", {
     parent: nested,
     audience: "agents",
+    request: "f".repeat(64),
     text: "a",
   });
   expect(published[0]?.tags).toEqual([
@@ -4266,6 +4502,7 @@ it("tags a nested reply for agents only", async () => {
     ["e", root, "", "root"],
     ["e", nested, "", "reply"],
     ["audience", "agents"],
+    ["buzz:request", "f".repeat(64)],
   ]);
 });
 

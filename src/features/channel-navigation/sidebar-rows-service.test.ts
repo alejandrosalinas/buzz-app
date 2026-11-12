@@ -1,7 +1,38 @@
 import { Context } from "@deepseek-ai/cordis";
 import { expect, it } from "vitest";
 import type { SidebarRowContribution } from "./sidebar-rows-service";
-import { SidebarRowsService } from "./sidebar-rows-service";
+import { sidebarRow, SidebarRowsService } from "./sidebar-rows-service";
+
+it.each(["team", "dm", "solo"] as const)(
+  "represents %s without changing channel or unread data",
+  (kind) => {
+    const channel = {
+      id: "chat",
+      name: "A chat",
+      channelType: kind === "team" ? ("stream" as const) : kind,
+      lastActivityAt: 123,
+    };
+    const unread = {
+      target: { kind: "channel" as const, channelId: channel.id },
+      observedCount: null,
+      attentionCount: null,
+      coverage: "unknown" as const,
+      freshness: "unknown" as const,
+      manual: "none" as const,
+    };
+    const row = sidebarRow(channel, "workspace", unread);
+    expect(row).toEqual({
+      id: "chat",
+      kind,
+      label: "A chat",
+      sectionKey: "workspace",
+      channel,
+      unread,
+    });
+    expect(row.channel).toBe(channel);
+    expect(row.unread).toBe(unread);
+  },
+);
 
 it("orders active scopes by contribution key and removes registrations on disable and teardown", async () => {
   const root = new Context();

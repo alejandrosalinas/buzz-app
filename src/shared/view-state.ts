@@ -1,3 +1,5 @@
+import { traceDraft } from "./draft-diagnostics";
+
 // View intent is durable and explicitly partitioned; connection generations are not storage keys.
 const viewListeners = new Map<string, Set<(key?: string) => void>>();
 const composerDraftKey =
@@ -10,6 +12,7 @@ export function draftCoordinates(key: string) {
 }
 // `key` names the one key that changed; undefined means any key may have.
 const changed = (scope: string, key?: string) => {
+  if (key) traceDraft(scope, key, "notify");
   for (const listener of viewListeners.get(scope) ?? []) listener(key);
 };
 /** Same durable view keys as the composer; no parallel draft store or index. */
@@ -29,8 +32,10 @@ export function subscribeView(scope: string, listener: (key?: string) => void) {
       }
       if (!event.key.startsWith("buzz-view.v1:")) return;
       const pair: unknown = JSON.parse(event.key.slice("buzz-view.v1:".length));
-      if (Array.isArray(pair) && pair[0] === scope)
+      if (Array.isArray(pair) && pair[0] === scope) {
+        if (typeof pair[1] === "string") traceDraft(scope, pair[1], "storage");
         listener(typeof pair[1] === "string" ? pair[1] : undefined);
+      }
     } catch {
       /* Storage may be unavailable while a window is closing. */
     }
@@ -59,16 +64,31 @@ export function viewRevision(scope: string, key: string) {
   }
 }
 export function writeView(scope: string, key: string, value: unknown) {
+  let phase: "serialize-failed" | "write-failed" | "notify-failed" =
+    "serialize-failed";
   try {
     const revision = JSON.stringify(value);
+    phase = "write-failed";
+    traceDraft(scope, key, "write");
     localStorage.setItem(
       `buzz-view.v1:${JSON.stringify([scope, key])}`,
       revision,
     );
-    if (viewRevision(scope, key) !== revision) return false;
+    const current = viewRevision(scope, key);
+    if (current !== revision) {
+      traceDraft(scope, key, "write-mismatch", 0, {
+        expected: revision,
+        current,
+        next: revision,
+        flags: 0,
+      });
+      return false;
+    }
+    phase = "notify-failed";
     changed(scope, key);
     return true;
   } catch {
+    traceDraft(scope, key, phase);
     // Ordinary view callers remain usable in memory; recovery callers check this.
     return false;
   }
@@ -88,7 +108,22 @@ export function replaceView(
 
 // Rich snapshots contain structure as well as text (up to 32,001 nodes).
 // Keep a receiver bound, not the old text-sized 128 KiB envelope cutoff.
-export const MAX_DRAFT_VIEW_LENGTH = 8 * 1024 * 1024;
+const MAX_DRAFT_VIEW_LENGTH = 8 * 1024 * 1024;
+
+/** A saved draft record as `listDraftViews` reads it: the parsed value,
+ * "oversized" past the receiver bound, or undefined when absent, empty or
+ * malformed. */
+export function parseDraftView(
+  raw: string | null | undefined,
+): { value: unknown } | "oversized" | undefined {
+  if (!raw) return undefined;
+  if (raw.length > MAX_DRAFT_VIEW_LENGTH) return "oversized";
+  try {
+    return { value: JSON.parse(raw) };
+  } catch {
+    return undefined;
+  }
+}
 
 /** Snapshot of a viewer's existing composer drafts, never other view coordinates. */
 export function listDraftViews(
@@ -122,20 +157,19 @@ export function listDraftViews(
         !draftCoordinates(pair[1])
       )
         continue;
-      const raw = localStorage.getItem(storageKey);
-      if (!raw) continue;
-      if (raw.length > MAX_DRAFT_VIEW_LENGTH) {
+      const draft = parseDraftView(localStorage.getItem(storageKey));
+      if (draft === "oversized") {
         unavailable++;
         continue;
       }
+      if (!draft) continue;
       try {
-        const value: unknown = JSON.parse(raw);
-        if (!meaningful(value, pair[1])) continue;
+        if (!meaningful(draft.value, pair[1])) continue;
         if (drafts.length === 500) {
           limited = true;
           break;
         }
-        drafts.push({ key: pair[1], value });
+        drafts.push({ key: pair[1], value: draft.value });
       } catch {
         /* Malformed old draft. */
       }

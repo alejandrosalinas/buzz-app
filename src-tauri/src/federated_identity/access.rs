@@ -383,6 +383,8 @@ mod tests {
         std::fs::create_dir(&source).unwrap();
         std::fs::write(source.join("plugin.js"), "export function apply() {}").unwrap();
         std::fs::write(source.join("manifest.json"), r#"{"id":"example.fi","name":"Example","apiVersion":1,"host":{"networkOrigins":["https://identity.example"],"federatedIdentity":{"authority":"test","operations":[{"method":"GET","path":"/api/list"}]}}}"#).unwrap();
+        buzzodz_plugins::sign_release(&source, &nostr::key::SecretKey::generate().to_secret_hex())
+            .unwrap();
         let revision = manager
             .install(&source)
             .unwrap()
@@ -487,6 +489,8 @@ mod tests {
         std::fs::create_dir(&source).unwrap();
         std::fs::write(source.join("plugin.js"), "export function apply() {}").unwrap();
         std::fs::write(source.join("manifest.json"), r#"{"id":"example.fi","name":"Example","apiVersion":1,"host":{"federatedIdentity":{"authority":"test","operations":[{"method":"GET","path":"/api/list"}]}}}"#).unwrap();
+        buzzodz_plugins::sign_release(&source, &nostr::key::SecretKey::generate().to_secret_hex())
+            .unwrap();
         let revision = manager
             .install(&source)
             .unwrap()
@@ -580,9 +584,10 @@ mod tests {
                 .unwrap();
             text
         });
+        let token = uuid::Uuid::new_v4().to_string();
         let response = forward(
             url::Url::parse(&format!("http://{address}/api/v1/buzz/communities/list")).unwrap(),
-            "fixture-session-token",
+            &token,
             Request {
                 path: "/api/v1/buzz/communities/list".into(),
                 method: "POST".into(),
@@ -598,7 +603,6 @@ mod tests {
         assert_eq!(serde_json::to_value(&response).unwrap()["status"], 401);
         let sent = server.join().unwrap();
         assert!(sent.starts_with("post /api/v1/buzz/communities/list "));
-        let token = "fixture-session-token";
         assert!(sent.contains(&format!("authorization: bearer {token}")));
         assert!(!sent.contains("cookie") && !sent.contains("x-bb-"));
     }

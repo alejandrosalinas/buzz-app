@@ -64,6 +64,7 @@ import {
   type ToolServer,
 } from "./goose";
 import { AgentProcess, AgentSessions, localSessions } from "./sessions";
+import { sessionTags } from "./transcript";
 
 export type Config = Readonly<{
   /** A model the provider offers; empty uses the provider's default, or the
@@ -156,6 +157,9 @@ export class GooseRuntime {
     AgentKey,
     ReturnType<AgentSessions["snapshot"]>
   >();
+  /** A failed turn's error as its report says it, such as where to fix
+   * goose's provider key. */
+  explain: (error: string) => string = (error) => error;
 
   constructor(
     private readonly host: Host,
@@ -646,7 +650,7 @@ export class GooseRuntime {
       agent,
       channel,
       event,
-      `⚠️ I couldn't finish that: ${error.slice(0, 500)}`,
+      `⚠️ I couldn't finish that: ${this.explain(error.slice(0, 500))}`,
       topLevel,
       [["p", agent.owner]],
     );
@@ -820,14 +824,19 @@ export class GooseRuntime {
     };
     // Every session of the agent shares them, so they read the settings, the
     // handle and the conversation's place as they are when called.
-    const tools: ToolServer = async (conversation, message) => {
+    const tools: ToolServer = async (conversation, message, workSignal) => {
       const handle = entry.handle;
       // A call in a conversation answers only while its turn runs unstopped.
       const current = conversation && entry.sessions.current(conversation);
+      const signal = AbortSignal.any([
+        entry.lifetime.signal,
+        workSignal ?? AbortSignal.abort(new Error("The turn has ended")),
+      ]);
       const client =
         handle &&
         appClient(handle, {
-          signal: entry.lifetime.signal,
+          signal,
+          callSignal: signal,
           ...(current && {
             check: () => {
               if (!current()) throw new Error("The Goose turn has ended");
@@ -909,6 +918,7 @@ export class GooseRuntime {
           title: title ?? "",
           conversation: conversation ?? null,
         }),
+      tags: (conversation) => sessionTags(agent, conversation),
       onChange: () => this.notify(),
       // Read as each turn starts, so a change needs no restart.
       choice: () => ({

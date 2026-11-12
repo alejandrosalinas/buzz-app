@@ -797,15 +797,22 @@ it("retries the card's connection, activity and read-state failures", async () =
   act(() => h.failSync());
   expect(screen.queryByRole("alert")).not.toBeInTheDocument();
 
-  // Cleared activity is not reported as nothing to read.
-  await act(async () => {
-    await h.owner.clearCache();
+  // Cleared activity is not reported as nothing to read while the repair the
+  // clear starts observes it again, and that repair brings it back.
+  let clearing: Promise<void> | undefined;
+  act(() => {
+    clearing = h.owner.clearCache();
   });
   expect(
     screen.queryByRole("list", { name: "Recent activity" }),
   ).not.toBeInTheDocument();
   expect(screen.queryByText("No recent activity")).not.toBeInTheDocument();
   expect(screen.queryByText("Nothing unread")).not.toBeInTheDocument();
+  await act(async () => {
+    await clearing;
+  });
+  await waitFor(() => expect(previewRows()).toHaveLength(2));
+  expect(screen.queryByText("No recent activity")).not.toBeInTheDocument();
   view.unmount();
 
   act(() => h.failConnection("relay offline"));
@@ -1131,6 +1138,7 @@ function fixture(
       readStateFloor: () => 0,
       outboxStorage: { load: () => [], save: () => {} },
       readStateStorage: {
+        capture: async () => structuredClone(journal),
         async update(change) {
           if (hold) {
             saveStarted = true;
@@ -1216,7 +1224,8 @@ function fixture(
       subscribers.add(listener);
       return () => subscribers.delete(listener);
     },
-    retry: retryConnection,
+    retry() {},
+    tryAgain: retryConnection,
     disconnect() {},
     clearCache: owner.clearCache,
   };
@@ -3035,8 +3044,24 @@ it("waits for roster recovery before explicit evidence refresh", async () => {
 
 it("cache clear shows explicit refresh instead of a spinner with no pending work", async () => {
   const h = fixture();
+  const root = h.root;
+  if (!root) throw new Error("Missing fixture root");
+  // Only the feed reads reactions; unread evidence never includes them.
+  h.addEvent(
+    signed(h.alice, {
+      kind: 7,
+      content: "❤️",
+      created_at: 30,
+      tags: [
+        ["e", root.id],
+        ["p", h.viewer.pubkey],
+      ],
+    }),
+  );
+  const reaction = { name: /Alice reacted with heart/ };
   render(h.view);
   await screen.findByText("Please review this");
+  await screen.findByRole("button", reaction);
   await waitFor(() =>
     expect(
       screen.queryByText("Checking recent activity…"),
@@ -3045,12 +3070,19 @@ it("cache clear shows explicit refresh instead of a spinner with no pending work
   await act(async () => {
     await h.owner.clearCache();
   });
+  // The repair the clear starts brings back the mention from unread evidence
+  // on its own, but the cleared feed stays idle: it offers Refresh rather than
+  // a spinner with nothing pending.
+  await screen.findByText("Please review this");
+  expect(h.owner.session.inboxFeed.snapshot().status).toBe("idle");
   expect(screen.getByText("Check recent activity.")).toBeVisible();
   expect(
     screen.queryByText("Checking recent activity…"),
   ).not.toBeInTheDocument();
+  expect(screen.queryByRole("button", reaction)).not.toBeInTheDocument();
   fireEvent.click(screen.getByRole("button", { name: "Refresh" }));
-  await screen.findByText("Please review this");
+  await screen.findByRole("button", reaction);
+  expect(h.owner.session.inboxFeed.snapshot().status).toBe("ready");
   expect(h.retrySync).not.toHaveBeenCalled();
 });
 

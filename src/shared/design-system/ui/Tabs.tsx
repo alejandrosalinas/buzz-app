@@ -55,6 +55,8 @@ export type TabItem<Value extends string> = {
  * underline for a plain light or dark surface. `segmented` groups filters
  * on an opaque surface with an inset track and a raised selection.
  *
+ * `capsule` uses outlined pills without a filled track, alongside a wrapping action.
+ *
  * **A variant rather than a second component**, because behaviour, keyboard
  * model, accessibility, props, and the Base UI tabs underneath are identical —
  * only the appearance differs, which is what a variant is for. `IconButton`
@@ -63,6 +65,7 @@ export type TabItem<Value extends string> = {
  * `chrome` is the default because every existing call site is on the gradient.
  */
 export type TabsVariant =
+  | "capsule"
   | "chrome"
   | "dock"
   | "panel"

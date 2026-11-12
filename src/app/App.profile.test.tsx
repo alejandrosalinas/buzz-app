@@ -960,7 +960,9 @@ it.each(["pending", "unavailable"] as const)(
     const name = await screen.findByRole("textbox", { name: "Display name" });
     await waitFor(() => expect(name).toHaveValue("Community name"));
     await user.clear(name);
-    await user.type(name, "Keep this draft");
+    // The draft's content matters here, not how it was entered; each typed
+    // keystroke renders the whole app again.
+    await user.paste("Keep this draft");
     if (state === "pending") {
       const snapshot = current.plugins.snapshot();
       const sidebar = snapshot.activation["test.sidebar"];
@@ -992,6 +994,9 @@ it.each(["pending", "unavailable"] as const)(
     );
     expect(name).toHaveValue("Keep this draft");
   },
+  // Each Settings navigation here renders the whole app again, about a second
+  // apiece on a loaded runner, as in the neighbouring tests.
+  15_000,
 );
 
 it("drops the retained draft after an accepted departure to another account's unavailable Settings", async () => {

@@ -315,6 +315,15 @@ it("publishes config artifacts straight to the relay, re-sending identical bytes
     .publish(event, signal)
     .catch((error: unknown) => error);
   expect(refused).toBeInstanceOf(PublishRejected);
+  expect(transport.configArtifacts.isNotSent?.(refused)).toBe(true);
+  expect(
+    transport.configArtifacts.isNotSent?.(
+      new Error((refused as Error).message),
+    ),
+  ).toBe(false);
+  expect(
+    transport.configArtifacts.isNotSent?.(new PublishRejected("denied")),
+  ).toBe(false);
   expect((refused as Error).message).toBe(
     "rate-limited: quota exceeded; retry in 9s",
   );
@@ -974,7 +983,9 @@ it.each(["message", "reaction"] as const)(
 
 it("exposes workflow history over the purpose-bound native route and workflow write kinds", async () => {
   const transport = await connectNativeTransport(community);
-  expect(nativeWriteKinds).toEqual(expect.arrayContaining([30620, 46020, 5]));
+  expect(nativeWriteKinds).toEqual(
+    expect.arrayContaining([30620, 46020, 5, 48103]),
+  );
   expect(transport.writer?.kinds).toEqual(nativeWriteKinds);
   assert.exists(transport.workflows);
   const id = "11111111-1111-4111-8111-111111111111";
@@ -1551,8 +1562,9 @@ it("exposes purpose-bound agent readers and fences obsolete observer decoding", 
   const signal = new AbortController().signal;
   const agent = keypair();
   const dispatch = vi.mocked(invoke);
-  dispatch.mockImplementationOnce(async (command) => {
+  dispatch.mockImplementationOnce(async (command, args) => {
     expect(command).toBe("relay_agent_library");
+    expect(args).toEqual({ community });
     return { definitions: [], identities: [] };
   });
   expect(await transport.readAgentLibrary?.(signal)).toEqual({
@@ -2366,4 +2378,64 @@ it.each([
   );
   await expect(work).rejects.toBeInstanceOf(ArtifactIncrementalError);
   await expect(work).rejects.toMatchObject({ code });
+});
+
+it.each([
+  ["sign-in", 401, "authentication required\n"],
+  ["access", 403, "authorization denied\n"],
+  ["access", 403, JSON.stringify({ error: "relay_membership_required" })],
+])(
+  "a refused response reports its %s refusal to the community's observer without the window event",
+  async (kind, status, body) => {
+    // This test environment has no Tauri window, so the event listener never
+    // installs: only the response itself can report the refusal.
+    const transport = await connectNativeTransport(community);
+    const refusals: string[] = [];
+    const stop = transport.observeRefusal?.((refusal) =>
+      refusals.push(refusal),
+    );
+    const answer = vi.mocked(invoke).getMockImplementation();
+    vi.mocked(invoke).mockImplementation(async (command, args, options) =>
+      command === "relay_http" && (args as Request).path === "/query"
+        ? { status, headers: {}, body }
+        : answer?.(command, args, options),
+    );
+    await expect(
+      transport.query([{ kinds: [9], "#h": ["channel"], limit: 10 }]),
+    ).rejects.toThrow();
+    expect(refusals).toEqual([kind]);
+    stop?.();
+  },
+);
+
+it("an ordinary 403 reports no community refusal", async () => {
+  const transport = await connectNativeTransport(community);
+  const refusals: string[] = [];
+  const stop = transport.observeRefusal?.((refusal) => refusals.push(refusal));
+  respond = () => ({
+    status: 403,
+    body: { error: "restricted: not a channel member" },
+  });
+  await expect(
+    transport.query([{ kinds: [9], "#h": ["channel"], limit: 10 }]),
+  ).rejects.toThrow();
+  expect(refusals).toEqual([]);
+  stop?.();
+});
+
+it("a refused unsigned GET reports no community refusal", async () => {
+  // Native signs only POST and reports refusals only for signed requests.
+  const transport = await connectNativeTransport(community);
+  const refusals: string[] = [];
+  const stop = transport.observeRefusal?.((refusal) => refusals.push(refusal));
+  const answer = vi.mocked(invoke).getMockImplementation();
+  vi.mocked(invoke).mockImplementation(async (command, args, options) =>
+    command === "relay_http" && (args as Request).method === "GET"
+      ? { status: 401, headers: {}, body: "authentication required\n" }
+      : answer?.(command, args, options),
+  );
+  const response = await nativeRelayRequest(community, "/gated");
+  expect(response.status).toBe(401);
+  expect(refusals).toEqual([]);
+  stop?.();
 });

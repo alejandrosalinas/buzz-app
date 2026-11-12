@@ -44,3 +44,17 @@ test("line-start mention capsules align with prose", async ({ page }) => {
       expect(Math.abs(offset), density).toBeLessThan(0.5);
   }
 });
+
+// Browser layout: a flat list keeps one author's messages visibly apart, so
+// a new message does not read as a wrapped line of the previous one.
+test("Compact stacks one author's messages 8px apart", async ({ page }) => {
+  await page.goto("/tests/fixtures/message-gallery.html?group=content");
+  await page.evaluate(() => {
+    document.documentElement.dataset.messageDensity = "compact";
+  });
+  const text = (id) =>
+    page.locator(`[data-message-id="${id}"] [data-message-action-anchor]`);
+  const first = await text("edited-own").boundingBox();
+  const next = await text("edited-own-emoji").boundingBox();
+  expect(next.y - (first.y + first.height)).toBeCloseTo(8, 1);
+});

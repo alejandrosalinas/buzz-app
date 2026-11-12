@@ -7,9 +7,15 @@ selection store.
 
 ## Getting started
 
+Bestie starts On for fresh local installs. Upgrades preserve existing saved
+choices and retain Off for existing profiles without a saved Bestie choice.
+The browser and native plugin storage owners persist that decision; a deliberate
+plugin-settings reset uses the current On default. This enables the destination,
+not automatic agent creation or messaging. See [plugin defaults](../../../docs/plugin-defaults.md).
+
 ### Pinned conversation
 
-When the account has a saved eligible Bestie, the sidebar row adopts that
+When the account has a saved eligible Bestie, the pinned shortcut adopts that
 agent's name and avatar and opens their canonical direct message. The canonical
 conversation is the newest verified, unarchived, non-cached DM whose roster
 contains the viewer and exactly that one other public key. A Solo chat, group DM,
@@ -21,19 +27,24 @@ selectable agent. Known-archived agents and agents confirmed absent from a compl
 inventory do not keep a pinned conversation.
 
 The page uses the ordinary conversation owners for history, drafts, sending,
-threads and unread state. Its conversation workspace reuses Messages’ tab state
-and tab host, with a retained main timeline/composer and a resizable side pane.
+threads and unread state. `BestieConversation` owns the local welcome. Its
+workspace reuses Messages’ tab state and tab host, with a retained main
+timeline/composer and a resizable side pane.
+The header also uses the DM’s shared plugin launchers and actions menu, including
+Huddle when available, channel details, and eligible plugin menu items.
 Threads follow the device’s thread placement preference and support the same
 move, rename, close and pane-collapse controls. Profile and plugin links open
 in the tab workspace. Thread visits bind to their originating DM. Restoring
 one after the Bestie or canonical DM changes retires incompatible thread visits
 and shows the current Bestie's chat; it never reads an old thread in the new DM.
+⌘F on the page searches this DM, and Search Buzz offers **Search conversation
+with** the Bestie, as they do in any other conversation.
 While that exact DM is promoted, Messages omits its
 ordinary row and clears any old device-local hidden-DM intent. Replacing or
 deleting the Bestie, disabling the plugin, changing communities, or losing the
 exact roster match releases the promotion and restores the ordinary DM row.
 
-The pinned row and Search Buzz destination show the agent's name and avatar.
+The pinned shortcut and Search Buzz destination show the agent's name and avatar.
 Search adds **Bestie** as supporting text and matches either name, so the pinned
 DM remains recognizable without presenting a placeholder identity. Agent rows
 remain separate **New chat** actions; namesakes stay distinct by exact public key
@@ -143,9 +154,35 @@ and incomplete or failed inventory reads remain on the pinned destination with
 their own recovery. Once a complete read proves that the saved agent is gone,
 the same chooser appears in place instead of sending the owner to another menu.
 
-A successful account read with no saved Bestie shows **Choose your bestie agent**,
-where the owner can search eligible existing agents in a picker with avatars,
-names and short public-key labels, or open the shared **Create agent** dialog.
+Setup is opt-in from the pinned Bestie destination; it does not take over the
+initial destination or send an automatic message. With no saved choice, the
+shortcut cycles through the same Fuzzies, Gloopies and Figgies as mobile, using
+bundled stills. The artwork pauses for reduced motion and hidden documents.
+
+Once the account read confirms no saved Bestie and inventory/archive reads settle,
+the rotating shortcut reads **Create an agent**, even when the shared
+inventory offers existing agents. When no eligible agents are available, the page
+shows **Create your first agent**, with matching character artwork, the description
+“Buzz is better with your agents. Create one to get started.” and a **Create an
+agent** action. That opens the shared creation form for name, avatar and provider
+settings—not a separate onboarding creation path. When that form was opened
+with a complete, empty identity inventory, finishing creation records local
+first-agent provenance before refreshing or saving the Bestie choice. Refresh
+and account-save retries retain it. Existing-agent choices, replacements and
+archived identities do not establish first-agent provenance.
+
+After the created agent is selected and its exact DM is verified, a local welcome
+introduces the sidebar shortcut and Buzz help. It uses the incoming-message
+layout, the agent’s avatar and the normal received bubble, without a visible
+local-content disclaimer. It is still local decoration, not a sent message:
+no relay event, model turn, unread state, timestamp or message actions.
+The receipt is device-local, partitioned by account/community/agent and bound to
+the first verified DM; a replacement DM does not inherit it. It remains at the
+known beginning of history on the pinned page after sending or reopening. It is
+hidden while older history remains. Ordinary DM entry points do not add it.
+Unavailable local storage omits this optional decoration without blocking creation.
+Otherwise **Choose your bestie agent** lets the owner search eligible existing
+agents with avatars, names and short public-key labels, or open the same form.
 Known hosted agents and agents on another device remain eligible, but require
 confirmation before saving: **Some bestie features aren’t available with remote
 agents.** This also applies after creating one through Builderlab.

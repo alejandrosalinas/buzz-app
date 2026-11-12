@@ -96,7 +96,7 @@ export function PinnedBestie({
         }
         action={
           connection.status === "error" ? (
-            <Button onClick={relay.retry}>Retry connection</Button>
+            <Button onClick={relay.tryAgain}>Retry connection</Button>
           ) : undefined
         }
       />
@@ -112,7 +112,8 @@ export function PinnedBestie({
         navigator={navigator}
         navigation={navigation}
         icon={icon}
-        agent={{ pubkey: saved, name }}
+        agent={{ pubkey: saved, name, picture: identity?.avatar }}
+        community={connection.origin}
         channel={channel}
       />
     );
@@ -198,7 +199,8 @@ export function PinnedBestie({
           navigator={navigator}
           navigation={navigation}
           icon={icon}
-          agent={{ pubkey: agent.pubkey, name }}
+          agent={{ pubkey: agent.pubkey, name, picture: agent.avatar }}
+          community={connection.origin}
           channel={undefined}
         />
       );
@@ -224,6 +226,7 @@ function DirectMessage({
   navigator,
   navigation,
   agent,
+  community,
   icon,
   channel,
 }: {
@@ -233,7 +236,8 @@ function DirectMessage({
   extensions: ConversationExtensions;
   navigator: Navigation;
   navigation?: PageNavigation | undefined;
-  agent: { pubkey: string; name: string };
+  agent: { pubkey: string; name: string; picture?: string | undefined };
+  community?: string | undefined;
   icon: React.ReactNode;
   channel: ChannelSummary | undefined;
 }) {
@@ -277,7 +281,8 @@ function DirectMessage({
         navigator={navigator}
         navigation={navigation}
         channel={channel}
-        bestie={agent.name}
+        agent={agent}
+        community={community}
         icon={icon}
       />
     );

@@ -12,9 +12,6 @@ ignore = [
     # upstream NetEQ pin and wrapper ban below together; re-audit or remove
     # this exception when NetEQ changes or removes the unused dependency.
     { id = "RUSTSEC-2026-0293", reason = "unused dependency of audited, exactly pinned neteq 0.8.3; no Rust references to ringbuf; other consumers forbidden by bans.deny" },
-    # instant 0.1.13 — unmaintained, not vulnerable. nostr 0.44 → instant (via
-    # Buzz and buzz-pairing). Remove when nostr 0.44 is gone.
-    { id = "RUSTSEC-2024-0384", reason = "instant via nostr 0.44; unmaintained, not vulnerable" },
     { id = "RUSTSEC-2024-0436", reason = "paste via iroh 1.3.0 → netwatch/netdev/netlink-packet-core (mesh-llm-sdk); archived proc-macro, unmaintained, not vulnerable" },
     # zip 8.6.0 < 9 (0367/0368/0369/0429) only affect ZipArchive::extract and
     # stream extraction. Only path: mesh-llm-sdk → mesh-llm-system and

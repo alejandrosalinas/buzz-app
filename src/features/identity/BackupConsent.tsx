@@ -68,17 +68,21 @@ let answering = 0;
  * are offered or added, which the app starts once launch ends, so the prompt
  * never opens over that dialog and decides with the communities it adds.
  * Closing the prompt saves nothing and keeps it closed until Builderlab signs
- * out or the app next starts.
+ * out or the app next starts. While it is `paused` behind another prompt,
+ * nothing is decided or asked either.
  */
 export function BackupConsent({
   identity,
   communities,
   servers = signInServers,
+  paused = false,
 }: {
   identity: Identity;
   communities: Pick<CommunityReader, "snapshot" | "subscribe">;
   /** The build's sign-in servers, for which communities its Builderlab hosts. */
   servers?: () => Promise<readonly SessionSnapshot[]>;
+  /** Another prompt is open, which this one waits behind. */
+  paused?: boolean;
 }) {
   const status = useSyncExternalStore(
     identity.backup.subscribe,
@@ -89,7 +93,7 @@ export function BackupConsent({
     subscribeLegacyImport,
     legacyImportPending,
   );
-  const held = launching || importing;
+  const held = launching || importing || paused;
   const [asking, setAsking] = useState<string>();
   const dismissed = useRef(false);
   const waiting =
@@ -163,8 +167,8 @@ export function BackupConsent({
 }
 
 /**
- * Asks whether to sync this device's identity with Builderlab. Sync with
- * Builderlab and I will manage my own key save the answer for `pubkey` and
+ * Asks whether to back up this device's key. Back up key and I will manage
+ * my own key save the answer for `pubkey` and
  * close with it; Close and Escape save nothing. A refused save stays in the
  * dialog. Once `ended`, it closes as Close does unless its own answer is
  * still being saved or was refused.
@@ -212,8 +216,8 @@ export function BackupPrompt({
   };
   return (
     <AlertDialog
-      title="Sync your identity with Builderlab?"
-      description="Buzz will save an encrypted copy of your identity key with your Builderlab account. That copy can restore your identity, including in other apps where you use the same key."
+      title="Back up your key?"
+      description="Buzz will save an encrypted copy of your identity key with your Builderlab account. That copy can restore your identity, including in other apps where you use the same key. If you manage your own key, keep a copy of your private key: you need it to use this account on another device or if you lose access to this one."
       onClose={onClose}
       initialFocus={sync}
       finalFocus={finalFocus}
@@ -236,7 +240,7 @@ export function BackupPrompt({
             loading={saving === true}
             onClick={() => answer(true)}
           >
-            Sync with Builderlab
+            Back up key
           </Button>
         </>
       }

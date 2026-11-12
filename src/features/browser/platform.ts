@@ -58,9 +58,11 @@ export type BrowserStatus = Readonly<{
   error: string | null;
   /** A step to take elsewhere, such as approving an app in the web browser. */
   notice?: string | null;
+  /** The page asked to open a page in the web browser, which `open` opens. */
+  held?: boolean;
 }>;
 
-export type BrowserAction = "back" | "forward" | "reload";
+export type BrowserAction = "back" | "forward" | "reload" | "open";
 
 export interface BrowserPlatform {
   readonly available: boolean;

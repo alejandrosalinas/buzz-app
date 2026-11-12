@@ -1,6 +1,7 @@
 import type { ActivityTurn } from "./activity";
 import { activityRecords, type ActivityRecord } from "./activity-records";
 import { terminalOutcome } from "./observer";
+import { freshTurnTriggers, turnTriggerIds } from "./turn-triggers";
 
 type Parsed = Readonly<{
   record: ActivityRecord;
@@ -110,25 +111,55 @@ export function requestActivity(
       )
       .map((turn) => turn.turnId),
   );
-  for (const start of parsed.filter(
-    ({ value }) => value.kind === "turn_started",
-  )) {
-    const triggers = start.value.payload?.triggeringEventIds;
+  // The lifecycle's membership of a turn it still holds is authoritative: a
+  // start or steer anchors the turn only for messages the lifecycle admitted.
+  // A turn it no longer holds, or holds without membership, is replayed from
+  // the raw records, admitting each start's and steer's messages in arrival
+  // order by the lifecycle's rules, so a list it rejected cannot associate a
+  // message here.
+  const retained = new Map<string, readonly string[]>();
+  for (const turn of turns)
     if (
-      !Array.isArray(triggers) ||
-      !triggers.some((id) => triggersWanted.has(id))
+      turn.agent === agent &&
+      turn.channelId === channelId &&
+      turn.triggeringEventIds
     )
-      continue;
-    if (ambiguous.has(start.value.turnId)) {
+      retained.set(turn.turnId, turn.triggeringEventIds);
+  const replayed = new Map<string, string[]>();
+  const anchors: Parsed[] = [];
+  for (const anchor of parsed) {
+    const { kind, turnId, payload } = anchor.value;
+    if (kind !== "turn_started" && kind !== "turn_steered") continue;
+    const listed = turnTriggerIds(payload?.triggeringEventIds);
+    const members = retained.get(turnId);
+    let joined: readonly string[];
+    if (members) joined = (listed ?? []).filter((id) => members.includes(id));
+    else {
+      const known = replayed.get(turnId) ?? [];
+      replayed.set(turnId, known);
+      joined = freshTurnTriggers(known, listed);
+      known.push(...joined);
+    }
+    if (joined.some((id) => triggersWanted.has(id))) anchors.push(anchor);
+  }
+  // A steered message joined a turn that started for another message, so it
+  // shares that turn's records from its start, or from the steer when the start
+  // is not loaded.
+  for (const anchor of anchors) {
+    if (turnIds.has(anchor.value.turnId)) continue;
+    if (ambiguous.has(anchor.value.turnId)) {
       uncertain = true;
       continue;
     }
     const turn = parsed.filter(
-      ({ value }) => value.turnId === start.value.turnId,
+      ({ value }) => value.turnId === anchor.value.turnId,
     );
+    const starts = turn.filter(({ value }) => value.kind === "turn_started");
+    const start =
+      anchor.value.kind === "turn_started" ? anchor : (starts[0] ?? anchor);
     // Duplicate starts/sequence resets leave identity ambiguous. Do not mix runs.
     if (
-      turn.filter(({ value }) => value.kind === "turn_started").length !== 1 ||
+      starts.length > 1 ||
       turn.some(
         ({ value }) => !Number.isSafeInteger(value.seq) || value.seq < 0,
       )

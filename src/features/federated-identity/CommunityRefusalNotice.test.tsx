@@ -167,3 +167,81 @@ it("leaves a key with no access to its admin, with Check again", async () => {
     .click(screen.getByRole("button", { name: "Check again" }));
   expect(retry).toHaveBeenCalledOnce();
 });
+
+// Only the server's other communities that require NIP-FI rely on its
+// account: one that doesn't is reached with the key alone. Signing in again
+// names none, since the refused session no longer reaches them either.
+it.each(["access", "sign-in"] as const)(
+  "names the communities a switch affects only for Switch account (%s)",
+  async (refusal) => {
+    const h = federatedFixture();
+    const authority = h.service.snapshot().authority;
+    if (!authority) throw new Error("Fixture authority required");
+    h.publish({
+      status: "signed-in",
+      email: "bob@personal.example",
+      authority: { ...authority, communityHosts: ["*.relay.example"] },
+    });
+    // B's discovery is held: until it answers, B counts, so a quick switch
+    // still warns about it.
+    let discoverB: ((requires: boolean) => void) | undefined;
+    const communityRequiresSignIn = vi.fn((relay: string) => {
+      if (relay === "https://b.relay.example")
+        return new Promise<boolean>((resolve) => {
+          discoverB = resolve;
+        });
+      // A failed discovery counts too: that community may rely on the account.
+      if (relay === "https://c.relay.example")
+        return Promise.reject(
+          new Error("Federated community discovery failed"),
+        );
+      return Promise.resolve(relay === "https://a.relay.example");
+    });
+    render(
+      <ToastProvider>
+        <CommunityRefusalNotice
+          refusal={refusal}
+          identity={{ ...h.service, communityRequiresSignIn }}
+          retry={vi.fn()}
+          relay="wss://self.relay.example"
+          memberships={[
+            { id: "wss://self.relay.example", name: "Self" },
+            { id: "wss://a.relay.example", name: "A" },
+            { id: "wss://b.relay.example", name: "B" },
+            { id: "wss://c.relay.example", name: "C" },
+            { id: "wss://elsewhere.example", name: "Elsewhere" },
+          ]}
+        />
+      </ToastProvider>,
+    );
+    if (refusal === "access") {
+      const dialog = await notice("You don’t have access to this community");
+      try {
+        expect(
+          await within(dialog).findByText(
+            "A, B, and C also use this account. Switching may change your access there.",
+          ),
+        ).toBeVisible();
+      } finally {
+        discoverB?.(false);
+      }
+      expect(
+        await within(dialog).findByText(
+          "A and C also use this account. Switching may change your access there.",
+        ),
+      ).toBeVisible();
+      expect(
+        communityRequiresSignIn.mock.calls.map(([relay]) => relay),
+      ).toEqual([
+        "https://a.relay.example",
+        "https://b.relay.example",
+        "https://c.relay.example",
+      ]);
+    } else {
+      const dialog = await notice("Sign in to open this community");
+      expect(buttons(dialog)).toEqual(["Sign in again"]);
+      expect(dialog).not.toHaveTextContent(/also use|signs you out/);
+      expect(communityRequiresSignIn).not.toHaveBeenCalled();
+    }
+  },
+);

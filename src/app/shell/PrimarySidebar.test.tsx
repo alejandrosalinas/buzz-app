@@ -23,11 +23,14 @@ import { federatedFixture } from "../../features/federated-identity/testing";
 import type { ChannelDetails } from "../../features/relay/channel-details-protocol";
 import { createSoloRegionFixture } from "../../features/channel-navigation/solo-navigation-testing";
 import { PrimarySidebar } from "./PrimarySidebar";
+import { NewMenu } from "./NewMenu";
+import type { SidebarPreferences } from "../../features/relay/sidebar-preferences";
 import type {
   RegisteredSidebarRestriction,
   SidebarScope,
 } from "../../features/channel-navigation/sidebar-scope-service";
 import { ToastProvider } from "../../shared/design-system/ui/Toast";
+import { createSidebarPreferencesStore } from "../../features/relay/sidebar-preferences-store";
 import { SOLO_LABEL } from "../../features/solo/labels";
 import type { ChannelDetailsCapability } from "../../features/relay/channel-details";
 import { SIDEBAR_REVEAL_BUDGET_MS } from "../../bundled/channels/useSidebarStartup";
@@ -418,6 +421,43 @@ it("expands fallback Solo when navigation selects an ordinary chat", async () =>
   }
 });
 
+it.each(["Solo", "All"])(
+  "preserves %s for a source opening and selects Team on its next explicit open",
+  async (filter) => {
+    const f = fixture(true);
+    f.roster((channels) => [
+      ...channels,
+      {
+        id: "source",
+        name: "Source channel",
+        channelType: "stream",
+        cached: true,
+      },
+    ]);
+    await waitFor(() =>
+      expect(
+        document.querySelector('[data-channel-id="source"]'),
+      ).not.toBeNull(),
+    );
+    const user = userEvent.setup();
+    await user.click(screen.getByRole("tab", { name: filter }));
+    const target = conversationTarget(scope, "source");
+    await act(() => f.open(target, { sidebar: "preserve" }));
+    expect(screen.getByRole("tab", { name: filter })).toHaveAttribute(
+      "aria-selected",
+      "true",
+    );
+    const teamRow = document.querySelector('[data-channel-id="source"]');
+    expect(teamRow).not.toBeNull();
+    expect(teamRow).not.toHaveAttribute("aria-current");
+    await act(() => f.open(target));
+    expect(
+      screen.getByRole("tab", { name: filter === "All" ? "All" : "Team" }),
+    ).toHaveAttribute("aria-selected", "true");
+    expect(teamRow).toHaveAttribute("aria-current", "page");
+  },
+);
+
 it.each([
   ["New workspace", "New workspace", "Cancel"],
   ["New channel", "Create a channel", "Close channel creation"],
@@ -492,7 +532,7 @@ it("keeps unavailable creation actions disabled", async () => {
 });
 
 it.each([["New", "New workspace"]])(
-  "does not navigate to a replaced session after project creation from %s completes",
+  "opens an ordinary workspace draft from %s and ignores later completion after session replacement",
   async (triggerName, itemName) => {
     const f = fixture(true, true);
     const user = userEvent.setup();
@@ -502,7 +542,25 @@ it.each([["New", "New workspace"]])(
     });
     const create = vi
       .spyOn(f.session.soloPreferences, "createSection")
+      .mockResolvedValueOnce(undefined)
       .mockReturnValue(pending);
+    await user.click(screen.getByRole("button", { name: triggerName }));
+    await user.click(await screen.findByRole("menuitem", { name: itemName }));
+    const first = await screen.findByRole("dialog", { name: "New workspace" });
+    await user.type(
+      within(first).getByRole("textbox", { name: "Name" }),
+      "First workspace",
+    );
+    await user.click(within(first).getByRole("button", { name: "Create" }));
+    const project = create.mock.calls[0]?.[0];
+    if (!project) throw new Error("Missing created workspace");
+    await waitFor(() =>
+      expect(f.open).toHaveBeenCalledWith(
+        soloDraftTarget(scope, { project: project.id }),
+      ),
+    );
+    await waitFor(() => expect(first).not.toBeInTheDocument());
+    f.open.mockClear();
     await user.click(screen.getByRole("button", { name: triggerName }));
     await user.click(await screen.findByRole("menuitem", { name: itemName }));
     const dialog = await screen.findByRole("dialog", { name: "New workspace" });
@@ -512,7 +570,7 @@ it.each([["New", "New workspace"]])(
     );
     try {
       await user.click(within(dialog).getByRole("button", { name: "Create" }));
-      await waitFor(() => expect(create).toHaveBeenCalledOnce());
+      await waitFor(() => expect(create).toHaveBeenCalledTimes(2));
       f.replaceSession();
     } finally {
       await act(async () => {
@@ -1046,9 +1104,44 @@ it("moves a refusal's recovery from the sidebar to its one notice", async () => 
   expect(within(sidebar()).queryByText(/sign-in/)).toBeNull();
 });
 
+// NIP-FA: an issuer refusal is not retried automatically, but the user's
+// Try again asks the issuer again rather than repeating it from the cache.
+it("makes Try again a person's retry, which asks the issuer again", async () => {
+  const h = federatedFixture();
+  const f = fixture(
+    true,
+    false,
+    undefined,
+    undefined,
+    0,
+    undefined,
+    undefined,
+    {
+      federatedIdentity: h.service,
+    },
+  );
+  const retry = vi.spyOn(f.relay, "retry");
+  const tryAgain = vi.spyOn(f.relay, "tryAgain");
+  const sidebar = () => screen.getByRole("complementary", { name: "Sidebar" });
+  f.connection({
+    status: "error",
+    error: "grant-refused",
+    origin: "wss://relay.example",
+  });
+  // So its issuer-refusal advice is that Try again, not a restart.
+  expect(within(sidebar()).getByRole("alert")).toHaveTextContent(
+    "Buzz couldn’t confirm your organization sign-in for this community. Try again. If it keeps happening, contact your administrator.",
+  );
+  await userEvent
+    .setup()
+    .click(within(sidebar()).getByRole("button", { name: "Try again" }));
+  expect(tryAgain).toHaveBeenCalledOnce();
+  expect(retry).not.toHaveBeenCalled();
+});
+
 it("shows Try again beside a settled failure, and Connecting while the connection retries", async () => {
   const f = fixture(true);
-  const retry = vi.spyOn(f.relay, "retry");
+  const retry = vi.spyOn(f.relay, "tryAgain");
   const sidebar = () => screen.getByRole("complementary", { name: "Sidebar" });
   const error = "ReadError: Relay read failed (502)";
   f.connection({ status: "error", error });
@@ -1085,5 +1178,315 @@ it("shows Try again beside a settled failure, and Connecting while the connectio
     expect(
       within(sidebar()).queryByRole("button", { name: "Try again" }),
     ).toBeNull();
+  }
+});
+
+it("keeps ordinary Buzz creation controls until a workspace source opts in and restores them when it is removed", async () => {
+  const h = createSoloRegionFixture(viewer);
+  const preferences = createSidebarPreferencesStore({
+    available: true,
+    groupsOnly: true,
+    read: async () => ({
+      sections: [
+        { id: "work", name: "Work", order: 0 },
+        { id: "empty", name: "Empty", order: 1 },
+      ],
+      assignments: { chat: "work" },
+      starred: [],
+      muted: [],
+    }),
+  });
+  await preferences.queries.ensure();
+  Object.assign(h.session, {
+    soloPreferences: preferences.queries,
+  });
+  h.roster(
+    h.session.channels
+      .list()
+      .channels.filter((channel) => channel.id === "chat"),
+  );
+  const view = render(
+    <ToastProvider>
+      <NewMenu relay={h.relay} navigator={h.navigator} />
+      <PrimarySidebar
+        relay={h.relay}
+        navigator={h.navigator}
+        target={conversationTarget(h.scope, "chat")}
+      >
+        {null}
+      </PrimarySidebar>
+    </ToastProvider>,
+  );
+  const user = userEvent.setup();
+  const checkOrdinary = async () => {
+    expect(
+      screen.getByRole("button", { name: "New chat in Work" }),
+    ).toBeVisible();
+    const empty = screen.getAllByRole("button", { name: "New chat in Empty" });
+    expect(empty).toHaveLength(2);
+    expect(empty.some((button) => button.textContent === "New chat")).toBe(
+      true,
+    );
+    expect(screen.queryByRole("button", { name: "Chats" })).toBeNull();
+    await user.click(screen.getByRole("button", { name: "New" }));
+    expect(
+      await screen.findByRole("menuitem", { name: "New chat" }),
+    ).toBeVisible();
+    await user.keyboard("{Escape}");
+    await waitFor(() => expect(screen.queryByRole("menu")).toBeNull());
+  };
+  try {
+    await checkOrdinary();
+    const source = await act(() =>
+      h.register({
+        composeWorkspaces: true,
+        component: ({ ui }) => {
+          const Workspace = ui.Workspace;
+          const Chats = ui.Chats;
+          if (!Workspace || !Chats)
+            throw new Error("Missing workspace composition");
+          return (
+            <>
+              <Workspace id="work" />
+              <Workspace id="empty" />
+              <Chats />
+            </>
+          );
+        },
+      }),
+    );
+    expect(
+      screen.queryByRole("button", { name: "New chat in Work" }),
+    ).toBeNull();
+    expect(
+      screen.queryByRole("button", { name: "New chat in Empty" }),
+    ).toBeNull();
+    expect(
+      screen.getByRole("button", { name: "New chat in Chats" }),
+    ).toBeVisible();
+    await user.click(screen.getByRole("button", { name: "New" }));
+    await screen.findByRole("menuitem", { name: "New workspace" });
+    expect(screen.queryByRole("menuitem", { name: "New chat" })).toBeNull();
+    await user.keyboard("{Escape}");
+    await waitFor(() => expect(screen.queryByRole("menu")).toBeNull());
+    await act(() => source.fiber.dispose());
+    await checkOrdinary();
+  } finally {
+    view.unmount();
+    preferences.dispose();
+    await h.dispose();
+  }
+});
+
+it.each(["New"])(
+  "selects the created workspace through its source from %s and retains selection failures for retry",
+  async (triggerName) => {
+    const h = createSoloRegionFixture(viewer);
+    let saved: SidebarPreferences = {
+      sections: [],
+      assignments: {},
+      starred: [],
+      muted: [],
+    };
+    const preferences = createSidebarPreferencesStore({
+      available: true,
+      groupsOnly: true,
+      read: async () => saved,
+      write: async () => saved,
+      createSection: async (section) => {
+        if (!saved.sections.some(({ id }) => id === section.id))
+          saved = {
+            ...saved,
+            sections: [...saved.sections, { ...section, order: 0 }],
+          };
+        return saved;
+      },
+    });
+    await preferences.queries.ensure();
+    Object.assign(h.session, {
+      soloPreferences: preferences.queries,
+    });
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const select = vi.fn(async () => {});
+    select.mockImplementationOnce(async () => {
+      await gate;
+      throw new Error("The workspace could not be opened. Try again.");
+    });
+    const source = await h.register({
+      composeWorkspaces: true,
+      openWorkspace: select,
+      component: ({ ui }) => (ui.Chats ? <ui.Chats /> : null),
+    });
+    const open = vi.fn(async () => ({ status: "opened" as const }));
+    const navigator = { ...h.navigator, open };
+    const view = render(
+      <ToastProvider>
+        <NewMenu relay={h.relay} navigator={navigator} />
+        <PrimarySidebar
+          relay={h.relay}
+          navigator={navigator}
+          target={conversationTarget(h.scope, "owned")}
+        >
+          {null}
+        </PrimarySidebar>
+      </ToastProvider>,
+    );
+    const user = userEvent.setup();
+    try {
+      await user.click(screen.getByRole("button", { name: triggerName }));
+      await user.click(
+        await screen.findByRole("menuitem", { name: "New workspace" }),
+      );
+      const dialog = await screen.findByRole("dialog", {
+        name: "New workspace",
+      });
+      await user.type(
+        within(dialog).getByRole("textbox", { name: "Name" }),
+        "Planning",
+      );
+      await user.click(within(dialog).getByRole("button", { name: "Create" }));
+      await waitFor(() => expect(select).toHaveBeenCalledOnce());
+      const workspace = saved.sections[0];
+      if (!workspace) throw new Error("Missing saved workspace");
+      expect(select).toHaveBeenLastCalledWith(source.binding(), workspace.id);
+      expect(
+        within(dialog).getByRole("textbox", { name: "Name" }),
+      ).toBeDisabled();
+      expect(open).not.toHaveBeenCalled();
+      await act(async () => release());
+      expect(await within(dialog).findByRole("alert")).toHaveTextContent(
+        "The workspace could not be opened",
+      );
+      await user.click(within(dialog).getByRole("button", { name: "Retry" }));
+      await waitFor(() => expect(dialog).not.toBeInTheDocument());
+      expect(select).toHaveBeenLastCalledWith(source.binding(), workspace.id);
+      expect(saved.sections).toEqual([workspace]);
+      expect(open).not.toHaveBeenCalled();
+    } finally {
+      release();
+      view.unmount();
+      preferences.dispose();
+      await h.dispose();
+    }
+  },
+);
+
+it("keeps an ordinary chat editor and pending save through task-source recovery", async () => {
+  const h = createSoloRegionFixture(viewer);
+  const preferences = createSidebarPreferencesStore({
+    available: true,
+    groupsOnly: true,
+    read: async () => ({
+      sections: [{ id: "work", name: "Work", order: 0 }],
+      assignments: { chat: "work" },
+      starred: [],
+      muted: [],
+    }),
+  });
+  await preferences.queries.ensure();
+  let release!: () => void;
+  const gate = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  let savingSignal: AbortSignal | undefined;
+  const save = vi.fn<ChannelDetailsCapability["save"]>(
+    async (_base, _draft, signal) => {
+      savingSignal = signal;
+      await gate;
+      throw new Error("Couldn’t save the name. Try again.");
+    },
+  );
+  save.mockImplementationOnce(async (_base, _draft, signal) => {
+    savingSignal = signal;
+    await gate;
+    throw new Error("Couldn’t save the name. Try again.");
+  });
+  Object.assign(h.session, {
+    soloPreferences: preferences.queries,
+    channelDetails: {
+      ...h.session.channelDetails,
+      available: true,
+      load: vi.fn(
+        async (): Promise<ChannelDetails> => ({
+          channelId: "chat",
+          name: "Chat",
+          description: "",
+          visibility: "private",
+          labels: [SOLO_LABEL],
+          version: "one",
+          canEdit: true,
+        }),
+      ),
+      save,
+    },
+  });
+  h.roster([...h.session.channels.list().channels]);
+  const source = await h.register({
+    composeWorkspaces: true,
+    component: ({ ui }) => {
+      const Workspace = ui.Workspace;
+      const Chats = ui.Chats;
+      if (!Workspace || !Chats)
+        throw new Error("Missing workspace composition");
+      return (
+        <>
+          <Workspace id="work">{null}</Workspace>
+          <Chats />
+        </>
+      );
+    },
+  });
+  const view = render(
+    <ToastProvider>
+      <PrimarySidebar
+        relay={h.relay}
+        navigator={h.navigator}
+        target={conversationTarget(h.scope, "chat")}
+      >
+        {null}
+      </PrimarySidebar>
+    </ToastProvider>,
+  );
+  const user = userEvent.setup();
+  const change = (status: "loading" | "ready", revision: number) =>
+    act(() => source.update({ status, binding: source.binding(), revision }));
+  try {
+    await user.dblClick(await screen.findByRole("button", { name: /^Chat$/ }));
+    const input = await screen.findByRole("textbox", { name: "Chat name" });
+    await waitFor(() => expect(input).toHaveFocus());
+    await user.keyboard("Keep this name");
+    change("loading", 2);
+    expect(screen.getByRole("textbox", { name: "Chat name" })).toBe(input);
+    expect(input).toHaveValue("Keep this name");
+    change("ready", 3);
+    expect(screen.getByRole("textbox", { name: "Chat name" })).toBe(input);
+    await user.keyboard("{Enter}");
+    await waitFor(() => expect(save).toHaveBeenCalledOnce());
+    change("loading", 4);
+    expect(savingSignal?.aborted).toBe(false);
+    expect(screen.getByRole("textbox", { name: "Chat name" })).toBe(input);
+    change("ready", 5);
+    expect(savingSignal?.aborted).toBe(false);
+    await act(async () => {
+      release();
+      await gate;
+    });
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      "Couldn’t save the name",
+    );
+    expect(input).toHaveValue("Keep this name");
+    save.mockResolvedValueOnce(undefined);
+    await user.keyboard("{Enter}");
+    await waitFor(() =>
+      expect(screen.queryByRole("textbox", { name: "Chat name" })).toBeNull(),
+    );
+  } finally {
+    release();
+    view.unmount();
+    preferences.dispose();
+    await h.dispose();
   }
 });

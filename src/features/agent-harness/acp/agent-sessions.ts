@@ -151,6 +151,9 @@ export type SessionsOptions = Readonly<{
     title?: string,
     conversation?: string,
   ): void;
+  /** The tags a session opens with, for the conversation it opens for:
+   * none for a one-off turn. */
+  tags?(conversation?: string): Readonly<Record<string, string>>;
   /** Called when a conversation's session opens, is sent a message, or
    * closes. */
   onChange?(): void;
@@ -574,8 +577,10 @@ export class AgentSessions {
     const slot: Slot = { idle: () => false, evict: async () => undefined };
     const room = pool.take(slot);
     let opened: AcpSession | undefined;
+    const tags = this.options.tags?.(this.once.has(key) ? undefined : key);
     const start = () =>
       process.open({
+        ...(tags ? { tags } : {}),
         onSession: (session) => (opened = session),
         cwd,
         systemPrompt: launch.systemPrompt,

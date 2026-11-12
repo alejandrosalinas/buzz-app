@@ -9,6 +9,7 @@ import {
   type PluginInstallOrigin,
 } from "./installer";
 import type { ConfigurationState, PluginInfo } from "./types";
+import { createPluginUpdates } from "./updates";
 
 const commit = "0123456789abcdef0123456789abcdef01234567";
 const base = {
@@ -78,6 +79,10 @@ it.each([
   ["no repository path", { repository: "https://example.com/" }],
   ["whitespace", { repository: "https://example.com/a b.git" }],
   ["a non-string repository", { repository: 4 }],
+  [
+    "an SSH username outside the request grammar",
+    { repository: "ssh://deploy+ci@code.example.org/team/plugins.git" },
+  ],
   ["an empty reference", { reference: "" }],
   ["an option-like reference", { reference: "--upload-pack=x" }],
   ["a reference with spaces", { reference: "my branch" }],
@@ -268,7 +273,7 @@ function setup({
   const managerListeners = new Set<() => void>();
   const manager = {
     imports: imports ?? undefined,
-    snapshot: () => ({ configuration }),
+    snapshot: () => ({ configuration, activation: {} }),
     subscribe(listener: () => void) {
       managerListeners.add(listener);
       return () => managerListeners.delete(listener);
@@ -332,6 +337,494 @@ it("checks installed ids even when disabled, source-backed, or contribution-free
     "installed",
   );
   expect(installer.getInstallationStatus("example.missing")).toBe("absent");
+});
+
+it("exposes update discovery as an optional capability with unavailable state until registered", async () => {
+  const { as } = setup();
+  const installer = await as("example.market");
+
+  expect(installer.updates?.getSnapshot().status).toBe("unavailable");
+  expect(installer.updates?.queueUpdates([])).toBeUndefined();
+});
+
+async function setupUpdates() {
+  const target = info("example.notes");
+  target.manifest = { ...target.manifest, updates: { defaultEnabled: true } };
+  target.updateSource = { ...base, path: "." };
+  const checkGit = vi.fn(async () => ({
+    token: "preview",
+    source: base.repository,
+    candidates: [{ path: ".", manifest: target.manifest, revision: "r2" }],
+    warnings: [],
+  }));
+  const f = setup({
+    plugins: [target, info("example.market"), info("example.other")],
+    imports: { checkGit },
+  });
+  const updates = createPluginUpdates(f.manager as never, async () => null);
+  const unregister = f.requests.registerUpdates(updates);
+  await updates.check();
+  const token = updates.capability.getSnapshot().candidates[0]?.token;
+  if (!token) throw new Error("Expected an update candidate");
+  return { ...f, updates, token, unregister, checkGit };
+}
+
+it("isolates request identities by plugin and replays after that caller remounts", async () => {
+  const f = await setupUpdates();
+  try {
+    const first = (await f.as("example.market")).updates;
+    const second = (await f.as("example.other")).updates;
+    if (!first || !second) throw new Error("Expected update capabilities");
+    const ownerId = first.ownerId;
+    if (!ownerId) throw new Error("Expected a provider identity");
+    const identity = { ownerId, requestId: "update-all" };
+    const request = { ...identity, tokens: [f.token] };
+    const one = first.queueUpdates(request.tokens, identity);
+    const two = second.queueUpdates(request.tokens, identity);
+    expect(one).toBeDefined();
+    expect(two).toBeDefined();
+    expect(two?.id).not.toBe(one?.id);
+    expect(first.getQueueRequest(request)).toEqual({
+      status: "admitted",
+      queue: one,
+    });
+    expect(second.getQueueRequest(request)).toEqual({
+      status: "admitted",
+      queue: two,
+    });
+    expect(first.getQueueRequest({ ...request, tokens: [] }).status).toBe(
+      "conflict",
+    );
+
+    await f.fibers[0]?.dispose();
+    const remounted = (await f.as("example.market")).updates;
+    if (!remounted) throw new Error("Expected remounted capability");
+    expect(remounted.getQueueRequest(request)).toEqual({
+      status: "admitted",
+      queue: one,
+    });
+    expect(remounted.queueUpdates(request.tokens, identity)).toBe(one);
+    f.unregister();
+    expect(remounted.getQueueRequest(request).status).toBe("unknown");
+    const replacement = createPluginUpdates(
+      f.manager as never,
+      async () => null,
+    );
+    const stopReplacement = f.requests.registerUpdates(replacement);
+    try {
+      expect(remounted.getQueueRequest(request).status).toBe("unknown");
+      expect(remounted.queueUpdates(request.tokens, identity)).toBeUndefined();
+    } finally {
+      stopReplacement();
+      replacement.dispose();
+    }
+  } finally {
+    f.unregister();
+    f.updates.dispose();
+    await Promise.all(f.fibers.map((fiber) => fiber.dispose()));
+  }
+});
+
+it("reports an old provider retired to plugins only after its confirmed update releases the shared review", async () => {
+  const f = await setupUpdates();
+  const replacement = createPluginUpdates(f.manager as never, async () => null);
+  let stopReplacement = () => {};
+  try {
+    const market = (await f.as("example.market")).updates;
+    const other = (await f.as("example.other")).updates;
+    const ownerId = market?.ownerId;
+    if (!market || !other || !ownerId) throw new Error("Expected updates");
+    const queue = market.queueUpdates([f.token]);
+    const review = f.updates.startNextReview(f.requests.tryHoldReview);
+    if (!queue || !review) throw new Error("Expected an open update review");
+    expect(f.updates.beginOperation(queue.id, review.token)).toBeDefined();
+
+    stopReplacement = f.requests.registerUpdates(replacement);
+    f.unregister();
+    f.updates.dispose();
+    expect(market.ownerId).toBe(replacement.capability.ownerId);
+    expect(market.getOwnerStatus?.(ownerId)).toBe("unknown");
+    expect(f.requests.tryHoldReview()).toBeUndefined();
+    await expect(
+      f.core.submit(base, { id: "example.market", lifetime: () => () => {} }),
+    ).resolves.toBe("unavailable");
+    await replacement.check();
+    const next = replacement.capability.getSnapshot().candidates[0]?.token;
+    if (!next) throw new Error("Expected a replacement candidate");
+    expect(market.queueUpdates([next])).toBeDefined();
+    expect(
+      replacement.startNextReview(f.requests.tryHoldReview),
+    ).toBeUndefined();
+
+    expect(f.updates.finishReview(queue.id, review.token, "updated")).toBe(
+      true,
+    );
+    expect(market.getOwnerStatus?.(ownerId)).toBe("retired");
+    expect(other.getOwnerStatus?.(ownerId)).toBe("retired");
+    await f.fibers[0]?.dispose();
+    const remounted = (await f.as("example.market")).updates;
+    expect(remounted?.getOwnerStatus?.(ownerId)).toBe("retired");
+    const replacementId = replacement.capability.ownerId;
+    if (!replacementId) throw new Error("Expected a replacement identity");
+    expect(remounted?.getOwnerStatus?.(replacementId)).toBe("unknown");
+    expect(replacement.startNextReview(f.requests.tryHoldReview)).toBeDefined();
+  } finally {
+    stopReplacement();
+    replacement.dispose();
+    f.unregister();
+    f.updates.dispose();
+    await Promise.all(f.fibers.map((fiber) => fiber.dispose()));
+  }
+});
+
+it("bounds sequential plugin refreshes without throttling host-forced checks", async () => {
+  vi.useFakeTimers();
+  const f = await setupUpdates();
+  try {
+    const first = (await f.as("example.market")).updates;
+    const second = (await f.as("example.other")).updates;
+    if (!first || !second) throw new Error("Expected update capabilities");
+    await first.refresh();
+    expect(f.checkGit).toHaveBeenCalledTimes(2);
+    await second.refresh();
+    expect(f.checkGit).toHaveBeenCalledTimes(2);
+    await f.updates.check(true);
+    expect(f.checkGit).toHaveBeenCalledTimes(3);
+    vi.advanceTimersByTime(59_999);
+    await first.refresh();
+    expect(f.checkGit).toHaveBeenCalledTimes(3);
+    vi.advanceTimersByTime(1);
+    await second.refresh();
+    expect(f.checkGit).toHaveBeenCalledTimes(4);
+  } finally {
+    f.unregister();
+    f.updates.dispose();
+    await Promise.all(f.fibers.map((fiber) => fiber.dispose()));
+    vi.useRealTimers();
+  }
+});
+
+it("owns both update subscriptions with the calling plugin lifetime", async () => {
+  const f = await setupUpdates();
+  try {
+    const first = (await f.as("example.market")).updates;
+    const second = (await f.as("example.other")).updates;
+    if (!first || !second) throw new Error("Expected update capabilities");
+    const one = first.queueUpdates([f.token]);
+    const two = second.queueUpdates([f.token]);
+    if (!one || !two) throw new Error("Expected admitted queues");
+    const goneSnapshot = vi.fn();
+    const goneQueue = vi.fn();
+    const liveSnapshot = vi.fn();
+    const liveQueue = vi.fn();
+    const stops = [
+      first.subscribe(goneSnapshot),
+      first.subscribeQueue(one.id, goneQueue),
+      second.subscribe(liveSnapshot),
+      second.subscribeQueue(two.id, liveQueue),
+    ];
+    await f.fibers[0]?.dispose();
+    await f.updates.check(true);
+    first.cancelQueue(one.id);
+    second.cancelQueue(two.id);
+    expect(goneSnapshot).not.toHaveBeenCalled();
+    expect(goneQueue).not.toHaveBeenCalled();
+    expect(liveSnapshot).toHaveBeenCalled();
+    expect(liveQueue).toHaveBeenCalledOnce();
+    for (const stop of stops) stop();
+    liveSnapshot.mockClear();
+    liveQueue.mockClear();
+    f.unregister();
+    expect(liveSnapshot).not.toHaveBeenCalled();
+    expect(liveQueue).not.toHaveBeenCalled();
+  } finally {
+    f.unregister();
+    f.updates.dispose();
+    await Promise.all(f.fibers.map((fiber) => fiber.dispose()));
+  }
+});
+
+it("reports only recognized installation source kinds from ready catalog data", async () => {
+  const bundled = info("example.bundled");
+  bundled.source = "bundled";
+  bundled.updateSource = { root: "/plugins/bundled", path: "." };
+  const git = info("example.git");
+  git.updateSource = { ...base, path: "example-git" };
+  const defaultReferenceGit = info("example.default-reference-git");
+  defaultReferenceGit.updateSource = { ...base, reference: "", path: "." };
+  const spacedGit = info("example.spaced-git");
+  spacedGit.updateSource = { ...base, path: "nested folder/插件" };
+  const url = info("example.url");
+  url.updateSource = {
+    url: "https://artifacts.example.com/plugins/example.url.json",
+    sha256: "ab".repeat(32),
+  };
+  const folder = info("example.folder");
+  folder.updateSource = { root: "/plugins/example-folder", path: "." };
+  const windowsFolder = info("example.windows-folder");
+  windowsFolder.updateSource = {
+    root: "C:\\plugins\\example-folder",
+    path: "nested\\folder name",
+  };
+  const spacedFolder = info("example.spaced-folder");
+  spacedFolder.updateSource = {
+    root: "/plugins/example folder",
+    path: "nested folder/插件",
+  };
+  const uncFolder = info("example.unc-folder");
+  uncFolder.updateSource = {
+    root: "\\\\server\\share\\plugins",
+    path: "nested/plugin",
+  };
+  const invalidWindowsFolder = info("example.invalid-windows-folder");
+  invalidWindowsFolder.updateSource = {
+    root: "C:\\plugins\\example-folder",
+    path: "..\\outside",
+  };
+  const scpGit = info("example.scp-git");
+  scpGit.updateSource = {
+    repository: "git@code.example.org:plugins/example.git",
+    reference: "main",
+    path: "nested/plugin",
+  };
+  const sshGit = info("example.ssh-git");
+  sshGit.updateSource = {
+    repository: "ssh://git@code.example.org/plugins/example.git",
+    reference: "main",
+    path: ".",
+  };
+  const nativeSshGit = info("example.native-ssh-git");
+  nativeSshGit.updateSource = {
+    repository: "ssh://deploy+ci@code.example.org/team/plugins.git",
+    reference: "main",
+    path: ".",
+  };
+  const pinnedGit = info("example.pinned-git");
+  pinnedGit.updateSource = {
+    ...base,
+    path: ".",
+    commit: "A".repeat(40),
+  };
+  const longPinnedGit = info("example.long-pinned-git");
+  longPinnedGit.updateSource = {
+    ...base,
+    path: ".",
+    commit: "a".repeat(64),
+  };
+  const uppercaseDigestUrl = info("example.uppercase-digest-url");
+  uppercaseDigestUrl.updateSource = {
+    url: "https://artifacts.example.com/plugins/example.uppercase-digest-url.json",
+    sha256: "AB".repeat(32),
+  };
+  const imports = {
+    files: vi.fn(),
+    git: vi.fn(),
+    url: vi.fn(),
+    install: vi.fn(),
+    discard: vi.fn(),
+    checkGit: vi.fn(),
+    checkFolder: vi.fn(),
+    previewFolder: vi.fn(),
+  };
+  const { as, core, requests, managerListenerCount, open } = setup({
+    imports,
+    plugins: [
+      bundled,
+      git,
+      defaultReferenceGit,
+      spacedGit,
+      url,
+      folder,
+      windowsFolder,
+      spacedFolder,
+      uncFolder,
+      invalidWindowsFolder,
+      scpGit,
+      sshGit,
+      nativeSshGit,
+      pinnedGit,
+      longPinnedGit,
+      uppercaseDigestUrl,
+    ],
+  });
+  const installer = await as("example.market");
+  const expected = {
+    "example.bundled": "bundled",
+    "example.git": "git",
+    "example.default-reference-git": "git",
+    "example.spaced-git": "git",
+    "example.url": "url",
+    "example.folder": "folder",
+    "example.windows-folder": "folder",
+    "example.spaced-folder": "folder",
+    "example.unc-folder": "folder",
+    "example.invalid-windows-folder": "unavailable",
+    "example.scp-git": "git",
+    "example.ssh-git": "git",
+    "example.native-ssh-git": "git",
+    "example.pinned-git": "git",
+    "example.long-pinned-git": "git",
+    "example.uppercase-digest-url": "url",
+    "example.missing": "absent",
+  } as const;
+
+  expect(installer.getInstallationSource).toBeTypeOf("function");
+  const request = vi.spyOn(requests, "request");
+  for (const [id, kind] of Object.entries(expected)) {
+    expect(installer.getInstallationSource?.(id)).toBe(kind);
+    expect(core.getInstallationSource(id)).toBe(kind);
+  }
+  expect(request).not.toHaveBeenCalled();
+  expect(requests.snapshot()).toBeUndefined();
+  expect(managerListenerCount()).toBe(0);
+  expect(open).not.toHaveBeenCalled();
+  for (const operation of Object.values(imports))
+    expect(operation).not.toHaveBeenCalled();
+});
+
+it("keeps unknown or malformed source metadata unavailable without side effects", async () => {
+  const malformed = [
+    { id: "example.no-source", source: null },
+    { id: "example.empty-source", source: {} },
+    { id: "example.unknown", source: { provider: "external" } },
+    {
+      id: "example.missing-git-fields",
+      source: { repository: base.repository },
+    },
+    {
+      id: "example.missing-url-digest",
+      source: { url: "https://artifacts.example.com/plugins/example.json" },
+    },
+    {
+      id: "example.invalid-repository",
+      source: { ...base, repository: "http://example.com/plugins.git" },
+    },
+    ...[
+      "ssh://-deploy@code.example.org/team/plugins.git",
+      "ssh://deploy:password@code.example.org/team/plugins.git",
+      "https://deploy@code.example.org/team/plugins.git",
+      "ssh://deploy@code.example.org/",
+      "ssh://deploy@code.example.org/team/plugins.git?",
+      "ssh://deploy@code.example.org/team/plugins.git#",
+      "ssh://deploy@code.example.org/team/plugin s.git",
+    ].map((repository, index) => ({
+      id: `example.invalid-saved-repository-${index}`,
+      source: { ...base, path: ".", repository },
+    })),
+    {
+      id: "example.invalid-reference",
+      source: { ...base, reference: "../main" },
+    },
+    {
+      id: "example.invalid-git-path",
+      source: { ...base, path: "../plugin" },
+    },
+    {
+      id: "example.invalid-commit",
+      source: { ...base, commit: "not-a-commit" },
+    },
+    {
+      id: "example.null-commit",
+      source: { ...base, path: ".", commit: null },
+    },
+    {
+      id: "example.invalid-url",
+      source: {
+        url: "http://artifacts.example.com/plugins/example.json",
+        sha256: "ab".repeat(32),
+      },
+    },
+    {
+      id: "example.invalid-sha256",
+      source: {
+        url: "https://artifacts.example.com/plugins/example.json",
+        sha256: "not-a-digest",
+      },
+    },
+    {
+      id: "example.relative-folder-root",
+      source: { root: "plugins/example-folder", path: "." },
+    },
+    {
+      id: "example.invalid-folder-path",
+      source: { root: "/plugins/example-folder", path: "../plugin" },
+    },
+    {
+      id: "example.ambiguous",
+      source: { ...base, path: ".", root: "/plugins/ambiguous" },
+    },
+    {
+      id: "example.unknown-git-key",
+      source: { ...base, path: ".", mirror: "https://mirror.example.org" },
+    },
+    {
+      id: "example.non-object-array",
+      source: [base.repository, base.reference, "."],
+    },
+    { id: "example.non-object-string", source: "plugin folder" },
+    {
+      id: "example.invalid-folder-root-nul",
+      source: { root: "/plugins/\0broken", path: "." },
+    },
+  ].map(({ id, source }) => {
+    const plugin = info(id);
+    plugin.updateSource = source as never;
+    return plugin;
+  });
+  const unsupportedPluginSource = info("example.unsupported-plugin-source");
+  unsupportedPluginSource.source = "unknown" as never;
+  unsupportedPluginSource.updateSource = { ...base, path: "." };
+  malformed.push(unsupportedPluginSource);
+  const imports = {
+    files: vi.fn(),
+    git: vi.fn(),
+    url: vi.fn(),
+    install: vi.fn(),
+    discard: vi.fn(),
+    checkGit: vi.fn(),
+    checkFolder: vi.fn(),
+    previewFolder: vi.fn(),
+  };
+  const f = setup({ plugins: malformed, imports });
+  const installer = await f.as("example.market");
+  const request = vi.spyOn(f.requests, "request");
+
+  for (const plugin of malformed) {
+    const id = plugin.manifest.id;
+    expect(installer.getInstallationSource?.(id)).toBe("unavailable");
+    expect(f.core.getInstallationSource(id)).toBe(
+      installer.getInstallationSource?.(id),
+    );
+  }
+  f.set({ status: "loading" });
+  expect(installer.getInstallationSource?.("example.missing")).toBe(
+    "unavailable",
+  );
+  expect(f.core.getInstallationSource("example.missing")).toBe("unavailable");
+  f.set(ready([]));
+  expect(installer.getInstallationSource?.("example.missing")).toBe("absent");
+  expect(f.core.getInstallationSource("example.missing")).toBe("absent");
+
+  expect(request).not.toHaveBeenCalled();
+  expect(f.requests.snapshot()).toBeUndefined();
+  expect(f.managerListenerCount()).toBe(0);
+  expect(f.open).not.toHaveBeenCalled();
+  for (const operation of Object.values(imports))
+    expect(operation).not.toHaveBeenCalled();
+});
+
+it("returns unavailable when a ready catalog has duplicate manifest IDs", async () => {
+  const first = info("example.duplicate");
+  first.updateSource = { ...base, path: "." };
+  const second = info("example.duplicate");
+  second.updateSource = { root: "/plugins/duplicate", path: "." };
+  const { as, core } = setup({ plugins: [first, second] });
+  const installer = await as("example.market");
+
+  expect(installer.getInstallationSource?.("example.duplicate")).toBe(
+    "unavailable",
+  );
+  expect(core.getInstallationSource("example.duplicate")).toBe("unavailable");
 });
 
 it("keeps unavailable configuration distinct from absence and emits presence changes", async () => {

@@ -8,7 +8,12 @@ import type {
   NipOaAuthorization,
 } from "../../../features/host/service";
 import { oauthTarget } from "../oauth/browser";
-import type { BuilderlabSession, Credential } from "../session";
+import { managementTimestamp } from "../management-date";
+import {
+  UNAUTHORIZED,
+  type BuilderlabSession,
+  type Credential,
+} from "../session";
 import {
   clearRegistration,
   registrationIntent,
@@ -20,6 +25,7 @@ export type RemoteAgent = Readonly<{
   name: string;
   pubkey: string;
   status: "Active" | "Unattested" | "Revoked" | "Unknown";
+  createdAt?: number;
   instructions?: string;
   modelId?: string;
   reasoningEffort?: string;
@@ -153,12 +159,9 @@ export function createAgentClient(
     )
       throw new DOMException("Builderlab session changed.", "AbortError");
   }
-  function refuseExpired(response: HostResponse) {
+  function refuseUnauthorized(response: HostResponse) {
     if (response.status !== 401) return;
-    throw Object.assign(
-      new Error("Your Builderlab session expired. Sign in again."),
-      { status: 401 },
-    );
+    throw Object.assign(new Error(UNAUTHORIZED), { status: 401 });
   }
   async function request(
     path: string,
@@ -186,7 +189,7 @@ export function createAgentClient(
       throw new BuilderlabUnavailable("Could not reach Builderlab. Try again.");
     }
     check(credential, signal);
-    refuseExpired(response);
+    refuseUnauthorized(response);
     if (response.status === 403)
       throw Object.assign(
         new Error("This Builderlab account cannot manage remote agents."),
@@ -249,7 +252,7 @@ export function createAgentClient(
       throw new Error("Could not reach Builderlab. Try again.");
     }
     check(credential, signal);
-    refuseExpired(response);
+    refuseUnauthorized(response);
     let result: Record<string, unknown> | undefined;
     try {
       const parsed = JSON.parse(response.body);
@@ -698,24 +701,30 @@ export function createAgentClient(
         )
       )
         throw new Error("Builderlab returned an invalid agent list.");
-      return agents.map((row) => ({
-        id: row.agent_id,
-        name: row.agent_name,
-        pubkey: row.agent_pubkey,
-        status: agentStatus(row.status),
-        instructions: row.agent_instructions ?? "",
-        ...(typeof row.model_id === "string" ? { modelId: row.model_id } : {}),
-        ...(typeof row.reasoning_effort === "string"
-          ? { reasoningEffort: row.reasoning_effort }
-          : {}),
-        ...(row.model_selection_status !== undefined
-          ? {
-              modelSelectionStatus: modelSelectionStatus(
-                row.model_selection_status,
-              ),
-            }
-          : {}),
-      }));
+      return agents.map((row) => {
+        const createdAt = managementTimestamp(row.created_at);
+        return {
+          id: row.agent_id,
+          name: row.agent_name,
+          pubkey: row.agent_pubkey,
+          status: agentStatus(row.status),
+          ...(createdAt === undefined ? {} : { createdAt }),
+          instructions: row.agent_instructions ?? "",
+          ...(typeof row.model_id === "string"
+            ? { modelId: row.model_id }
+            : {}),
+          ...(typeof row.reasoning_effort === "string"
+            ? { reasoningEffort: row.reasoning_effort }
+            : {}),
+          ...(row.model_selection_status !== undefined
+            ? {
+                modelSelectionStatus: modelSelectionStatus(
+                  row.model_selection_status,
+                ),
+              }
+            : {}),
+        };
+      });
     },
   };
 }

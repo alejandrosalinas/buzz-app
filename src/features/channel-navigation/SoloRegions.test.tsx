@@ -11,8 +11,18 @@ import {
 } from "@testing-library/react";
 import { afterEach, assert, expect, it, vi } from "vitest";
 import userEvent from "@testing-library/user-event";
-import { type ReactNode, useCallback, useRef, useState } from "react";
+import {
+  type ReactNode,
+  useCallback,
+  useEffect,
+  useRef,
+  useState,
+} from "react";
 import { SoloRegions } from "./SoloRegions";
+import { ChannelNavigationProvider } from "./ChannelNavigationState";
+import { conversationTarget, soloDraftTarget } from "./routes";
+import { MessageComposer } from "../messages/MessageComposer";
+import { composerDOMFixture } from "../messages/composer-testing";
 import { ToastProvider } from "../../shared/design-system/ui/Toast";
 import { MenuItem } from "../../shared/design-system/ui/Menu";
 import { SoloHeading } from "../../bundled/channels/SoloHeading";
@@ -28,6 +38,7 @@ import { useSidebarView } from "../../bundled/channels/useSidebarView";
 import { writeView } from "../../shared/view-state";
 import destinationStyles from "./SoloDestination.module.css";
 
+composerDOMFixture();
 const disposals: (() => unknown)[] = [];
 afterEach(async () => {
   cleanup();
@@ -45,6 +56,7 @@ function fixture() {
 function mount(
   h: ReturnType<typeof fixture>,
   target: OpenTarget = { version: 1, kind: "home" },
+  wrap: (children: ReactNode) => ReactNode = (children) => children,
 ) {
   const open = vi.fn(async () => ({ status: "opened" as const }));
   const retryReveal = vi.fn();
@@ -82,11 +94,7 @@ function mount(
       />
     );
   }
-  const mounted = render(
-    <ToastProvider>
-      <View />
-    </ToastProvider>,
-  );
+  const mounted = render(<ToastProvider>{wrap(<View />)}</ToastProvider>);
   return {
     ...mounted,
     open,
@@ -95,11 +103,7 @@ function mount(
     navigate(next: OpenTarget) {
       target = next;
       void h.navigate(next);
-      mounted.rerender(
-        <ToastProvider>
-          <View />
-        </ToastProvider>,
-      );
+      mounted.rerender(<ToastProvider>{wrap(<View />)}</ToastProvider>);
     },
   };
 }
@@ -183,6 +187,124 @@ function Body({ ui }: SoloRegionProps) {
   );
 }
 
+it.each([
+  ["delete", "selected"],
+  ["archive", "selected"],
+  ["delete", "other chat"],
+  ["delete", "navigated away"],
+  ["delete", "failed"],
+] as const)(
+  "%s of a plugin-owned chat preserves Solo and newer navigation (%s)",
+  async (action, outcome) => {
+    const h = fixture();
+    // Menus offer lifecycle actions from a real chat's signed roster.
+    const owned = "0b6c5f3e-7d2a-4e1b-9c8d-1f2e3a4b5c6d";
+    h.roster(
+      h.session.channels.list().channels.map((channel) =>
+        channel.id === "owned"
+          ? {
+              ...channel,
+              id: owned,
+              members: [h.session.viewer],
+              owners: [h.session.viewer],
+              viewerRole: "owner",
+            }
+          : channel,
+      ),
+    );
+    await h.register({
+      component: ({ ui }) => (
+        <>
+          <Row ui={ui} channelId={owned} />
+          <Row ui={ui} channelId="chat" label="Must stay outside" />
+        </>
+      ),
+    });
+    const target = conversationTarget(
+      h.scope,
+      outcome === "other chat" ? "chat" : owned,
+    );
+    await h.navigate(target);
+    let finish!: () => void;
+    let fail!: (error: Error) => void;
+    const pending = new Promise<void>((resolve, reject) => {
+      finish = resolve;
+      fail = reject;
+    });
+    const run = vi.fn(() => pending);
+    h.session.channelLifecycle = {
+      ...h.session.channelLifecycle,
+      available: true,
+      load: async (channelId) => ({
+        channelId,
+        channelType: "stream",
+        canDelete: true,
+        canArchive: true,
+        canUnarchive: false,
+        canLeave: false,
+        canHide: false,
+      }),
+      run,
+    };
+    const view = mount(h, target, (children) => (
+      <ChannelNavigationProvider relay={h.relay}>
+        {children}
+      </ChannelNavigationProvider>
+    ));
+    const user = userEvent.setup();
+    await user.click(screen.getByRole("button", { name: "Actions for Owned" }));
+    const actionName = action === "delete" ? "Delete chat" : "Archive chat";
+    await user.click(await screen.findByRole("menuitem", { name: actionName }));
+    if (action === "delete") {
+      const dialog = await screen.findByRole("dialog", {
+        name: "Delete Owned?",
+      });
+      await user.click(within(dialog).getByRole("button", { name: "Cancel" }));
+      expect(view.open).not.toHaveBeenCalled();
+      expect(run).not.toHaveBeenCalled();
+      await user.click(
+        screen.getByRole("button", { name: "Actions for Owned" }),
+      );
+      await user.click(
+        await screen.findByRole("menuitem", { name: actionName }),
+      );
+      await user.click(await screen.findByRole("button", { name: actionName }));
+    }
+    try {
+      await waitFor(() => expect(run).toHaveBeenCalledOnce());
+      if (outcome === "navigated away")
+        act(() => view.navigate(conversationTarget(h.scope, "chat")));
+      if (outcome === "failed")
+        await act(async () => fail(new Error("Deletion unavailable")));
+      else {
+        // Roster removal unmounts the row before the session-owned write completes.
+        act(() =>
+          h.roster(
+            h.session.channels.list().channels.filter((c) => c.id !== owned),
+          ),
+        );
+        expect(
+          screen.queryByRole("button", { name: "Owned" }),
+        ).not.toBeInTheDocument();
+        await act(async () => finish());
+      }
+      await screen.findByRole("dialog", {
+        name:
+          outcome === "failed"
+            ? "Delete chat failed"
+            : `${action === "delete" ? "Chat deleted" : "Chat archived"}: Owned`,
+      });
+      if (outcome === "selected")
+        expect(view.open).toHaveBeenCalledExactlyOnceWith(
+          soloDraftTarget(h.scope),
+        );
+      else expect(view.open).not.toHaveBeenCalled();
+    } finally {
+      await act(async () => finish());
+    }
+  },
+);
+
 it("paints the shared card tone and accepted drag target the source chooses", async () => {
   const h = fixture();
   await h.register({
@@ -245,6 +367,133 @@ it("keeps header actions and every owned channel reachable through body failure 
   );
   expect(screen.getByRole("button", { name: "Owned" })).toBeVisible();
   expect(screen.queryByText("Must stay outside")).not.toBeInTheDocument();
+});
+
+it("shares state before mount and notifies mounted and headless consumers", async () => {
+  const h = fixture();
+  let props: SoloRegionProps | undefined;
+  function StateBody(value: SoloRegionProps) {
+    props = value;
+    const [state, setState] = useState(() => value.state.get());
+    useEffect(
+      () => value.state.subscribe(() => setState(value.state.get())),
+      [value.state],
+    );
+    return <output aria-label="Saved filter">{JSON.stringify(state)}</output>;
+  }
+  const source = await h.register({ component: StateBody });
+  const state = source.handle.state(source.binding());
+  expect(state.get()).toBeUndefined();
+  const listener = vi.fn(() => state.get());
+  const stop = state.subscribe(listener);
+  expect(state.set({ filter: "running" })).toBe(true);
+  expect(listener).toHaveLastReturnedWith({ filter: "running" });
+  const view = mount(h);
+  expect(screen.getByLabelText("Saved filter")).toHaveTextContent('"running"');
+  act(() => {
+    state.set({ filter: "all-active" });
+  });
+  expect(screen.getByLabelText("Saved filter")).toHaveTextContent(
+    '"all-active"',
+  );
+  act(() => {
+    props?.state.set({ filter: "needs-you" });
+  });
+  expect(listener).toHaveLastReturnedWith({ filter: "needs-you" });
+  view.unmount();
+  stop();
+  listener.mockClear();
+  expect(state.set(null)).toBe(true);
+  expect(listener).not.toHaveBeenCalled();
+  expect(state.get()).toBeNull();
+});
+
+it("scopes storage notifications and removes subscriptions when a binding or source ends", async () => {
+  const h = fixture();
+  const source = await h.register();
+  const binding = source.binding();
+  const state = source.handle.state(binding);
+  const listener = vi.fn();
+  const remove = vi.spyOn(window, "removeEventListener");
+  state.subscribe(listener);
+  const storageKey = `buzz-view.v1:${JSON.stringify([h.scope, `solo-region-state:${binding.viewer}:example/work`])}`;
+  localStorage.setItem(storageKey, JSON.stringify({ filter: "running" }));
+  window.dispatchEvent(
+    new StorageEvent("storage", {
+      key: `buzz-view.v1:${JSON.stringify([h.scope, "other"])}`,
+      storageArea: localStorage,
+    }),
+  );
+  expect(listener).not.toHaveBeenCalled();
+  window.dispatchEvent(
+    new StorageEvent("storage", { key: storageKey, storageArea: localStorage }),
+  );
+  expect(listener).toHaveBeenCalledOnce();
+  expect(state.get()).toEqual({ filter: "running" });
+  h.reconnect();
+  expect(remove).toHaveBeenCalledWith("storage", expect.any(Function));
+  expect(() => state.get()).toThrow("ended");
+  expect(state.set(null)).toBe(false);
+  expect(() => state.subscribe(listener)).toThrow("ended");
+  expect(() => source.handle.state(binding)).toThrow("ended");
+  listener.mockClear();
+  const next = source.handle.state(source.binding());
+  next.subscribe(listener);
+  await source.fiber.dispose();
+  window.dispatchEvent(
+    new StorageEvent("storage", { key: storageKey, storageArea: localStorage }),
+  );
+  expect(listener).not.toHaveBeenCalled();
+  expect(() => next.get()).toThrow("ended");
+  const replacement = await h.register();
+  expect(replacement.handle.state(replacement.binding()).get()).toEqual({
+    filter: "running",
+  });
+});
+
+it("distinguishes missing state from unavailable storage and rejects invalid or oversized writes", async () => {
+  const h = fixture();
+  const source = await h.register();
+  const state = source.handle.state(source.binding());
+  expect(state.get()).toBeUndefined();
+  const read = vi.spyOn(Storage.prototype, "getItem").mockImplementation(() => {
+    throw new Error("denied");
+  });
+  expect(() => state.get()).toThrow("unavailable");
+  read.mockRestore();
+  expect(state.set({ huge: "é".repeat(8192) })).toBe(false);
+  const circular: { self?: unknown } = {};
+  circular.self = circular;
+  expect(state.set(circular as never)).toBe(false);
+  expect(state.get()).toBeUndefined();
+  const listener = vi.fn();
+  state.subscribe(listener);
+  vi.spyOn(Storage.prototype, "setItem").mockImplementation(() => {
+    throw new Error("full");
+  });
+  expect(state.set({ filter: "running" })).toBe(false);
+  expect(listener).not.toHaveBeenCalled();
+  expect(state.get()).toBeUndefined();
+});
+
+it("retains the latest accepted subscriber write when storage becomes unavailable", async () => {
+  const h = fixture();
+  const source = await h.register();
+  const state = source.handle.state(source.binding());
+  const nested = vi.fn(() => state.set("second"));
+  const stop = state.subscribe(() => {
+    if (state.get() === "first") nested();
+  });
+  expect(state.set("first")).toBe(true);
+  expect(nested).toHaveLastReturnedWith(true);
+  expect(state.get()).toBe("second");
+  stop();
+  vi.spyOn(Storage.prototype, "getItem").mockImplementation(() => {
+    throw new Error("denied");
+  });
+  expect(state.get()).toBe("second");
+  expect(state.set("rejected")).toBe(false);
+  expect(state.get()).toBe("second");
 });
 
 it("retains accepted presentation state across unmount, disposal and re-registration and refuses stale or failed writes", async () => {
@@ -1462,6 +1711,456 @@ it("hands a header menu action the durable trigger as its dialog origin", async 
   );
   expect(selected).toHaveBeenCalledOnce();
 });
+
+/** jsdom has no CSS animations; hold the real menu's close-completion boundary. */
+function holdDestinationMenuClose(menu: HTMLElement) {
+  let finish!: () => void;
+  const finished = new Promise<void>((resolve) => {
+    finish = resolve;
+  });
+  const observed = vi.fn();
+  Object.defineProperty(menu, "getAnimations", {
+    configurable: true,
+    value: () => {
+      if (!menu.hasAttribute("data-closed")) return [];
+      observed();
+      return [{ finished }];
+    },
+  });
+  return {
+    observed,
+    release: () => act(async () => finish()),
+  };
+}
+
+async function openDestinationActionMenu(
+  user: ReturnType<typeof userEvent.setup>,
+  surface: "context" | "ellipsis",
+  input: "pointer" | "keyboard",
+) {
+  const row = screen.getByRole("button", { name: "Owned" });
+  const trigger = screen.getByRole("button", { name: "Actions for Owned" });
+  if (surface === "context") {
+    if (input === "pointer") fireEvent.contextMenu(row);
+    else {
+      row.focus();
+      await user.keyboard("{Shift>}{F10}{/Shift}");
+    }
+  } else if (input === "pointer") await user.click(trigger);
+  else {
+    trigger.focus();
+    await user.keyboard("{Enter}");
+  }
+  const menu = await waitFor(() => {
+    const open = screen
+      .getAllByRole("menu")
+      .find((item) => !item.hasAttribute("data-closed"));
+    assert(open);
+    return open;
+  });
+  await waitFor(() =>
+    expect(menu).toContainElement(document.activeElement as HTMLElement),
+  );
+  return menu;
+}
+
+it.each([
+  ["context", "pointer"],
+  ["context", "keyboard"],
+  ["ellipsis", "pointer"],
+  ["ellipsis", "keyboard"],
+] as const)(
+  "hands the %s destination action focus after %s menu close completes",
+  async (surface, input) => {
+    const h = fixture();
+    const pending: readonly never[] = [];
+    Object.assign(h.session, {
+      outbox: {
+        ready: async () => {},
+        recovery: async () => undefined,
+        supports: (kind: number) => kind === 9,
+        snapshot: () => pending,
+        subscribe: () => () => {},
+        observeDismiss: () => () => {},
+      },
+    });
+    const selected = vi.fn();
+    function Destination({ ui }: SoloRegionProps) {
+      const [editing, setEditing] = useState(false);
+      return (
+        <>
+          <Row
+            ui={ui}
+            channelId="owned"
+            menuActions={[
+              {
+                id: "new-task",
+                label: "New task",
+                icon: <span />,
+                onSelect: () => {
+                  selected(document.activeElement);
+                  setEditing(true);
+                },
+              },
+            ]}
+          />
+          {editing && (
+            <MessageComposer
+              scope={h.scope}
+              session={h.session}
+              channelId="owned"
+              channelName="Owned"
+              label="New task draft"
+              autoFocus
+            />
+          )}
+        </>
+      );
+    }
+    await h.register({ component: Destination });
+    mount(h);
+    const user = userEvent.setup();
+    const menu = await openDestinationActionMenu(user, surface, input);
+    const close = holdDestinationMenuClose(menu);
+    try {
+      const action = screen.getByRole("menuitem", { name: "New task" });
+      if (input === "pointer") await user.click(action);
+      else {
+        await user.keyboard("{End}");
+        expect(action).toHaveFocus();
+        await user.keyboard("{Enter}");
+      }
+      await waitFor(() => expect(close.observed).toHaveBeenCalled());
+      expect(selected).not.toHaveBeenCalled();
+      expect(
+        screen.queryByRole("textbox", { name: "New task draft" }),
+      ).toBeNull();
+    } finally {
+      await close.release();
+    }
+    await waitFor(() =>
+      expect(
+        screen.getByRole("textbox", { name: "New task draft" }),
+      ).toHaveFocus(),
+    );
+    expect(selected).toHaveBeenCalledExactlyOnceWith(
+      screen.getByRole("button", { name: "Owned" }),
+    );
+    expect(screen.queryByRole("menu")).not.toBeInTheDocument();
+  },
+);
+
+it.each([
+  ["context", "rebind"],
+  ["context", "unmount"],
+  ["ellipsis", "rebind"],
+  ["ellipsis", "unmount"],
+] as const)(
+  "drops a queued %s destination action after %s before late close completion",
+  async (surface, retirement) => {
+    const h = fixture();
+    const selected = vi.fn();
+    await h.register({
+      component: ({ ui }) => (
+        <Row
+          ui={ui}
+          channelId="owned"
+          menuActions={[
+            {
+              id: "new-task",
+              label: "New task",
+              icon: <span />,
+              onSelect: selected,
+            },
+          ]}
+        />
+      ),
+    });
+    const view = mount(h);
+    const user = userEvent.setup();
+    const menu = await openDestinationActionMenu(user, surface, "pointer");
+    const close = holdDestinationMenuClose(menu);
+    try {
+      await user.click(screen.getByRole("menuitem", { name: "New task" }));
+      await waitFor(() => expect(close.observed).toHaveBeenCalled());
+      expect(selected).not.toHaveBeenCalled();
+      if (retirement === "rebind") await act(() => h.reconnect());
+      else view.unmount();
+    } finally {
+      await close.release();
+    }
+    expect(selected).not.toHaveBeenCalled();
+    expect(menu).not.toBeInTheDocument();
+  },
+);
+
+it.each(["context", "ellipsis"] as const)(
+  "drops a queued %s destination action when its menu reopens and then closes with Escape",
+  async (surface) => {
+    const h = fixture();
+    const selected = vi.fn();
+    await h.register({
+      component: ({ ui }) => (
+        <Row
+          ui={ui}
+          channelId="owned"
+          menuActions={[
+            {
+              id: "new-task",
+              label: "New task",
+              icon: <span />,
+              onSelect: selected,
+            },
+          ]}
+        />
+      ),
+    });
+    mount(h);
+    const user = userEvent.setup();
+    const menu = await openDestinationActionMenu(user, surface, "pointer");
+    const close = holdDestinationMenuClose(menu);
+    try {
+      await user.click(screen.getByRole("menuitem", { name: "New task" }));
+      await waitFor(() => expect(close.observed).toHaveBeenCalled());
+      if (surface === "context")
+        fireEvent.contextMenu(screen.getByRole("button", { name: "Owned" }));
+      else
+        fireEvent.click(
+          screen.getByRole("button", { name: "Actions for Owned" }),
+        );
+      await waitFor(() => expect(menu).not.toHaveAttribute("data-closed"));
+      await user.keyboard("{Escape}");
+      await waitFor(() => expect(menu).toHaveAttribute("data-closed"));
+    } finally {
+      await close.release();
+    }
+    await waitFor(() => expect(menu).not.toBeInTheDocument());
+    expect(selected).not.toHaveBeenCalled();
+  },
+);
+
+async function deferredDestinationFixture(
+  label = "Pin",
+  run?: () => void | Promise<void>,
+) {
+  const h = fixture();
+  const pending: readonly never[] = [];
+  Object.assign(h.session, {
+    outbox: {
+      ready: async () => {},
+      recovery: async () => undefined,
+      supports: (kind: number) => kind === 9,
+      snapshot: () => pending,
+      subscribe: () => () => {},
+      observeDismiss: () => () => {},
+    },
+  });
+  const selected = vi.fn();
+  function Destination({ ui }: SoloRegionProps) {
+    const [editing, setEditing] = useState(false);
+    return (
+      <>
+        <Row
+          ui={ui}
+          channelId="owned"
+          menuActions={[
+            {
+              id: "chosen",
+              label,
+              icon: <span />,
+              onSelect: () => {
+                selected(document.activeElement);
+                if (label === "New task") setEditing(true);
+                return run?.();
+              },
+            },
+          ]}
+        />
+        {editing && (
+          <MessageComposer
+            scope={h.scope}
+            session={h.session}
+            channelId="owned"
+            channelName="Owned"
+            label="New task draft"
+            autoFocus
+          />
+        )}
+      </>
+    );
+  }
+  await h.register({ component: Destination });
+  const view = mount(h);
+  const external = render(<input aria-label="Elsewhere" />);
+  return {
+    h,
+    view,
+    selected,
+    external,
+    user: userEvent.setup(),
+    row: screen.getByRole("button", { name: "Owned" }),
+    input: screen.getByRole("textbox", { name: "Elsewhere" }),
+  };
+}
+
+it.each(["context", "ellipsis"] as const)(
+  "keeps ordinary %s Escape and outside dismissal focus without running a contribution",
+  async (surface) => {
+    const h = await deferredDestinationFixture();
+    let menu = await openDestinationActionMenu(h.user, surface, "keyboard");
+    await h.user.keyboard("{Escape}");
+    await waitFor(() => expect(menu).not.toBeInTheDocument());
+    expect(h.row).toHaveFocus();
+    menu = await openDestinationActionMenu(h.user, surface, "pointer");
+    await h.user.click(h.input);
+    await waitFor(() => expect(menu).not.toBeInTheDocument());
+    expect(h.input).toHaveFocus();
+    expect(h.selected).not.toHaveBeenCalled();
+  },
+);
+
+it.each([
+  ["context", "Pin", "pointer", "input"],
+  ["context", "New task", "keyboard", "input"],
+  ["context", "Pin", "keyboard", "other menu"],
+  ["context", "New task", "pointer", "other menu"],
+  ["ellipsis", "Pin", "keyboard", "input"],
+  ["ellipsis", "New task", "pointer", "input"],
+  ["ellipsis", "Pin", "pointer", "other menu"],
+  ["ellipsis", "New task", "keyboard", "other menu"],
+] as const)(
+  "cancels selected %s %s after %s selection moves to %s during exit",
+  async (surface, label, input, destination) => {
+    const h = await deferredDestinationFixture(label);
+    const menu = await openDestinationActionMenu(h.user, surface, input);
+    const close = holdDestinationMenuClose(menu);
+    let elsewhere: HTMLElement = h.input;
+    try {
+      const action = screen.getByRole("menuitem", { name: label });
+      if (input === "pointer") await h.user.click(action);
+      else {
+        await h.user.keyboard("{End}");
+        expect(action).toHaveFocus();
+        await h.user.keyboard("{Enter}");
+      }
+      await waitFor(() => expect(close.observed).toHaveBeenCalled());
+      if (destination === "other menu") {
+        render(
+          <div role="menu" aria-label="Other menu">
+            <button type="button" role="menuitem">
+              Other action
+            </button>
+          </div>,
+        );
+        elsewhere = screen.getByRole("menuitem", { name: "Other action" });
+      }
+      elsewhere.focus();
+      expect(elsewhere).toHaveFocus();
+      expect(h.selected).not.toHaveBeenCalled();
+    } finally {
+      await close.release();
+    }
+    await waitFor(() => expect(menu).not.toBeInTheDocument());
+    expect(elsewhere).toHaveFocus();
+    expect(h.selected).not.toHaveBeenCalled();
+    expect(
+      screen.queryByRole("textbox", { name: "New task draft" }),
+    ).toBeNull();
+  },
+);
+
+it.each(["context", "ellipsis"] as const)(
+  "runs selected %s Pin once from body and returns its non-navigation focus to the row",
+  async (surface) => {
+    const h = await deferredDestinationFixture();
+    const menu = await openDestinationActionMenu(h.user, surface, "pointer");
+    const close = holdDestinationMenuClose(menu);
+    try {
+      await h.user.click(screen.getByRole("menuitem", { name: "Pin" }));
+      await waitFor(() => expect(close.observed).toHaveBeenCalled());
+      (document.activeElement as HTMLElement).blur();
+      expect(document.body).toHaveFocus();
+      expect(h.selected).not.toHaveBeenCalled();
+    } finally {
+      await close.release();
+    }
+    await waitFor(() => expect(menu).not.toBeInTheDocument());
+    expect(h.selected).toHaveBeenCalledExactlyOnceWith(h.row);
+    expect(h.row).toHaveFocus();
+  },
+);
+
+it.each(["context", "ellipsis"] as const)(
+  "keeps the %s row origin and visible error after a deferred contribution rejects",
+  async (surface) => {
+    const h = await deferredDestinationFixture("Pin", () =>
+      Promise.reject(new Error("no")),
+    );
+    const menu = await openDestinationActionMenu(h.user, surface, "pointer");
+    await h.user.click(screen.getByRole("menuitem", { name: "Pin" }));
+    await waitFor(() => expect(menu).not.toBeInTheDocument());
+    expect(await screen.findByText("The action could not run.")).toBeVisible();
+    expect(h.selected).toHaveBeenCalledExactlyOnceWith(h.row);
+    expect(h.row).toHaveFocus();
+  },
+);
+
+it.each([
+  ["context", "ellipsis"],
+  ["ellipsis", "context"],
+] as const)(
+  "does not let late %s completion consume a new %s selection",
+  async (first, second) => {
+    const h = await deferredDestinationFixture();
+    const oldMenu = await openDestinationActionMenu(h.user, first, "pointer");
+    const oldClose = holdDestinationMenuClose(oldMenu);
+    let nextClose: ReturnType<typeof holdDestinationMenuClose> | undefined;
+    try {
+      await h.user.click(screen.getByRole("menuitem", { name: "Pin" }));
+      await waitFor(() => expect(oldClose.observed).toHaveBeenCalled());
+      const nextMenu = await openDestinationActionMenu(
+        h.user,
+        second,
+        "pointer",
+      );
+      nextClose = holdDestinationMenuClose(nextMenu);
+      await h.user.click(
+        within(nextMenu).getByRole("menuitem", { name: "Pin" }),
+      );
+      await waitFor(() => expect(nextClose?.observed).toHaveBeenCalled());
+      await oldClose.release();
+      await waitFor(() => expect(oldMenu).not.toBeInTheDocument());
+      expect(h.selected).not.toHaveBeenCalled();
+      await nextClose.release();
+      await waitFor(() => expect(nextMenu).not.toBeInTheDocument());
+      expect(h.selected).toHaveBeenCalledExactlyOnceWith(h.row);
+      expect(h.row).toHaveFocus();
+    } finally {
+      await oldClose.release();
+      await nextClose?.release();
+    }
+  },
+);
+
+it.each(["context", "ellipsis"] as const)(
+  "resets the chosen %s handoff on keyboard reopen before Escape",
+  async (surface) => {
+    const h = await deferredDestinationFixture();
+    const first = await openDestinationActionMenu(h.user, surface, "pointer");
+    await h.user.click(screen.getByRole("menuitem", { name: "Pin" }));
+    await waitFor(() => expect(first).not.toBeInTheDocument());
+    expect(h.selected).toHaveBeenCalledExactlyOnceWith(h.row);
+    const reopened = await openDestinationActionMenu(
+      h.user,
+      surface,
+      "keyboard",
+    );
+    await h.user.keyboard("{Escape}");
+    await waitFor(() => expect(reopened).not.toBeInTheDocument());
+    expect(h.row).toHaveFocus();
+    expect(h.selected).toHaveBeenCalledOnce();
+  },
+);
 
 it.each([false, true])(
   "preserves muted Solo unread markers in source and recovery destinations (recovery=%s)",

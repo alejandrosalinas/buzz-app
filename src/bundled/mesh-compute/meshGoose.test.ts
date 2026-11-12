@@ -49,6 +49,8 @@ describe("meshGooseEnv", () => {
       OPENAI_HOST: "http://127.0.0.1:4111",
       OPENAI_BASE_PATH: "lease-1/v1/chat/completions",
       OPENAI_API_KEY: "mesh-local",
+      GOOSE_TOOL_DEFERRAL: null,
+      GOOSE_TOOL_DEFERRAL_ALWAYS_LOAD: null,
     });
   });
 });

@@ -1,6 +1,7 @@
 import { openChannelDetails } from "./channel-details.mjs";
 import { openPage } from "./navigation.mjs";
 import { test, expect } from "./fixture.mjs";
+import { animationsSettled } from "./animations.mjs";
 
 const channelId = "11111111-1111-4111-8111-111111111111";
 const panelFor = (page) =>
@@ -335,11 +336,7 @@ for (const action of ["archive", "delete"]) {
         await expect(restore).toBeFocused();
         expect(app.report.lifecyclePublications).toHaveLength(1);
         await restore.click();
-        await unarchive.evaluate(async (element) => {
-          await Promise.all(
-            element.getAnimations().map((animation) => animation.finished),
-          );
-        });
+        await animationsSettled(unarchive);
         // Force the operation to finish before the confirmation's exit does.
         const exitGate = await unarchive.evaluateHandle((element) => {
           const state = { held: false, animations: [] };

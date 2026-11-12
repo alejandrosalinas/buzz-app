@@ -1,6 +1,7 @@
 import {
   localActivity,
   localWorkLabel,
+  localWorkRoot,
 } from "../../features/agents/local-activity";
 import type { RelaySession } from "../../features/relay/session";
 import { activityRecords } from "../../features/agents/activity-records";
@@ -52,9 +53,12 @@ export function workingAgentDetails(
         row.agent === agent &&
         (row.state === "waiting" || row.state === "working"),
     );
+    const messageId = work.syntheticMessage
+      ? localWorkRoot(work)
+      : work.messageId;
     return {
       startedAt: Math.min(...active.map((row) => row.startedAt)),
-      ...(active.length === 1 ? { messageId: work.messageId } : {}),
+      ...(active.length === 1 && messageId ? { messageId } : {}),
       label: localWorkLabel(work),
     };
   }

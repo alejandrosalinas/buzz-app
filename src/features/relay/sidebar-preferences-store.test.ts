@@ -946,3 +946,396 @@ it("fences an in-flight filter write when the session cache is cleared", async (
     owner.dispose();
   }
 });
+
+it("coalesces hints and owes a fresh trailing read after an initial or active read", async () => {
+  const initial = deferred<SidebarPreferences>();
+  const first = deferred<SidebarPreferences>();
+  const second = deferred<SidebarPreferences>();
+  const started = deferred<void>();
+  const trailing = deferred<void>();
+  const read = vi.fn(() => initial.promise);
+  const strong = vi
+    .fn()
+    .mockImplementationOnce(() => {
+      started.resolve();
+      return first.promise;
+    })
+    .mockImplementationOnce(() => {
+      trailing.resolve();
+      return second.promise;
+    });
+  const store = createSidebarPreferencesStore({
+    read,
+    readAfterWrite: strong,
+    available: true,
+  });
+  try {
+    const loading = store.queries.ensure();
+    await Promise.resolve(); // the initial read has started
+    expect(read).toHaveBeenCalledOnce();
+    store.invalidate();
+    store.invalidate();
+    initial.resolve(data);
+    await started.promise;
+    store.invalidate(); // newer change while the strong read is in flight
+    first.resolve({ ...data, assignments: {} });
+    await trailing.promise;
+    second.resolve(data);
+    await loading;
+    expect(strong).toHaveBeenCalledTimes(2);
+    expect(store.queries.snapshot()).toEqual({ status: "ready", data });
+  } finally {
+    initial.resolve(data);
+    first.resolve(data);
+    second.resolve(data);
+    store.dispose();
+  }
+});
+
+it("waits for local moves and reconciles hints without losing other preference families", async () => {
+  const write = deferred<Awaited<ReturnType<SidebarAssignmentMutator>>>();
+  const started = deferred<void>();
+  const fresh = {
+    ...data,
+    assignments: { alpha: "work", gamma: "work" },
+    muted: ["muted"],
+    sort: { channels: "recent" as const },
+  };
+  const strong = vi.fn(async () => {
+    started.resolve();
+    return fresh;
+  });
+  const store = createSidebarPreferencesStore({
+    read: async () => data,
+    readAfterWrite: strong,
+    available: true,
+    write: () => write.promise,
+    writeStar: async () => data.starred,
+  });
+  try {
+    await store.queries.ensure();
+    const move = store.queries.assign("gamma", "work");
+    store.invalidate();
+    store.invalidate();
+    await Promise.resolve();
+    expect(store.queries.snapshot().data?.assignments.gamma).toBe("work");
+    expect(strong).not.toHaveBeenCalled();
+    write.resolve({ sections: data.sections, assignments: fresh.assignments });
+    await move;
+    await started.promise;
+    await store.queries.ensure();
+    expect(strong).toHaveBeenCalledOnce();
+    expect(store.queries.snapshot().data).toEqual(fresh);
+  } finally {
+    write.resolve(data);
+    store.dispose();
+  }
+});
+
+it("does not consume an invalidation when a local write discards its read", async () => {
+  const first = deferred<SidebarPreferences>();
+  const started = deferred<void>();
+  const trailing = deferred<void>();
+  const fresh = { ...data, muted: ["gamma"] };
+  const strong = vi
+    .fn()
+    .mockImplementationOnce(() => {
+      started.resolve();
+      return first.promise;
+    })
+    .mockImplementationOnce(async () => {
+      trailing.resolve();
+      return fresh;
+    });
+  const store = createSidebarPreferencesStore({
+    read: async () => data,
+    readAfterWrite: strong,
+    available: true,
+    writeMute: async () => fresh.muted,
+  });
+  try {
+    await store.queries.ensure();
+    store.invalidate();
+    await started.promise;
+    await store.queries.setMute("gamma", true);
+    first.resolve(data);
+    await trailing.promise;
+    await store.queries.ensure();
+    expect(store.queries.snapshot().data).toEqual(fresh);
+    expect(strong).toHaveBeenCalledTimes(2);
+  } finally {
+    first.resolve(data);
+    store.dispose();
+  }
+});
+
+it("retains failed invalidations for recovery without an immediate retry loop", async () => {
+  const strong = vi
+    .fn(async () => data)
+    .mockRejectedValueOnce(new Error("offline"));
+  const store = createSidebarPreferencesStore({
+    read: async () => data,
+    readAfterWrite: strong,
+    available: true,
+  });
+  try {
+    await store.queries.ensure();
+    store.invalidate();
+    await Promise.resolve();
+    await store.queries.ensure();
+    expect(store.queries.snapshot()).toMatchObject({
+      status: "error",
+      data,
+      error: "offline",
+    });
+    expect(strong).toHaveBeenCalledOnce();
+    store.reconnect(true);
+    await Promise.resolve();
+    await store.queries.ensure();
+    expect(strong).toHaveBeenCalledTimes(2);
+    expect(store.queries.snapshot()).toEqual({ status: "ready", data });
+  } finally {
+    store.dispose();
+  }
+});
+
+it.each(["clear", "dispose"] as const)(
+  "fences queued hint reads on %s",
+  async (action) => {
+    const strong = vi.fn(async () => data);
+    const store = createSidebarPreferencesStore({
+      read: async () => data,
+      readAfterWrite: strong,
+      available: true,
+    });
+    try {
+      store.invalidate();
+      store[action]();
+      await Promise.resolve();
+      expect(strong).not.toHaveBeenCalled();
+      expect(store.queries.snapshot()).toEqual({ status: "idle" });
+    } finally {
+      store.dispose();
+    }
+  },
+);
+
+it.each(["clear", "dispose"] as const)(
+  "fences in-flight hint reads on %s",
+  async (action) => {
+    const pending = deferred<SidebarPreferences>();
+    const started = deferred<void>();
+    let signal: AbortSignal | undefined;
+    const store = createSidebarPreferencesStore({
+      available: true,
+      read: async () => data,
+      readAfterWrite: async (activeSignal) => {
+        signal = activeSignal;
+        started.resolve();
+        return pending.promise;
+      },
+    });
+    try {
+      await store.queries.ensure();
+      store.invalidate();
+      await started.promise;
+      const active = store.queries.ensure();
+      store[action]();
+      expect(signal?.aborted).toBe(true);
+      pending.resolve(data);
+      await active;
+      expect(store.queries.snapshot()).toEqual({ status: "idle" });
+    } finally {
+      pending.resolve(data);
+      store.dispose();
+    }
+  },
+);
+
+it("keeps mounted data and controls usable during a live reconciliation", async () => {
+  const pending = deferred<SidebarPreferences>();
+  const started = deferred<void>();
+  const store = createSidebarPreferencesStore({
+    available: true,
+    read: async () => data,
+    readAfterWrite: async () => {
+      started.resolve();
+      return pending.promise;
+    },
+    write: async () => data,
+    writeStar: async () => data.starred,
+  });
+  try {
+    await store.queries.ensure();
+    const before = store.queries.snapshot();
+    store.invalidate();
+    await started.promise;
+    expect(store.queries.snapshot()).toBe(before);
+    expect(store.queries.writable).toBe(true);
+    pending.resolve(data);
+    await store.queries.ensure();
+  } finally {
+    pending.resolve(data);
+    store.dispose();
+  }
+});
+
+it("keeps a newer hint owed when an older read fails", async () => {
+  const initial = deferred<SidebarPreferences>();
+  const started = deferred<void>();
+  const strong = vi.fn(async () => {
+    started.resolve();
+    return data;
+  });
+  const store = createSidebarPreferencesStore({
+    available: true,
+    read: () => initial.promise,
+    readAfterWrite: strong,
+  });
+  try {
+    const loading = store.queries.ensure();
+    await Promise.resolve();
+    store.invalidate();
+    initial.reject(new Error("obsolete read failed"));
+    await started.promise;
+    await loading;
+    expect(strong).toHaveBeenCalledOnce();
+    expect(store.queries.snapshot()).toEqual({ status: "ready", data });
+  } finally {
+    initial.resolve(data);
+    store.dispose();
+  }
+});
+
+it.each(["success", "failure"] as const)(
+  "settles a manual refresh after read %s when a concurrent rename fails",
+  async (outcome) => {
+    const pending = deferred<SidebarPreferences>();
+    const readStarted = deferred<void>();
+    const rename = deferred<SidebarPreferences>();
+    const renameStarted = deferred<void>();
+    const read = vi
+      .fn(async () => data)
+      .mockImplementationOnce(async () => data)
+      .mockImplementationOnce(() => {
+        readStarted.resolve();
+        return pending.promise;
+      });
+    const store = createSidebarPreferencesStore({
+      available: true,
+      read,
+      renameSection: () => {
+        renameStarted.resolve();
+        return rename.promise;
+      },
+    });
+    try {
+      await store.queries.ensure();
+      const refresh = store.queries.refresh();
+      await readStarted.promise;
+      expect(store.queries.snapshot().status).toBe("loading");
+      const failedRename = expect(
+        store.queries.renameSection("work", "Renamed"),
+      ).rejects.toThrow("rename rejected");
+      await renameStarted.promise;
+      if (outcome === "success") pending.resolve(data);
+      else pending.reject(new Error("read rejected"));
+      await refresh;
+      rename.reject(new Error("rename rejected"));
+      await failedRename;
+      expect(store.queries.snapshot()).toMatchObject({
+        status: outcome === "success" ? "ready" : "error",
+        data,
+        ...(outcome === "failure" ? { error: "read rejected" } : {}),
+      });
+      expect(read).toHaveBeenCalledTimes(2);
+    } finally {
+      pending.resolve(data);
+      rename.resolve(data);
+      store.dispose();
+    }
+  },
+);
+
+it("shows loading for an explicit retry while a live reconciliation remains owed", async () => {
+  const pending = deferred<SidebarPreferences>();
+  const started = deferred<void>();
+  const strong = vi
+    .fn(async () => data)
+    .mockRejectedValueOnce(new Error("offline"))
+    .mockImplementationOnce(() => {
+      started.resolve();
+      return pending.promise;
+    });
+  const store = createSidebarPreferencesStore({
+    available: true,
+    read: async () => data,
+    readAfterWrite: strong,
+  });
+  try {
+    await store.queries.ensure();
+    store.invalidate();
+    await Promise.resolve();
+    await store.queries.ensure();
+    expect(store.queries.snapshot().status).toBe("error");
+    const retry = store.queries.refresh();
+    await started.promise;
+    expect(store.queries.snapshot()).toMatchObject({ status: "loading", data });
+    pending.resolve(data);
+    await retry;
+    expect(store.queries.snapshot()).toEqual({ status: "ready", data });
+    expect(strong).toHaveBeenCalledTimes(2);
+  } finally {
+    pending.resolve(data);
+    store.dispose();
+  }
+});
+
+it("keeps authoritative reconciliation behind an admitted rename", async () => {
+  const rename = deferred<SidebarPreferences>();
+  const renameStarted = deferred<void>();
+  const first = deferred<SidebarPreferences>();
+  const readStarted = deferred<void>();
+  const renamed: SidebarPreferences = {
+    ...data,
+    sections: [{ id: "work", name: "Renamed", order: 0 }],
+  };
+  const strong = vi
+    .fn(async () => renamed)
+    .mockImplementationOnce(() => {
+      readStarted.resolve();
+      return first.promise;
+    });
+  const store = createSidebarPreferencesStore({
+    available: true,
+    read: async () => data,
+    readAfterWrite: strong,
+    renameSection: () => {
+      renameStarted.resolve();
+      return rename.promise;
+    },
+  });
+  try {
+    await store.queries.ensure();
+    store.invalidate();
+    await readStarted.promise;
+    const write = store.queries.renameSection("work", "Renamed");
+    await renameStarted.promise;
+    first.resolve(data);
+    // Let the stale read finish while the admitted write is still held.
+    await Promise.resolve();
+    expect(strong).toHaveBeenCalledOnce();
+    rename.resolve(renamed);
+    await write;
+    await store.queries.ensure();
+    expect(strong).toHaveBeenCalledTimes(2);
+    expect(store.queries.snapshot()).toEqual({
+      status: "ready",
+      data: renamed,
+    });
+  } finally {
+    first.resolve(data);
+    rename.resolve(renamed);
+    store.dispose();
+  }
+});

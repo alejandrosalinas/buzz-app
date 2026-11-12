@@ -130,6 +130,7 @@ function mount(
     snapshot: () => snapshot,
     subscribe: () => () => {},
     retry() {},
+    tryAgain() {},
     disconnect() {},
     clearCache: async () => {},
   };
@@ -266,6 +267,7 @@ function live(agent: Key, first: RelayEvent) {
     snapshot: () => snapshot,
     subscribe: () => () => {},
     retry() {},
+    tryAgain() {},
     disconnect() {},
     clearCache: async () => {},
   };
@@ -403,6 +405,7 @@ it("shows no owner for a known agent with no public profile", async () => {
     snapshot: () => snapshot,
     subscribe: () => () => {},
     retry() {},
+    tryAgain() {},
     disconnect() {},
     clearCache: async () => {},
   };
@@ -548,6 +551,7 @@ it("follows an auth-only head restored from disk while the pane is mounted", asy
     snapshot: () => connection,
     subscribe: () => () => {},
     retry() {},
+    tryAgain() {},
     disconnect() {},
     clearCache: async () => {},
   };

@@ -19,6 +19,40 @@ multiple devices are last-writer-wins, so an idle device can report Away even
 while another is active. A crashed connection's lease can remain for up to 180
 seconds; refreshing the snapshot does not prove that the session is still alive.
 
+## Hosted agents
+
+An agent a remote runtime runs (a Builderlab agent) holds no socket and sends
+no presence: it wakes when mentioned. Its badge shows Online, whatever relay
+presence says, while two signed records agree. The agent's winning kind 0 must
+carry a verified NIP-OA owner, and that owner's newest kind 30177 record for
+the agent (`d` = agent pubkey) must name a runtime that an installed agent type
+marks `remote`. A record signed by anyone else never counts. Agents tells each
+community session which type keys are remote. Deleting the agent deletes its
+record, and the next read drops the badge. This is display only: Online here
+means the owner set the agent up to run remotely, not that the runtime is up,
+and it grants nothing.
+
+`features/presence/hosted.ts` reads only shown agents within the observed
+directory's demand limit whose evidence is missing or was read for another
+owner: one filter per owner, at most 100 agents each and four filters per read,
+coalesced for 100ms. The observed directory tells it when demand moves subjects
+within or past its 256-subject limit, so the same window bounds both: an agent
+past it is neither read nor marked and stays limited, and one admitted later is
+read then. A read under way is not cancelled; agents shown meanwhile are read
+next. Evidence for up to 1024 agents outlives their views, so a remount reads
+nothing. Every shown agent is read again every five to six minutes. No read
+starts while the app is hidden, and a read of several batches under way stops
+before its next batch, keeping what it has read; evidence and badges stay, and
+a reconnect or a return to the foreground spreads the reads it wants, the
+unfinished rest included, over one to five seconds.
+A failed read keeps the last answer. The first retry waits 60–66 seconds, each
+further failure in a row doubles the wait, to a cap of 30–33 minutes, and a
+successful read resets it; a read queued during a failing read waits for that
+deadline too. Disconnect hides the badge until reconnection. Subscribers are
+told whenever an agent's badge changes, whichever input changed it: a record,
+its attested owner, the demand limit, the connection or the known runtimes.
+Viewers without a remote agent type installed see relay presence only.
+
 ## Your status
 
 The account avatar, message/thread bylines and one-to-one DM avatars

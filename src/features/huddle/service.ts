@@ -1,4 +1,5 @@
 import { addChannelMember } from "../channel-members/members";
+import { endLastHumanHuddle } from "./ending";
 import { createPcmSender } from "./sender";
 import type { ChannelSummary } from "../relay/contracts";
 import type { AudioSettingsState } from "./audio-settings";
@@ -30,6 +31,7 @@ type Attempt = {
   abort: AbortController;
   audio?: HuddleAudio;
   opening?: Promise<void>;
+  admissions?: readonly string[];
   heartbeat?: ReturnType<typeof setInterval>;
   stopAccess?: () => void;
   stopAudioSettings?: () => void;
@@ -125,7 +127,7 @@ export function createHuddles(
   };
   const valid = (attempt: Attempt) =>
     !disposed && current === attempt && !attempt.abort.signal.aborted;
-  async function leave(error?: string) {
+  async function leave(error?: string, remote = false) {
     if (closing) return closing;
     if (snapshot.phase === "incoming" && snapshot.room) {
       requests?.dismiss(snapshot.room);
@@ -135,6 +137,10 @@ export function createHuddles(
       requests?.dismiss(snapshot.room);
     const failedRoom = snapshot.room;
     const previous = current;
+    const ending =
+      !error && !remote && snapshot.phase === "connected"
+        ? snapshot
+        : undefined;
     current = undefined;
     resetActivity();
     previous?.abort.abort();
@@ -168,6 +174,22 @@ export function createHuddles(
           await previous.opening.catch(() => {});
           await bridge.close(previous.id);
         }
+        if (ending?.room && ending.destination && previous.admissions)
+          await endLastHumanHuddle(
+            previous.connection.session,
+            ending.destination,
+            ending.room,
+            previous.admissions,
+            () => {
+              const next = relay.snapshot();
+              return (
+                !disposed &&
+                next.status === "ready" &&
+                next.session === previous.connection.session &&
+                next.scope === previous.connection.scope
+              );
+            },
+          );
         update(
           error
             ? {
@@ -350,7 +372,7 @@ export function createHuddles(
           unavailable.add(`${destination.scope}:${room}`);
           requests?.dismiss(room);
         }
-        void leave(event.error ?? undefined);
+        void leave(event.error ?? undefined, true);
         return;
       }
       if (event.type === "audio") {
@@ -360,6 +382,7 @@ export function createHuddles(
       }
       // Native roster snapshots are unordered. Keep arrival order for the stack;
       // a participant who leaves and returns is a new arrival.
+      attempt.admissions = event.participants;
       const present = new Set([destination.viewer, ...event.participants]);
       const participants = snapshot.participants.filter((key) =>
         present.has(key),
@@ -480,6 +503,10 @@ export function createHuddles(
     snapshot: () => snapshot,
     voiceListening: voiceSeat("listening"),
     voiceThinking: voiceSeat("thinking"),
+    remoteVoiceError(error: string) {
+      if (snapshot.phase !== "idle" && snapshot.phase !== "error") return;
+      update({ ...idle, phase: "error", error });
+    },
     voiceError(call: string, error?: string) {
       if (snapshot.id !== call) return;
       const { error: _previous, ...rest } = snapshot;

@@ -106,6 +106,7 @@ async function fixture(
       return () => listeners.delete(listener);
     },
     retry() {},
+    tryAgain() {},
     disconnect() {},
     clearCache: async () => {},
   };

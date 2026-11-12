@@ -367,6 +367,8 @@ describe("update, enable and remove requests", () => {
     expect(checkGit).toHaveBeenCalledWith(
       "https://example.com/plugins.git",
       "main",
+      undefined,
+      { path: "notes" },
     );
     expect(requests.pending()[0]).toMatchObject({
       id: requestId,
@@ -435,19 +437,38 @@ describe("update, enable and remove requests", () => {
     expect(requests.pending()).toEqual([]);
   });
 
-  it("refuse an update to the installed revision", async () => {
-    const { agent } = harness(
-      disabled,
-      preview({
+  it.each([false, true])(
+    "requests a same-revision update only for a new signature (%s)",
+    async (signed) => {
+      const checked = preview({
         path: "notes",
         id: "example.notes",
         revision: "example.notes-1",
-      }),
-    );
-    await expect(
-      agent.request({ action: "update", id: "example.notes", reason }),
-    ).rejects.toThrow("example.notes is already at main's version");
-  });
+      });
+      checked.candidates = checked.candidates.map((candidate) => ({
+        ...candidate,
+        publisher: signed ? "a".repeat(64) : null,
+      }));
+      const { agent, requests, change } = harness(disabled, checked);
+      const request = agent.request({
+        action: "update",
+        id: "example.notes",
+        reason,
+      });
+      if (signed) {
+        await expect(request).resolves.toMatchObject({
+          applied: false,
+          action: "update",
+        });
+        expect(requests.pending()).toHaveLength(1);
+        expect(change).not.toHaveBeenCalled();
+      } else {
+        await expect(request).rejects.toThrow(
+          "example.notes is already at main's version",
+        );
+      }
+    },
+  );
 
   it("refuse an update when the plugin left its recorded path", async () => {
     const { agent } = harness(

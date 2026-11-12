@@ -690,8 +690,8 @@ it("keeps the permalink renderable when a literal note contains an unclosed Mark
     "href",
     `buzz://message?channel=alpha&id=${messageId}`,
   );
-  expect(screen.getByText(/Please check this/)).toHaveTextContent(
-    "``` Please check this",
+  expect(screen.getByText(/Please check this/).innerHTML).toBe(
+    "```<br>Please check this",
   );
 });
 

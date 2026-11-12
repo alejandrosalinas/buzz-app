@@ -5,7 +5,10 @@ import { afterEach, expect, it, vi } from "vitest";
 import { DeliveryNotice } from "./DeliveryNotice";
 import type { ChannelMessage } from "../relay/contracts";
 
-afterEach(cleanup);
+afterEach(() => {
+  cleanup();
+  vi.useRealTimers();
+});
 const row: ChannelMessage = {
   id: "message",
   channelId: "channel",
@@ -41,3 +44,24 @@ it.each(["sending", "accepted", "unknown", "failed"] as const)(
     expect(!!screen.queryByRole("button", { name: "Retry" })).toBe(canRetry);
   },
 );
+
+it("offers Retry as soon as a pending send fails, and stays quiet while unconfirmed", () => {
+  vi.useFakeTimers({ now: 100_050 });
+  const pending = { ...row, createdAt: 100 };
+  const retry = vi.fn();
+  const view = render(
+    <DeliveryNotice row={{ ...pending, delivery: "sending" }} retry={retry} />,
+  );
+  expect(screen.queryByRole("status")).not.toBeInTheDocument();
+  view.rerender(
+    <DeliveryNotice row={{ ...pending, delivery: "failed" }} retry={retry} />,
+  );
+  expect(screen.getByRole("status")).toHaveTextContent(
+    "Couldn’t send this message.",
+  );
+  expect(screen.getByRole("button", { name: "Retry" })).toBeInTheDocument();
+  view.rerender(
+    <DeliveryNotice row={{ ...pending, delivery: "unknown" }} retry={retry} />,
+  );
+  expect(screen.queryByRole("status")).not.toBeInTheDocument();
+});

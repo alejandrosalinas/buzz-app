@@ -2,6 +2,7 @@
 // as a new agent. The catalog is read a page at a time; an over-budget page is
 // retried smaller.
 import {
+  type ReactNode,
   useEffect,
   useId,
   useRef,
@@ -396,12 +397,12 @@ function ImportShared({
 export function SharedAgentCardContent({
   agent,
   community,
-  detail,
+  action,
 }: {
   agent: Pick<SharedDefinition, "name" | "picture" | "model">;
   community: string | undefined;
-  /** Said in place of the model, such as why the card isn't ready. */
-  detail?: string | undefined;
+  /** Conversation cards offer an action in place of model metadata. */
+  action?: ReactNode;
 }) {
   return (
     <>
@@ -411,12 +412,14 @@ export function SharedAgentCardContent({
       </span>
       <span className={cardStyles.identity}>
         <span className={`${cardStyles.name} text-label`}>{agent.name}</span>
-        <span className={cardStyles.detail}>
-          {!detail && <ModelIcon model={agent.model} />}
-          <span className={cardStyles.detailText}>
-            {detail ?? (agent.model || "Shared agent")}
+        {action ?? (
+          <span className={cardStyles.detail}>
+            <ModelIcon model={agent.model} />
+            <span className={cardStyles.detailText}>
+              {agent.model || "Shared agent"}
+            </span>
           </span>
-        </span>
+        )}
       </span>
     </>
   );

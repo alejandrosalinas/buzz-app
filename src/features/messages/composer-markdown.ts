@@ -12,7 +12,11 @@ import {
 import { gfmStrikethrough } from "micromark-extension-gfm-strikethrough";
 import type { Emphasis, PhrasingContent, Root, Text } from "mdast";
 import type { MentionDraft } from "./mention-draft";
-import type { Node as EditorNode, NodeType } from "prosemirror-model";
+import {
+  Fragment,
+  type Node as EditorNode,
+  type NodeType,
+} from "prosemirror-model";
 import {
   composerSchema,
   readComposerDocument,
@@ -42,9 +46,16 @@ strike.peek = () => "~";
 
 /** Plain portions are authored Markdown, not rich-editor literal text. Keeping
  * their source verbatim avoids normalizing formats this slice does not edit.
- * Marked content uses CommonMark/GFM delimiter escaping and flanking rules. */
+ * Marked content uses CommonMark/GFM delimiter escaping and flanking rules.
+ * A chip is its label as literal text in place. */
 export function composerMarkdown(draft: MentionDraft): string {
-  const doc = readComposerDocument(draft, []);
+  const project = (node: EditorNode): EditorNode =>
+    node.type.name === "token" && node.attrs.semantic
+      ? node.mark(composerSchema.marks.literal.create().addToSet(node.marks))
+      : node.isLeaf
+        ? node
+        : node.copy(Fragment.fromArray(node.content.content.map(project)));
+  const doc = project(readComposerDocument(draft, []));
   return [
     ...(draft.chatCards ?? []),
     blocksMarkdown(doc),

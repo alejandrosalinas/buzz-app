@@ -1,4 +1,5 @@
 import { test, expect } from "./fixture.mjs";
+import { animationsSettled } from "./animations.mjs";
 
 const button = (page, name) => page.getByRole("button", { name, exact: true });
 // The palette scales in and its content slides in after a delay. Both hold
@@ -6,17 +7,7 @@ const button = (page, name) => page.getByRole("button", { name, exact: true });
 // mid-entrance. Finish the entrance before measuring rows or moving the pointer.
 const entered = async (dialog) => {
   await expect(dialog).not.toHaveAttribute("data-starting-style");
-  await dialog.evaluate((node) =>
-    Promise.all(
-      node
-        .getAnimations({ subtree: true })
-        .filter(
-          (animation) =>
-            animation.effect?.getComputedTiming().endTime !== Infinity,
-        )
-        .map((animation) => animation.finished),
-    ),
-  );
+  await animationsSettled(dialog, { subtree: true });
 };
 test("search arrows traverse the conversation action and recent activity, Enter opens and Escape restores focus", async ({
   page,

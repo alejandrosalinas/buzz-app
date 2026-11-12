@@ -1,9 +1,18 @@
 // @vitest-environment jsdom
+import {
+  MESSAGE_TOKENS_TAG,
+  signedMessageTokenTags,
+} from "../messages/message-tokens";
 import "@testing-library/jest-dom/vitest";
 import { webcrypto } from "node:crypto";
 import { projectTemplateId } from "./workspace";
 import { composerDOMFixture } from "../messages/composer-testing";
-import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { assert, afterEach, beforeEach, expect, it, vi } from "vitest";
+import { mentionDraft } from "../messages/mention-draft";
+import {
+  projectComposerDocument,
+  readComposerDocument,
+} from "../messages/composer-document";
 import {
   act,
   cleanup,
@@ -19,6 +28,10 @@ import * as modelStorage from "../messages/solo-model-picks-storage";
 import { readView, writeView } from "../../shared/view-state";
 import { linkedDraftKey, type LinkedChat } from "./linked-chat";
 import { SoloDraft, resetNewChatProject } from "./SoloDraft";
+import {
+  regionDraftKey,
+  regionStartKey,
+} from "../channel-navigation/solo-navigation";
 import { writeDefaultLifetime } from "./default-lifetime";
 import { ToastProvider } from "../../shared/design-system/ui/Toast";
 import { ChatNotStarted, createChannelWrites } from "../relay/channel-writes";
@@ -36,6 +49,8 @@ import { AgentsContext } from "../agents/react";
 import type { Agents } from "../agents/service";
 import { MentionCompletion } from "../../bundled/mentions/MentionCompletion";
 import { mentionQuery } from "../../bundled/mentions/mention-query";
+import { ChannelCompletion } from "../../bundled/channels/ChannelCompletion";
+import { channelQuery } from "../../bundled/channels/channel-query";
 import type { ComposerCompletion } from "../conversation/contracts";
 import type { Contribution } from "../../plugins/contributions";
 
@@ -44,8 +59,36 @@ vi.mock(
   () => import("../messages/solo-model-picks-storage-testing"),
 );
 
+/** The plugin region a region draft's Send asks for; set per test. */
+const regionNavigation = vi.hoisted(() => {
+  let owner: unknown;
+  let snapshot = { regions: [], excluded: new Set<string>() };
+  const listeners = new Set<() => void>();
+  return {
+    set(next: unknown) {
+      owner = next;
+      snapshot = { ...snapshot };
+      for (const listener of listeners) listener();
+    },
+    service: {
+      subscribe(listener: () => void) {
+        listeners.add(listener);
+        return () => listeners.delete(listener);
+      },
+      snapshot: () => snapshot,
+      draftRegion: (label: string) =>
+        label === "buzz.region:example:tasks" ? owner : undefined,
+    },
+  };
+});
+vi.mock("../channel-navigation/solo-navigation", async (original) => ({
+  ...(await original<typeof import("../channel-navigation/solo-navigation")>()),
+  soloNavigationFor: () => regionNavigation.service,
+}));
+
 composerDOMFixture();
 afterEach(cleanup);
+afterEach(() => regionNavigation.set(undefined));
 afterEach(() => {
   vi.unstubAllGlobals();
   Reflect.deleteProperty(navigator, "locks");
@@ -1545,6 +1588,83 @@ it("keeps a locally chosen project when its persistence fails and other draft wr
   } finally {
     storage.mockRestore();
   }
+});
+
+it("`#` chooses New chat's workspace without leaving text, and Send files the chat there", async () => {
+  const f = await projectSetup();
+  const user = userEvent.setup();
+  const started = vi.fn();
+  const empty: [] = [];
+  const none = { snapshot: () => empty, subscribe: () => () => {} };
+  const completions: readonly Contribution<ComposerCompletion>[] = [
+    {
+      id: "channel-typeahead",
+      key: "buzz.channels/channel-typeahead",
+      pluginId: "buzz.channels",
+      revision: "1",
+      title: "Channel",
+      match: ({ text, start }) => channelQuery(text, start),
+      component: ChannelCompletion,
+    },
+  ];
+  // Named, as relay channels are; a joined stream follows the workspace rows.
+  const list = f.session.channels.list;
+  let named: { source: unknown; value: ReturnType<typeof list> } | undefined;
+  const team = {
+    id: "team",
+    name: "other-team",
+    channelType: "stream" as const,
+    members: [f.session.viewer ?? ""],
+  };
+  Object.assign(f.session.channels, {
+    list: () => {
+      const source = list();
+      if (named?.source !== source)
+        named = {
+          source,
+          value: {
+            ...source,
+            channels: [
+              ...source.channels.map((channel) =>
+                Object.assign({ name: "" }, channel),
+              ),
+              team,
+            ],
+          },
+        };
+      return named.value;
+    },
+  });
+  render(
+    <SoloDraft
+      session={f.session}
+      scope="hash-workspace"
+      onStarted={started}
+      extensions={{
+        tools: none,
+        inline: none,
+        completions: { snapshot: () => completions, subscribe: () => () => {} },
+      }}
+    />,
+  );
+  const input = screen.getByRole("textbox");
+  await user.type(input, "Plan #oth");
+  const row = await screen.findByRole("option", { name: /Other/ });
+  expect(
+    screen.getAllByRole("option").map((option) => option.textContent),
+  ).toEqual(["OtherWorkspaceEnter", "other-team"]);
+  expect(row).toHaveAttribute("aria-selected", "true");
+  await user.keyboard("{Enter}");
+  expect(input).toHaveValue("Plan ");
+  expect(
+    screen.getByRole("button", { name: "Workspace: Other" }),
+  ).toBeVisible();
+  expect(screen.queryByRole("option")).toBeNull();
+  await user.type(input, "it");
+  await user.click(screen.getByRole("button", { name: "Send message" }));
+  await waitFor(() => expect(started).toHaveBeenCalledOnce());
+  expect(f.assign).toHaveBeenCalledWith(expect.any(String), "other");
+  expect(f.messages.send.mock.calls[0]?.[1]).not.toContain("#");
 });
 
 it("inherits the project's defaults for two consecutive new chats", async () => {
@@ -3452,4 +3572,295 @@ it("does not start a named Solo chat from a file alone", async () => {
   fireEvent.submit(form);
   expect(test.channelWrites.create).not.toHaveBeenCalled();
   expect(test.messages.send).not.toHaveBeenCalled();
+});
+
+const REGION = "buzz.region:example:tasks";
+const regionBinding = { scope: "test", viewer: "f".repeat(64), incarnation: 1 };
+const startOptions = (test: ReturnType<typeof setup>) =>
+  (test.channelWrites.start.mock.calls[0] as unknown[] | undefined)?.[6];
+it("a region's New chat starts a labeled chat its source can find, without filing it", async () => {
+  const test = await projectSetup(),
+    onStarted = vi.fn(),
+    user = userEvent.setup();
+  regionNavigation.set({ source: {}, binding: regionBinding });
+  const key = regionDraftKey(REGION, "work");
+  writeView("test", `${key}:new-draft`, taggedDraft("Plan the launch"));
+  render(
+    <SoloDraft
+      session={test.session}
+      scope="test"
+      projectId="work"
+      region={REGION}
+      onStarted={onStarted}
+    />,
+  );
+  await user.click(screen.getByRole("button", { name: "Send message" }));
+  await waitFor(() => expect(onStarted).toHaveBeenCalledOnce());
+  const id = test.channelWrites.create.mock.calls[0]?.[0] ?? "";
+  // Unguarded, so the Outbox replays it after a restart like any New chat.
+  expect(startOptions(test)).toEqual({ labels: [REGION] });
+  expect(readView("test", regionStartKey(id), null)).toEqual({
+    region: REGION,
+    workspace: "work",
+  });
+  expect(test.assign).not.toHaveBeenCalled();
+  expect(test.messages.send).toHaveBeenCalledWith(
+    id,
+    taggedDraft("Plan the launch").text,
+    ["a".repeat(64)],
+  );
+  expect(readView("test", `${key}:new-draft`, null)).toBe("");
+  // An ordinary New chat keeps its own draft and its unlabeled start.
+  expect(readView("test", "solo:project:work:new-draft", null)).toBeNull();
+});
+it("a region draft whose link can't be saved starts nothing and keeps its prompt and files", async () => {
+  const test = setup(),
+    onStarted = vi.fn(),
+    user = userEvent.setup();
+  Object.assign(test.session, {
+    attachments: { uploadForNewChat: vi.fn(async () => notes) },
+  });
+  regionNavigation.set({ source: {}, binding: regionBinding });
+  const key = regionDraftKey(REGION);
+  writeView("test", `${key}:new-draft`, taggedDraft("Plan the launch"));
+  render(
+    <SoloDraft
+      session={test.session}
+      scope="test"
+      region={REGION}
+      onStarted={onStarted}
+    />,
+  );
+  await user.upload(
+    screen.getByLabelText("Choose attachments"),
+    new File(["notes"], "notes.txt", { type: "text/plain" }),
+  );
+  const setItem = Storage.prototype.setItem;
+  const writes = vi
+    .spyOn(Storage.prototype, "setItem")
+    .mockImplementation(function (this: Storage, name, value) {
+      if (name.includes("solo-region-start:")) throw new Error("Storage full");
+      setItem.call(this, name, value);
+    });
+  try {
+    await user.click(screen.getByRole("button", { name: "Send message" }));
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      "This chat couldn't be saved on this device. Your draft is kept.",
+    );
+  } finally {
+    writes.mockRestore();
+  }
+  expect(test.channelWrites.start).not.toHaveBeenCalled();
+  expect(test.messages.send).not.toHaveBeenCalled();
+  expect(onStarted).not.toHaveBeenCalled();
+  expect(screen.getByRole("textbox")).toHaveTextContent("Plan the launch");
+  expect(screen.getByRole("button", { name: "Remove notes.txt" })).toBeTruthy();
+  // Sending again, once storage recovers, starts it.
+  await user.click(screen.getByRole("button", { name: "Send message" }));
+  await waitFor(() => expect(onStarted).toHaveBeenCalledOnce());
+  expect(test.channelWrites.start).toHaveBeenCalledOnce();
+});
+it("a region draft can only address agents its source accepts", async () => {
+  const test = setup(),
+    user = userEvent.setup();
+  const draftAgent = vi.fn(
+    (_binding: unknown, pubkey: string) => pubkey !== "a".repeat(64),
+  );
+  regionNavigation.set({ source: { draftAgent }, binding: regionBinding });
+  writeView(
+    "test",
+    `${regionDraftKey(REGION)}:new-draft`,
+    taggedDraft("Plan the launch"),
+  );
+  render(
+    <SoloDraft
+      session={test.session}
+      scope="test"
+      region={REGION}
+      onStarted={vi.fn()}
+    />,
+  );
+  await user.click(screen.getByRole("button", { name: "Send message" }));
+  expect(await screen.findByRole("alert")).toHaveTextContent(
+    "This chat's plugin can't use one of these agents. Choose another agent.",
+  );
+  expect(draftAgent).toHaveBeenCalledWith(regionBinding, "a".repeat(64));
+  expect(test.channelWrites.start).not.toHaveBeenCalled();
+  expect(screen.getByRole("textbox")).toHaveTextContent("Plan the launch");
+});
+it("a region draft whose source stops while its files upload keeps the draft and can't send", async () => {
+  const test = setup(),
+    onStarted = vi.fn(),
+    user = userEvent.setup();
+  let finish = (_value: typeof notes) => {};
+  const uploadForNewChat = vi.fn(
+    () =>
+      new Promise<typeof notes>((resolve) => {
+        finish = resolve;
+      }),
+  );
+  Object.assign(test.session, { attachments: { uploadForNewChat } });
+  regionNavigation.set({ source: {}, binding: regionBinding });
+  writeView(
+    "test",
+    `${regionDraftKey(REGION)}:new-draft`,
+    taggedDraft("Plan the launch"),
+  );
+  render(
+    <SoloDraft
+      session={test.session}
+      scope="test"
+      region={REGION}
+      onStarted={onStarted}
+    />,
+  );
+  await user.upload(
+    screen.getByLabelText("Choose attachments"),
+    new File(["notes"], "notes.txt", { type: "text/plain" }),
+  );
+  await waitFor(() => expect(uploadForNewChat).toHaveBeenCalledOnce());
+  await user.click(screen.getByRole("button", { name: "Send message" }));
+  // The source stops while Send waits for the upload.
+  act(() => regionNavigation.set(undefined));
+  await act(async () => finish(notes));
+  expect(await screen.findByRole("alert")).toHaveTextContent(
+    "This chat's plugin is unavailable. Your draft is saved.",
+  );
+  expect(
+    screen
+      .getAllByRole("status")
+      .some((status) =>
+        status.textContent?.includes(
+          "This chat's plugin is unavailable. Your draft is saved.",
+        ),
+      ),
+  ).toBe(true);
+  expect(screen.getByRole("button", { name: "Send message" })).toBeDisabled();
+  expect(test.channelWrites.start).not.toHaveBeenCalled();
+  expect(onStarted).not.toHaveBeenCalled();
+  expect(screen.getByRole("textbox")).toHaveTextContent("Plan the launch");
+  expect(screen.getByRole("button", { name: "Remove notes.txt" })).toBeTruthy();
+});
+it("a refused region start forgets its link and gives its prompt and files back to the region's draft", async () => {
+  const test = setup(),
+    onStarted = vi.fn(),
+    onFailed = vi.fn(),
+    user = userEvent.setup();
+  Object.assign(test.session, {
+    attachments: { uploadForNewChat: vi.fn(async () => notes) },
+  });
+  const refuse = refusedStart(test);
+  regionNavigation.set({ source: {}, binding: regionBinding });
+  const key = regionDraftKey(REGION);
+  writeView("test", `${key}:new-draft`, taggedDraft("Plan the launch"));
+  const view = () => (
+    <SoloDraft
+      session={test.session}
+      scope="test"
+      region={REGION}
+      onStarted={onStarted}
+      onFailed={onFailed}
+    />
+  );
+  const first = render(view());
+  await user.upload(
+    screen.getByLabelText("Choose attachments"),
+    new File(["notes"], "notes.txt", { type: "text/plain" }),
+  );
+  await user.click(screen.getByRole("button", { name: "Send message" }));
+  await waitFor(() => expect(onStarted).toHaveBeenCalledOnce());
+  const id = test.channelWrites.create.mock.calls[0]?.[0] ?? "";
+  expect(readView("test", regionStartKey(id), null)).not.toBeNull();
+  first.unmount();
+  render(view());
+  await refuse();
+  await waitFor(() => expect(onFailed).toHaveBeenCalledOnce());
+  expect(readView("test", regionStartKey(id), null)).toBeNull();
+  expect(screen.getByRole("textbox")).toHaveTextContent("Plan the launch");
+  expect(screen.getByRole("button", { name: "Remove notes.txt" })).toBeTruthy();
+  expect(readView("test", "solo:new-draft", null)).toBeNull();
+});
+it("a region lead draft starts its workspace's lead only while it still targets that workspace", async () => {
+  const test = await projectSetup(),
+    onStarted = vi.fn(),
+    user = userEvent.setup();
+  regionNavigation.set({ source: {}, binding: regionBinding });
+  const key = regionDraftKey(REGION, "work");
+  const view = () => (
+    <SoloDraft
+      session={test.session}
+      scope="test"
+      projectId="work"
+      region={REGION}
+      lead
+      onStarted={onStarted}
+    />
+  );
+  writeView("test", `${key}:new-draft`, taggedDraft("Lead the launch"));
+  const first = render(view());
+  await user.click(screen.getByRole("button", { name: "Send message" }));
+  await waitFor(() => expect(onStarted).toHaveBeenCalledOnce());
+  const lead = test.channelWrites.create.mock.calls[0]?.[0] ?? "";
+  expect(readView("test", regionStartKey(lead), null)).toEqual({
+    region: REGION,
+    workspace: "work",
+    lead: true,
+  });
+  first.unmount();
+  writeView("test", `${key}:new-draft`, taggedDraft("Just a task"));
+  render(view());
+  await user.click(screen.getByRole("button", { name: "Workspace: Work" }));
+  await user.click(await screen.findByRole("menuitemradio", { name: "Other" }));
+  await user.click(screen.getByRole("button", { name: "Send message" }));
+  await waitFor(() => expect(onStarted).toHaveBeenCalledTimes(2));
+  const task = test.channelWrites.create.mock.calls[1]?.[0] ?? "";
+  expect(readView("test", regionStartKey(task), null)).toEqual({
+    region: REGION,
+    workspace: "other",
+  });
+});
+it("starts a New chat from a saved folder chip and signs the chip into its first message", async () => {
+  const f = setup(),
+    started = vi.fn();
+  const chip = { kind: "folder", id: "/repo", label: "@repo" };
+  // The relay writer reads the chips the draft is signing as it sends.
+  let signed: string[][] = [];
+  f.messages.send.mockImplementation(() => {
+    signed = signedMessageTokenTags();
+    return "e".repeat(64);
+  });
+  const own = projectComposerDocument(
+    readComposerDocument(mentionDraft(taggedDraft("Fix ")), []),
+  ).draft;
+  const doc = own.document?.content as {
+    content: { content: unknown[] }[];
+  };
+  const [paragraph] = doc.content;
+  assert.exists(paragraph);
+  writeView("test", "solo:new-draft", {
+    ...own,
+    document: {
+      version: 1,
+      content: {
+        ...doc,
+        content: [
+          {
+            ...paragraph,
+            content: [
+              ...paragraph.content,
+              { type: "token", attrs: { source: "/repo", semantic: chip } },
+            ],
+          },
+        ],
+      },
+    },
+  });
+  render(<SoloDraft session={f.session} scope="test" onStarted={started} />);
+  expect(screen.getByRole("img", { name: "Folder @repo" })).toBeVisible();
+  await userEvent
+    .setup()
+    .click(screen.getByRole("button", { name: "Send message" }));
+  await waitFor(() => expect(started).toHaveBeenCalledOnce());
+  expect(f.messages.send.mock.calls[0]?.[1]).toBe("@Member agent Fix /repo");
+  expect(signed).toEqual([[MESSAGE_TOKENS_TAG, JSON.stringify([chip])]]);
 });

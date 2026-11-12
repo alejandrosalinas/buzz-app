@@ -17,6 +17,10 @@ const VISIBILITY: Record<Audience, string> = {
 };
 export const SIGN_IN =
   "Ask your owner to sign in at Settings → Plugins → Builderlab, then try again.";
+/** A 401 refuses only the call unless native ends the session, so a signed-in
+ * owner may have no sign-in to do. */
+const REFUSED =
+  "Try again. If it keeps happening, ask your owner to check their Builderlab sign-in at Settings → Plugins → Builderlab.";
 
 type Json = Record<string, unknown>;
 const object = (value: unknown): Json =>
@@ -98,7 +102,7 @@ export function createAppsClient(
     }
     if (response.status === 401)
       throw new Error(
-        `Builderlab refused the sign-in for ${what} (HTTP ${response.status}). ${SIGN_IN}`,
+        `Builderlab refused the sign-in for ${what} (HTTP ${response.status}). ${REFUSED}`,
       );
     if (response.status < 200 || response.status >= 300) {
       const error = object(body.error);

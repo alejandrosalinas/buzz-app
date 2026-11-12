@@ -41,6 +41,10 @@ import { threadReference } from "../../features/relay/thread-reference";
 import type { ChannelLabel } from "../../features/channels/channel-icon";
 import { appClient, readFile } from "../../buzz-mcp/app-client";
 import { readProject } from "../../features/agent-harness/project";
+import {
+  referencedFolders,
+  referencedSkills,
+} from "../../features/agent-harness/referenced-folders";
 import { RESUMED_PROMPT } from "../../buzz-mcp/prompt";
 import { MemoryReads } from "../../features/agent-harness/core-memory";
 import { SessionControls } from "../../features/agent-harness/session-control";
@@ -106,6 +110,8 @@ type Request = {
   toolRoot?: string;
   /** The agent's team sections, if it is on a team. */
   team: string;
+  session?: Delivery["session"];
+  sessionContext?: string;
   /** The Solo chat's workspace Canvas section, if it has one. */
   project?: string;
   /** The model and effort the owner picked for this turn. */
@@ -165,6 +171,7 @@ type Active = {
   effort?: string;
   workspace: string;
   signal: AbortSignal;
+  tools: AbortController;
   /** Every request this turn has taken in, the first and each steered one. */
   requests: Request[];
   /** Latest acknowledged mention per Buzz thread; independent of session scope. */
@@ -263,6 +270,7 @@ function noteOf(request: Request) {
       request.conversation.root,
     ) ?? [];
   const notes = [
+    request.sessionContext,
     request.resumed ? RESUMED_PROMPT : undefined,
     ...request.notes,
     turnNote(request.agent),
@@ -320,6 +328,9 @@ export class CodexRuntime {
     { key: string; ready: Promise<Models> }
   >();
   private memoryReads = new MemoryReads();
+  /** A failed turn's notice as the thread reads it, such as where to sign
+   * Codex in again. */
+  explain: (notice: string) => string = (notice) => notice;
   constructor(
     private readonly spawn: Spawn,
     /** What each agent's turns read of its community, while it can be read. */
@@ -514,11 +525,16 @@ export class CodexRuntime {
       ? "active"
       : "idle";
   }
-  session(agent: Agent, place: SessionPlace, action: SessionControlAction) {
+  session(
+    agent: Agent,
+    place: SessionPlace,
+    action: SessionControlAction,
+    reset?: (change: () => Promise<void>) => Promise<void>,
+  ) {
     const abort = new AbortController();
     const pending = {
       abort,
-      done: this.changeSession(agent, place, action, abort.signal),
+      done: this.changeSession(agent, place, action, abort.signal, reset),
     };
     const actions = this.actions.get(agent.key) ?? new Set();
     this.actions.set(agent.key, actions);
@@ -533,6 +549,7 @@ export class CodexRuntime {
     place: SessionPlace,
     action: SessionControlAction,
     lifetime: AbortSignal,
+    reset?: (change: () => Promise<void>) => Promise<void>,
   ): Promise<void> {
     const reads = this.reads(agent.key);
     const remote = await this.inspect?.(agent.key);
@@ -559,32 +576,36 @@ export class CodexRuntime {
           `${agent.key}/${conversation}`,
           action,
           async () => {
-            await this.storage.set(
-              key,
-              JSON.stringify({ key: crypto.randomUUID(), intent: "new" }),
-            );
-            this.inventoryReads.delete(agent.key);
-            this.inventories.set(
-              agent.key,
-              (this.inventories.get(agent.key) ?? []).filter(
-                (row) => row.key !== conversation,
-              ),
-            );
-            this.inventoryVersions.set(
-              agent.key,
-              this.conversationVersion(agent.key) + 1,
-            );
-            const prior = this.remote.get(key);
-            this.remote.delete(key);
-            prior?.runtime.dispose();
-            if (prior) await this.disposeExecution(agent.key, prior.execution);
-            this.views.set(
-              agent.key,
-              [...this.remote.values()]
-                .filter((entry) => entry.agent === agent.key)
-                .flatMap((entry) => entry.runtime.sessions(agent.key)),
-            );
-            for (const listener of this.listeners) listener();
+            const change = async () => {
+              await this.storage.set(
+                key,
+                JSON.stringify({ key: crypto.randomUUID(), intent: "new" }),
+              );
+              this.inventoryReads.delete(agent.key);
+              this.inventories.set(
+                agent.key,
+                (this.inventories.get(agent.key) ?? []).filter(
+                  (row) => row.key !== conversation,
+                ),
+              );
+              this.inventoryVersions.set(
+                agent.key,
+                this.conversationVersion(agent.key) + 1,
+              );
+              const prior = this.remote.get(key);
+              this.remote.delete(key);
+              prior?.runtime.dispose();
+              if (prior)
+                await this.disposeExecution(agent.key, prior.execution);
+              this.views.set(
+                agent.key,
+                [...this.remote.values()]
+                  .filter((entry) => entry.agent === agent.key)
+                  .flatMap((entry) => entry.runtime.sessions(agent.key)),
+              );
+              for (const listener of this.listeners) listener();
+            };
+            await (reset ? reset(change) : change());
           },
         );
       if ((await this.storage.read(key)) === null) {
@@ -615,15 +636,22 @@ export class CodexRuntime {
       signal.throwIfAborted();
       const saved = entry.saved[key];
       if (action === "new") {
-        if (!saved) return;
-        delete entry.saved[key];
-        try {
-          await this.storage.set(entry.storageKey, JSON.stringify(entry.saved));
-        } catch (error) {
-          entry.saved[key] = saved;
-          throw error;
-        }
-        this.forget(agent.key, key);
+        const change = async () => {
+          if (!saved) return;
+          delete entry.saved[key];
+          try {
+            await this.storage.set(
+              entry.storageKey,
+              JSON.stringify(entry.saved),
+            );
+          } catch (error) {
+            entry.saved[key] = saved;
+            throw error;
+          }
+          this.forget(agent.key, key);
+          return;
+        };
+        await (reset ? reset(change) : change());
         return;
       }
       if (agent.protection && !this.handle(agent.key)?.protection)
@@ -1617,10 +1645,20 @@ export class CodexRuntime {
     if (wake && !wakeLands(wake, topLevel)) return delivery.ignored?.();
     // Only a Solo chat's Canvas is handed over.
     const canvas = reads.canvas?.bind(reads);
-    const project = solo
-      ? (await readProject(canvas && (() => canvas(channelId, agent.owner))))
-          ?.section
-      : undefined;
+    const [canvasProject, folders] = await Promise.all([
+      solo
+        ? readProject(canvas && (() => canvas(channelId, agent.owner)))
+        : undefined,
+      referencedFolders(event, agent.owner, reads.scope),
+    ]);
+    const project =
+      [
+        canvasProject?.section,
+        folders.section,
+        referencedSkills(event, agent.owner, agent.pubkey),
+      ]
+        .filter(Boolean)
+        .join("\n\n") || undefined;
     // A stop during the reads deleted this agent's entry; recreating it would
     // reopen the agent.
     delivery.signal.throwIfAborted();
@@ -1628,19 +1666,46 @@ export class CodexRuntime {
     const root = settings.scope === "channel" ? undefined : toolRoot;
     delivery.signal.throwIfAborted();
     const conversationKey = JSON.stringify([channelId, root ?? "channel"]);
+    const sourceRoot = wake ? wake.root : rootOf(event);
+    const admission = (deferred: boolean) =>
+      delivery.prepareSession?.(
+        {
+          source: {
+            channelId,
+            ...(!channel?.dm && sourceRoot ? { root: sourceRoot } : {}),
+          },
+          conversation: { channelId, ...(root ? { root } : {}) },
+        },
+        deferred,
+      );
+
     if (await this.inspect?.(agent.key)) {
       const handoff = this.controls.deliver(
         `${agent.key}/${conversationKey}`,
-        async () => {
+        async (deferred) => {
+          const admitted = await admission(deferred);
           const runtime = await this.connection(
             agent.key,
             reads.scope,
             conversationKey,
-            delivery.signal,
+            deferred ? undefined : delivery.signal,
           );
-          await runtime.run(delivery);
+          const accepted = deferred ? runtime.target?.signal : delivery.signal;
+          if (!accepted)
+            throw new Error("The remote Codex lifetime is unavailable");
+          await runtime.run({
+            ...delivery,
+            ...(admitted
+              ? { session: admitted.session, sessionContext: admitted.context }
+              : {}),
+            signal: accepted,
+          });
         },
       );
+      if (handoff.deferred) {
+        delivery.workingUntil(handoff.done);
+        return;
+      }
       return handoff.done;
     }
     if (this.disposed) throw new Error("Codex runtime is disposed");
@@ -1681,6 +1746,10 @@ export class CodexRuntime {
         ...(topLevel && !solo && !huddle ? { threadReplies: true } : {}),
       },
       team: delivery.team ?? "",
+      ...(delivery.session ? { session: delivery.session } : {}),
+      ...(delivery.sessionContext
+        ? { sessionContext: delivery.sessionContext }
+        : {}),
       ...(project ? { project: `${project}\n` } : {}),
       answered,
       failActivity,
@@ -1711,6 +1780,13 @@ export class CodexRuntime {
       async (deferred) => {
         if (deferred) entry.abort.signal.throwIfAborted();
         else delivery.signal.throwIfAborted();
+        const admitted = await admission(deferred);
+        if (admitted) {
+          request.session = admitted.session;
+          if (admitted.context !== undefined)
+            request.sessionContext = admitted.context;
+          else delete request.sessionContext;
+        }
         const text = textOf(request.event, agent.name);
         let lane = entry.lanes.get(key);
         if (!lane) {
@@ -1928,7 +2004,7 @@ export class CodexRuntime {
         {
           ...params,
           ephemeral: true,
-          dynamicTools: dynamicTools(this.added(), !!agent.ownerAccess),
+          dynamicTools: dynamicTools(this.added()),
         },
       );
       once.threadId = started.thread.id;
@@ -2003,6 +2079,7 @@ export class CodexRuntime {
     if (!active?.requests.includes(request) || active.finished)
       return Promise.resolve();
     active.stopped = true;
+    active.tools.abort(new Error("The owner stopped the turn"));
     active.stopping ??= (async () => {
       try {
         await active.ready;
@@ -2015,7 +2092,10 @@ export class CodexRuntime {
         // A turn that did not stop still reports how it ends, and can be
         // stopped again.
         delete active.stopping;
-        if (!active.finished) active.stopped = false;
+        if (!active.finished) {
+          active.stopped = false;
+          active.tools = new AbortController();
+        }
         throw error;
       }
     })();
@@ -2026,12 +2106,13 @@ export class CodexRuntime {
    * success. Watches have no bubble; mentions in other threads keep theirs,
    * and a top-level chat is one scope. */
   private acknowledgeActivity(active: Active, request: Request) {
-    if (!request.step) return;
-    const scope = request.activityScope;
-    const prior = active.activity.get(scope);
-    if (prior === request) return;
-    prior?.superseded?.();
-    active.activity.set(scope, request);
+    if (request.step) {
+      const scope = request.activityScope;
+      const prior = active.activity.get(scope);
+      if (prior === request) return;
+      prior?.superseded?.();
+      active.activity.set(scope, request);
+    }
     request.acknowledged?.();
   }
 
@@ -2153,7 +2234,7 @@ export class CodexRuntime {
   private publish(request: Request, content: string) {
     return request.agent.publish({
       kind: 9,
-      content,
+      content: this.explain(content),
       tags: [
         ["h", request.conversation.channelId],
         ...(request.replyRoot !== undefined
@@ -2178,11 +2259,14 @@ export class CodexRuntime {
     if (
       !turn ||
       call.namespace !== "buzz" ||
-      !sessionTools(this.added(), true).some((tool) => tool.name === call.tool)
+      !sessionTools(this.added()).some((tool) => tool.name === call.tool)
     )
       throw new Error("No active Buzz tool for this thread and turn");
+    const signal = active
+      ? AbortSignal.any([turn.signal, active.tools.signal])
+      : turn.signal;
     const check = () => {
-      turn.signal.throwIfAborted();
+      signal.throwIfAborted();
       if (turn.finished) throw new Error("The Codex turn has ended");
     };
     check();
@@ -2220,13 +2304,14 @@ export class CodexRuntime {
               this.spawn,
               turn.workspace,
               path,
-              turn.signal,
+              signal,
               agent.protection?.processProtection,
             ),
       check,
-      signal: turn.signal,
+      signal,
+      callSignal: signal,
       memories: async (slug) => {
-        const listing = await this.memories(owner, turn.signal, slug);
+        const listing = await this.memories(owner, signal, slug);
         check();
         return listing;
       },
@@ -2238,6 +2323,7 @@ export class CodexRuntime {
     // A watch or timer turn has no default destination.
     const context: Context = request
       ? {
+          ...(request.session ? { session: request.session } : {}),
           channel: request.conversation.channelId,
           ...(request.toolRoot ? { root: request.toolRoot } : {}),
           ...(request.toolRoot && !request.conversation.root
@@ -2581,15 +2667,14 @@ export class CodexRuntime {
       // Resume restores the thread's tools, so one started with other added
       // tools starts fresh.
       const added = this.added();
-      const owner = !!agent.ownerAccess;
-      const tools = addedKey(added) + (owner ? ":owner" : "");
+      const tools = addedKey(added);
       const resuming =
         existing?.workspace === workspace && (existing.tools ?? "") === tools;
       type Started = { thread: { id: string; cwd: string } };
       const start = () =>
         rpc.request<Started>("thread/start", {
           ...params,
-          dynamicTools: dynamicTools(added, owner),
+          dynamicTools: dynamicTools(added),
         });
       const resume = (threadId: string) =>
         rpc.request<Started>("thread/resume", {
@@ -2704,6 +2789,7 @@ export class CodexRuntime {
       finished: false,
       workspace: lane.voice?.loaded.workspace ?? request.settings.workspace,
       signal,
+      tools: new AbortController(),
       requests: [request],
       activity: new Map(),
     };
@@ -3002,12 +3088,12 @@ function follow(
  * keeps a deferred tool from the model until its tool search finds it. Every
  * model in Codex's catalog has tool search (supports_search_tool); one
  * without it would not see deferred tools. */
-const dynamicTools = (added: readonly AddedTool[], owner: boolean) => [
+const dynamicTools = (added: readonly AddedTool[]) => [
   {
     type: "namespace",
     name: "buzz",
-    description: sessionHint(added, owner),
-    tools: sessionTools(added, owner).map(({ load, ...tool }) => ({
+    description: sessionHint(added),
+    tools: sessionTools(added).map(({ load, ...tool }) => ({
       type: "function",
       ...tool,
       ...(load === "search" ? { deferLoading: true } : {}),

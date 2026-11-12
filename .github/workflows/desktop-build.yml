@@ -1,0 +1,542 @@
+name: Desktop build
+
+# Builds, verifies and publishes every desktop platform for its callers:
+# release.yml (previews and Windows/Linux candidates) and desktop-stable.yml
+# (stable and beta tags). Callers choose the source ref; this checks it.
+on:
+  workflow_call:
+    inputs:
+      candidates:
+        description: Build Windows/Linux candidates only (no publishing or macOS signing)
+        type: boolean
+        default: false
+      release_version:
+        description: Stable or beta version (X.Y.Z or X.Y.Z-beta.N) built from its v tag; empty builds a preview from main
+        type: string
+        default: ""
+    outputs:
+      version:
+        description: The version every platform was built as
+        value: ${{ jobs.build.outputs.version }}
+
+permissions:
+  contents: read
+
+env:
+  # Automatic key backup to bb-public production, only for builds that sign in to
+  # app.builderlab.xyz: every build without an FI descriptor does, through the
+  # built-in server. The namespace must match that service's configuration.
+  BUZZ_NSEC_BACKUP_SERVICE_URL: ${{ !vars.BUZZ_BUILD_FEDERATED_IDENTITY_CONFIG && 'https://app.builderlab.xyz/api/goose' || '' }}
+  BUZZ_NSEC_BACKUP_NAMESPACE: ${{ !vars.BUZZ_BUILD_FEDERATED_IDENTITY_CONFIG && 'backup/bb-public/production' || '' }}
+  # Public verification inputs; the native build and plugins.updater must match.
+  # Candidate-only runs build without the updater. Stable and beta builds check
+  # the stable feed, previews the preview feed; both trust the same key.
+  BUZZ_UPDATER_PUBLIC_KEY: ${{ !inputs.candidates && 'dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDJDQjQ2RDZFMUEwOERFMTEKUldRUjNnZ2FibTIwTE10QkVaMzFyYkZlY0R4ajhmbFBjdncvNVRCYnNpSm9kaFNBaHQzemZlZHkK' || '' }}
+  BUZZ_UPDATER_ENDPOINT: ${{ !inputs.candidates && (inputs.release_version && 'https://github.com/block/buzz-app/releases/download/stable-feed/latest.json' || 'https://github.com/block/buzz-app/releases/download/preview-feed/latest.json') || '' }}
+  # Read by scripts/candidate-version.mjs; empty selects the preview version.
+  RELEASE_VERSION: ${{ inputs.release_version }}
+
+jobs:
+  build:
+    if: github.repository == 'block/buzz-app' && !inputs.candidates
+    name: Build, sign, and notarize (${{ matrix.arch }})
+    runs-on: macos-latest
+    strategy:
+      matrix:
+        include:
+          - { target: aarch64-apple-darwin, arch: aarch64, lipo: arm64 }
+          - { target: x86_64-apple-darwin, arch: x64, lipo: x86_64 }
+    timeout-minutes: 120
+    permissions:
+      contents: read
+      id-token: write
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+    env:
+      CI: "true"
+      CARGO_TERM_COLOR: always
+      TARGET: ${{ matrix.target }}
+    steps:
+      # Unset builds trust only the built-in sign-in server and an empty value
+      # opts out, so add the repository's servers only when it names some.
+      - name: Add sign-in servers
+        if: vars.BUZZ_BUILD_FEDERATED_IDENTITY_CONFIG != ''
+        shell: bash
+        env:
+          SERVERS: ${{ vars.BUZZ_BUILD_FEDERATED_IDENTITY_CONFIG }}
+        # The delimiter form keeps a pretty-printed, multiline value intact.
+        run: |
+          delimiter="FI_${RANDOM}${RANDOM}${RANDOM}"
+          [[ "$SERVERS" != *"$delimiter"* ]]
+          printf 'BUZZ_BUILD_FEDERATED_IDENTITY_CONFIG<<%s\n%s\n%s\n' "$delimiter" "$SERVERS" "$delimiter" >> "$GITHUB_ENV"
+      - name: Require the release source and signing configuration
+        env:
+          SOURCE_REF: ${{ github.ref }}
+          SIGNING_ROLE: ${{ secrets.OSX_CODESIGN_ROLE }}
+          SIGNING_BUCKET: ${{ secrets.CODESIGN_S3_BUCKET }}
+          UPDATER_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          UPDATER_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        run: |
+          # Previews build main; stable and beta releases build their own tag.
+          expected=refs/heads/main
+          [[ -z "$RELEASE_VERSION" ]] || expected="refs/tags/v$RELEASE_VERSION"
+          test "$SOURCE_REF" = "$expected" || { echo "::error::This release must run from $expected"; exit 1; }
+          test -n "$SIGNING_ROLE" && test -n "$SIGNING_BUCKET" || { echo '::error::Set OSX_CODESIGN_ROLE and CODESIGN_S3_BUCKET'; exit 1; }
+          test -n "$UPDATER_KEY" && test -n "$UPDATER_PASSWORD" || { echo '::error::Set TAURI_SIGNING_PRIVATE_KEY and TAURI_SIGNING_PRIVATE_KEY_PASSWORD'; exit 1; }
+
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: ./.github/actions/setup
+      # Hermit's rustup proxies select the rust-toolchain.toml release, which has
+      # only the runner's (Apple Silicon) standard library. Add the Intel one to
+      # that toolchain and keep nested builds on it.
+      - name: Select pinned Rust with the Intel standard library
+        if: matrix.arch == 'x64'
+        run: |
+          version=$(rustc --version | cut -d' ' -f2)
+          rustup toolchain install "$version" --profile minimal --target "$TARGET"
+          echo "RUSTUP_TOOLCHAIN=$version" >> "$GITHUB_ENV"
+          echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          key: macos-prerelease-${{ matrix.arch }}
+          cache-all-crates: true
+
+      - name: Set release version
+        id: version
+        run: node scripts/candidate-version.mjs
+
+      - name: Build unsigned app and DMG
+        env:
+          TAURI_BUNDLER_DMG_IGNORE_CI: "true"
+        run: |
+          # Fail fast if the selected Rust lacks this target's standard library.
+          test -d "$(rustc --print target-libdir --target "$TARGET")" || { echo "::error::Rust has no $TARGET standard library"; exit 1; }
+          rm -rf "target/$TARGET/release/bundle"
+          pnpm tauri build --ci --no-sign --bundles dmg --target "$TARGET" --config "$RUNNER_TEMP/candidate.json" -- --locked
+
+      - name: Locate unsigned DMG
+        id: unsigned
+        run: |
+          shopt -s nullglob
+          dmgs=("target/$TARGET/release/bundle/dmg/"*.dmg)
+          test "${#dmgs[@]}" -eq 1 || { echo '::error::Expected exactly one DMG'; exit 1; }
+          echo "path=${dmgs[0]}" >> "$GITHUB_OUTPUT"
+
+      - name: Sign and notarize
+        id: codesign
+        uses: block/apple-codesign-action@679535d1ab7c5a7c18e6f9afcba3464512cc3dde # v1.1.0
+        with:
+          osx-codesign-role: ${{ secrets.OSX_CODESIGN_ROLE }}
+          codesign-s3-bucket: ${{ secrets.CODESIGN_S3_BUCKET }}
+          unsigned-artifact-path: ${{ steps.unsigned.outputs.path }}
+          entitlements-plist-path: src-tauri/entitlements.plist
+          artifact-name: buzz-app-${{ github.run_id }}-${{ github.run_attempt }}-${{ matrix.lipo }}
+
+      - name: Verify release DMG
+        env:
+          SIGNED_DMG: ${{ steps.codesign.outputs.signed-dmg-path }}
+          LIPO_ARCH: ${{ matrix.lipo }}
+        run: |
+          app_dir=$(mktemp -d "$RUNNER_TEMP/verify-release.XXXXXX")
+          hdiutil attach "$SIGNED_DMG" -readonly -nobrowse -mountpoint "$app_dir" >/dev/null
+          trap 'hdiutil detach "$app_dir" >/dev/null' EXIT
+          app="$app_dir/Buzz.app"
+          codesign --verify --deep --strict --verbose=2 \
+            -R '=anchor apple generic and certificate 1[field.1.2.840.113635.100.6.2.6] exists and certificate leaf[field.1.2.840.113635.100.6.1.13] exists and certificate leaf[subject.OU] = EYF346PHUG' "$app"
+          spctl --assess --type execute --verbose=4 "$app"
+          xcrun stapler validate "$app"
+          test "$(lipo -archs "$app/Contents/MacOS/Buzz")" = "$LIPO_ARCH" || { echo "::error::Buzz is not $LIPO_ARCH"; exit 1; }
+          # Promotion inspects only the Apple Silicon executable, so check each leg here.
+          for value in "$BUZZ_UPDATER_PUBLIC_KEY" "$BUZZ_UPDATER_ENDPOINT"; do
+            grep -aqF "$value" "$app/Contents/MacOS/Buzz" || { echo '::error::Buzz does not embed the updater configuration'; exit 1; }
+          done
+          test -n "$(/usr/libexec/PlistBuddy -c 'Print :NSMicrophoneUsageDescription' "$app/Contents/Info.plist")"
+          codesign --display --entitlements :- "$app" > "$RUNNER_TEMP/signed-entitlements.plist"
+          test "$(/usr/libexec/PlistBuddy -c 'Print :com.apple.security.device.audio-input' "$RUNNER_TEMP/signed-entitlements.plist")" = true || { echo '::error::Signed app is missing microphone entitlement'; exit 1; }
+          test "$(/usr/libexec/PlistBuddy -c 'Print :com.apple.security.cs.disable-library-validation' "$RUNNER_TEMP/signed-entitlements.plist")" = true || { echo '::error::Signed app is missing library-validation exemption needed for MeshLLM runtimes'; exit 1; }
+          goose="$app/Contents/Resources/bin/goose-acp"
+          test -x "$goose" || { echo '::error::Signed app is missing goose-acp'; exit 1; }
+          test "$(lipo -archs "$goose")" = "$LIPO_ARCH" || { echo "::error::goose-acp is not $LIPO_ARCH"; exit 1; }
+          codesign --verify --strict --verbose=2 \
+            -R '=anchor apple generic and certificate 1[field.1.2.840.113635.100.6.2.6] exists and certificate leaf[field.1.2.840.113635.100.6.1.13] exists and certificate leaf[subject.OU] = EYF346PHUG' "$goose"
+          command="$app/Contents/Resources/bin/buzz-agent-command"
+          test -x "$command" || { echo '::error::Signed app is missing buzz-agent-command'; exit 1; }
+          test "$(lipo -archs "$command")" = "$LIPO_ARCH" || { echo "::error::buzz-agent-command is not $LIPO_ARCH"; exit 1; }
+          codesign --verify --strict --verbose=2 \
+            -R '=anchor apple generic and certificate 1[field.1.2.840.113635.100.6.2.6] exists and certificate leaf[subject.OU] = EYF346PHUG' "$command"
+          cli="$app/Contents/Resources/bin/buzz"
+          test -x "$cli" || { echo '::error::Signed app is missing buzz'; exit 1; }
+          test "$(lipo -archs "$cli")" = "$LIPO_ARCH" || { echo "::error::buzz is not $LIPO_ARCH"; exit 1; }
+          codesign --verify --strict --verbose=2 \
+            -R '=anchor apple generic and certificate 1[field.1.2.840.113635.100.6.2.6] exists and certificate leaf[field.1.2.840.113635.100.6.1.13] exists and certificate leaf[subject.OU] = EYF346PHUG' "$cli"
+          codesign --display --verbose=2 "$cli" 2>&1 | grep 'flags=.*runtime' > /dev/null || { echo '::error::buzz lacks the hardened runtime'; exit 1; }
+          "$cli" --help > /dev/null || { echo '::error::Signed buzz does not run'; exit 1; }
+
+      - name: Stage release assets and checksums
+        env:
+          SIGNED_DMG: ${{ steps.codesign.outputs.signed-dmg-path }}
+          VERSION: ${{ steps.version.outputs.version }}
+          ARCH: ${{ matrix.arch }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        run: |
+          set -euo pipefail
+          mkdir release-assets
+          cp "$SIGNED_DMG" "release-assets/Buzz_${VERSION}_${ARCH}.dmg"
+
+          # Package the verified, Apple-signed and stapled app from the release DMG.
+          app_dir=$(mktemp -d "$RUNNER_TEMP/updater-app.XXXXXX")
+          hdiutil attach "$SIGNED_DMG" -readonly -nobrowse -mountpoint "$app_dir" >/dev/null
+          trap 'hdiutil detach "$app_dir" >/dev/null' EXIT
+          app="$app_dir/Buzz.app"
+          test -d "$app" || { echo '::error::Signed DMG contains no app'; exit 1; }
+          archive="$PWD/release-assets/Buzz_${VERSION}_${ARCH}.app.tar.gz"
+          # ditto copies the complete signed bundle (including symlinks and metadata).
+          staged_app=$(mktemp -d "$RUNNER_TEMP/updater-staging.XXXXXX")
+          ditto "$app" "$staged_app/Buzz.app"
+          codesign --verify --deep --strict "$staged_app/Buzz.app"
+          (cd "$staged_app" && COPYFILE_DISABLE=1 tar -czf "$archive" 'Buzz.app')
+          pnpm tauri signer sign "$archive"
+          test -s "$archive" && test -s "$archive.sig" || { echo '::error::Updater signing failed'; exit 1; }
+          (cd release-assets && shasum -a 256 ./*.dmg ./*.tar.gz > SHA256SUMS)
+
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: signed-macos-${{ matrix.arch }}
+          path: release-assets/
+          if-no-files-found: error
+          retention-days: 7
+
+  publish:
+    name: Publish GitHub release
+    needs: [build, windows, linux, updater_signatures]
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: signed-macos-aarch64
+          path: build-assets/macos-aarch64
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: signed-macos-x64
+          path: build-assets/macos-x64
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: windows-x64-candidate
+          path: build-assets/windows
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: linux-x64-candidates
+          path: build-assets/linux
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: windows-linux-updater-signatures
+          path: build-assets/signatures
+      - name: Verify and assemble release assets
+        env:
+          VERSION: ${{ needs.build.outputs.version }}
+          SOURCE_SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          for platform in macos-aarch64 macos-x64 windows linux; do
+            (cd "build-assets/$platform" && sha256sum --check SHA256SUMS)
+          done
+          # Exact names also reject mixed versions after a partial-job rerun.
+          # Rerun all jobs so every platform uses the same run attempt/version.
+          mkdir release-assets
+          for arch in aarch64 x64; do
+            for asset in dmg app.tar.gz app.tar.gz.sig; do
+              cp "build-assets/macos-$arch/Buzz_${VERSION}_$arch.$asset" release-assets/
+            done
+          done
+          cp "build-assets/windows/Buzz_${VERSION}_x64_unsigned.exe" release-assets/
+          cp "build-assets/linux/Buzz_${VERSION}_amd64.deb" release-assets/
+          cp "build-assets/linux/Buzz_${VERSION}_x86_64.AppImage" release-assets/
+          for installer in x64_unsigned.exe amd64.deb x86_64.AppImage; do
+            cp "build-assets/signatures/Buzz_${VERSION}_${installer}.sig" release-assets/
+          done
+          printf '%s\n' "$SOURCE_SHA" > release-assets/SOURCE_COMMIT
+          (cd release-assets && sha256sum ./Buzz_* > SHA256SUMS)
+      - name: Publish desktop release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          SOURCE_SHA: ${{ github.sha }}
+          VERSION: ${{ needs.build.outputs.version }}
+        run: |
+          platforms='Includes Apple Silicon and Intel macOS (signed and notarized), Windows x64 (unsigned NSIS installer), and Linux x64 (Ubuntu 24.04 deb and AppImage).'
+          # Previews create their tag at the built commit. Stable and beta
+          # releases publish on their existing protected tag and never create one.
+          case "$VERSION" in
+            *-preview.*)
+              options=(--target "$SOURCE_SHA" --prerelease --latest=false --title "Buzz $VERSION (desktop preview)")
+              notes="Desktop preview from commit $SOURCE_SHA, built by Actions run $GITHUB_RUN_ID. $platforms Windows/Linux still require desktop acceptance. Updater-enabled installs update from the preview feed." ;;
+            *-beta.*)
+              options=(--verify-tag --prerelease --latest=false --title "Buzz $VERSION (beta)")
+              notes="Desktop beta from commit $SOURCE_SHA, built by Actions run $GITHUB_RUN_ID. $platforms Betas are never served on the stable feed; installs update to the next promoted stable release." ;;
+            *)
+              options=(--verify-tag --latest --title "Buzz $VERSION")
+              notes="Buzz desktop $VERSION from commit $SOURCE_SHA, built by Actions run $GITHUB_RUN_ID. $platforms Updater-enabled installs update from the stable feed once a release is promoted to it." ;;
+          esac
+          # GitHub can fail one call of several (500 publishing the uploaded
+          # draft). Delete a draft a failed try left, then try again. A
+          # published v$VERSION may be an earlier attempt's, already in a
+          # feed, so it is never deleted. Deleting a draft keeps its tag.
+          for try in 1 2 3; do
+            gh release create "v$VERSION" release-assets/* "${options[@]}" --notes "$notes" &&
+              exit 0
+            test "$try" -lt 3 || exit 1
+            draft=$(gh release view "v$VERSION" --json isDraft --jq .isDraft) || draft=
+            case "$draft" in
+              true) gh release delete "v$VERSION" --yes || true ;;
+              false)
+                echo "::error::v$VERSION is already published; leaving it in place."
+                exit 1 ;;
+            esac
+            sleep $((try * 15))
+          done
+
+  windows:
+    if: github.repository == 'block/buzz-app'
+    name: Windows x64 installer (unsigned)
+    runs-on: windows-2025
+    timeout-minutes: 120
+    defaults:
+      run:
+        shell: bash
+    steps:
+      # Unset builds trust only the built-in sign-in server and an empty value
+      # opts out, so add the repository's servers only when it names some.
+      - name: Add sign-in servers
+        if: vars.BUZZ_BUILD_FEDERATED_IDENTITY_CONFIG != ''
+        shell: bash
+        env:
+          SERVERS: ${{ vars.BUZZ_BUILD_FEDERATED_IDENTITY_CONFIG }}
+        # The delimiter form keeps a pretty-printed, multiline value intact.
+        run: |
+          delimiter="FI_${RANDOM}${RANDOM}${RANDOM}"
+          [[ "$SERVERS" != *"$delimiter"* ]]
+          printf 'BUZZ_BUILD_FEDERATED_IDENTITY_CONFIG<<%s\n%s\n%s\n' "$delimiter" "$SERVERS" "$delimiter" >> "$GITHUB_ENV"
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      # Reuse the native CI pin selection; Hermit does not run on Windows.
+      - name: Read repository tool pins
+        id: pins
+        shell: pwsh
+        run: |
+          foreach ($tool in @('node', 'pnpm')) {
+            $pins = @(Get-ChildItem "bin/.$tool-*.pkg")
+            if ($pins.Count -ne 1) { throw "Expected one $tool pin" }
+            $version = $pins[0].Name -replace "^\.$tool-(.*)\.pkg$", '$1'
+            "$tool=$version" >> $env:GITHUB_OUTPUT
+          }
+          $rust = (Select-String -Path rust-toolchain.toml -Pattern '^channel = "(.+)"$').Matches.Groups[1].Value
+          if (!$rust) { throw "Expected a rust-toolchain.toml channel" }
+          "rust=$rust" >> $env:GITHUB_OUTPUT
+      - name: Select pinned Rust
+        shell: pwsh
+        env:
+          RUST_VERSION: ${{ steps.pins.outputs.rust }}
+        run: |
+          rustup toolchain install $env:RUST_VERSION --profile minimal
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          "RUSTUP_TOOLCHAIN=$env:RUST_VERSION" >> $env:GITHUB_ENV
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: ${{ steps.pins.outputs.node }}
+      - uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1 # v4.3.0
+        with:
+          version: ${{ steps.pins.outputs.pnpm }}
+      - run: pnpm install --frozen-lockfile
+      - name: Set candidate version
+        run: node scripts/candidate-version.mjs
+      - name: Build NSIS installer
+        run: pnpm tauri build --ci --no-sign --bundles nsis --config "$RUNNER_TEMP/candidate.json" -- --locked
+      - name: Install into disposable runner and verify app executable
+        shell: pwsh
+        env:
+          CANDIDATES: ${{ inputs.candidates }}
+        run: |
+          $installers = @(Get-ChildItem target/release/bundle/nsis/*.exe)
+          if ($installers.Count -ne 1) { throw 'Expected exactly one NSIS installer' }
+          $destination = "$env:RUNNER_TEMP\candidate-install"
+          # NSIS /D must be last and unquoted, including paths containing spaces.
+          $process = Start-Process $installers[0].FullName -ArgumentList "/S /D=$destination" -Wait -PassThru
+          if ($process.ExitCode -ne 0) { throw "Installer failed: $($process.ExitCode)" }
+          if (!(Test-Path "$destination\Buzz.exe")) { throw 'App executable missing' }
+          if (!(Test-Path "$destination\bin\goose-acp.exe")) { throw 'goose-acp missing' }
+          if (!(Test-Path "$destination\bin\buzz-agent-command.exe")) { throw 'buzz-agent-command missing' }
+          if (!(Test-Path "$destination\bin\buzz.exe")) { throw 'buzz missing' }
+          & "$destination\bin\buzz.exe" --help | Out-Null
+          if ($LASTEXITCODE -ne 0) { throw 'buzz does not run' }
+          if ($env:CANDIDATES -ne 'true') {
+            $binary = [Text.Encoding]::ASCII.GetString([IO.File]::ReadAllBytes("$destination\Buzz.exe"))
+            foreach ($value in @($env:BUZZ_UPDATER_PUBLIC_KEY, $env:BUZZ_UPDATER_ENDPOINT)) {
+              if (!$value -or !$binary.Contains($value)) { throw 'App executable does not embed the updater configuration' }
+            }
+          }
+      - name: Stage candidate and checksum
+        run: |
+          mkdir release-assets
+          installers=(target/release/bundle/nsis/*.exe)
+          test "${#installers[@]}" -eq 1
+          cp "${installers[0]}" "release-assets/Buzz_${VERSION}_x64_unsigned.exe"
+          printf '%s\n' "$GITHUB_SHA" > release-assets/SOURCE_COMMIT
+          cd release-assets
+          sha256sum ./*.exe > SHA256SUMS
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: windows-x64-candidate
+          path: release-assets/
+          if-no-files-found: error
+          retention-days: 7
+
+  linux:
+    if: github.repository == 'block/buzz-app'
+    name: Linux x64 installers
+    runs-on: ubuntu-latest
+    # Shipped old-Buzz recipe, without its mesh/Kubernetes/updater dependencies.
+    container: ubuntu:24.04@sha256:33ceb71981b602c1a7443a53469e4dba065f7503eab3078a2d7a57a2ab987517
+    timeout-minutes: 120
+    defaults:
+      run:
+        shell: bash
+    env:
+      APPIMAGE_EXTRACT_AND_RUN: "1"
+    steps:
+      # Unset builds trust only the built-in sign-in server and an empty value
+      # opts out, so add the repository's servers only when it names some.
+      - name: Add sign-in servers
+        if: vars.BUZZ_BUILD_FEDERATED_IDENTITY_CONFIG != ''
+        shell: bash
+        env:
+          SERVERS: ${{ vars.BUZZ_BUILD_FEDERATED_IDENTITY_CONFIG }}
+        # The delimiter form keeps a pretty-printed, multiline value intact.
+        run: |
+          delimiter="FI_${RANDOM}${RANDOM}${RANDOM}"
+          [[ "$SERVERS" != *"$delimiter"* ]]
+          printf 'BUZZ_BUILD_FEDERATED_IDENTITY_CONFIG<<%s\n%s\n%s\n' "$delimiter" "$SERVERS" "$delimiter" >> "$GITHUB_ENV"
+      - name: Install build and packaging dependencies
+        run: |
+          apt-get update
+          DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+            build-essential ca-certificates curl desktop-file-utils file git \
+            libasound2-dev libayatana-appindicator3-dev libgtk-3-dev librsvg2-dev \
+            libopus-dev libssl-dev libwebkit2gtk-4.1-dev libxdo-dev patchelf pkg-config \
+            squashfs-tools wget xdg-utils
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
+      # No shared writable release caches. Use existing pins and frozen inputs.
+      - uses: cashapp/activate-hermit@cea9af7913204a965fd488637a8d1811bba2e616 # v1
+      - run: pnpm install --frozen-lockfile
+      - name: Install pinned AppImage repacking tools
+        run: |
+          wget -q -O /tmp/appimagetool https://github.com/AppImage/appimagetool/releases/download/1.9.1/appimagetool-x86_64.AppImage
+          echo 'ed4ce84f0d9caff66f50bcca6ff6f35aae54ce8135408b3fa33abfc3cb384eb0  /tmp/appimagetool' | sha256sum -c
+          install -m 755 /tmp/appimagetool /usr/local/bin/appimagetool
+          wget -q -O /tmp/appimage-runtime https://github.com/AppImage/type2-runtime/releases/download/20251108/runtime-x86_64
+          echo '2fca8b443c92510f1483a883f60061ad09b46b978b2631c807cd873a47ec260d  /tmp/appimage-runtime' | sha256sum -c
+          install -D -m 644 /tmp/appimage-runtime /usr/local/lib/appimage-runtime
+          echo 'APPIMAGETOOL_RUNTIME_FILE=/usr/local/lib/appimage-runtime' >> "$GITHUB_ENV"
+      - name: Set candidate version
+        run: node scripts/candidate-version.mjs
+      - name: Build deb and AppImage
+        run: pnpm tauri build --ci --no-sign --bundles deb,appimage --config "$RUNNER_TEMP/candidate.json" -- --locked
+      - name: Repair AppImage and verify packaged app executables
+        env:
+          CANDIDATES: ${{ inputs.candidates }}
+        run: |
+          shopt -s nullglob
+          debs=(target/release/bundle/deb/*.deb)
+          images=(target/release/bundle/appimage/*.AppImage)
+          test "${#debs[@]}" -eq 1 && test "${#images[@]}" -eq 1
+          bash scripts/fix-appimage.sh "${images[0]}"
+          dpkg-deb -x "${debs[0]}" "$RUNNER_TEMP/deb"
+          test -x "$RUNNER_TEMP/deb/usr/bin/Buzz"
+          test -x "$RUNNER_TEMP/deb/usr/lib/Buzz Foundation/bin/goose-acp"
+          test -x "$RUNNER_TEMP/deb/usr/lib/Buzz Foundation/bin/buzz-agent-command"
+          test -x "$RUNNER_TEMP/deb/usr/lib/Buzz Foundation/bin/buzz"
+          "$RUNNER_TEMP/deb/usr/lib/Buzz Foundation/bin/buzz" --help > /dev/null
+          image=$(realpath "${images[0]}")
+          mkdir "$RUNNER_TEMP/appimage"
+          (cd "$RUNNER_TEMP/appimage" && "$image" --appimage-extract >/dev/null)
+          test -x "$RUNNER_TEMP/appimage/squashfs-root/usr/bin/Buzz"
+          test -x "$RUNNER_TEMP/appimage/squashfs-root/usr/bin/Buzz.bin"
+          test -x "$RUNNER_TEMP/appimage/squashfs-root/usr/lib/Buzz Foundation/bin/goose-acp"
+          test -x "$RUNNER_TEMP/appimage/squashfs-root/usr/lib/Buzz Foundation/bin/buzz-agent-command"
+          test -x "$RUNNER_TEMP/appimage/squashfs-root/usr/lib/Buzz Foundation/bin/buzz"
+          # The updater selects each install's feed entry by its embedded bundle type.
+          binaries=("$RUNNER_TEMP/deb/usr/bin/Buzz" "$RUNNER_TEMP/appimage/squashfs-root/usr/bin/Buzz.bin")
+          grep -aqF __TAURI_BUNDLE_TYPE_VAR_DEB "${binaries[0]}" || { echo '::error::deb app lacks its bundle type'; exit 1; }
+          grep -aqF __TAURI_BUNDLE_TYPE_VAR_APP "${binaries[1]}" || { echo '::error::AppImage app lacks its bundle type'; exit 1; }
+          if [[ "$CANDIDATES" != true ]]; then
+            for binary in "${binaries[@]}"; do
+              for value in "$BUZZ_UPDATER_PUBLIC_KEY" "$BUZZ_UPDATER_ENDPOINT"; do
+                [[ -n "$value" ]] && grep -aqF "$value" "$binary" || { echo "::error::$binary does not embed the updater configuration"; exit 1; }
+              done
+            done
+          fi
+          mkdir release-assets
+          cp "${debs[0]}" "release-assets/Buzz_${VERSION}_amd64.deb"
+          cp "${images[0]}" "release-assets/Buzz_${VERSION}_x86_64.AppImage"
+          printf '%s\n' "$GITHUB_SHA" > release-assets/SOURCE_COMMIT
+          cd release-assets
+          sha256sum ./*.deb ./*.AppImage > SHA256SUMS
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: linux-x64-candidates
+          path: release-assets/
+          if-no-files-found: error
+          retention-days: 7
+
+  updater_signatures:
+    # Installer jobs never receive the signing key; sign their verified bytes here.
+    if: >-
+      github.repository == 'block/buzz-app' && !inputs.candidates &&
+      github.ref == (inputs.release_version && format('refs/tags/v{0}', inputs.release_version) || 'refs/heads/main')
+    name: Sign Windows and Linux updater installers
+    needs: [windows, linux]
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: ./.github/actions/setup
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: windows-x64-candidate
+          path: build-assets/windows
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: linux-x64-candidates
+          path: build-assets/linux
+      - name: Sign verified installers
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        run: |
+          set -euo pipefail
+          for platform in windows linux; do
+            (cd "build-assets/$platform" && sha256sum --check SHA256SUMS)
+          done
+          mkdir signatures
+          for installer in build-assets/windows/*.exe build-assets/linux/*.deb build-assets/linux/*.AppImage; do
+            pnpm tauri signer sign "$installer"
+            test -s "$installer.sig" || { echo '::error::Updater signing failed'; exit 1; }
+            mv "$installer.sig" signatures/
+          done
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: windows-linux-updater-signatures
+          path: signatures/
+          if-no-files-found: error
+          retention-days: 7

@@ -2,8 +2,15 @@
   display: flex;
   flex-direction: column;
   min-height: 0;
-  /* --available-height is set by the popover positioner. */
-  max-height: min(34rem, var(--available-height));
+  /* 700px popup at the default text size, less the popup's list padding and
+     1px floating-surface border. --available-height is set by the popover
+     positioner. */
+  max-height: calc(
+    min(43.75rem, var(--available-height)) -
+    2 *
+    var(--space-1) -
+    2px
+  );
 }
 
 .header {
@@ -46,8 +53,6 @@
 .body {
   flex: 1 1 auto;
   min-height: 0;
-  /* 300px at the default text size; scales with enlarged text. */
-  max-height: 18.75rem;
   overflow-y: auto;
   padding-block: var(--space-1);
 }

@@ -427,37 +427,54 @@ it("defaults to platform storage using the bundled manifests", async () => {
   expect(values.get("buzzodz.plugins.v1")).toContain('"example":false');
 });
 
-it("installs a selected preview through the management boundary, rejecting overlap and stale polls", async () => {
-  const install = deferred();
-  const imports = {
-    checkFolder: vi.fn(async () => "updated"),
-    previewFolder: vi.fn(async () => null),
-    folder: vi.fn(async () => null),
-    files: vi.fn(async () => null),
-    git: vi.fn(async () => null),
-    url: vi.fn(async () => null),
-    checkGit: vi.fn(async () => null),
-    discard: vi.fn(async () => {}),
-    install: vi.fn(() => install.promise),
-  };
-  const { plugins, installation } = harness({ imports });
-  await vi.advanceTimersByTimeAsync(0);
-  expect(plugins.imports).toBe(imports);
-  const poll = deferred();
-  vi.mocked(installation.getCatalog).mockReturnValueOnce(poll.promise);
-  await vi.advanceTimersByTimeAsync(1000);
-  const first = plugins.installImport("preview", "nested/dist");
-  expect(await plugins.installImport("other", "wrong")).toBe(false);
-  expect(imports.install).toHaveBeenCalledExactlyOnceWith(
-    "preview",
-    "nested/dist",
-  );
-  install.resolve(ready(false));
-  expect(await first).toBe(true);
-  poll.resolve(ready());
-  await vi.advanceTimersByTimeAsync(0);
-  expect(plugins.snapshot().configuration).toEqual(ready(false));
-});
+it.each(["resolve", "reject"] as const)(
+  "retains a confirmed import past its watchdog until it %ss, rejecting overlap and stale polls",
+  async (settlement) => {
+    const install = deferred();
+    const imports = {
+      checkFolder: vi.fn(async () => ({ revision: "updated" })),
+      previewFolder: vi.fn(async () => null),
+      folder: vi.fn(async () => null),
+      files: vi.fn(async () => null),
+      git: vi.fn(async () => null),
+      url: vi.fn(async () => null),
+      checkGit: vi.fn(async () => null),
+      discard: vi.fn(async () => {}),
+      install: vi.fn(() => install.promise),
+    };
+    const { plugins, installation } = harness({ imports });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(plugins.imports).toBe(imports);
+    const poll = deferred();
+    vi.mocked(installation.getCatalog).mockReturnValueOnce(poll.promise);
+    await vi.advanceTimersByTimeAsync(1000);
+    const first = plugins.installImport("preview", "nested/dist");
+    const returned = vi.fn();
+    void first.then(returned);
+    expect(await plugins.installImport("other", "wrong")).toBe(false);
+    expect(imports.install).toHaveBeenCalledExactlyOnceWith(
+      "preview",
+      "nested/dist",
+    );
+    await vi.advanceTimersByTimeAsync(10_000);
+    expect(plugins.snapshot().error).toContain("10 seconds");
+    expect(plugins.snapshot().busy).toBe(true);
+    expect(returned).not.toHaveBeenCalled();
+    expect(await plugins.installImport("other", "wrong")).toBe(false);
+    if (settlement === "resolve") install.resolve(ready(false));
+    else install.reject(new Error("Late native failure"));
+    expect(await first).toBe(settlement === "resolve");
+    expect(plugins.snapshot().busy).toBe(false);
+    expect(plugins.snapshot().error).toBe(
+      settlement === "resolve" ? null : "Error: Late native failure",
+    );
+    poll.resolve(ready());
+    await vi.advanceTimersByTimeAsync(0);
+    expect(plugins.snapshot().configuration).toEqual(
+      ready(settlement !== "resolve"),
+    );
+  },
+);
 
 it("reloads through the management boundary, rejecting overlap and stale polls", async () => {
   const reload = deferred();
@@ -524,8 +541,59 @@ it("rejects retry while busy, disabled, paused, or carrying an artifact error", 
     plugin.error = "Artifact unavailable";
   vi.mocked(installation.getCatalog).mockResolvedValue(broken);
   await vi.advanceTimersByTimeAsync(1000);
-  expect(plugins.snapshot().activation.example?.status).toBe("failed");
+  expect(plugins.snapshot().activation.example).toBeUndefined();
   expect(plugins.retryPlugin("example")).toBe(false);
+});
+
+it("does not load an enabled external plugin with a verification error", async () => {
+  const catalog = ready();
+  if (catalog.status !== "ready") throw new Error("fixture");
+  const entry = catalog.catalog.plugins[0];
+  if (!entry) throw new Error("fixture");
+  entry.source = "external";
+  entry.error = "External plugins require a signed release";
+  const { plugins, installation } = harness({
+    getCatalog: async () => catalog,
+  });
+  await vi.advanceTimersByTimeAsync(0);
+  expect(installation.readModule).not.toHaveBeenCalled();
+  expect(plugins.snapshot().activation.example).toBeUndefined();
+  expect(plugins.retryPlugin("example")).toBe(false);
+});
+
+it("disposes an active plugin when its unchanged revision fails verification", async () => {
+  const code = `export const inject = ["pages"];
+export function apply(ctx) {
+  ctx.pages.register({ id: "main", title: "External", component: () => null });
+}`;
+  const objectUrl = vi
+    .spyOn(URL, "createObjectURL")
+    .mockReturnValue(`data:text/javascript,${encodeURIComponent(code)}`);
+  try {
+    const catalog = ready();
+    if (catalog.status !== "ready") throw new Error("fixture");
+    const entry = catalog.catalog.plugins[0];
+    if (!entry) throw new Error("fixture");
+    entry.source = "external";
+    const { plugins, pages, installation } = harness({
+      getCatalog: vi.fn(async () => catalog),
+      readModule: vi.fn(async () => code),
+    });
+    await vi.waitFor(() => expect(pages.snapshot()).toHaveLength(1));
+    expect(plugins.snapshot().activation.example?.status).toBe("active");
+    const broken = structuredClone(catalog);
+    const brokenEntry = broken.catalog.plugins[0];
+    if (!brokenEntry) throw new Error("fixture");
+    brokenEntry.error = "Invalid plugin release event ID or signature";
+    vi.mocked(installation.getCatalog).mockResolvedValue(broken);
+    await vi.advanceTimersByTimeAsync(1000);
+    expect(pages.snapshot()).toHaveLength(0);
+    expect(plugins.snapshot().activation.example).toBeUndefined();
+    expect(plugins.retryPlugin("example")).toBe(false);
+    expect(installation.readModule).toHaveBeenCalledTimes(1);
+  } finally {
+    objectUrl.mockRestore();
+  }
 });
 
 it("loads an enabled external plugin regardless of its id", async () => {

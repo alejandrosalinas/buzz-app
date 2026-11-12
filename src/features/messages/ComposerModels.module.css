@@ -222,7 +222,9 @@ html[data-keyboard-navigation] .thumb:focus-within {
 .slider[data-pointer-moving],
 .slider[data-dragging] .tetherSway,
 html[data-keyboard-input] .slider,
-html[data-keyboard-input] .slider * {
+html[data-keyboard-input] .slider
+/* biome-ignore lint/correctness/noUnknownPseudoClass: CSS Modules preserves the shared Button class. */
+:where(.thumbFace, .tetherSway, :global(.buzz-button)) {
   transition: none;
 }
 @media (prefers-reduced-motion: reduce) {

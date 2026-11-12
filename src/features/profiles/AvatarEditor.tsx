@@ -19,6 +19,7 @@ import { ScrollEdgeMaterial } from "../../shared/design-system/ui/ScrollEdgeMate
 import { Tabs } from "../../shared/design-system/ui/Tabs";
 import {
   avatarPictureError,
+  profilePictureError,
   emojiAvatar,
   emojiAvatarScale,
   paintEmojiAvatar,
@@ -38,6 +39,8 @@ type Props = {
   name: string;
   community?: string | undefined;
   shape?: "circle" | "squircle";
+  /** A person's own profile, which keeps an emoji avatar saved by Buzz mobile. */
+  personal?: boolean;
   size?: "compact" | "default";
   /** Reuse the active session's already-authorized cached thumbnail in compact previews. */
   thumbnailMedia?: (url: string, size: "small") => string | undefined;
@@ -102,7 +105,9 @@ export function AvatarEditor(props: Props) {
     props.size === "compact" ? "small" : undefined,
     props.size === "compact" ? props.thumbnailMedia : undefined,
   );
-  const pictureError = avatarPictureError(props.value);
+  const pictureError = (
+    props.personal ? profilePictureError : avatarPictureError
+  )(props.value);
   const errorId = useId();
   // The empty and filled triggers swap as the draft preview changes. One id
   // lets Base UI follow the mounted one, for Tab and return focus.
@@ -496,6 +501,7 @@ function AvatarDraft({
   inlinePicker,
   value,
   community,
+  personal,
   onPreview,
   sizeTarget,
   disabled = false,
@@ -620,7 +626,9 @@ function AvatarDraft({
       }
     }
   }
-  const pictureError = avatarPictureError(picture);
+  const pictureError = (personal ? profilePictureError : avatarPictureError)(
+    picture,
+  );
   // Validate late: show the URL error after blur or an attempt to apply it,
   // then keep it current so it clears as soon as the URL is fixed.
   // An invalid saved URL is not a new attempt, so it shows at once.

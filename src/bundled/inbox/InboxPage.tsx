@@ -233,7 +233,7 @@ export function InboxPage({
                       "Choose a community to see your activity.")}
               </p>
               {connection.status === "error" && !connection.denied && (
-                <Button onClick={relay.retry}>Retry connection</Button>
+                <Button onClick={relay.tryAgain}>Retry connection</Button>
               )}
             </div>
           </div>

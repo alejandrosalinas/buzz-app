@@ -4,6 +4,7 @@ import {
 } from "./message-actions.mjs";
 import { test, expect } from "./source-fixture.mjs";
 import { watchPageErrors } from "./page-errors.mjs";
+import { animationsSettled } from "./animations.mjs";
 
 test("reaction plus opens a visible emoji-only picker, restores focus and publishes custom emoji", async ({
   page,
@@ -57,9 +58,7 @@ test("reaction plus opens a visible emoji-only picker, restores focus and publis
       const { x, y, width, height } = node.getBoundingClientRect();
       return { x, y, width, height };
     });
-  await actions.evaluate((bar) =>
-    Promise.all(bar.getAnimations().map((animation) => animation.finished)),
-  );
+  await animationsSettled(actions);
   const actionsBefore = await bounds(actions);
   const plusBefore = await bounds(plus);
   await plus.click();

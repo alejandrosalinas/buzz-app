@@ -1,7 +1,6 @@
 use super::relay::*;
 use buzz_pairing::PairingSession;
 use futures_util::{SinkExt, StreamExt};
-use nostr_pairing::JsonUtil;
 use tokio_tungstenite::{tungstenite::Message, WebSocketStream};
 use url::Url;
 
@@ -64,8 +63,8 @@ async fn late_auth_uses_ephemeral_key_and_retries_only_unacknowledged_events() {
     let (_, mut auth) = subscribe(&mut client, &source, &relay).await.unwrap();
     assert_eq!(read_server(&mut server).await[0], "REQ");
     let event = source
-        .sign_event(nostr_pairing::EventBuilder::new(
-            nostr_pairing::Kind::Custom(24134),
+        .sign_event(nostr::event::EventBuilder::new(
+            nostr::event::Kind::Custom(24134),
             "encrypted-fixture",
         ))
         .unwrap();
@@ -78,10 +77,10 @@ async fn late_auth_uses_ephemeral_key_and_retries_only_unacknowledged_events() {
         .unwrap());
     let authentication = read_server(&mut server).await;
     assert_eq!(authentication[0], "AUTH");
-    let proof = nostr_pairing::Event::from_json(authentication[1].to_string()).unwrap();
+    let proof = serde_json::from_value::<nostr::event::Event>(authentication[1].clone()).unwrap();
     assert!(proof.verify().is_ok());
     assert_eq!(proof.pubkey, source.pubkey());
-    assert_eq!(proof.kind, nostr_pairing::Kind::Authentication);
+    assert_eq!(proof.kind, nostr::event::Kind::Authentication);
     let rejected = serde_json::json!([
         "OK",
         event.id.to_hex(),

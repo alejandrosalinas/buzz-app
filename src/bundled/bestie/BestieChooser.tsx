@@ -16,6 +16,8 @@ import { ChoiceRow } from "../../shared/design-system/ui/ChoiceRow";
 import { Combobox } from "../../shared/design-system/ui/Combobox";
 import { AgentCreateDialog } from "../agents/AgentCreateDialog";
 import { RemoteBestieConfirm, remoteAgent } from "../agents/BestieChoice";
+import { rememberFirstAgent } from "./FirstAgentWelcome";
+import { EmptyBestieAvatar } from "./EmptyBestieAvatar";
 
 const message = (reason: unknown) =>
   reason instanceof Error ? reason.message : String(reason);
@@ -27,8 +29,8 @@ export function BestieChooser({
   scope,
   community,
   agents,
-  title = "Choose your bestie agent",
-  description = "This is your primary agent in Buzz. They’ll get special placement and extra capabilities in the app.",
+  title,
+  description,
 }: {
   session: RelaySession;
   scope: string;
@@ -42,6 +44,7 @@ export function BestieChooser({
   const { types } = useAgents(agents);
   const [search, setSearch] = useState("");
   const [creating, setCreating] = useState(false);
+  const [firstCreation, setFirstCreation] = useState(false);
   const [selected, setSelected] = useState("");
   const [created, setCreated] = useState("");
   const [saving, setSaving] = useState(false);
@@ -114,17 +117,36 @@ export function BestieChooser({
     label: names?.(agent.pubkey)?.name ?? agent.managedName ?? agent.name,
     keyLabel: keyLabels.get(agent.pubkey),
   }));
-  const pending = choices.pending || choices.archives.status === "loading";
-  const shownError = error || choices.error;
+  const pending =
+    choices.pending ||
+    choices.archives.status === "idle" ||
+    choices.archives.status === "loading";
+  const shownError = error || choices.error || choices.archives.error;
+  const firstAgent =
+    choices.complete &&
+    ["ready", "unavailable"].includes(choices.archives.status) &&
+    !available.length &&
+    !pending &&
+    !shownError &&
+    !created &&
+    !refreshing;
   return (
     <>
       <EmptyState
-        icon={<BestieIcon />}
-        title={title}
-        description={description}
+        icon={firstAgent ? <EmptyBestieAvatar /> : <BestieIcon />}
+        title={
+          title ??
+          (firstAgent ? "Create your first agent" : "Choose your bestie agent")
+        }
+        description={
+          description ??
+          (firstAgent
+            ? "Buzz is better with your agents. Create one to get started."
+            : "Choose the agent you want close at hand. Your Bestie gets a pinned DM and is selected for new Solo chats.")
+        }
         action={
           <div className="flex w-full max-w-sm flex-col items-center gap-3">
-            {!available.length && !pending && (
+            {!firstAgent && !available.length && !pending && (
               <p className="m-0 text-body-sm text-secondary">
                 {chooseInstruction}
               </p>
@@ -193,7 +215,7 @@ export function BestieChooser({
                 </Combobox.Popup>
               </Combobox.Root>
             )}
-            {!available.length && !pending && !shownError && (
+            {!firstAgent && !available.length && !pending && !shownError && (
               <p className="m-0 text-body-sm text-muted" role="status">
                 You don’t have an eligible agent in this community yet.
               </p>
@@ -213,11 +235,16 @@ export function BestieChooser({
                 variant={available.length ? "outline" : "prominent"}
                 size={available.length ? "sm" : "md"}
                 disabled={saving || refreshing}
-                onClick={() => setCreating(true)}
+                onClick={() => {
+                  setFirstCreation(
+                    firstAgent && !choices.identities.length && !title,
+                  );
+                  setCreating(true);
+                }}
               >
-                Create agent
+                {firstAgent ? "Create an agent" : "Create agent"}
               </Button>
-              {(choices.error || created) && (
+              {(choices.error || choices.archives.error || created) && (
                 <Button
                   variant="outline"
                   size="sm"
@@ -253,6 +280,7 @@ export function BestieChooser({
           community={community}
           onClose={() => setCreating(false)}
           onCreated={(agent) => {
+            if (firstCreation) rememberFirstAgent(scope, agent.pubkey);
             setCreating(false);
             setCreated(agent.pubkey);
             setRefreshing(true);

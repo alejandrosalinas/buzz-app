@@ -1,0 +1,58 @@
+.cards {
+  display: grid;
+  gap: var(--space-2);
+  margin-block-start: var(--space-2);
+}
+.card {
+  min-width: 0;
+  display: grid;
+  gap: var(--space-2);
+  padding: var(--space-3);
+  border: 1px solid var(--border-standard);
+  border-radius: var(--radius-control);
+  background: var(--surface-panel);
+  color: var(--text-standard);
+}
+.files {
+  display: grid;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.note {
+  margin: 0;
+  color: var(--text-secondary);
+  font-size: var(--text-body-sm);
+  line-height: var(--text-body-sm--line-height);
+  letter-spacing: var(--text-body-sm--letter-spacing);
+}
+.counts {
+  display: inline-flex;
+  gap: var(--space-2);
+  font-family: var(--font-mono);
+  font-size: var(--text-mono);
+  line-height: var(--text-mono--line-height);
+  letter-spacing: var(--text-mono--letter-spacing);
+  font-weight: var(--text-mono--font-weight);
+}
+.added {
+  color: var(--text-success);
+}
+.removed {
+  color: var(--text-danger);
+}
+.panel {
+  display: grid;
+  gap: var(--space-4);
+  min-width: 0;
+}
+.picker {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  margin-block-end: var(--space-3);
+}
+.picker > :first-child {
+  flex: 1;
+  min-width: 0;
+}

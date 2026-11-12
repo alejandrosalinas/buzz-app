@@ -61,12 +61,12 @@ home, and reviews start Codex with `forced_chatgpt_workspace_id` set to it and
 recorded for another workspace, before loading any workspace's managed
 configuration. A replacement that records the pinned workspace with another
 workspace's tokens is stopped only if OpenAI's servers check the two match,
-which Buzz has not verified. Existing users must sign in through Buzz once, with
-**Sign in again** in Codex's harness defaults: until then, and while the shared
-sign-in is an API key or names another workspace, Codex reviews fail closed with
-a message saying where to sign in. API key sign-ins, keyring sign-in and custom
-model providers cannot run Codex reviews. Protected Codex gives its tool shells
-an empty protection bridge address and token through
+which Buzz has not verified. Existing users must sign in through Buzz once,
+which Codex's harness defaults offer while Codex is signed out: until then, and
+while the shared sign-in is an API key or names another workspace, Codex reviews
+fail closed with a message saying where to sign in. API key sign-ins, keyring
+sign-in and custom model providers cannot run Codex reviews. Protected Codex
+gives its tool shells an empty protection bridge address and token through
 `shell_environment_policy.set`, which keeps the user's own shell policy. This
 stops tool shells inheriting them, but a same-user command that reads the
 engine's environment can still end the bridge session, and later turns then fail
@@ -82,10 +82,10 @@ complete ordinary version-2 multi-community store.
 ## Provider API
 
 An installed plugin injects `agentProtection`, then registers
-`{ processProtection, check(request, signal), phases?(policy), runtimeProcesses? }`. Registration is owned by its
+`{ processProtection, checkEvidence(metadata, source, signal), phases?(policy), runtimeProcesses? }`. Registration is owned by its
 plugin ID; replacing or unloading it revokes the old registration and pending
 checks. Only the exact boolean `true` permits an action. Exceptions, cancellation,
-missing providers, invalid/oversized requests and the bounded deadline deny it.
+missing providers, invalid evidence or metadata, and the bounded deadline deny it.
 A provider may instead deny with exactly `{allowed: false, reason}` to explain
 the denial to people. Buzz reduces the reason to one line of at most 300
 characters and uses it only when denying what a protected Codex agent reads (a
@@ -133,10 +133,13 @@ and the OS shell. Protected Claude reads through the same helper and runs its pi
 release as a declared artifact. Ordinary launch IDs and runtime PATH retain their
 prior behavior.
 
-`check` receives an immutable action (`kind`, `session`, `content`, optional
-`command`) plus host-captured `agent`, `relay`, `runtime` and `policy`. `kind` is
+Every provider implements `checkEvidence(metadata, source, signal)`. Metadata
+contains `kind`, `session`, optional `command`, and host-captured `agent`, `relay`,
+`runtime` and `policy`. The separate, pull-driven `TextSource` yields serialized
+JSON content through `read()`. There is no total evidence byte limit; the provider
+must consume the source completely before an allow is accepted. `kind` is
 `context`, `tool` or `tool-result`. Session metadata is not authorization or proof
-of the currently displayed conversation. Each source or combined tool action is limited to 256 KiB. Optional `phases(policy)` returns a
+of the currently displayed conversation. Optional `phases(policy)` returns a
 boolean for every action kind; it is captured from the native policy at launch.
 Disabled phases still validate the provider lifetime, but send no inspection
 evidence and do not invoke a checker. Omitting it enables every phase. Plugins
@@ -329,11 +332,11 @@ choice remains separate from the requesting runtime's enforcement capability.
 Runtime plugins own `registerModels({label, models, complete})`; credentials remain
 with that runtime. `modelChoices()` lists configured choices. A protection provider
 calls `complete(model, {system, input, outputSchema?}, signal, requester?)` for
-bounded tool-free inference. The plugin owns instructions, schemas and response
+tool-free inference. The plugin owns instructions, schemas and response
 parsing; the host returns text and the actual model. The `agent` model selector
 resolves only the current requesting agent's configured runtime/model using its
 host identity and relay. Runtime changes and cancellation reject the result.
-Prompts, including optional serializable schemas, are bounded to 768 KiB.
+Every registered runtime accepts `input` as either a string or a replayable `TextSource`. `writeJSON(process, value)` serializes these inputs through ordered, bounded process writes; `encodeJSON(value)` exposes the same encoding as an async iterator. A partial failed write stops the worker so the next request cannot be appended to an incomplete frame. The runtime/plugin owns model capacity and reports errors; the app imposes no total streaming prompt limit.
 
 Runtime completion receives an optional fourth, prepared spawn function for the
 calling protection plugin's engine. Codex and Goose require it for their isolated,
@@ -370,4 +373,4 @@ quality. Native build caches remain keyed by pins and patches. Human
 acceptance and current UI/interaction checks remain required before marking the
 experimental PR ready.
 
-Each input source or combined tool action is bounded to 256 KiB, with separate 768 KiB serialized prompt/record headroom. Nothing is truncated to fit. Fixed classifiers can have smaller input bounds; a failed inspection must pause or deny. These byte limits do not establish classifier tokenization or detection completeness.
+Protection plugins own evidence storage and model capacity. The shared `evidence/begin`, `chunk`, `finish`, and `cancel` protocol is bound to one worker and its host-owned policy. One chunk at a time is acknowledged after consumption; sequence and final byte count must match before approval. Codex and Goose share the native sender; Pi uses the same host channel over its process connection. Claude retains an immutable private transcript snapshot and pulls bounded sections. Small transcripts keep their per-record sources; larger ones stream as one source per phase, routed record by record, so phase policies apply the same at any size. The native Claude watchdog spools large frames and reads only control metadata. The security plugin stores large pending evidence separately and exposes bounded sections to human and model reviewers. Chunk, metadata, concurrency, and timeout bounds remain; none is a total evidence allowance. The ordinary command-output and HTTP-body ceilings remain 1 MiB and 4 MiB. Nothing is truncated to obtain an allow. The plugin's native classifier/model implementation can still materialize full evidence and is responsible for resource/model failures; this is not a constant-memory guarantee for every runtime. A failed inspection must pause or deny.

@@ -132,6 +132,23 @@ test("channel completion preserves native editing, focus, popup geometry and sig
     "value",
     "[\\#General](buzz://channel/c) ",
   );
+  // The restored link edits as one chip with native keys: arrows step over
+  // it, Delete removes it whole without exposing Markdown, undo restores it.
+  await input.press("ControlOrMeta+ArrowDown");
+  await input.press("ArrowLeft");
+  await input.press("ArrowLeft");
+  await expect(input).toHaveJSProperty(
+    "value",
+    "[\\#General](buzz://channel/c) ",
+  );
+  await input.press("Delete");
+  await expect(input).toHaveJSProperty("value", " ");
+  await input.press("ControlOrMeta+z");
+  await expect(input).toHaveJSProperty(
+    "value",
+    "[\\#General](buzz://channel/c) ",
+  );
+  await expect(input.locator("[data-link-renderer]")).toHaveText("General");
   await input.press("Enter");
   await expect
     .poll(() => page.evaluate(() => window.mentionFixture.publications.length))

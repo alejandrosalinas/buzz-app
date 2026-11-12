@@ -1,4 +1,5 @@
-use nostr_pairing::{Keys, ToBech32};
+use nostr::key::{Keys, SecretKey};
+use nostr::nips::nip19::ToBech32;
 use zeroize::Zeroizing;
 
 pub(super) async fn prepare(
@@ -10,8 +11,8 @@ pub(super) async fn prepare(
         if current != viewer {
             return Err("The active account changed. Reopen Pair mobile.".into());
         }
-        let secret = nostr_pairing::SecretKey::from_slice(secret)
-            .map_err(|_| "Couldn’t read your Buzz account.")?;
+        let secret =
+            SecretKey::from_slice(secret).map_err(|_| "Couldn’t read your Buzz account.")?;
         payload(&Keys::new(secret), &viewer, &origin)
     })
     .await

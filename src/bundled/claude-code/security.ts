@@ -1,9 +1,13 @@
 import type { AgentProtection } from "../../features/agent-protection/service";
 import type { Spawn } from "./claude";
+import type { TranscriptSource } from "./protection-transcript";
 export const PROTECTED_CLAUDE_VERSION = "2.1.305";
 export type ClaudeProtection = Readonly<{
   gate: AgentProtection;
-  history(path: string, signal: AbortSignal): Promise<unknown>;
+  history(
+    path: string,
+    signal: AbortSignal,
+  ): Promise<unknown[] | TranscriptSource>;
 }>;
 /** Native request logs repeat tool catalogues; retain all conversation evidence. */
 export function protectionHistoryEntry(entry: unknown): unknown {
@@ -180,4 +184,10 @@ export async function protectedRuntime(spawn: Spawn) {
   const id = PROTECTED_PROCESSES[stdout.trim()];
   if (!id) throw new Error("Protected Claude needs a Mac");
   return id;
+}
+
+/** Acquire a snapshot before an asynchronous hook/tool check starts reading it. */
+export function retainProtectionHistory(value: unknown): () => void {
+  const history = value as { retain?: () => () => void } | null;
+  return typeof history?.retain === "function" ? history.retain() : () => {};
 }

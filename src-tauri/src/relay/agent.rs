@@ -966,28 +966,45 @@ fn decode_memory_events(
 
 #[tauri::command]
 pub(crate) async fn relay_agent_library(
+    host: tauri::State<'_, IdentityHost>,
     state: tauri::State<'_, crate::app_agents::AppAgentHost>,
+    community: String,
 ) -> Result<Value> {
+    origin(&community)?;
+    let viewer = host.with_key(|_, viewer| Ok(viewer.to_owned())).await?;
     let agents = state
         .agents()
         .map_err(|_| "Current Buzz library unavailable")?;
-    tauri::async_runtime::spawn_blocking(move || read_agent_library(&agents))
+    tauri::async_runtime::spawn_blocking(move || read_agent_library(&agents, &community, &viewer))
         .await
         .map_err(|_| "Current Buzz library unavailable".to_owned())?
 }
 
 /// Public display metadata for the identities Agents saved, read through their
 /// owner so both share one schema.
-fn read_agent_library(agents: &AppAgents) -> Result<Value> {
+fn read_agent_library(agents: &AppAgents, community: &str, viewer: &str) -> Result<Value> {
+    // Match the saved canonical wss address, including DNS's trailing-dot alias.
+    let mut destination = origin(community)?;
+    let host = destination
+        .host_str()
+        .ok_or("Invalid community")?
+        .trim_end_matches('.')
+        .to_owned();
+    destination
+        .set_host(Some(&host))
+        .map_err(|_| "Invalid community")?;
+    destination
+        .set_scheme("wss")
+        .map_err(|_| "Invalid community")?;
+    let destination = destination.as_str().trim_end_matches('/');
     let rows = agents
         .list()
         .map_err(|_| "Current Buzz library unavailable")?;
     let mut identities = Vec::new();
     let mut keys = HashSet::new();
-    for agent in rows
-        .into_iter()
-        .filter(|agent| !agent.deleted && !agent.joining)
-    {
+    for agent in rows.into_iter().filter(|agent| {
+        !agent.deleted && !agent.joining && agent.owner == viewer && agent.relay == destination
+    }) {
         if !key(&agent.pubkey) || agent.name.encode_utf16().count() > 256 {
             return Err("Current Buzz library unavailable".into());
         }
@@ -1044,15 +1061,22 @@ mod tests {
         let path = dir.path().join("identities.json");
         let agents = AppAgents::open(path.clone());
         assert_eq!(
-            read_agent_library(&agents).unwrap(),
+            read_agent_library(&agents, "https://relay.example", &"d".repeat(64)).unwrap(),
             json!({"definitions": [], "identities": []})
         );
         for case in cases {
             let bytes = serde_json::to_vec(&case["rows"]).unwrap();
             std::fs::write(&path, &bytes).unwrap();
-            let result = read_agent_library(&agents);
-            if let Some(expected) = case.get("expected") {
+            let result = read_agent_library(&agents, "https://relay.example", &"d".repeat(64));
+            if let Some(expected) = case.get("scopedExpected").or_else(|| case.get("expected")) {
                 assert_eq!(&result.unwrap(), expected, "{}", case["name"]);
+                assert_eq!(
+                    &read_agent_library(&agents, "https://RELAY.example.:443/", &"d".repeat(64))
+                        .unwrap(),
+                    expected,
+                    "canonical {}",
+                    case["name"]
+                );
             } else {
                 assert!(result.is_err(), "{}", case["name"]);
             }

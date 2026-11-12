@@ -1,32 +1,155 @@
+/* The portrait-color foil and motion follow block/buzz PR #5790. */
+@property --card-x {
+  syntax: "<number>";
+  inherits: true;
+  initial-value: 0.5;
+}
+@property --card-y {
+  syntax: "<number>";
+  inherits: true;
+  initial-value: 0.5;
+}
 /* The card keeps its drawn proportions and fits whole in the room its flex
    column leaves the stage. */
 .stage {
+  /* Feature-owned artwork: retain the reference card’s return curve. */
+  --card-return: 560ms cubic-bezier(0.22, 0.8, 0.3, 1);
   flex: 1;
   min-height: 0;
   container-type: size;
   display: flex;
   justify-content: center;
+  align-items: center;
   perspective: 1200px;
+}
+.reveal,
+.placeholder {
+  /* Leave room for the turn, tilt and shadow inside the bounded stage. */
+  height: min(90cqh, 90cqw * var(--card-tall));
+  aspect-ratio: var(--card-aspect);
+  border-radius: var(--card-radius);
+}
+.reveal {
+  position: relative;
+  isolation: isolate;
+  perspective: inherit;
+}
+/* A flat hit surface owns hover, including square corner bounds. Once
+   entered it grows slightly, so edge jitter does not repeatedly reset tilt. */
+.reveal::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+}
+.reveal:hover::after {
+  inset: -12px;
+}
+.turn,
+.card {
+  height: 100%;
+  border-radius: inherit;
+}
+.turn {
+  pointer-events: none;
+  /* Perspective must belong to the hover plane's direct parent. */
+  perspective: inherit;
+  opacity: 0;
+}
+/* This occasional export reveal retains the original trading card's one-second
+   turn. Its own plane leaves pointer tilt independent of the entrance. */
+.reveal[data-ready="true"] .turn {
+  opacity: 1;
+}
+.reveal[data-animate="true"] .turn {
+  animation: reveal 1s cubic-bezier(0.22, 1, 0.36, 1) 240ms both;
+}
+.burst {
+  position: absolute;
+  inset: -24% -36%;
+  /* Scale the original composition as a whole for this compact stage. */
+  transform: scale(0.6);
+  z-index: -1;
+  pointer-events: none;
+  border-radius: inherit;
+}
+.burst > span {
+  --burst-color: color-mix(in srgb, var(--card-accent) 62%, transparent);
+  position: absolute;
+  inset: 4%;
+  border-radius: 44%;
+  background: radial-gradient(
+    ellipse,
+    var(--burst-color) 0%,
+    var(--burst-color) 24%,
+    transparent 72%
+  );
+  box-shadow: 0 0 32cqh 18cqh var(--burst-color);
+  filter: blur(4cqh);
+  opacity: 0;
+  transform: var(--burst-start);
+}
+.reveal[data-animate="true"] .burst > span {
+  animation: burst 1.4s cubic-bezier(0.65, 0, 0.35, 1) 240ms both;
+}
+.burst > span:nth-child(1) {
+  --burst-color: color-mix(in srgb, var(--card-accent) 68%, white);
+  --burst-start: translate3d(-6%, -3%, 0) rotate(-17deg) scale(0.9, 0.56);
+  --burst-end: translate3d(-18%, -10%, 0) rotate(-8deg) scale(1.15, 0.72);
+}
+.burst > span:nth-child(2) {
+  --burst-start: translate3d(6%, 1%, 0) rotate(19deg) scale(0.64, 0.84);
+  --burst-end: translate3d(20%, 4%, 0) rotate(28deg) scale(0.82, 1.08);
+}
+.burst > span:nth-child(3) {
+  --burst-color: color-mix(in srgb, var(--card-accent) 52%, white);
+  --burst-start: translate3d(-1%, 5%, 0) rotate(3deg) scale(0.8, 0.59);
+  --burst-end: translate3d(-2%, 18%, 0) rotate(12deg) scale(1.02, 0.76);
+}
+@keyframes reveal {
+  from {
+    opacity: 0;
+    transform: rotateY(-105deg) scale(0.86);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+@keyframes burst {
+  0% {
+    opacity: 0;
+    transform: var(--burst-start);
+  }
+  /* Hold off the early flash through the translucent entrance. */
+  16% {
+    opacity: 0;
+  }
+  48% {
+    opacity: 0.58;
+  }
+  100% {
+    opacity: 0;
+    transform: var(--burst-end);
+  }
 }
 .card {
   --card-x: 0.5;
   --card-y: 0.5;
   position: relative;
-  /* The drawn card's proportions and corner, from its canvas. */
-  height: min(100cqh, 100cqw * var(--card-tall));
-  aspect-ratio: var(--card-aspect);
-  border-radius: var(--card-radius);
-  box-shadow: var(--shadow-sm);
-  transform: rotateX(calc((0.5 - var(--card-y)) * 12deg))
-    rotateY(calc((var(--card-x) - 0.5) * 12deg));
+  /* Artwork shadow scales with the card so it clears the dialog footer. */
+  box-shadow:
+    0 0.8cqh 1.6cqh color-mix(in srgb, black 22%, transparent),
+    0 0.4cqh 0.8cqh color-mix(in srgb, black 16%, transparent);
+  transform: rotateX(calc((0.5 - var(--card-y)) * 20deg))
+    rotateY(calc((var(--card-x) - 0.5) * 20deg));
   user-select: none;
+  /* The stationary reveal wrapper owns hit testing, not this rotating plane. */
+  pointer-events: none;
 }
-/* It follows the pointer directly and settles back once the pointer leaves. */
-.card:not(:hover) {
-  transition: transform var(--duration-settle) var(--easing-settle);
+.card {
+  transition: transform var(--card-return);
 }
 .placeholder {
-  background: var(--interaction-fill);
   box-shadow: none;
 }
 .image {
@@ -38,29 +161,112 @@
 .sheen {
   position: absolute;
   inset: 0;
+  padding: var(--card-border);
   border-radius: inherit;
   pointer-events: none;
-  /* The foil's own colours, from the card artwork. */
-  background: var(--card-sheen);
-  background-size: 250% 250%;
-  background-position: calc(var(--card-x) * 100%) calc(var(--card-y) * 100%);
-  mix-blend-mode: multiply;
-  opacity: 0;
-  transition: opacity var(--duration-settle) var(--easing-settle);
+  overflow: hidden;
+  mask:
+    linear-gradient(black 0 0) content-box,
+    linear-gradient(black 0 0);
+  mask-composite: exclude;
+  transition:
+    --card-x var(--card-return),
+    --card-y var(--card-return);
 }
-.card:hover .sheen {
-  opacity: 0.35;
+.sheen::before,
+.sheen::after {
+  content: "";
+  position: absolute;
+  inset: -1px;
+  opacity: 0;
+  transition: opacity var(--card-return);
+}
+.sheen::before {
+  background: radial-gradient(
+    circle at calc(var(--card-x) * 100%) calc(var(--card-y) * 100%),
+    color-mix(in srgb, white 88%, transparent) 0,
+    color-mix(in srgb, var(--card-accent) 32%, white) 13%,
+    transparent 34%
+  );
+}
+.sheen::after {
+  background: conic-gradient(
+    from 218deg at calc(var(--card-x) * 100%) calc(var(--card-y) * 100%),
+    transparent 0deg,
+    color-mix(in srgb, var(--card-accent) 44%, white) 42deg,
+    color-mix(in srgb, white 84%, transparent) 72deg,
+    color-mix(in srgb, var(--card-accent) 54%, white) 104deg,
+    transparent 148deg
+  );
+}
+@media (hover: hover) and (pointer: fine) {
+  .reveal[data-entered="true"]:hover .card {
+    /* Bridge discrete pointer events without the long return-to-rest delay. */
+    transition-duration: 80ms;
+  }
+  .reveal[data-entered="true"]:hover .card .sheen {
+    /* Track the pointer directly; ease only when it leaves the card. */
+    transition-duration: 0ms;
+  }
+  .reveal[data-entered="true"]:hover .card .sheen::before {
+    opacity: 0.76;
+    transition-duration: 90ms;
+  }
+  .reveal[data-entered="true"]:hover .card .sheen::after {
+    opacity: 0.58;
+    transition-duration: 90ms;
+  }
 }
 @media (prefers-reduced-motion: reduce) {
-  .card,
-  .card:not(:hover) {
+  .reveal[data-animate="true"] .turn {
+    animation: none;
+    opacity: 1;
+  }
+  .burst,
+  .sheen {
+    display: none;
+  }
+  .card {
     transform: none;
     transition: none;
   }
-  .sheen,
-  .card:hover .sheen {
-    opacity: 0.2;
-    background-position: 50% 50%;
+}
+
+/* Cover the flattened portrait only after the same bundled art has loaded.
+   The white backing matches the canvas panel, avoiding a doubled character. */
+.portrait {
+  position: absolute;
+  left: var(--portrait-left);
+  top: var(--portrait-top);
+  width: var(--portrait-width);
+  aspect-ratio: 1;
+  border-radius: var(--portrait-radius);
+  overflow: hidden;
+  background: white;
+  pointer-events: none;
+  visibility: hidden;
+}
+.portrait[data-loaded="true"] {
+  visibility: visible;
+}
+.portrait img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  transform: translate(
+    calc((var(--card-x) - 0.5) * 4%),
+    calc((var(--card-y) - 0.5) * 4%)
+  );
+  transition: transform var(--card-return);
+}
+@media (hover: hover) and (pointer: fine) {
+  .reveal[data-entered="true"]:hover .card .portrait img {
+    transition-duration: 80ms;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .portrait img {
+    transform: none;
     transition: none;
   }
 }

@@ -331,6 +331,7 @@ export async function bestieFixture(
       };
     },
     retry() {},
+    tryAgain() {},
     disconnect() {},
     async clearCache() {},
   };
@@ -380,6 +381,7 @@ export async function bestieFixture(
       publish: vi.fn(),
       publishProfile: vi.fn(),
       query: vi.fn(),
+      effectiveEdit: vi.fn(),
       searchProfiles: vi.fn(),
       upload: vi.fn(),
       media: vi.fn(),

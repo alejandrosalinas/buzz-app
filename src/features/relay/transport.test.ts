@@ -353,7 +353,8 @@ it("saves the viewer's config artifacts when the broker admits kind 45010", asyn
     content: "{}",
     tags: [],
   });
-  let returned = artifact;
+  let returned = artifact,
+    refuse = false;
   const fetcher = vi.fn(async (url: string) => {
     if (url.endsWith("/session"))
       return Response.json({
@@ -362,7 +363,11 @@ it("saves the viewer's config artifacts when the broker admits kind 45010", asyn
         writeKinds: [9, 45010],
       });
     if (url.endsWith("/sign")) return Response.json(returned);
-    return Response.json({ accepted: true, event_id: artifact.id });
+    return Response.json({
+      accepted: !refuse,
+      event_id: artifact.id,
+      message: refuse ? "rate-limited: try later" : "",
+    });
   });
   vi.stubGlobal("fetch", fetcher);
   const transport = await connectBrokerTransport();
@@ -379,6 +384,14 @@ it("saves the viewer's config artifacts when the broker admits kind 45010", asyn
     "/api/relay/sign",
     "/api/relay/publish",
   ]);
+  refuse = true;
+  const refused = await writer
+    .publish(saved, signal)
+    .catch((error: unknown) => error);
+  expect(writer.isNotSent?.(refused)).toBe(true);
+  expect(writer.isNotSent?.(new Error((refused as Error).message))).toBe(false);
+  expect(writer.isNotSent?.(new PublishRejected("denied"))).toBe(false);
+  refuse = false;
   // Only this viewer's artifacts.
   await expect(
     writer.sign({ kind: 9, content: "", tags: [], created_at: 1 }, signal),

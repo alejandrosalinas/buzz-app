@@ -165,6 +165,26 @@ it("loads the broker's Vite config without native-compatibility warnings", () =>
               );
             }
             delete process.env.BUZZ_DATABRICKS_HOST;
+            // Mobile app store listings reach the mobile card verbatim; invalid
+            // links fail the build without echoing credentials.
+            const mobileApps = ['BUZZ_MOBILE_APP_IOS_URL', 'BUZZ_MOBILE_APP_ANDROID_URL'];
+            for (const [link, expected] of [[' https://apps.example.com/buzz ', 'https://apps.example.com/buzz'], [undefined, '']]) {
+              for (const name of mobileApps) {
+                if (link === undefined) delete process.env[name];
+                else process.env[name] = link;
+              }
+              const result = await loadConfigFromFile({ command: 'build', mode: 'production' }, configFile);
+              for (const name of mobileApps)
+                assert.equal(result.config.define['import.meta.env.VITE_' + name], JSON.stringify(expected));
+            }
+            for (const [name, invalid] of [[mobileApps[0], 'https://user:secret@apps.example.com'], [mobileApps[1], 'http://apps.example.com']]) {
+              process.env[name] = invalid;
+              await assert.rejects(
+                loadConfigFromFile({ command: 'build', mode: 'production' }, configFile),
+                error => !String(error).includes('secret') && String(error).includes(name),
+              );
+              delete process.env[name];
+            }
             // A fresh checkout uses production for both dev and packaged frontends.
             // Explicit empty values retain the deployment opt-out.
             for (const local of ['', 'BUZZ_BUILDERLAB_URL=']) {

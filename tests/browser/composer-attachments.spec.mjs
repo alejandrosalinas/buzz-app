@@ -3,6 +3,20 @@ import { readFile } from "node:fs/promises";
 import react from "@vitejs/plugin-react";
 import { createServer } from "./vite-server.mjs";
 
+// The preparation journeys import their modules into a bare same-origin page.
+// The app's index.html would boot the whole app, and its first load
+// transforms over a thousand modules inside the navigation timeout.
+async function openPreparationDocument(page, server) {
+  const url = `http://127.0.0.1:${server.httpServer.address().port}/attachment-preparation`;
+  await page.route(url, (route) =>
+    route.fulfill({
+      contentType: "text/html",
+      body: "<!doctype html><title>Attachment preparation</title>",
+    }),
+  );
+  await page.goto(url);
+}
+
 // Browser-only boundary: actual File/DataTransfer delivery, editor capture and page wiring.
 test("picker, pane drop and clipboard files use the same attachment draft and existing Send", async ({
   page,
@@ -482,7 +496,7 @@ test("preparation preserves snapshot/animation and uses lossless WebP for pixel 
   });
   await server.listen();
   try {
-    await page.goto(`http://127.0.0.1:${server.httpServer.address().port}`);
+    await openPreparationDocument(page, server);
     for (const [name, type] of [
       ["still.png", "image/png"],
       ["animated.png", "image/png"],
@@ -1213,7 +1227,7 @@ test("PNG and JPEG preparation uploads metadata-free browser-encoded bytes", asy
   });
   await server.listen();
   try {
-    await page.goto(`http://127.0.0.1:${server.httpServer.address().port}`);
+    await openPreparationDocument(page, server);
     const results = await page.evaluate(async () => {
       const { prepareAttachment } = await import(
         "/src/features/messages/prepare-attachment.ts"

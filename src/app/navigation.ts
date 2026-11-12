@@ -13,7 +13,9 @@ import type { PageNavigation } from "../features/navigation/service";
 import type {
   OpenAttempt,
   OpenFailure,
+  Navigation,
   NavigationOpenOptions,
+  NavigationSnapshot,
 } from "../features/navigation/controller";
 import { isBuiltInSettingsSection } from "./settings-sections";
 import { linkedPage, linkedPageTarget } from "../features/pages/plugin-link";
@@ -25,12 +27,34 @@ export type PendingSettingsDeparture = {
   viewer: string;
   communityId: string;
 };
+/**
+ * The navigation as the shell renders it. An attempt that opens changes only
+ * its status, so the shell keeps the opening snapshot and skips a render per
+ * visit: its status never reads "opened". Readers of that subscribe themselves.
+ */
+export function shellSnapshot(navigation: Navigation) {
+  let shown = navigation.snapshot();
+  return () => {
+    const next = navigation.snapshot();
+    const last = shown;
+    const keys = Object.keys(next) as (keyof NavigationSnapshot)[];
+    if (
+      last.status !== "opening" ||
+      next.status !== "opened" ||
+      keys.length !== Object.keys(last).length ||
+      keys.some((key) => key !== "status" && next[key] !== last[key])
+    )
+      shown = next;
+    return shown;
+  };
+}
 export function useAppNavigation(
   services: AppServices,
   departure?: PendingSettingsDeparture | null,
 ) {
   const navigation = services.navigation;
-  const state = useSyncExternalStore(navigation.subscribe, navigation.snapshot);
+  const view = useMemo(() => shellSnapshot(navigation), [navigation]);
+  const state = useSyncExternalStore(navigation.subscribe, view);
   const client = useSyncExternalStore(
     services.communities.subscribe,
     services.communities.snapshot,
@@ -498,6 +522,7 @@ export function useAppNavigation(
       const current = navigation.snapshot().entry.target;
       if (current.kind !== "settings") return;
       const {
+        route: _route,
         section: _section,
         provider: _provider,
         pluginId: _pluginId,
@@ -508,6 +533,7 @@ export function useAppNavigation(
         navigation.dismiss((target) => {
           if (target.kind !== "settings") return false;
           const {
+            route: _route,
             section: _section,
             provider: _provider,
             pluginId: _pluginId,
@@ -553,7 +579,7 @@ export function useAppNavigation(
       ) {
         const status = services.relay.snapshot().status;
         if (status === "error" || status === "disconnected")
-          services.relay.retry();
+          services.relay.tryAgain();
       }
       void navigation.retry();
     },

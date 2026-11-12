@@ -1,6 +1,7 @@
 // goose on the shared ACP client: one `goose-acp` process, with goose's
 // extensions for the system prompt, steering, and per-turn provider and model
 // picks. Each session's Buzz tools reach goose over HTTP MCP, never a Buzz key.
+import { sessionTools } from "../../buzz-mcp/session-tools";
 import {
   AcpProcess,
   REQUEST_TIMEOUT_MS,
@@ -56,6 +57,11 @@ const CONFIGURED = "goose";
  * model, which goose would prefer to each session's. */
 export const ENV: Readonly<Record<string, string | null>> = {
   GOOSE_MODE: "auto",
+  GOOSE_TOOL_DEFERRAL: "lookup",
+  GOOSE_TOOL_DEFERRAL_ALWAYS_LOAD: sessionTools()
+    .filter((tool) => tool.load === "always")
+    .map((tool) => `buzz__${tool.name}`)
+    .join(","),
   BUZZ_PRIVATE_KEY: null,
   BUZZ_AUTH_TAG: null,
   BUZZ_RELAY_URL: null,
@@ -92,11 +98,11 @@ export const GOOSE: AcpHooks = {
         },
         () => true,
       ),
-  newSessionMeta: (buzz, { title, provider, platform }) => ({
+  newSessionMeta: (buzz, { title, provider, platform, tags }) => ({
     // The session's whole tool set: goose's developer tools and the Buzz
     // tools, so extensions in the owner's goose config and plugins never load
     // into a Buzz agent. The pinned Goose persists this list, including the
-    // Buzz MCP token; aaif-goose/goose#12908 is not in v1.57.0. Keep the entry
+    // Buzz MCP token; aaif-goose/goose#12908 is not in v1.59.0. Keep the entry
     // until upstream supports client MCP servers alongside this allowlist.
     // The non-persistence acceptance test remains a known failure.
     // Mesh sessions pass a narrower `platform` set (see mesh-compute).
@@ -106,6 +112,8 @@ export const GOOSE: AcpHooks = {
     ...(title ? { sessionTitle: title } : {}),
     // On the provider's default model, whatever goose's config holds.
     ...(provider ? { provider } : {}),
+    // Indexed by goose, so `session/list` finds the session by them.
+    ...(tags ? { tags } : {}),
   }),
   // Appended under goose's own prompt, which carries each extension's
   // instructions. `set` replaces that prompt and renders the text as a

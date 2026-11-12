@@ -286,3 +286,97 @@ test("pointer completion animates surviving rows in a scrolled list", async ({
     "the next row moves through intermediate positions instead of jumping into the fading row",
   ).toBe(true);
 });
+
+// Only a browser can detect the dock wrapper clipping a badge's text or bubble.
+// Use the real plugin contribution inside PageNavigation, not a copied count.
+test("due reminder counts fit the dock at every supported text size", async ({
+  page,
+}) => {
+  const { unexplained } = watchPageErrors(page);
+  for (const count of [0, 1, 12, 125]) {
+    await page.goto(`${url}?dock&count=${count}`);
+    const tab = page.getByRole("tab", { name: /Reminders/ });
+    const badge = tab.getByRole("img", { name: `${count} due`, exact: true });
+    if (!count) {
+      await expect(tab).toBeVisible();
+      await expect(badge).toHaveCount(0);
+      continue;
+    }
+    await expect(badge).toHaveText(count > 99 ? "99+" : String(count));
+    await page.evaluate(() => document.fonts.ready);
+    for (const width of [480, 1280]) {
+      await page.setViewportSize({ width, height: 800 });
+      for (const mode of ["light", "dark"]) {
+        for (const font of ["default", "larger"]) {
+          await page.evaluate(
+            ({ mode, font }) => {
+              document.documentElement.dataset.colorMode = mode;
+              document.documentElement.dataset.fontSize = font;
+            },
+            { mode, font },
+          );
+          const geometry = await badge.evaluate((el) => {
+            const rect = el.getBoundingClientRect();
+            const wrapper = el
+              .closest(".buzz-tabs-badge")
+              .getBoundingClientRect();
+            const tab = el.closest('[role="tab"]');
+            const tile = tab.getBoundingClientRect();
+            const icon = tab.querySelector("svg").getBoundingClientRect();
+            const scrollport = el
+              .closest(".shell-dock-pages")
+              .getBoundingClientRect();
+            const range = document.createRange();
+            range.selectNodeContents(el);
+            const text = range.getBoundingClientRect();
+            return {
+              bubbleFits:
+                rect.left >= wrapper.left &&
+                rect.right <= wrapper.right &&
+                rect.top >= wrapper.top &&
+                rect.bottom <= wrapper.bottom,
+              textFits:
+                text.left >= wrapper.left &&
+                text.right <= wrapper.right &&
+                text.top >= wrapper.top &&
+                text.bottom <= wrapper.bottom,
+              outsideCorner: rect.top < tile.top && rect.right > tile.right,
+              clearOfIcon: rect.bottom <= icon.top || rect.left >= icon.right,
+              insideScrollport:
+                rect.left >= scrollport.left &&
+                rect.right <= scrollport.right &&
+                rect.top >= scrollport.top &&
+                rect.bottom <= scrollport.bottom,
+              overflow: el.scrollWidth - el.clientWidth,
+              fontSize: Number.parseFloat(getComputedStyle(el).fontSize),
+              tileWidth: tile.width,
+              background: getComputedStyle(el).backgroundColor,
+            };
+          });
+          expect(
+            geometry.bubbleFits,
+            `${count}, ${width}, ${mode}, ${font}`,
+          ).toBe(true);
+          expect(geometry.textFits).toBe(true);
+          expect(geometry.outsideCorner).toBe(true);
+          expect(geometry.clearOfIcon).toBe(true);
+          expect(geometry.insideScrollport).toBe(true);
+          expect(geometry.overflow).toBe(0);
+          expect(geometry.fontSize).toBeLessThan(geometry.tileWidth / 2);
+          expect(geometry.background).not.toBe("rgba(0, 0, 0, 0)");
+        }
+      }
+    }
+    // A corner badge must not intercept the tab's pointer or keyboard action.
+    await page.goto(`${url}?dock&count=${count}&inactive`);
+    await expect(tab).toHaveAttribute("aria-selected", "false");
+    const tile = await tab.boundingBox();
+    await tab.click({ position: { x: tile.width - 2, y: 2 } });
+    await expect(tab).toHaveAttribute("aria-selected", "true");
+    await page.reload();
+    await tab.focus();
+    await page.keyboard.press("Enter");
+    await expect(tab).toHaveAttribute("aria-selected", "true");
+  }
+  expect(unexplained()).toEqual([]);
+});

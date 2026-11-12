@@ -97,10 +97,41 @@
       calc((var(--size-control-sm) - 1lh - 2px) / 2)
     );
   }
+  /* Mask placeholders read as a centered pattern; revealed values use ordinary type. */
+  .buzz-input[data-appearance="masked"] {
+    @apply text-body-lg;
+    text-align: center;
+    letter-spacing: 0.2em;
+    text-indent: 0.2em;
+    user-select: none;
+    color: var(--text-subtle);
+  }
+  .buzz-input[data-appearance="masked"] .buzz-select-value {
+    flex: 1;
+    display: inline-flex;
+    align-items: center;
+    justify-content: safe center;
+    gap: var(--space-1);
+    overflow: hidden;
+    white-space: nowrap;
+  }
+  .buzz-select-prefix {
+    @apply text-body-sm;
+    flex-shrink: 0;
+    letter-spacing: normal;
+    text-indent: 0;
+  }
+  .buzz-input[data-appearance="masked"] .buzz-select-value > :last-child {
+    min-width: 0;
+    overflow: hidden;
+  }
   .buzz-textarea {
     min-height: 6rem;
     padding: var(--space-control-inset);
     resize: vertical;
+  }
+  .buzz-input[data-text-size="large"] {
+    @apply text-body-lg;
   }
   /* Agent instructions intentionally use one outlined boundary and no inset fill. */
   .buzz-textarea:where([data-appearance="outlined"]) {
@@ -477,6 +508,15 @@
     border-radius: 0;
     padding-inline: 0;
     background: transparent;
+  }
+  .buzz-input-group[data-wrap] {
+    flex-wrap: wrap;
+    padding-block: var(--space-2);
+  }
+  .buzz-input-group[data-wrap] > .buzz-input {
+    flex-basis: min(12ch, 100%);
+    min-height: 1lh;
+    padding-block: 0;
   }
   .buzz-input-leading {
     display: flex;

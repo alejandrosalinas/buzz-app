@@ -1,6 +1,7 @@
 import { openChannelDetails } from "./channel-details.mjs";
 import { openPage } from "./navigation.mjs";
 import { test, expect } from "./fixture.mjs";
+import { animationsSettled } from "./animations.mjs";
 
 test.use({ pluginFixtures: true });
 
@@ -51,11 +52,7 @@ test("channel members opens from the header, fits each viewport, and returns key
     await expect(dialog.getByText(/People ·/)).toBeVisible();
     await expect(dialog.getByText("Loading members…")).toHaveCount(0);
     // Finish the entrance before measuring; content changes must not recenter it.
-    await dialog.evaluate(async (node) => {
-      await Promise.all(
-        node.getAnimations().map((animation) => animation.finished),
-      );
-    });
+    await animationsSettled(dialog);
     const box = await dialog.boundingBox();
     expect(box.x).toBeGreaterThanOrEqual(0);
     expect(box.x + box.width).toBeLessThanOrEqual(width);

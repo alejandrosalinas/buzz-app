@@ -813,7 +813,7 @@ the complete correctness suite still runs with `pnpm test` / `just scan`:
   rather than part of pre-push.
 - **Browser measurements:** Chromium then WebKit, serially on an isolated runner.
   It also runs all [perf scenarios](performance.md) once in Chromium.
-- **Browser journeys:** twenty-three runners (nine Chromium and fourteen WebKit
+- **Browser journeys:** twenty-seven runners (nine Chromium and eighteen WebKit
   file-level shards), each with two workers. They start alongside measurements on separate
   runners; `CI required` still requires both lanes. A separate required Ubuntu
   job builds the native plugin-manager fixture once with Hermit's pinned Cargo.

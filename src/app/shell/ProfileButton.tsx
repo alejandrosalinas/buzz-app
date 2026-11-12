@@ -225,6 +225,12 @@ export function ProfileButton({
   const ActionDialog = actions.find(
     (action) => action === selectedAction,
   )?.component;
+  const renderAction = (action: RegisteredAccountAction) => (
+    <MenuItem key={action.key} onClick={() => setSelectedAction(action)}>
+      <MenuIcon>{action.icon ?? <PlugIcon size={17} />}</MenuIcon>
+      {action.title}
+    </MenuItem>
+  );
   const accountLabel = useId();
   const statusUnavailable = useId();
   const avatar = (
@@ -509,6 +515,9 @@ export function ProfileButton({
               onSettings("plugins");
             }}
           />
+          {actions
+            .filter((action) => action.placement === "before-settings")
+            .map(renderAction)}
           <MenuItem
             aria-current={settingsSelected ? "page" : undefined}
             onClick={() => {
@@ -526,16 +535,12 @@ export function ProfileButton({
               </MenuTrailing>
             )}
           </MenuItem>
-          {actions.length > 0 && <MenuSeparator />}
-          {actions.map((action) => (
-            <MenuItem
-              key={action.key}
-              onClick={() => setSelectedAction(action)}
-            >
-              <MenuIcon>{action.icon ?? <PlugIcon size={17} />}</MenuIcon>
-              {action.title}
-            </MenuItem>
-          ))}
+          {actions.some((action) => action.placement !== "before-settings") && (
+            <MenuSeparator />
+          )}
+          {actions
+            .filter((action) => action.placement !== "before-settings")
+            .map(renderAction)}
         </MenuPopup>
       </MenuRoot>
       {ActionDialog && (

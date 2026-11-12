@@ -1,3 +1,6 @@
+import { apply as applyReminders } from "../../src/bundled/reminders";
+import { PageNavigation } from "../../src/app/shell/PageNavigation";
+import type { Page, RegisteredPage } from "../../src/features/pages/service";
 import { useState } from "react";
 import { RemindDialog } from "../../src/bundled/reminders/RemindDialog";
 import type { ChannelMessage } from "../../src/features/relay/contracts";
@@ -14,6 +17,7 @@ import type {
 } from "../../src/features/relay/reminders";
 import type { RelayData } from "../../src/features/relay/service";
 import type { Navigation } from "../../src/features/navigation/controller";
+import "@fontsource-variable/inter/wght.css";
 import "../../src/shared/styles/globals.css";
 
 // The real Reminders page in a content region of `?width=` pixels, with one
@@ -21,6 +25,12 @@ import "../../src/shared/styles/globals.css";
 const params = new URLSearchParams(location.search);
 const width = Number(params.get("width")) || 900;
 const demo = params.has("demo");
+const dock = params.has("dock");
+if (dock) {
+  document.documentElement.dataset.colorMode = params.get("theme") ?? "dark";
+  document.documentElement.dataset.accent = "bee";
+  document.documentElement.dataset.fontSize = params.get("font") ?? "default";
+}
 document.documentElement.classList.toggle(
   "dark",
   params.get("theme") === "dark",
@@ -86,6 +96,18 @@ const channelList = Object.freeze({
 });
 const profiles = new Map([[viewer, { name: "Ada Lovelace" }]]);
 let state = initialState;
+if (dock) {
+  state = {
+    ...state,
+    reminders: Array.from(
+      { length: Number(params.get("count") ?? 1) },
+      (_, i) => ({
+        ...initialState.reminders[0],
+        id: `due-${i}`,
+      }),
+    ),
+  };
+}
 const listeners = new Set<() => void>();
 function publish(items: readonly Reminder[]) {
   state = { ...state, reminders: items };
@@ -152,6 +174,60 @@ const relay = {
   snapshot: () => connection,
   subscribe: () => () => {},
 } as unknown as RelayData;
+
+// Capture the real plugin's contribution. Effects are not started: this fixture
+// controls the relay boundary and has no notification or background-timer work.
+const pages: RegisteredPage[] = [];
+if (dock) {
+  applyReminders({
+    relay,
+    pages: {
+      register(page: Page) {
+        pages.push({
+          ...page,
+          key: `buzz.reminders/${page.id}`,
+          pluginId: "buzz.reminders",
+          revision: "fixture",
+        });
+      },
+    },
+    notifications: { register: () => ({ submit: async () => {} }) },
+    conversation: { registerMessageAction() {} },
+    effect() {},
+  } as unknown as Parameters<typeof applyReminders>[0]);
+}
+
+if (dock) {
+  pages.push({
+    id: "pages",
+    title: "Pages",
+    component: () => null,
+    key: "fixture/pages",
+    pluginId: "fixture",
+    revision: "fixture",
+  });
+}
+
+function DockPreview() {
+  const [selected, select] = useState(
+    params.has("inactive") ? "other" : pages[0].key,
+  );
+  return (
+    <div className="shell-background flex h-screen pt-2">
+      <nav aria-label="Apps dock" className="shell-side-dock">
+        <div className="shell-dock-pages">
+          <PageNavigation
+            pages={pages}
+            selected={selected}
+            onSelect={select}
+            placement="dock"
+          />
+        </div>
+      </nav>
+      <main className="flex-1 bg-panel" />
+    </div>
+  );
+}
 
 const root = document.getElementById("root");
 if (!root) throw new Error("Missing fixture root");
@@ -255,4 +331,4 @@ function Preview() {
     </div>
   );
 }
-createRoot(root).render(<Preview />);
+createRoot(root).render(dock ? <DockPreview /> : <Preview />);

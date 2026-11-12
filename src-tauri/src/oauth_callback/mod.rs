@@ -392,6 +392,13 @@ fn parse_callback(
     )
 }
 
+fn inline_csp_hash(source: &str) -> String {
+    // HTML parsing normalizes CRLF and lone CR before CSP hashes inline text.
+    // include_str! preserves checkout line endings, including Windows CRLF.
+    let source = source.replace("\r\n", "\n").replace('\r', "\n");
+    base64::engine::general_purpose::STANDARD.encode(Sha256::digest(source.as_bytes()))
+}
+
 async fn reply(stream: &mut TcpStream, status: u16, message: &str, builderlab: bool) {
     // All copy comes from the fixed responses above, never from callback values.
     let heading = match status {
@@ -404,11 +411,10 @@ async fn reply(stream: &mut TcpStream, status: u16, message: &str, builderlab: b
         "{{font}}",
         &base64::engine::general_purpose::STANDARD.encode(include_bytes!("inter-latin.woff2")),
     );
-    let style_hash =
-        base64::engine::general_purpose::STANDARD.encode(Sha256::digest(style.as_bytes()));
+    let style_hash = inline_csp_hash(&style);
     let mut policy = format!("default-src 'none'; img-src data:; font-src data:; style-src 'sha256-{style_hash}'; base-uri 'none'; frame-ancestors 'none'");
     let script = include_str!("page.js");
-    let script_hash = base64::engine::general_purpose::STANDARD.encode(Sha256::digest(script));
+    let script_hash = inline_csp_hash(script);
     policy.push_str(&format!("; script-src 'sha256-{script_hash}'"));
     let script = format!("<script>{script}</script>");
     let artwork = base64::engine::general_purpose::STANDARD.encode(include_bytes!("cubes.webp"));

@@ -12,6 +12,7 @@ import {
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { PageSearch, type SearchServices } from "./PageSearch";
+import { BestieConversationContext } from "./bestie-context";
 import type { RegisteredPage } from "../../features/pages/service";
 import { createShortcutBindings } from "../../features/shortcuts/preferences";
 import { ShortcutsService } from "../../features/shortcuts/service";
@@ -21,6 +22,7 @@ import type { RelaySnapshot } from "../../features/relay/service";
 import {
   keypair,
   metadata,
+  profile,
   roster,
   scriptedTransport,
 } from "../../features/relay/testing";
@@ -307,7 +309,8 @@ it("shows the live search shortcut in the trigger and its hint, following a rebi
   const bindings = createShortcutBindings(window);
   const shortcuts = new ShortcutsService(root, window, bindings);
   try {
-    // Only the shortcut services are read while the dialog is closed.
+    // Only the shortcut services, and the relay when given, are read while
+    // the dialog is closed.
     render(
       <PageSearch
         pages={[]}
@@ -397,6 +400,199 @@ it("opens conversation-scoped search with Command F and returns to overall searc
     cleanup();
     bindings.dispose();
     await root.fiber.dispose();
+  }
+});
+
+/** A connected community whose promoted Bestie DM is with Pollen, beside an
+ * ordinary DM with Ada, shown through the shell's Bestie projection, on a
+ * navigation target that can change. */
+async function bestieSearch() {
+  const root = new Context();
+  root.provide("pluginStatus", {
+    isActive: () => true,
+    subscribe: () => () => {},
+  });
+  const bindings = createShortcutBindings(window);
+  const shortcuts = new ShortcutsService(root, window, bindings);
+  const viewer = keypair(),
+    relay = keypair(),
+    pollen = keypair(),
+    ada = keypair();
+  const bestieDm = "11111111-1111-4111-8111-111111111111";
+  const adaDm = "22222222-2222-4222-8222-222222222222";
+  const owner = createRelaySession({
+    viewer: viewer.pubkey,
+    relayAuthor: relay.pubkey,
+    media: () => undefined,
+    query: async (filters) =>
+      filters.flatMap((filter) =>
+        filter.kinds?.includes(0)
+          ? [profile(pollen, { name: "Pollen" }), profile(ada, { name: "Ada" })]
+          : filter.kinds?.includes(39000)
+            ? [bestieDm, adaDm].map((id) =>
+                metadata(relay, id, "", 1_700_000_000, [["t", "dm"]]),
+              )
+            : filter.kinds?.includes(39002)
+              ? [
+                  roster(relay, bestieDm, [viewer.pubkey, pollen.pubkey]),
+                  roster(relay, adaDm, [viewer.pubkey, ada.pubkey]),
+                ]
+              : [],
+      ),
+  });
+  await new Promise<void>((resolve) => {
+    const unsubscribe = owner.session.channels.subscribeList(() => {
+      if (owner.session.channels.list().status !== "ready") return;
+      unsubscribe();
+      resolve();
+    });
+    owner.session.channels.ensureList();
+  });
+  const connection = {
+    status: "ready",
+    generation: 1,
+    session: owner.session,
+    scope: "s",
+  };
+  const community = { selected: "wss://relay.example", viewer: viewer.pubkey };
+  let navigation = {
+    entry: {
+      target: { kind: "page", pluginId: "buzz.bestie", pageId: "bestie" },
+    },
+  };
+  const listeners = new Set<() => void>();
+  const services = {
+    shortcuts,
+    shortcutBindings: bindings,
+    navigation: {
+      subscribe: (listener: () => void) => {
+        listeners.add(listener);
+        return () => listeners.delete(listener);
+      },
+      snapshot: () => navigation,
+      open: vi.fn(async () => {}),
+    },
+    communities: {
+      subscribe: () => () => {},
+      snapshot: () => community,
+      relay: { subscribe: () => () => {}, snapshot: () => connection },
+    },
+  } as unknown as SearchServices;
+  // In production, AppShell mounts BestieNavigationProvider above PageSearch,
+  // and both read the same relay (searchServices.communities.relay), so the
+  // context's session is the one search compares against. This stands in for it.
+  render(
+    <BestieConversationContext
+      value={{ session: owner.session, channelId: bestieDm }}
+    >
+      <PageSearch
+        pages={[
+          {
+            key: "buzz.channels/channels",
+            pluginId: "buzz.channels",
+            id: "channels",
+            title: "Channels",
+            revision: "bundled",
+            component: () => null,
+          },
+        ]}
+        onSelect={vi.fn()}
+        services={services}
+      />
+    </BestieConversationContext>,
+  );
+  const apple = isApplePlatform(navigator.platform);
+  return {
+    adaDm,
+    press: (key: string) =>
+      fireEvent.keyDown(window, { key, metaKey: apple, ctrlKey: !apple }),
+    navigate(target: object) {
+      navigation = { entry: { target } } as typeof navigation;
+      act(() => {
+        for (const listener of listeners) listener();
+      });
+    },
+    async dispose() {
+      cleanup();
+      owner.dispose();
+      bindings.dispose();
+      await root.fiber.dispose();
+    },
+  };
+}
+
+it("scopes Command F and Command K's conversation row to the Bestie page's DM", async () => {
+  const f = await bestieSearch();
+  try {
+    f.press("f");
+    const scoped = await screen.findByRole("dialog", {
+      name: "Search this conversation",
+    });
+    expect(
+      await within(scoped).findByRole("button", {
+        name: "Remove Pollen search scope",
+      }),
+    ).toBeVisible();
+    fireEvent.keyDown(
+      within(scoped).getByRole("combobox", {
+        name: "Search this conversation",
+      }),
+      { key: "Escape" },
+    );
+    f.press("k");
+    const search = await screen.findByRole("dialog", { name: "Search Buzz" });
+    fireEvent.click(
+      await within(search).findByRole("option", {
+        name: /Search conversation with Pollen/,
+      }),
+    );
+    expect(
+      await within(search).findByRole("button", {
+        name: "Remove Pollen search scope",
+      }),
+    ).toBeVisible();
+  } finally {
+    await f.dispose();
+  }
+});
+
+it("scopes Command F to another conversation, not the Bestie DM, while a Bestie DM exists", async () => {
+  const f = await bestieSearch();
+  try {
+    f.navigate({ kind: "conversation", channelId: f.adaDm });
+    f.press("f");
+    const scoped = await screen.findByRole("dialog", {
+      name: "Search this conversation",
+    });
+    expect(
+      await within(scoped).findByRole("button", {
+        name: "Remove Ada search scope",
+      }),
+    ).toBeVisible();
+    expect(
+      within(scoped).queryByRole("button", {
+        name: "Remove Pollen search scope",
+      }),
+    ).toBeNull();
+  } finally {
+    await f.dispose();
+  }
+});
+
+it("opens nothing with Command F on another page while a Bestie DM exists", async () => {
+  const f = await bestieSearch();
+  try {
+    f.navigate({ kind: "page", pluginId: "buzz.agents", pageId: "agents" });
+    f.press("f");
+    await act(async () => {});
+    expect(screen.queryByRole("dialog")).toBeNull();
+    f.press("k");
+    const search = await screen.findByRole("dialog", { name: "Search Buzz" });
+    expect(
+      within(search).queryByRole("option", { name: /Search conversation/ }),
+    ).toBeNull();
+  } finally {
+    await f.dispose();
   }
 });
 
@@ -872,7 +1068,7 @@ it("finds and opens saved conversations while the community is unreachable or st
           return () => listeners.delete(listener);
         },
         snapshot: () => connection,
-        retry,
+        tryAgain: retry,
       },
     },
   } as unknown as SearchServices;

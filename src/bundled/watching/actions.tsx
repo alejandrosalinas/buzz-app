@@ -23,5 +23,6 @@ export function useAction() {
       setPending(false);
     }
   };
-  return { pending, error, run };
+  const reset = () => setError("");
+  return { pending, error, run, reset };
 }

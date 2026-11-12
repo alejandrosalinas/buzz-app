@@ -7,6 +7,9 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::sync::{Mutex, OnceLock};
 
+mod public_image;
+mod public_page;
+
 #[derive(Clone, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub(crate) struct CallContext {
@@ -370,7 +373,7 @@ pub(crate) async fn plugin_host_upload_bytes_once<R: tauri::Runtime>(
         // One FIFO queue and work permit for GET/save/upload; queue time is part
         // of this call's entry deadline. Do not clone/build multipart while waiting.
         let _place = crate::host_files::byte_admission(deadline).await?;
-        byte_origin(manager, &id, &revision, &url).await?;
+        upload_origin(&byte_grants(manager, &id, &revision).await?, &url)?;
         calls.consume(
             webview.label(),
             "upload-bytes",
@@ -401,6 +404,7 @@ async fn send_byte_upload(
         bytes,
     )?;
     let client = reqwest::Client::builder()
+        .user_agent(crate::relay::user_agent())
         .redirect(reqwest::redirect::Policy::none())
         .retry(reqwest::retry::never())
         .timeout(DEADLINE)
@@ -449,12 +453,28 @@ pub(crate) async fn plugin_host_request_bytes(
     let end = entered + Duration::from_millis(timeout);
     let operation = async {
         let _place = crate::host_files::byte_admission(end).await?;
-        byte_origin(manager.clone(), &id, &revision, &url).await?;
-        let get = client(false)?
-            .get(url.clone())
-            .timeout(Duration::from_millis(timeout));
-        let (status, headers, bytes) = read_bytes(get, request.max_bytes).await?;
-        byte_origin(manager, &id, &revision, &url).await?;
+        let reach = byte_origin(manager.clone(), &id, &revision, &url).await?;
+        let (status, headers, bytes) = match reach {
+            ByteReach::Declared => {
+                let get = client(false)?
+                    .get(url.clone())
+                    .timeout(Duration::from_millis(timeout));
+                read_bytes(get, request.max_bytes).await?
+            }
+            ByteReach::PublicImage => {
+                let addresses = public_image::public_addresses(&url).await?;
+                public_image::fetch(
+                    url.clone(),
+                    &addresses,
+                    request.max_bytes,
+                    Duration::from_millis(timeout),
+                )
+                .await?
+            }
+        };
+        if byte_origin(manager, &id, &revision, &url).await? != reach {
+            return Err("Host request origin is not declared".into());
+        }
         byte_frame(status, headers, bytes).map(tauri::ipc::Response::new)
     };
     tokio::time::timeout_at(end, operation)
@@ -462,20 +482,93 @@ pub(crate) async fn plugin_host_request_bytes(
         .map_err(|_| "Host byte request timed out")?
 }
 
+/// One public page's preview fields, for a plugin whose manifest declares
+/// `host.publicPages`. Redirects come back for the plugin to check.
+#[tauri::command]
+pub(crate) async fn plugin_host_read_page(
+    manager: tauri::State<'_, PluginManager>,
+    id: String,
+    revision: String,
+    url: String,
+    timeout_ms: Option<u64>,
+) -> Result<public_page::PageReply, String> {
+    let timeout = timeout_ms.unwrap_or(10_000);
+    if !(1..=30_000).contains(&timeout) {
+        return Err("Invalid page request timeout".into());
+    }
+    let (url, _, _) = validate_request(&HostRequest {
+        url,
+        method: "GET".into(),
+        headers: BTreeMap::new(),
+        body: None,
+        timeout_ms: Some(timeout),
+    })?;
+    let end = tokio::time::Instant::now() + Duration::from_millis(timeout);
+    let operation = async {
+        let _place = crate::host_files::byte_admission(end).await?;
+        if !byte_grants(manager.clone(), &id, &revision)
+            .await?
+            .public_pages
+        {
+            return Err("Plugin may not read public pages".to_owned());
+        }
+        let reply = public_page::read(url, Duration::from_millis(timeout)).await?;
+        if !byte_grants(manager, &id, &revision).await?.public_pages {
+            return Err("Plugin may not read public pages".to_owned());
+        }
+        Ok(reply)
+    };
+    tokio::time::timeout_at(end, operation)
+        .await
+        .map_err(|_| "Host page request timed out")?
+}
+
+/// How a byte request may reach its URL: a declared origin gets any response;
+/// any other origin, with `host.publicImages`, gets only a public image.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum ByteReach {
+    Declared,
+    PublicImage,
+}
+
+async fn byte_grants(
+    manager: tauri::State<'_, PluginManager>,
+    id: &str,
+    revision: &str,
+) -> Result<HostGrants, String> {
+    let (id, revision) = (id.to_owned(), revision.to_owned());
+    with_manager(manager, move |m| m.host_grants(&id, &revision))
+        .await
+        .map_err(|_| "Host byte request is unavailable".into())
+}
+
 async fn byte_origin(
     manager: tauri::State<'_, PluginManager>,
     id: &str,
     revision: &str,
     url: &reqwest::Url,
-) -> Result<(), String> {
-    let (id, revision) = (id.to_owned(), revision.to_owned());
-    let grants = with_manager(manager, move |m| m.host_grants(&id, &revision))
-        .await
-        .map_err(|_| "Host byte request is unavailable")?;
-    if !allows_origin(&grants, url) {
-        return Err("Host request origin is not declared".into());
+) -> Result<ByteReach, String> {
+    let grants = byte_grants(manager, id, revision).await?;
+    reach(&grants, url).ok_or_else(|| "Host request origin is not declared".into())
+}
+
+/// An upload sends the plugin's bytes and returns the whole reply, so it
+/// needs a declared origin: `host.publicImages` widens only image reads.
+fn upload_origin(grants: &HostGrants, url: &reqwest::Url) -> Result<(), String> {
+    match reach(grants, url) {
+        Some(ByteReach::Declared) => Ok(()),
+        _ => Err("Host request origin is not declared".into()),
     }
-    Ok(())
+}
+
+fn reach(grants: &HostGrants, url: &reqwest::Url) -> Option<ByteReach> {
+    if allows_origin(grants, url) {
+        Some(ByteReach::Declared)
+    } else if grants.public_images {
+        Some(ByteReach::PublicImage)
+    } else {
+        None
+    }
 }
 
 fn byte_frame(
@@ -754,7 +847,9 @@ pub(crate) fn client(protected: bool) -> Result<&'static reqwest::Client, String
     static PROTECTED: OnceLock<Result<reqwest::Client, reqwest::Error>> = OnceLock::new();
     let cell = if protected { &PROTECTED } else { &PLAIN };
     cell.get_or_init(|| {
-        let builder = reqwest::Client::builder().redirect(reqwest::redirect::Policy::none());
+        let builder = reqwest::Client::builder()
+            .user_agent(crate::relay::user_agent())
+            .redirect(reqwest::redirect::Policy::none());
         if protected {
             // No idle connections, so each one-time request opens its own
             // (reqwest is built without HTTP/2, so none are shared either).
@@ -822,6 +917,51 @@ mod tests {
     use super::*;
     use std::io::{Read, Write};
     use std::net::TcpListener;
+
+    #[test]
+    fn a_declared_origin_keeps_its_reach_and_public_images_cover_the_rest() {
+        let url = |raw| reqwest::Url::parse(raw).unwrap();
+        let mut grants = HostGrants {
+            network_origins: vec!["https://api.example.com".into()],
+            ..HostGrants::default()
+        };
+        assert_eq!(
+            reach(&grants, &url("https://api.example.com/a")),
+            Some(ByteReach::Declared)
+        );
+        assert_eq!(reach(&grants, &url("https://cdn.example.org/a.png")), None);
+        grants.public_images = true;
+        assert_eq!(
+            reach(&grants, &url("https://api.example.com/a")),
+            Some(ByteReach::Declared)
+        );
+        assert_eq!(
+            reach(&grants, &url("https://cdn.example.org/a.png")),
+            Some(ByteReach::PublicImage)
+        );
+    }
+
+    #[test]
+    fn public_images_never_authorize_an_upload() {
+        let url = |raw| reqwest::Url::parse(raw).unwrap();
+        let images_only = HostGrants {
+            public_images: true,
+            ..HostGrants::default()
+        };
+        for target in [
+            "https://cdn.example.org/a.png",
+            "https://internal.example:8443/api",
+        ] {
+            assert!(upload_origin(&images_only, &url(target)).is_err());
+        }
+        let declared = HostGrants {
+            network_origins: vec!["https://api.example.com".into()],
+            public_images: true,
+            ..HostGrants::default()
+        };
+        assert!(upload_origin(&declared, &url("https://api.example.com/upload")).is_ok());
+        assert!(upload_origin(&declared, &url("https://cdn.example.org/upload")).is_err());
+    }
 
     fn local_response(response: Vec<u8>) -> (reqwest::Url, std::thread::JoinHandle<()>) {
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();
@@ -1123,3 +1263,7 @@ mod replay_tests;
 #[cfg(test)]
 #[path = "host_request/byte_tests.rs"]
 mod byte_tests;
+
+#[cfg(test)]
+#[path = "host_request/user_agent_tests.rs"]
+mod user_agent_tests;

@@ -10,6 +10,8 @@ import { MembershipRow } from "../../../src/features/messages/MembershipRow";
 import { Button } from "../../../src/shared/design-system/ui/Button";
 import { LinkLabel, linkKind } from "../../../src/bundled/links/InlineLink";
 import { DiffMessage } from "../../../src/bundled/diffs/DiffMessage";
+import { Chart } from "../../../src/bundled/charts/Chart";
+import { ChartExpand } from "../../../src/bundled/charts/ChartExpand";
 import { MermaidDiagram } from "../../../src/bundled/mermaid/MermaidDiagram";
 import { MermaidExpand } from "../../../src/bundled/mermaid/MermaidExpand";
 import { parseAccent } from "../../../src/shared/theme/accent";
@@ -87,7 +89,7 @@ const messages: readonly Contribution<MessageRenderer>[] = [
     component: DiffMessage,
   },
 ];
-const codeBlocks: readonly Contribution<CodeBlockRenderer>[] = [
+const allCodeBlocks: readonly Contribution<CodeBlockRenderer>[] = [
   {
     id: "mermaid",
     key: "gallery/mermaid",
@@ -98,7 +100,21 @@ const codeBlocks: readonly Contribution<CodeBlockRenderer>[] = [
     component: MermaidDiagram,
     action: MermaidExpand,
   },
+  {
+    id: "buzz-chart",
+    key: "gallery/buzz-chart",
+    pluginId: "gallery",
+    revision: "1",
+    title: "Chart",
+    matches: (language) => language.toLowerCase() === "buzz-chart",
+    component: Chart,
+    action: ChartExpand,
+  },
 ];
+const codeBlocks =
+  new URLSearchParams(location.search).get("charts") === "off"
+    ? allCodeBlocks.filter((block) => block.id !== "buzz-chart")
+    : allCodeBlocks;
 const emptyTools: ReturnType<ConversationExtensions["tools"]["snapshot"]> = [];
 const subscribe = () => () => {};
 const extensions: ConversationExtensions = {

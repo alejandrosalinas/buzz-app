@@ -1142,8 +1142,8 @@ export class PiRuntime {
       agent,
       // Whichever host runs the agent fills in its tools' credential.
       ...(handle && { as: { pubkey: handle.pubkey, relay: handle.relay } }),
-      tools: sessionTools(this.added(), !!handle?.ownerAccess),
-      hint: sessionHint(this.added(), !!handle?.ownerAccess),
+      tools: sessionTools(this.added()),
+      hint: sessionHint(this.added()),
     });
   }
 

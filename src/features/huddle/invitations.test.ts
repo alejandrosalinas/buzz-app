@@ -121,6 +121,7 @@ it("adds a room member, recovers the signed invitation after discovery, and keep
     snapshot: () => connection,
     subscribe: () => () => {},
     retry() {},
+    tryAgain() {},
     disconnect() {},
     clearCache: async () => {},
   };

@@ -1,4 +1,4 @@
-# Desktop test releases
+# Desktop releases
 
 ## Agent protection compatibility notice
 
@@ -12,9 +12,12 @@ leaves files unchanged; earlier protected previews prompt at startup. See the
 
 ## Preview artifacts
 
-The **Desktop previews** workflow builds all supported desktop platforms from
-`main` and publishes one GitHub prerelease, tagged
-`v<app-version>-preview.<run-number>.<attempt>` at the built commit:
+The **Desktop previews** workflow (`release.yml`) builds all supported desktop
+platforms from `main` and publishes one GitHub prerelease, tagged
+`v<app-version>-preview.<run-number>.<attempt>` at the built commit. The
+build, verification, updater signing and publication jobs live in the reusable
+`desktop-build.yml`, which [stable and beta releases](#stable-and-beta-releases)
+share, so every lane publishes the same assets:
 
 - **Apple Silicon and Intel macOS:** a signed/notarized DMG and a signed updater
   archive with its `.sig` for each architecture.
@@ -68,9 +71,9 @@ endpoint below.
 
 The preview endpoint is `https://github.com/block/buzz-app/releases/download/preview-feed/latest.json`.
 This is a dedicated rolling prerelease in `block/buzz-app`, separate from legacy
-`block/buzz`'s `buzz-desktop-latest`. Reserve `stable-feed/latest.json` in this
-repository for a future production channel; this workflow never creates it.
-Neither endpoint is `releases/latest`: versioned builds are prereleases.
+`block/buzz`'s `buzz-desktop-latest`. Stable releases use their own
+[stable feed](#stable-updater-feed); this workflow never writes it. Neither
+endpoint is `releases/latest`, which serves the Latest stable release's assets.
 
 **Auto-promotion begins as soon as this workflow lands on `main`.** Install an
 updater-enabled build manually first (older installed builds lack the updater),
@@ -96,9 +99,10 @@ The release build must embed the same pinned public key and preview endpoint as
 #312; promotion verifies both in the candidate macOS executable. Builds made before
 that integration are ineligible even if their updater archive and signature
 exist, as are builds without Windows/Linux signatures. The promotion gate
-downloads every updater artifact and signature, verifies the
-Minisign archive and trusted-comment signatures against the client's pinned
-key. The release signer signs the archive and trusted comment without passing
+(`scripts/promote-updater-feed.sh`, shared with the stable feed) downloads every
+updater artifact and signature, verifies the Minisign archive and trusted-comment
+signatures against the client's pinned key. The release signer signs the
+archive and trusted comment without passing
 `--app-version`, so signatures do not embed an authenticated version. The gate
 accepts that format and verifies both signatures, but cannot bind the advertised
 feed version to those signed bytes.
@@ -156,10 +160,147 @@ again. The age window is measured from publication, not promotion. Actions build
 artifacts have a separate seven-day retention policy and do not control GitHub
 release retention.
 
+## Stable and beta releases
+
+Public releases for people outside the team are published from protected
+`vX.Y.Z` (stable) and `vX.Y.Z-beta.N` (beta) tags by the **Desktop stable
+release** workflow (`desktop-stable.yml`). They use the same build, checks,
+twelve assets and `SHA256SUMS` as previews, with two differences:
+
+- The version is the tag's (`v1.0.0` builds `1.0.0`), not `tauri.conf.json`'s.
+- Every platform embeds the same updater public key as previews, but the
+  stable feed endpoint
+  `https://github.com/block/buzz-app/releases/download/stable-feed/latest.json`.
+  Each build job checks its executables for that endpoint.
+
+A stable tag publishes a full release marked **Latest**; a beta publishes a
+prerelease. Both publish on the existing tag (`--verify-tag`) and never create
+or move one. Previews' own tags (`v…-preview.N.M`) and the internal
+`desktop-v*` tags described below never start this workflow.
+
+The workflow first refuses, before building, unless:
+
+- the tag is exactly `vX.Y.Z` or `vX.Y.Z-beta.N` (no leading zeros, `N` ≥ 1);
+- an active tag ruleset restricts `refs/tags/v*` (see [setup](#stable-release-setup));
+- the tag points at the run's commit, and that commit is in `main` history.
+
+To release, an admin tags a commit in `main` history and pushes the tag with
+Git. Do not create the tag from the GitHub Releases page: that creates the
+release first, and the workflow then fails because the release already exists.
+
+```sh
+git fetch origin main
+git tag -a v1.0.0 -m 'Buzz 1.0.0' <commit-sha>
+git push origin refs/tags/v1.0.0
+```
+
+If a platform job fails, use **Re-run all jobs**, as for previews. A published
+tag is never moved or reused; cut a new version instead. After tagging a stable
+release, raise `tauri.conf.json`'s version above it, so previews version above
+the release they follow.
+
+### Stable updater feed
+
+Publishing a release never changes what installed apps receive. To serve a
+published stable release, run **Desktop stable feed** (`desktop-stable-feed.yml`)
+from `main`:
+
+```sh
+gh workflow run desktop-stable-feed.yml --repo block/buzz-app --ref main \
+  -f version=1.0.0
+```
+
+It waits for approval in the `desktop-stable-feed` environment, and fails unless
+that environment has required reviewers and deploys only from `main` (GitHub
+creates a missing environment without protection). It then runs the preview
+feed's promotion gate against the stable feed: it requires a published,
+non-draft, non-prerelease `v1.0.0`, verifies every updater signature against the pinned
+key and the stable endpoint in the Apple Silicon executable, refuses rollback
+and changed same-version metadata, replaces `stable-feed/latest.json` last and
+reads it back. Only `X.Y.Z` versions can be promoted, so betas and previews
+never reach the stable feed; beta installs update to the next promoted stable
+release. The `stable-feed` release is created as a prerelease, so it never
+becomes Latest. Preview cleanup ignores stable and beta releases and the
+`stable-feed` release.
+
+The first promotion creates the feed. Before announcing automatic updates,
+install that release, then promote a newer one and check that the installed app
+updates on each platform. The preview feed's residual risks apply unchanged,
+including unbound signature versions.
+
+### Website installer manifest
+
+After the stable feed is replaced and read back, the same approved job publishes
+`downloads.json` to the dedicated `download-feed` data branch, so the website
+offers the release installed stable apps receive. Previews and betas never
+change it. Its public URL is:
+
+`https://raw.githubusercontent.com/block/buzz-app/download-feed/downloads.json`
+
+Schema version 1 contains `channel: "stable"`, `version`, `release` and a
+`downloads` map with `macos-arm64`, `macos-x64`, `windows-x64`, `linux-appimage`
+and `linux-deb` URLs. Mac entries are DMG installers, not updater archives.
+All five exact, nonempty assets of the published, non-prerelease release must
+exist before the manifest changes. Publication follows `stable-feed/latest.json`,
+rejects rollback and altered same-version metadata, uses an atomic file update,
+and verifies read-back. The first stable promotion creates an orphan branch
+containing only the manifest; until then the URL returns 404. Keep that branch
+writable by release Actions; no personal token or Pages setup is required.
+Raw-file CDN updates can take about five minutes to become visible.
+
+Manifest generation for the promoted stable release can be checked without
+writing anything:
+
+```sh
+GH_REPO=block/buzz-app bin/node scripts/publish-desktop-downloads.mjs 1.0.0
+```
+
+For recovery, a release operator can run the same command with `--apply` for the
+currently promoted stable version. Stable releases are never pruned, so the
+advertised installers stay available. Website clients should use bounded caching
+and fall back to the releases page if metadata cannot be read or validated. This
+manifest selects installer links; it is not an updater signature or desktop
+acceptance record.
+
+### Stable release setup
+
+A repository admin sets these up once, before the first stable tag:
+
+- **Order.** Activate the tag ruleset before this workflow is on `main`, and
+  check then that no stable or beta tags (`vX.Y.Z`, `vX.Y.Z-beta.N`) exist yet.
+  The workflow checks only that the ruleset is active when it runs, so a tag
+  created before then would publish, or re-run, without the ruleset ever having
+  governed its creation.
+
+- **Tag ruleset.** Create a second tag ruleset, separate from the
+  `desktop-v*` one below (whose tag workflow requires it to have no exclusions):
+  - target tags, enforcement **Active**;
+  - include `refs/tags/v*` and exclude `refs/tags/v*-preview.*`;
+  - restrict creations, updates and deletions, and block force pushes;
+  - bypass: the repository admin role, in `always` mode.
+
+  The exclusion matters. The previews workflow creates each `v…-preview` tag
+  through `gh release create` with `GITHUB_TOKEN`, and preview cleanup deletes
+  old ones the same way. `GITHUB_TOKEN` is not a bypass actor, so a ruleset over
+  all of `refs/tags/v*` would fail every preview publication and cleanup. Do
+  not add GitHub Actions as a bypass actor instead: any workflow on any branch
+  could then create a stable tag. With the exclusion, preview tags stay as
+  unprotected as they are today; the stable workflow ignores them.
+
+- **Environment.** Create `desktop-stable-feed` with required reviewers and a
+  custom deployment branch policy that allows only the `main` branch. It holds
+  no secrets. Promotion checks both and refuses to run without them.
+- **Signing.** Stable builds use the [signing secrets](#signing) previews use.
+  The macOS signing role must trust this repository's tag runs as well as
+  `main`: confirm its OIDC trust policy accepts `refs/tags/v*` before the
+  first stable tag.
+
 ## Release tags
 
-Release builds outside this repository's preview workflow consume immutable
+Release builds outside this repository's GitHub Actions consume immutable
 `desktop-vX.Y.Z` or `desktop-vX.Y.Z-beta.N` tags, never a branch or commit.
+These are separate from the public [stable and beta](#stable-and-beta-releases)
+`v*` tags: they never start a GitHub Actions build.
 Run **Desktop release tag** from `main` with the version and a full commit SHA
 in `main` history. It publishes an annotated tag through the release GitHub App
 and fails before writing unless an active tag ruleset includes
@@ -189,8 +330,8 @@ Setup, by a repository admin:
 
 ### Builderlab URL
 
-The **Desktop previews** workflow leaves `BUZZ_BUILDERLAB_URL` unset, so every
-platform build, including candidate-only runs, signs in to the built-in
+The desktop build leaves `BUZZ_BUILDERLAB_URL` unset, so every platform build,
+in every lane and including candidate-only runs, signs in to the built-in
 Builderlab server (`https://app.builderlab.xyz`) with the native session. When
 the repository's non-secret Actions variable
 `BUZZ_BUILD_FEDERATED_IDENTITY_CONFIG` is nonempty, the workflow adds its
@@ -244,8 +385,8 @@ To update Goose, verify every target archive against the exact release identity:
 ```sh
 gh attestation verify <archive> --repo aaif-goose/goose \
   --signer-workflow aaif-goose/goose/.github/workflows/release.yml \
-  --source-ref refs/tags/v1.57.0 \
-  --source-digest 30bba95105e59bc3e7df624cf6b4d433690cfe12 \
+  --source-ref refs/tags/v1.59.0 \
+  --source-digest 5d03ef6ed07ba59826328f1aff18d9a754ff8ad2 \
   --cert-oidc-issuer https://token.actions.githubusercontent.com \
   --deny-self-hosted-runners
 ```
@@ -258,15 +399,18 @@ Never resolve
 `latest` at build time.
 The obsolete `target/goose-acp-src` and `target/goose-acp-build` caches are unused
 and can be removed locally when no old source build is running.
-Version 1.57.0 also advances Goose 26 commits from the previous source pin;
-distribution parity alone does not establish runtime compatibility. Before
+Version 1.59.0 advances Goose 18 commits from v1.58.1; the four commits only on
+v1.58.1's release branch are release chores and cherry-picks of #13328 and
+#13340, both included in v1.59.0; distribution parity alone does not
+establish runtime compatibility. Before
 shipping, exercise provider sessions, HTTP MCP, steering/cancellation, secret
 non-persistence and session history, plus native Windows/Linux startup and
 packaged signing/installers.
 The candidate is known to fail the MCP credential non-persistence check: the
 client HTTP URL and bearer header are stored in session data and export.
 An isolated canary probe reproduced this in both the old source-built 1.56.0
-executable and v1.57.0; upstream #12908 is not included in either version. This
+executable and v1.57.0; upstream #12908 was closed unmerged, so v1.59.0 does
+not include it either. This
 remains a separate existing acceptance failure, not a distribution regression.
 
 ## Bundled buzz CLI
@@ -286,8 +430,11 @@ build` runs it through `beforeBuildCommand`; `just desktop` runs it with `--dev`
 (a debug build, and a failure only warns). It selects `TAURI_ENV_TARGET_TRIPLE`
 or the host, installs under `target/buzz-cli/<rev>/<target>/<profile>`, which
 lets Cargo skip an install that is already current, and replaces the staged file
-atomically. Linked worktrees use the main checkout's `target/`, so they share
-one build of each revision. A first release build takes about two minutes.
+atomically. Each revision also builds in its own `target/buzz-cli-build/<rev>`:
+Cargo trusts an earlier build of a git checkout even after the revision changes,
+so a shared build directory would stage the old CLI after a bump. Linked
+worktrees use the main checkout's `target/`, so they share one build of each
+revision. A first release build takes about two minutes.
 
 The macOS release signing service signs the executable with the Developer ID
 certificate and the hardened runtime, as it does `goose-acp` and

@@ -26,12 +26,13 @@ function run(...args) {
   return spawnSync(process.execPath, [script, ...args], { encoding: "utf8" });
 }
 
-const endpoint =
-  "https://github.com/block/buzz-app/releases/download/preview-feed/latest.json";
+const feedUrl = (feed) =>
+  `https://github.com/block/buzz-app/releases/download/${feed}/latest.json`;
+const endpoint = feedUrl("preview-feed");
 const publicKeyBase64 =
   "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDJDQjQ2RDZFMUEwOERFMTEKUldRUjNnZ2FibTIwTE10QkVaMzFyYkZlY0R4ajhmbFBjdncvNVRCYnNpSm9kaFNBaHQzemZlZHkK";
 // Inject a disposable public key into a copy of the promotion script, never into production.
-function fixture(dir, version = "0.0.0-preview.22.1") {
+function fixture(dir, version = "0.0.0-preview.22.1", embedded = endpoint) {
   const { privateKey, publicKey } = generateKeyPairSync("ed25519");
   const keyId = Buffer.from("12345678");
   const keyRecord = Buffer.concat([
@@ -83,7 +84,7 @@ function fixture(dir, version = "0.0.0-preview.22.1") {
     writeFileSync(installer, `fixture bytes: ${installer}`);
     signFile(installer);
   }
-  writeFileSync(binary, `compiled: ${endpoint} ${encodedKey}`);
+  writeFileSync(binary, `compiled: ${embedded} ${encodedKey}`);
   const sign = (...options) => signFile(archive, ...options);
   const args = (action, current) => [
     localScript,
@@ -228,43 +229,88 @@ test("preview rollback compares the complete canonical SemVer without number rou
   }
 });
 
-test("successful preview publication promotes automatically; manual recovery bypasses skipped builds", () => {
-  const workflow = parse(
-    readFileSync(
-      new URL("../../.github/workflows/release.yml", import.meta.url),
-      "utf8",
-    ),
+test("stable releases get their own feed; betas and previews never reach it", (t) => {
+  const dir = mkdtempSync(join(tmpdir(), "stable-feed-"));
+  t.after(() => rmSync(dir, { recursive: true, force: true }));
+  const stable = feedUrl("stable-feed");
+  const { manifest, binary, execute } = fixture(dir, "1.0.0", stable);
+  assert.equal(execute("generate").status, 0, execute("generate").stderr);
+  const data = JSON.parse(readFileSync(manifest, "utf8"));
+  assert.equal(data.version, "1.0.0");
+  assert.equal(data.notes, "Buzz 1.0.0 desktop");
+  assert.equal(
+    data.platforms["windows-x86_64"].url,
+    "https://github.com/block/buzz-app/releases/download/v1.0.0/Buzz_1.0.0_x64_unsigned.exe",
   );
-  const { build, publish, promote_preview: promotion } = workflow.jobs;
-  assert.match(build.if, /!inputs\.promote_version/);
-  assert.deepEqual(publish.needs, [
-    "build",
-    "windows",
-    "linux",
-    "updater_signatures",
-  ]);
-  assert.deepEqual(promotion.needs, ["build", "publish"]);
+  assert.equal(execute("verify").status, 0);
+  const current = join(dir, "current.json");
+  writeFileSync(current, JSON.stringify({ ...data, version: "1.0.1" }));
+  assert.match(
+    execute("verify", current).stderr,
+    /Refusing stable feed rollback/,
+  );
+  // A preview in the current stable feed is not comparable, so it is refused.
+  writeFileSync(
+    current,
+    JSON.stringify({ ...data, version: "0.0.0-preview.22.1" }),
+  );
+  assert.match(execute("verify", current).stderr, /Invalid stable version/);
+  // A preview build checks the preview feed, so it cannot be served as stable.
+  writeFileSync(binary, `compiled: ${endpoint} ${publicKeyBase64}`);
+  assert.match(execute("verify").stderr, /updater endpoint/);
+  mkdirSync(join(dir, "preview"));
+  const preview = fixture(join(dir, "preview"), undefined, stable);
+  assert.match(preview.execute("verify").stderr, /updater endpoint/);
+});
+
+test("betas and malformed versions are never served on a feed", (t) => {
+  const dir = mkdtempSync(join(tmpdir(), "beta-feed-"));
+  t.after(() => rmSync(dir, { recursive: true, force: true }));
+  for (const version of ["1.0.0-beta.1", "1.0", "01.0.0"]) {
+    const sub = join(dir, version);
+    mkdirSync(sub);
+    const { execute } = fixture(sub, version, feedUrl("stable-feed"));
+    assert.match(execute("generate").stderr, /Invalid feed version/, version);
+  }
+});
+
+test("successful preview publication promotes automatically; manual recovery bypasses skipped builds", () => {
+  const read = (path) =>
+    readFileSync(new URL(`../../${path}`, import.meta.url), "utf8");
+  const workflow = parse(read(".github/workflows/release.yml"));
+  const { desktop, promote_preview: promotion } = workflow.jobs;
+  assert.match(desktop.if, /!inputs\.promote_version/);
+  assert.deepEqual(
+    parse(read(".github/workflows/desktop-build.yml")).jobs.publish.needs,
+    ["build", "windows", "linux", "updater_signatures"],
+  );
+  assert.deepEqual(promotion.needs, ["desktop"]);
   assert.match(promotion.if, /!cancelled\(\)/);
   assert.match(promotion.if, /!inputs\.candidates/);
   assert.match(
     promotion.if,
-    /inputs\.promote_version == '' && needs\.build\.result == 'success' && needs\.publish\.result == 'success'/,
+    /inputs\.promote_version == '' && needs\.desktop\.result == 'success'/,
   );
   assert.match(
     promotion.if,
-    /inputs\.promote_version != '' && needs\.build\.result == 'skipped' && needs\.publish\.result == 'skipped'/,
+    /inputs\.promote_version != '' && needs\.desktop\.result == 'skipped'/,
   );
   assert.equal(promotion.permissions.contents, "write");
   const promotionStep = promotion.steps.find((step) =>
-    step.run?.includes("scripts/preview-feed.mjs verify"),
+    step.run?.includes("scripts/promote-updater-feed.sh"),
+  );
+  assert.equal(
+    promotionStep.run,
+    'scripts/promote-updater-feed.sh preview-feed "$VERSION"',
   );
   assert.equal(
     promotionStep.env.VERSION,
-    `\${{ inputs.promote_version || needs.build.outputs.version }}`,
+    `\${{ inputs.promote_version || needs.desktop.outputs.version }}`,
   );
+  const promote = read("scripts/promote-updater-feed.sh");
   assert.ok(
-    promotionStep.run.indexOf("scripts/preview-feed.mjs verify") <
-      promotionStep.run.indexOf("gh release upload preview-feed"),
+    promote.indexOf("scripts/preview-feed.mjs verify") <
+      promote.indexOf('gh release upload "$feed"'),
   );
   const cleanupStep = promotion.steps.at(-1);
   assert.equal(

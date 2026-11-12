@@ -1,0 +1,68 @@
+name: Desktop stable release
+run-name: Publish ${{ github.ref_name }}
+
+# Publishes a stable (vX.Y.Z, marked Latest) or beta (vX.Y.Z-beta.N, a
+# prerelease) GitHub release from its protected tag. Serving a stable release
+# to installed apps is a separate step: desktop-stable-feed.yml.
+on:
+  push:
+    tags:
+      - "v[0-9]*"
+      # Previews' own tags; release.yml creates them and they never trigger this.
+      - "!v*-preview.*"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: desktop-stable-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  source:
+    if: github.repository == 'block/buzz-app'
+    name: Verify release tag
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      version: ${{ steps.source.outputs.version }}
+    steps:
+      - name: Require a release tag in main history
+        id: source
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          TAG: ${{ github.ref_name }}
+          SOURCE_SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          [[ "$TAG" =~ ^v((0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-beta\.[1-9][0-9]*)?)$ ]] ||
+            { echo "::error::$TAG is not a release tag (vX.Y.Z or vX.Y.Z-beta.N)"; exit 1; }
+          version="${BASH_REMATCH[1]}"
+          # Anyone with write access can push an unprotected tag, so publish only
+          # while an active ruleset restricts v* tags (previews' own excepted).
+          protected=''
+          for id in $(gh api "repos/$GH_REPO/rulesets" --jq '.[] | select(.target == "tag" and .enforcement == "active") | .id'); do
+            protected+=$(gh api "repos/$GH_REPO/rulesets/$id" --jq '
+              select((.conditions.ref_name.include | index("refs/tags/v*")) != null
+                and (.conditions.ref_name.exclude - ["refs/tags/v*-preview.*"]) == []
+                and ([.rules[].type] | sort) == ["creation", "deletion", "non_fast_forward", "update"]) | .id')
+          done
+          [[ -n "$protected" ]] || { echo '::error::No active tag ruleset restricts creation, update and deletion of refs/tags/v*'; exit 1; }
+          # The tag must point at the commit this run builds.
+          tagged=$(gh api "repos/$GH_REPO/commits/refs/tags/$TAG" --jq .sha)
+          [[ "$tagged" == "$SOURCE_SHA" ]] || { echo "::error::$TAG is at $tagged, not $SOURCE_SHA"; exit 1; }
+          main=$(gh api "repos/$GH_REPO/git/ref/heads/main" --jq .object.sha)
+          base=$(gh api "repos/$GH_REPO/compare/$SOURCE_SHA...$main" --jq .merge_base_commit.sha)
+          [[ "$base" == "$SOURCE_SHA" ]] || { echo "::error::$SOURCE_SHA is not in main history at $main"; exit 1; }
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+
+  desktop:
+    needs: source
+    uses: ./.github/workflows/desktop-build.yml
+    permissions:
+      contents: write
+      id-token: write
+    secrets: inherit
+    with:
+      release_version: ${{ needs.source.outputs.version }}

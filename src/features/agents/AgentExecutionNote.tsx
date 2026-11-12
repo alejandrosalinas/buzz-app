@@ -1,9 +1,16 @@
+import type { ReactNode } from "react";
 import { CloudIcon } from "../../shared/design-system/icons";
 import { PreferenceRow } from "../../shared/design-system/ui/PreferenceRow";
 import { SettingsGroup } from "../../shared/design-system/ui/SettingsGroup";
 
 /** Execution guidance sits outside the settings container it explains. */
-export function AgentExecutionNote({ runtime }: { runtime?: string }) {
+export function AgentExecutionNote({
+  runtime,
+  description,
+}: {
+  runtime?: string;
+  description?: ReactNode;
+}) {
   // Keep the cue compact; the composer explains where remote work happens.
   return (
     <div role="note">
@@ -12,9 +19,10 @@ export function AgentExecutionNote({ runtime }: { runtime?: string }) {
           icon={<CloudIcon />}
           title="Remote agent"
           subtitle={
-            runtime === "block.builderlab/builderlab"
+            description ??
+            (runtime === "block.builderlab/builderlab"
               ? "Runs on a Builderlab machine"
-              : undefined
+              : undefined)
           }
         />
       </SettingsGroup>

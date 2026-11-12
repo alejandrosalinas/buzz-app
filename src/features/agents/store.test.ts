@@ -1,5 +1,10 @@
 import { expect, it, vi } from "vitest";
-import { sourceCompleted, sourceSignature, validateObject } from "./attention";
+import {
+  OBJECT_LIMIT,
+  sourceCompleted,
+  sourceSignature,
+  validateObject,
+} from "./attention";
 import { fileStore } from "./state";
 import {
   STORAGE_KEY,
@@ -119,8 +124,8 @@ it("saves attention only as on; absent or anything else reads as off", async () 
 it("skips objects over the count limit in slug order, and refuses to add more", () => {
   const storage = memoryStorage();
   const attention = Object.fromEntries(
-    Array.from({ length: 101 }, (_, n) => {
-      const slug = `interest/i${String(n).padStart(3, "0")}`;
+    Array.from({ length: OBJECT_LIMIT + 1 }, (_, n) => {
+      const slug = `interest/i${String(n).padStart(4, "0")}`;
       return [
         slug,
         { slug, value: { type: "interest", instructions: "x" }, modifiedAt: 1 },
@@ -135,9 +140,12 @@ it("skips objects over the count limit in slug order, and refuses to add more", 
     }),
   );
   const read = readRecords(storage)[pubkey] as AgentRecord;
-  expect(Object.keys(read.attention)).toHaveLength(100);
-  expect(Object.keys(read.skipped ?? {})).toEqual(["interest/i100"]);
-  const { "interest/i099": _, ...full } = read.attention;
+  const pad = (n: number) => String(n).padStart(4, "0");
+  expect(Object.keys(read.attention)).toHaveLength(OBJECT_LIMIT);
+  expect(Object.keys(read.skipped ?? {})).toEqual([
+    `interest/i${pad(OBJECT_LIMIT)}`,
+  ]);
+  const { [`interest/i${pad(OBJECT_LIMIT - 1)}`]: _, ...full } = read.attention;
   expect(() =>
     setAttention({ ...read, attention: full }, "interest/new", {
       type: "interest",
@@ -146,7 +154,7 @@ it("skips objects over the count limit in slug order, and refuses to add more", 
   ).not.toThrow();
   expect(() =>
     setAttention(read, "interest/new", { type: "interest", instructions: "x" }),
-  ).toThrow(/at most 100/);
+  ).toThrow(`at most ${OBJECT_LIMIT}`);
 });
 
 it("keeps a timer's budget across edits; only a rearm moves its deadline", () => {
@@ -614,8 +622,8 @@ it("retains the original pause envelope when a child exceeds the supported objec
           modifiedAt: 1,
         },
         ...Object.fromEntries(
-          Array.from({ length: 101 }, (_, index) => {
-            const slug = `watch/${String(index).padStart(3, "0")}`;
+          Array.from({ length: OBJECT_LIMIT + 1 }, (_, index) => {
+            const slug = `watch/${String(index).padStart(4, "0")}`;
             return [slug, { slug, value, modifiedAt: 1 }];
           }),
         ),
@@ -624,12 +632,12 @@ it("retains the original pause envelope when a child exceeds the supported objec
   );
   const read = readRecords(storage)[pubkey];
   if (!read) throw new Error("fixture");
-  expect(read.skipped?.["watch/100"]?.value).toEqual(value);
+  const over = `watch/${String(OBJECT_LIMIT).padStart(4, "0")}`;
+  expect(read.skipped?.[over]?.value).toEqual(value);
   await writeRecord(storage, read);
   expect(
-    JSON.parse(storage.getItem(recordKey(pubkey)) ?? "{}").attention[
-      "watch/100"
-    ].value,
+    JSON.parse(storage.getItem(recordKey(pubkey)) ?? "{}").attention[over]
+      .value,
   ).toEqual(value);
 });
 

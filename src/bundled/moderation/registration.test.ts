@@ -1,3 +1,4 @@
+import { provideNavigation } from "../../features/navigation/service";
 import { Context } from "@deepseek-ai/cordis";
 import { expect, it, vi } from "vitest";
 import { MEMBERSHIP_SECTION } from "../../features/communities/CommunityPickerItem";
@@ -17,6 +18,7 @@ const owner = "0".repeat(64);
 function relay(): RelayData {
   const session = {
     relayAuthor: relayKey,
+    subscribeLive: () => () => {},
     read: async () => [
       {
         id: "e".repeat(64),
@@ -49,6 +51,7 @@ function relay(): RelayData {
 // Settings navigation does, under the id the real manifest gives the plugin.
 it("registers the Membership card under the key the community rail opens", async () => {
   const root = new Context();
+  provideNavigation(root);
   root.provide("pluginStatus", {
     isActive: () => true,
     subscribe: () => () => {},

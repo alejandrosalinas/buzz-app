@@ -103,6 +103,7 @@ function harness() {
       };
     },
     retry() {},
+    tryAgain() {},
     disconnect() {},
     clearCache: async () => {},
   };

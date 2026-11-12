@@ -1,4 +1,4 @@
-import { memo, useEffect, useId, useLayoutEffect } from "react";
+import { memo, type ReactNode, useEffect, useId, useLayoutEffect } from "react";
 import {
   ConversationTimeline,
   useConversation,
@@ -14,6 +14,7 @@ import styles from "./Channels.module.css";
 
 export const ChannelBody = memo(function ChannelBody({
   cached,
+  intro,
   viewer,
   revealMessageId,
   inlineTarget,
@@ -25,6 +26,7 @@ export const ChannelBody = memo(function ChannelBody({
 }: {
   onContentReady?(channelId: string): void;
   cached: boolean;
+  intro?: ReactNode;
   viewer?: string | undefined;
   navigation?: PageNavigation | undefined;
   revealMessageId?: string | undefined;
@@ -120,6 +122,7 @@ export const ChannelBody = memo(function ChannelBody({
   return (
     <ConversationTimeline
       continuityKey={continuityKey}
+      intro={intro}
       viewer={viewer}
       window={window}
       launchPending={

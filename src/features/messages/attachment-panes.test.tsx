@@ -157,6 +157,7 @@ async function fixture(archived = false) {
     snapshot: () => snapshot,
     subscribe: () => () => {},
     retry() {},
+    tryAgain() {},
     disconnect() {},
     clearCache: owner.clearCache,
   };

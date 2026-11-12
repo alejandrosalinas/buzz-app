@@ -27,6 +27,11 @@ restoring settings never plays a preview. Silent stops the current preview. The
 Sound switch turns playback off without disabling alerts. Each category also offers
 Silent, which is saved like other sound choices and suppresses that category’s
 audio without changing its desktop alerts. Silent has no audio preview.
+A saved sound name this build does not bundle (chosen on a newer build, for
+example) restores as the default for that category only. Alerts and the other
+choices stay as saved. Restore writes nothing, so a later upgrade finds the name
+unless a notification setting was changed on this build in the meantime: any
+change saves all four categories as currently restored, replacing the name.
 
 ```ts
 export const inject = ["notifications"];

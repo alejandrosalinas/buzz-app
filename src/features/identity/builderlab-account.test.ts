@@ -11,6 +11,7 @@ import {
 } from "../federated-identity/testing";
 import {
   backupOfferedFor,
+  builderlabPhone,
   federatedBuilderlabAccount,
   seededAccount,
 } from "./builderlab-account";
@@ -835,7 +836,7 @@ describe("bind", () => {
         .catch((error: unknown) => error);
       expect(failed).toBeInstanceOf(Error);
       expect((failed as Error).message).toBe(signedOut);
-      expect((failed as { retryable?: unknown }).retryable).toBeUndefined();
+      expect((failed as { retryable?: unknown }).retryable).toBe(false);
     },
   );
 
@@ -1153,6 +1154,27 @@ describe("unbind", () => {
     expect((failed as Error).message).toBe("offline");
     expect((failed as { retryable?: unknown }).retryable).toBe(true);
   });
+
+  // Start over's page has no way past a failed unlink but Try again, so only
+  // an ended sign-in, where signing in again helps instead, may withdraw it.
+  it.each([
+    ["a lapsed session", lapsed, false],
+    ["a refused origin", refusal(403, "invalid_origin"), undefined],
+    ["a non-JSON refusal", answer(403, "Forbidden"), undefined],
+  ])(
+    "keeps Try again for an unlink failing on %s unless the sign-in ended",
+    async (_label, reply, retryable) => {
+      vi.spyOn(console, "warn").mockImplementation(() => {});
+      const failed: unknown = await forwardedAccount(
+        credential,
+        kgoose(bound(old), reply).request,
+        untouched,
+      )
+        .unbind(old, pubkey)
+        .catch((error: unknown) => error);
+      expect((failed as { retryable?: unknown }).retryable).toBe(retryable);
+    },
+  );
 
   // kgoose's delete answers 200 or a 403 `invalid_origin`; its
   // `@Authenticated` gate answers a lapsed session with misk's 401.
@@ -1546,5 +1568,92 @@ describe("federatedBuilderlabAccount", () => {
       ],
     ]);
     expect(fi.request).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("builderlabPhone", () => {
+  const other = "cd".repeat(32);
+  /** A signed-in session whose account answers `current` with `linked` and
+   * `status` with `backups`, and whose native backup is offered. */
+  const phone = async (
+    linked: string | null,
+    backups: string[] | ReturnType<typeof answer> | Error,
+  ) => {
+    const fi = federatedFixture();
+    await fi.service.signIn();
+    fi.request.mockImplementation(async ({ path }: { path: string }) => {
+      if (path.endsWith("/nostr-identities/current"))
+        return answer(200, {
+          identity: linked ? { pubkey_hex: linked } : null,
+        });
+      if (path.endsWith("/nsec-backups/status")) {
+        if (backups instanceof Error) throw backups;
+        return Array.isArray(backups)
+          ? answer(200, {
+              current_nostr_pubkey: linked,
+              backup_nostr_pubkeys: backups,
+            })
+          : backups;
+      }
+      throw new Error(`Unexpected ${path}`);
+    });
+    const send = vi.fn(async (command: string) => {
+      if (command === "nsec_backup_state")
+        return { seq: 1, pass: 0, builderlab: true, status: "idle" };
+    });
+    return {
+      fi,
+      phone: builderlabPhone(fi.service, {
+        ...noRecovery,
+        backup: createBackupStatus(send as never),
+        setBackupChoice: () => {
+          throw new Error("Wrote backup consent");
+        },
+      }),
+    };
+  };
+
+  it("restores this key when it is the account's linked key and is backed up", async () => {
+    const { fi, phone: card } = await phone(pubkey, [pubkey]);
+    expect(await card.restoresOnPhone(pubkey)).toBe(true);
+    expect(await card.restoresOnPhone(pubkey.toUpperCase())).toBe(true);
+    expect(
+      fi.request.mock.calls.map(([input]) => (input as { path: string }).path),
+    ).toEqual(
+      expect.arrayContaining([
+        "/api/goose/v1/buzz/nostr-identities/current",
+        "/api/goose/v1/buzz/nsec-backups/status",
+      ]),
+    );
+  });
+
+  it.each([
+    ["no backup", pubkey, []],
+    ["no key linked", null, [pubkey]],
+    ["a different key linked and backed up", other, [pubkey, other]],
+    ["this key backed up but another linked", other, [pubkey]],
+    ["backups unavailable", pubkey, answer(404, "")],
+    ["a refused status read", pubkey, answer(403, "{}")],
+    ["an unreadable status reply", pubkey, answer(200, "not json")],
+    ["a failed status read", pubkey, new Error("timed out")],
+  ] as const)("does not restore with %s", async (_, linked, backups) => {
+    const { phone: card } = await phone(
+      linked,
+      backups as Parameters<typeof phone>[1],
+    );
+    expect(await card.restoresOnPhone(pubkey)).toBe(false);
+  });
+
+  it("does not restore, and reads nothing, when signed out or with no identity", async () => {
+    const { fi, phone: card } = await phone(pubkey, [pubkey]);
+    fi.publish({ status: "signed-out" });
+    expect(await card.restoresOnPhone(pubkey)).toBe(false);
+    expect(
+      await builderlabPhone(fi.service, undefined).restoresOnPhone(pubkey),
+    ).toBe(false);
+    expect(
+      await builderlabPhone(undefined, undefined).restoresOnPhone(pubkey),
+    ).toBe(false);
+    expect(fi.request).not.toHaveBeenCalled();
   });
 });

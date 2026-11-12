@@ -34,6 +34,9 @@ export type SessionSnapshot = Readonly<{
   /** A retired session's record is still stored because removing it
    * failed (`unavailable`); signing out again retries the removal. */
   cleanup: boolean;
+  /** Signing in again waits on the browser while this session stays
+   * signed in; `cancelSignIn` ends only that wait. */
+  renewing?: boolean;
 }>;
 /** First run's sign-in choices (`FirstRunIdentity`); plugins see `signIn()`. */
 export type SignInOptions = Readonly<{
@@ -68,6 +71,9 @@ export interface FederatedIdentity {
   subscribe(listener: () => void): () => void;
   signIn(): Promise<SessionSnapshot>;
   cancelSignIn(): Promise<void>;
+  /** Checks a session whose restore failed again, keeping its stored record:
+   * native retries the restore; a signed-in session answers as it is. */
+  recheck?(): Promise<SessionSnapshot>;
   /** With `revision`, only while that session is current: native leaves a
    * newer one signed in. Answers with native's own snapshot. */
   signOut(options?: { revision?: string }): Promise<SessionSnapshot>;
@@ -78,6 +84,15 @@ export interface FederatedIdentity {
   forCommunity?(relay: string): FederatedIdentity;
   /** The session of the sign-in server with this id, for Settings. */
   forServer?(id: string): FederatedIdentity;
+  /** Whether a community (`wss://` or `https://` origin) requires NIP-FI,
+   * from the `/info` discovery native shares with admission. One that does
+   * not is reached with the key alone, whatever any session does. Rejects
+   * when discovery fails. */
+  communityRequiresSignIn?(relay: string): Promise<boolean>;
+  /** The user asked to try a community (`wss://` or `https://` origin) again:
+   * its next admission asks the issuer again instead of repeating a refusal
+   * native cached for the session (NIP-FA). Automatic retries never call it. */
+  askAgain?(relay: string): Promise<void>;
 }
 declare module "@deepseek-ai/cordis" {
   interface Context {
@@ -205,6 +220,11 @@ export class FederatedIdentityService
     await invoke("federated_identity_cancel_sign_in");
     await this.operation("federated_identity_snapshot");
   }
+  recheck() {
+    return this.operation("federated_identity_snapshot");
+  }
+  communityRequiresSignIn = communityRequiresSignIn;
+  askAgain = askAgain;
   forCommunity = (relay: string): FederatedIdentity => {
     let session = this.shared.communities.get(relay);
     if (!session) {
@@ -306,6 +326,27 @@ export async function signInServers(): Promise<readonly SessionSnapshot[]> {
   return invoke<SessionSnapshot[]>("federated_identity_servers");
 }
 
+/** Forgets the issuer refusals native cached for a community this session,
+ * so its next request asks the issuer again. Only for a person's retry. */
+export async function askAgain(relay: string) {
+  if (!nativeIdentityEnabled()) return;
+  try {
+    await invoke("federated_identity_ask_again", { relay });
+  } catch (error) {
+    throw typeof error === "string" ? new Error(error) : error;
+  }
+}
+
+async function communityRequiresSignIn(relay: string) {
+  if (!nativeIdentityEnabled())
+    throw new Error("Federated identity requires Buzz desktop");
+  try {
+    return await invoke<boolean>("federated_identity_requires", { relay });
+  } catch (error) {
+    throw typeof error === "string" ? new Error(error) : error;
+  }
+}
+
 /** Which server a session command is for: a community's, or one by id. */
 type Target = Readonly<{ relay: string } | { server: string }>;
 
@@ -354,6 +395,8 @@ class CommunitySession implements FederatedIdentity {
       );
     void this.operation("federated_identity_snapshot").catch(() => {});
   }
+  communityRequiresSignIn = communityRequiresSignIn;
+  askAgain = askAgain;
   snapshot = () => this.state;
   subscribe = (listener: () => void) => {
     this.start();
@@ -386,6 +429,9 @@ class CommunitySession implements FederatedIdentity {
   async cancelSignIn() {
     await invoke("federated_identity_cancel_sign_in", this.target);
     await this.operation("federated_identity_snapshot");
+  }
+  recheck() {
+    return this.operation("federated_identity_snapshot");
   }
   request(): Promise<HostResponse> {
     return Promise.reject(

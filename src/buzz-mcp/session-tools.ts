@@ -8,13 +8,14 @@ import {
   ATTENTION_OFF,
   ATTENTION_REVIEW,
 } from "../features/agent-harness/attention-prompt";
+import { pluginInstructions } from "../features/agent-harness/plugin-instructions";
+import type { AgentHandle } from "../features/agents/service";
 import {
   ATTENTION_TOOLS,
   callAttentionTool,
   isAttentionTool,
 } from "./attention";
 import type { BuzzClient, Context } from "./client";
-import { callOwnerTool, isOwnerTool, OWNER_TOOLS } from "./owner";
 import { callPluginTool, isPluginTool, PLUGIN_TOOLS } from "./plugins";
 import { callSettingsTool, isSettingsTool, SETTINGS_TOOLS } from "./settings";
 import {
@@ -37,8 +38,8 @@ export type AddedTool = Readonly<{
   name: string;
   description: string;
   inputSchema: Readonly<Record<string, unknown>>;
-  /** Runs it as the agent working in `context`. A throw is a tool error for
-   * the agent to correct. */
+  /** Runs as the agent in `context`. Use `client.signal` to cancel waits and
+   * check it before external writes. A throw is a tool error for the agent. */
   call(
     client: BuzzClient,
     context: Context,
@@ -82,33 +83,26 @@ const listed = ({ name, description, inputSchema }: AddedTool): Listed => ({
  * never grows what every turn carries. */
 export type SessionTool = Listed & Readonly<{ load: "always" | "search" }>;
 
-/** The tools a session lists: the Buzz tools, then those plugins add. The
- * owner tools only with `owner`: a client with `ownerAccess`. */
+/** The tools a session lists: the Buzz tools, then those plugins add. */
 export const sessionTools = (
   added: readonly AddedTool[] = [],
-  owner = false,
 ): readonly SessionTool[] => [
   ...TOOLS.map((tool) => ({ ...tool, load: "always" as const })),
   ...ATTENTION_TOOLS.map((tool) => ({ ...tool, load: "search" as const })),
   ...SOLO_WORKER_TOOLS.map((tool) => ({ ...tool, load: "search" as const })),
   ...PLUGIN_TOOLS.map((tool) => ({ ...tool, load: "search" as const })),
   ...SETTINGS_TOOLS.map((tool) => ({ ...tool, load: "search" as const })),
-  ...(owner
-    ? OWNER_TOOLS.map((tool) => ({ ...tool, load: "search" as const }))
-    : []),
   ...added.map((tool) => ({ ...listed(tool), load: "search" as const })),
 ];
 
 /** What the server (Claude) or namespace (Codex) with the tools says up
  * front, so the model knows what it can search for. */
-export function sessionHint(added: readonly AddedTool[] = [], owner = false) {
+export function sessionHint(added: readonly AddedTool[] = []) {
+  // Codex limits namespace descriptions to 1024 characters. Tool search has the full list.
   const plugins = added.length
-    ? ` and tools plugins add (${added.map((tool) => tool.name).join(", ")})`
+    ? " and tools from enabled plugins. Search by capability to discover specific plugin tools"
     : "";
-  const owned = owner
-    ? ", your owner's channels, members, messages and canvases read with their access (owner_channel_list, owner_read)"
-    : "";
-  return `Read and act in Buzz as this agent. Search for the rest when you need them: your attention (Interests, event watches and timers; interest_set and watch_add say how they work), Nexus workers an owner lets you run (solo_worker_connections), this device's plugins (plugin_list; install, update, enable and remove are requests your owner confirms)${owned}${plugins}.`;
+  return `Read and act in Buzz as this agent. Search for the rest when you need them: your attention (Interests, event watches and timers; interest_set and watch_add say how they work), this device's plugins (plugin_list; install, update, enable and remove are requests your owner confirms)${plugins}.`;
 }
 
 /** Changes when the added tools change, so a session that keeps the list it
@@ -127,14 +121,25 @@ export function addedKey(added: readonly AddedTool[]) {
   return (hash >>> 0).toString(36);
 }
 
-/** Text for the end of a turn's prompt, as the agent's attention is now.
- * An agent with no Interests has nothing to review, so it need not load the
- * attention tools to find that out. */
-export function turnNote(client?: Pick<BuzzClient, "attention">) {
+/** Text for the end of a turn's prompt: the instructions plugins give the
+ * agent now, then its attention as it is now. An agent with no Interests has
+ * nothing to review, so it need not load the attention tools to find that
+ * out. */
+export function turnNote(
+  client?: Pick<BuzzClient, "attention"> & Pick<AgentHandle, "instructions">,
+) {
   const attention = client?.attention;
-  if (!attention) return undefined;
-  if (!attention.enabled()) return ATTENTION_OFF;
-  return attention.interests().length ? ATTENTION_REVIEW : ATTENTION_NONE;
+  const review = !attention
+    ? undefined
+    : !attention.enabled()
+      ? ATTENTION_OFF
+      : attention.interests().length
+        ? ATTENTION_REVIEW
+        : ATTENTION_NONE;
+  const notes = [pluginInstructions(client?.instructions?.()), review].filter(
+    Boolean,
+  );
+  return notes.length ? notes.join("\n\n") : undefined;
 }
 
 /** Answers one tool call. Throws when the tool cannot run now; the message
@@ -170,17 +175,12 @@ export async function callSessionTool(
       ...(typeof args.command === "string" ? { command: args.command } : {}),
     });
   let reply: Reply;
-  let held: (() => void) | undefined;
   try {
-    if (isOwnerTool(name) && !added.some((tool) => tool.name === name))
-      ({ text: reply, held } = await callOwnerTool(client, name, args));
-    else reply = await dispatchSessionTool(client, context, name, args, added);
+    reply = await dispatchSessionTool(client, context, name, args, added);
   } catch (error) {
     return checkedToolError(client, session, error);
   }
   await client.protect?.({ kind: "tool-result", session, content: reply });
-  // An owner read is released only while the binding it was read with holds.
-  held?.();
   return reply;
 }
 
@@ -206,8 +206,8 @@ async function dispatchSessionTool(
 ): Promise<Reply> {
   const tool = added.find((tool) => tool.name === name);
   if (tool) {
-    // A plugin's tool doesn't get the agent's device settings or owner access.
-    const { settings: _, ownerAccess: __, ...plugin } = client;
+    // A plugin's tool doesn't get the agent's device settings.
+    const { settings: _, ...plugin } = client;
     return tool.call(plugin, context, args);
   }
   if (isSoloWorkerTool(name)) return callSoloWorkerTool(client, name, args);

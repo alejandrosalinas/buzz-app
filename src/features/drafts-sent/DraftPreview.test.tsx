@@ -220,6 +220,7 @@ function fixture(upload?: () => Promise<UploadedAttachment>) {
     snapshot: () => connection,
     subscribe: () => () => {},
     retry() {},
+    tryAgain() {},
     disconnect() {},
     clearCache: owner.clearCache,
   } as RelayData;

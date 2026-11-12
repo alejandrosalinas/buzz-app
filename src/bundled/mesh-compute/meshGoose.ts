@@ -47,7 +47,7 @@ const MESH_EXTENSIONS: readonly PlatformExtension[] = [
 export function meshGooseEnv(
   baseUrl: string,
   root: string,
-): Record<string, string> {
+): Record<string, string | null> {
   const url = new URL(baseUrl);
   const path = url.pathname.replace(/^\/+|\/+$/g, "");
   return {
@@ -57,6 +57,10 @@ export function meshGooseEnv(
     OPENAI_BASE_PATH: `${path}/chat/completions`,
     // The loopback route takes no key; goose needs one to start the provider.
     OPENAI_API_KEY: "mesh-local",
+    // TODO: enable goose's tool deferral for mesh once it is tested there.
+    // Until then, unset the lookup deferral that `ENV` turns on for goose.
+    GOOSE_TOOL_DEFERRAL: null,
+    GOOSE_TOOL_DEFERRAL_ALWAYS_LOAD: null,
   };
 }
 

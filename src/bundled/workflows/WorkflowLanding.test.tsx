@@ -1391,6 +1391,8 @@ function filterLanding(save = true) {
     availability: { ...fixture.capability.availability, save },
   };
   const onCreate = vi.fn();
+  // WorkflowsPage owns New workflow's availability and omits onCreate without save.
+  const create = save ? onCreate : undefined;
   const channels = [
     { id: fixtureChannel, name: "General", channelType: "stream" as const },
     { id: "other-channel", name: "Other", channelType: "stream" as const },
@@ -1434,7 +1436,7 @@ function filterLanding(save = true) {
           detailTarget={null}
           selected={undefined}
           onSelect={() => {}}
-          onCreate={onCreate}
+          onCreate={create}
           onDelete={() => {}}
           onOpen={() => {}}
         />
@@ -2055,6 +2057,172 @@ it.each(["delete", "enable"] as const)(
       expect(row.closest('[aria-hidden="true"]')).not.toBeNull();
       expect(dialog).not.toBeInTheDocument();
       expect(screen.queryByRole("alertdialog", { hidden: true })).toBeNull();
+    } finally {
+      target.remove();
+    }
+  },
+);
+
+it("marks an archived channel's workflows as not runnable and blocks only turning them on", async () => {
+  const reason = "This channel is archived, so its workflows can't run.";
+  const archived: ChannelSummary = {
+    id: fixtureChannel,
+    name: "General",
+    channelType: "stream",
+    archived: true,
+  };
+  const live: ChannelSummary = {
+    id: "live-channel",
+    name: "Live",
+    channelType: "stream",
+  };
+  const definitions = [
+    { name: "Off helper", channelId: archived.id, createdAt: 1, on: false },
+    { name: "On helper", channelId: archived.id, createdAt: 2, on: true },
+    { name: "Live helper", channelId: live.id, createdAt: 3, on: false },
+  ].map(({ name, on, ...fields }) => ({
+    ...fixtureDefinition,
+    ...fields,
+    id: name,
+    yaml: fixtureYaml
+      .replace("Message helper", name)
+      .replace("enabled: false", `enabled: ${on}`),
+  }));
+  const { fixture, target } = landing([archived, live]);
+  act(() =>
+    fixture.definitions.update({
+      status: "ready",
+      data: { partial: false, items: definitions },
+    }),
+  );
+  const user = userEvent.setup();
+  const run = (name: string) =>
+    screen.getByRole("button", { name: `Run now: ${name}` });
+  const toggle = (name: string) =>
+    screen.getByRole("switch", { name: `Enabled in configuration: ${name}` });
+  try {
+    const group = await screen.findByRole("region", { name: "General" });
+    await waitFor(() =>
+      expect(within(group).getByText("Archived")).toBeVisible(),
+    );
+    expect(
+      within(screen.getByRole("region", { name: "Live" })).queryByText(
+        "Archived",
+      ),
+    ).toBeNull();
+    for (const name of ["Off helper", "On helper"]) {
+      // Focusable while disabled, so its reason shows on hover.
+      expect(run(name)).toHaveAttribute("aria-disabled", "true");
+      expect(run(name)).toHaveAccessibleDescription(reason);
+    }
+    await user.hover(run("Off helper"));
+    expect(await screen.findByRole("tooltip")).toHaveTextContent(reason);
+    await user.unhover(run("Off helper"));
+    expect(toggle("Off helper")).toHaveAttribute("aria-disabled", "true");
+    expect(toggle("Off helper")).toHaveAccessibleDescription(reason);
+    await user.hover(toggle("Off helper"));
+    expect(await screen.findByRole("tooltip")).toHaveTextContent(reason);
+    await user.unhover(toggle("Off helper"));
+    await waitFor(() => expect(screen.queryByRole("tooltip")).toBeNull());
+    // Like Run now, it stays in the tab order but can't be turned on.
+    run("Off helper").focus();
+    await user.tab();
+    expect(toggle("Off helper")).toHaveFocus();
+    // Space doesn't scroll the list either.
+    expect(fireEvent.keyDown(toggle("Off helper"), { key: " " })).toBe(false);
+    await user.keyboard(" ");
+    expect(toggle("Off helper")).not.toBeChecked();
+    act(() => toggle("Off helper").blur());
+    // Turning a workflow off stays available, so it stops failing.
+    expect(toggle("On helper")).toBeChecked();
+    expect(toggle("On helper")).not.toHaveAttribute("aria-disabled");
+    expect(toggle("On helper")).toHaveAccessibleDescription("");
+    expect(run("Live helper")).toBeEnabled();
+    expect(run("Live helper")).toHaveAccessibleDescription("");
+    expect(toggle("Live helper")).not.toHaveAttribute("aria-disabled");
+
+    await user.click(screen.getByRole("button", { name: /^Open Off helper:/ }));
+    const detail = within(target).getByRole("region", { name: "Off helper" });
+    expect(within(detail).getByText(/#General · Archived ·/)).toBeVisible();
+    const detailRun = within(detail).getByRole("button", { name: "Run now" });
+    expect(detailRun).toHaveAttribute("aria-disabled", "true");
+    expect(detailRun).toHaveAccessibleDescription(reason);
+    const detailToggle = within(detail).getByRole("switch", {
+      name: "Enabled in configuration",
+    });
+    expect(detailToggle).toHaveAttribute("aria-disabled", "true");
+    expect(detailToggle).toHaveAccessibleDescription(reason);
+    await user.click(detailToggle);
+    await user.click(run("Off helper"));
+    expect(fixture.calls.save).toBe(0);
+    expect(fixture.calls.trigger).toBe(0);
+
+    await user.click(toggle("On helper"));
+    expect(fixture.calls.save).toBe(1);
+    expect(fixture.input()?.yaml).toContain("enabled: false");
+
+    screen.getByRole("button", { name: "Sort workflows" }).focus();
+    await user.keyboard("{Enter}");
+    await user.click(
+      await screen.findByRole("menuitemradio", { name: "Recently updated" }),
+    );
+    const recent = await screen.findByRole("region", {
+      name: "Recent workflows",
+    });
+    expect(
+      within(recent).getByRole("button", { name: /^Open Off helper:/ }),
+    ).toHaveTextContent(/#General·Archived·/);
+    expect(
+      within(recent).getByRole("button", { name: /^Open Live helper:/ }),
+    ).not.toHaveTextContent("Archived");
+    expect(run("Off helper")).toHaveAccessibleDescription(reason);
+    expect(run("Live helper")).toBeEnabled();
+  } finally {
+    target.remove();
+  }
+});
+
+it.each(["card", "detail"] as const)(
+  "says why it doesn't turn a workflow on from the %s when its channel is archived during the confirmation",
+  async (surface) => {
+    const live: ChannelSummary = {
+      id: fixtureChannel,
+      name: "General",
+      channelType: "stream",
+    };
+    const { fixture, target, changeChannels } = landing([live]);
+    const user = userEvent.setup();
+    try {
+      if (surface === "card") {
+        await user.click(
+          await screen.findByRole("switch", {
+            name: "Enabled in configuration: Message helper",
+          }),
+        );
+      } else {
+        await user.click(
+          await screen.findByRole("button", { name: /^Open Message helper:/ }),
+        );
+        await user.click(
+          within(
+            within(target).getByRole("region", { name: "Message helper" }),
+          ).getByRole("switch", { name: "Enabled in configuration" }),
+        );
+      }
+      const confirm = await screen.findByRole("alertdialog", {
+        name: "This workflow may run often",
+      });
+      changeChannels([{ ...live, archived: true }]);
+      await user.click(
+        within(confirm).getByRole("button", { name: "Turn on" }),
+      );
+      expect(fixture.calls.save).toBe(0);
+      // The card says why nothing changed.
+      expect(
+        await screen.findByRole("dialog", {
+          name: "This channel is archived, so its workflows can't run.",
+        }),
+      ).toBeVisible();
     } finally {
       target.remove();
     }

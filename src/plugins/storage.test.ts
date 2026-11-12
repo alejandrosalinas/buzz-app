@@ -100,7 +100,7 @@ it.each(
         reloadable: false,
         error: null,
         manifest: { id, name: id, apiVersion: 1 as const },
-        enabled: false,
+        enabled: id === "buzz.bestie",
       },
     ];
     const expected = saved ?? id !== "buzz.bestie";
@@ -130,6 +130,7 @@ it.each(
 const optionalCatalog = (): PluginInfo[] => [
   ...catalog(),
   ...["buzz.reminders", "buzz.workflows"].map((id) => bundledPlugin(id, false)),
+  bundledPlugin("buzz.bestie"),
 ];
 function browserStorage() {
   const values = new Map<string, string>();
@@ -166,6 +167,7 @@ it.each([false, true])(
             { enabled: true },
             { enabled: existing },
             { enabled: existing },
+            { enabled: !existing },
           ],
         },
       });
@@ -179,7 +181,15 @@ it.each([false, true])(
     expect(
       await createPluginStorage(optionalCatalog).getCatalog(),
     ).toMatchObject({
-      catalog: { plugins: [{}, {}, { enabled: existing }, { enabled: false }] },
+      catalog: {
+        plugins: [
+          {},
+          {},
+          { enabled: existing },
+          { enabled: false },
+          { enabled: !existing },
+        ],
+      },
     });
   },
 );
@@ -210,11 +220,27 @@ it("requires recovery for unreadable settings and resets to current defaults dur
   expect(storage.getItem("buzzodz.plugins.v1")).toBe("broken");
   expect(await installation.recoverSettings()).toMatchObject({
     status: "ready",
-    catalog: { plugins: [{}, {}, { enabled: false }, { enabled: false }] },
+    catalog: {
+      plugins: [
+        {},
+        {},
+        { enabled: false },
+        { enabled: false },
+        { enabled: true },
+      ],
+    },
   });
   expect(await createPluginStorage(optionalCatalog).getCatalog()).toMatchObject(
     {
-      catalog: { plugins: [{}, {}, { enabled: false }, { enabled: false }] },
+      catalog: {
+        plugins: [
+          {},
+          {},
+          { enabled: false },
+          { enabled: false },
+          { enabled: true },
+        ],
+      },
     },
   );
   expect(
@@ -254,6 +280,7 @@ it.each(["corrupt", "saved"])(
               "buzz.github": false,
               "buzz.reminders": false,
               "buzz.workflows": false,
+              "buzz.bestie": false,
             },
           });
     storage.setItem(`buzz-client.v1:${"a".repeat(64)}`, "{}");
@@ -282,6 +309,7 @@ it.each(["corrupt", "saved"])(
             { enabled: false },
             { enabled: false },
             { enabled: false },
+            { enabled: false },
           ],
         },
       });
@@ -294,6 +322,7 @@ it.each(["corrupt", "saved"])(
           { enabled: true },
           { enabled: false },
           { enabled: false },
+          { enabled: true },
         ],
       },
     });
@@ -301,7 +330,15 @@ it.each(["corrupt", "saved"])(
       await createPluginStorage(optionalCatalog).getCatalog(),
     ).toMatchObject({
       status: "ready",
-      catalog: { plugins: [{}, {}, { enabled: false }, { enabled: false }] },
+      catalog: {
+        plugins: [
+          {},
+          {},
+          { enabled: false },
+          { enabled: false },
+          { enabled: true },
+        ],
+      },
     });
   },
 );

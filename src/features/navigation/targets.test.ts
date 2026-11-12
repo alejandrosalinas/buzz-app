@@ -136,6 +136,16 @@ describe("open target boundary", () => {
     };
     expect(targetKey(a)).toBe(targetKey(b));
     expect(parseOpenTarget(a)).toEqual(a);
+    const settings = {
+      version: 1,
+      kind: "settings",
+      section: "org.example/card",
+      route: { version: 1, params: "create" },
+    } as const;
+    expect(parseOpenTarget(settings)).toEqual(settings);
+    expect(targetKey(settings)).not.toBe(
+      targetKey({ version: 1, kind: "settings", section: settings.section }),
+    );
   });
   it.each([
     null,
@@ -163,6 +173,12 @@ describe("open target boundary", () => {
     { ...conversation, threadRootId: "b".repeat(64), context: "timeline" },
     { ...conversation, channelId: "../../other" },
     { version: 1, kind: "page", pluginId: "a/b", pageId: "board" },
+    {
+      version: 1,
+      kind: "settings",
+      section: "org.example/card",
+      route: { version: 0, params: null },
+    },
     {
       version: 1,
       kind: "page",

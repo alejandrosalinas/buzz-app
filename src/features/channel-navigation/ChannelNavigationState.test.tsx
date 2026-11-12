@@ -12,6 +12,7 @@ import {
 } from "@testing-library/react";
 import { afterEach, expect, it, vi } from "vitest";
 import { ToastProvider } from "../../shared/design-system/ui/Toast";
+import { ApiPaused } from "../relay/http-admission";
 import type { RelayData, RelaySnapshot } from "../relay/service";
 import type { RelaySession } from "../relay/session";
 import { PanelWorkspace } from "../panels/PanelWorkspace";
@@ -361,4 +362,27 @@ it("runs a chat archive's Undo through the lifecycle gate, after any action hold
   await screen.findByRole("dialog", { name: "Chat unarchived: Planning" });
   expect(view.result.current.lifecycleDialog).toBeUndefined();
   expect(run).toHaveBeenCalledTimes(3);
+});
+
+it("keeps a paused delete's confirmation open in place of the failure toast, then retries it", async () => {
+  const run = vi
+    .fn<(action: string, id: string, signal?: AbortSignal) => Promise<void>>()
+    .mockRejectedValueOnce(new ApiPaused(0))
+    .mockResolvedValueOnce();
+  const view = mount(fixture(run).relay, true);
+  const channel = { id: "plans", name: "Plans" };
+  act(() => view.result.current.openLifecycle(channel, "delete"));
+  fireEvent.click(
+    await screen.findByRole("button", { name: "Delete channel" }),
+  );
+  const retry = await screen.findByRole("button", { name: "Retry" });
+  expect(screen.getByRole("dialog", { name: "Delete Plans?" })).toBeVisible();
+  expect(
+    screen.queryByRole("dialog", { name: "Delete channel failed" }),
+  ).toBeNull();
+  expect(view.result.current.lifecycleDialog?.channel).toBe(channel);
+  fireEvent.click(retry);
+  await screen.findByRole("dialog", { name: "Channel deleted: Plans" });
+  expect(run).toHaveBeenCalledTimes(2);
+  expect(view.result.current.lifecycleDialog).toBeUndefined();
 });

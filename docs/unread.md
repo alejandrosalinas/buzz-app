@@ -32,6 +32,35 @@ accepted. Cancelled leases cannot survive disposal, revocation/regrant, or a new
 manual-unread action. Restored channel heads pass signature/access verification
 and supply evidence before their rows become observable.
 
+Standard consumers can invoke automatic observation when `frontier-sync` is
+available and the reading policy below is satisfied. This ordering repair does
+not change consumer enablement. For individual non-DM `observe` writes, this
+ordering repair preserves signed peer manual-unread
+intent correlated with a local pending read, or visible in its save transaction.
+It does not yet cover a sibling-only receipt queued behind that transaction:
+the sibling has no local read correlation and its checkpoint can commit too late.
+The read's before/after frontiers use verified channel/thread context against
+current storage, so an already-stale override is not revived. Only successful,
+advancing saves qualify. An initialized storage connection reserves a read-start
+IndexedDB snapshot before the owner queue suspends. Its already-seen marker
+generations fence duplicate delivery separately from the current save-time
+frontiers. This fence joins set counters across coordinates because convergence
+and client rotation can carry an already-seen register to a new slot; later
+overlapping generations with a higher set counter remain eligible. Markers
+discovered by refresh or committed only by a sibling window after capture are reconciled in
+the advancing read transaction; no live-event redelivery is required. That
+transaction also updates qualifying pending checkpoints if sibling ingestion has
+not committed. Capture failures reject the observation rather than moving its
+start to save time. This also applies to an observation invoked before storage
+initialization; it must be retried after read-state readiness. A local checkpoint
+preserves the exact marker generation and its baseline correction before marker
+ingestion commits. Once that checkpoint succeeds, failed or cancelled ingestion
+can retry after restart with the same unread result. Newer envelopes advance the
+recovery-version fence without replacing the generation's first-arrival read
+correlation. An abrupt exit before any checkpoint write succeeds has no durable
+correlation to recover. This changes neither the signed blob nor published intent.
+Catch-up's `readMessages` path is outside this ordering repair.
+
 Reusable `ChannelTimeline` and `ThreadPanel` own the standard observation policy:
 focused active reading surface, visible document, settled positioning, fully
 visible rows, and 300 ms dwell. Scroll/content/focus changes cancel/restart dwell. Owners explicitly wake the
@@ -104,6 +133,37 @@ viewport):
   reader's entry evidence outlives them. A channel read covers the channel
   mark and reading a message covers its receipt; retention keeps row marks
   last and never treats them as override ancestry.
+- The channel snapshot's `oldestUnreadId` names the oldest unread message its
+  timeline shows (a top-level post or broadcast reply), from the same bounded
+  evidence as `observedCount`: missing history can make a later message the
+  oldest one known. Every relay read feeds that evidence, a channel window's
+  page included, so `sampled` says a repair has read every channel in unread
+  scope since evidence was last emptied (a cache clear or capacity overflow) or
+  a channel entered that scope: evidence then reaches past what windows loaded,
+  up to each batch's 500-row limit. A cache clear or newly accessible channel
+  starts that repair at once; an overflow waits for the next recovery tick.
+  Later repairs, refreshes included, leave `sampled` set. Until it is set,
+  `sampling` says a repair that can set it is reading, about to restart, or not
+  yet asked for; one that fails, overflows or is abandoned (a dropped
+  connection, an access change) without a restart clears it until the next
+  starts. When entry did not capture a verified, idle window with all of its
+  history (rows sit above it, or it was cached, refreshing or still paging), the
+  **New messages** divider waits for `sampled`, then appears only at
+  `oldestUnreadId` among the rows loaded on entry and only below one that a
+  channel-wide read reaches (`attention()` reports `prefixRead`: the channel
+  frontier, its `activity:` catch-up mark or the retention floor), because each
+  of those also reads every older ordinary row. While it waits with `sampling`
+  set, the timeline holds its own reading (dwell and bottom catch-up), which
+  would otherwise read the loaded rows and erase the evidence it waits for. Once
+  `sampled` is set the divider is placed and reading starts at once; if
+  `sampling` clears first, the visit settles with no divider and reading resumes
+  without waiting for a retry. A batch that filled its limit can still stop
+  short of the true oldest unread message. `prefixRead` rules that out for
+  ordinary rows, but not for mentions, broadcasts, broadcast replies or messages
+  marked unread, which catch-up's `activity:` mark never reads: a short sample
+  can hide an unread one of those above the window, and the divider then lands
+  below it. Rows above read only by their own `msg:` or `thread:` marks, as
+  dwell short of the bottom leaves them, place no divider.
 - Both keys use verified event timestamps, never wall time. Neither enters generic
   channel/thread inheritance or remote override baselines. Channel catch-up ends
   a local manual unread on the channel itself; message and thread manual-unread
@@ -412,6 +472,86 @@ root-tag matches is not seen, and a single deletion event that names several
 of the viewer's messages is visible only if all of them are retained. Replies
 still require retained evidence of their own.
 
+## Captured explicit reads
+
+`markCapturedMessagesRead(messageIds)` is an optional explicit operation for a
+caller that already captured verified message IDs. It records only the eligible
+per-message reads in that set: it does not expand to replies or descendants,
+advance a channel/thread prefix, or include later arrivals. After the saved
+action succeeds, only those IDs' visit-local forced-unread overlays are cleared;
+the shared message-force hint and independent channel, root, and thread marks
+remain. If local read-state retention would need to raise its device-wide floor
+for these marks, or cannot retain a selected message's receipt under the durable
+coverage rules, the save rejects unchanged with `CapturedReadWouldWidenError` or
+`CapturedReadNotRetainedError`. The selected local unread overlays remain in
+place on either rejection. A full journal and reserve can make an exact read
+remain unavailable: another accepted read may move the floor without restoring
+capacity, so retrying is not guaranteed to succeed. Callers must not silently
+retry unrelated reads or substitute a broader channel/thread read. If a caller
+offers a broader read as an alternative, it must be a separate explicit user
+choice. A newer shared message-force hint can also fence a save, so retry the
+same explicit set only after preserving that newer intent. Older hosts may omit
+this capability, so callers must check it before invoking it.
+
+`prepareChannelRead(channelId, rootId?)` captures the channel's existing
+prefix/time cut and owned local-mark keys once. Invoke its returned function to
+save or retry that same intent; a retry does not capture later arrivals or a
+new clock cut. The optional root still bounds a DM reader's channel cut; it is
+not a narrow thread operation.
+
+`prepareThreadRead(channelId, rootId)` instead captures the retained verified
+incoming replies below a retained canonical root. Each captured reply keeps its own
+message ID and timestamp. It reads no root, other thread, or subsequently loaded
+reply, even one with an older timestamp. It clears the selected thread's local
+mark and captured reply marks; independent channel, root-message and other-thread
+marks remain. The shared message-unread sidebar hint also remains until channel
+open reconciles it: that hint has no subtree ownership, even when this window
+has a forced-message overlay. Per-message receipts stay device-local, as with
+`markMessageRead`.
+Neither operation acquires or disposes a consumer's reading lease or discovers
+all historical messages/marks.
+
+Both operations reserve a saved-journal snapshot at preparation, before their
+channel queue can wait. Mark all shares one saved revision cut across its selected
+channels; the predicates retain only that revision, not copies of the full journal.
+The replacing storage transaction checks the *current*
+local manual-unread revisions before changing any frontier or local mark. A newer
+saved mark among the captured keys rejects the whole save, including marks saved
+by another local window. Prepare a new operation to explicitly read that newer
+intent. Earlier same-window manual actions already queued at preparation remain
+eligible to clear, but only if their saves succeed. A manual save queued behind
+the read remains unread when it later commits. An earlier queued save that
+overwrites a newer window's same-key mark does not authorize clearing that
+intervening intent. This is not a claim of atomicity
+between a pending call and its eventual return. Remote unread overrides keep
+the existing frontier semantics; this fence does not order identical remote
+marker tuples or change automatic observation.
+
+Capture requires initialized read-state storage (`await unread.ensure()` before
+preparation). A failed capture rejects every invocation of that operation rather
+than moving the snapshot to save time; prepare again after readiness/recovery.
+Storage failures retain the cut for retry. Access revoke/regrant, cache clear,
+or session disposal invalidate captured intent; leaving the channel invalidates
+only Undo, not the saved read. The thread operation additionally requires its
+captured message evidence to remain valid.
+
+An individual saved explicit-read result may expose an optional `undo` only when
+that action cleared saved local-unread journal markers and cleared no
+forced-message marker or covered overlay. The handle is also withheld if a force
+mark for covered messages is queued while the read saves. Undo restores only the
+local-unread journal markers that exact saved action removed, in a new storage
+transaction; it does not restore overlays or rewind or publish a read frontier.
+The handle is conditional on the exact saved journal revision and the
+operation's access/lifecycle evidence. Its revision guard covers the whole
+journal: any later save that advances the revision, including an unrelated
+marker or quiet read-state save, makes the handle stale; bookkeeping saves that
+leave the revision unchanged do not. This whole-journal expiry is deliberately
+conservative rather than per-target. `markAllChannelsRead()` omits its
+per-channel handles because later saves in the sweep expire earlier ones. The
+thread operation also depends on its captured message evidence. A failed undo
+save can be retried with the same handle; duplicate or stale attempts reject.
+Consumers must tolerate hosts that do not provide `undo`.
+
 ## Explicit clearing matrix
 
 | Intent | Durable frontier | Local manual-unread clears |
@@ -429,7 +569,9 @@ unread overrides. Bounded evidence cannot establish ownership of every historica
 local mark. The channel frontier and owned local clears commit in one transaction;
 storage failure changes neither, and disposal/cache clear or access revoke/regrant
 invalidates queued intent. Automatic dwell retains its existing cancellation rule
-for newer manual-unread intent.
+for newer manual-unread intent. Explicit message/timeline reads also preserve
+remote overrides at the same frontier; a strictly newer frontier makes them
+ineffective without clearing their remote register.
 
 ## Durable sync and privacy
 
@@ -500,10 +642,14 @@ mark: a reply finds its channel from its own event, but finds its thread only wh
 root is loaded. Older desktop and mobile clients ignore `activity:`, so they show the
 ordinary top-level messages it covers as unread. This is accepted; it never makes a
 read in those clients unread here.
-Marks without retained evidence are kept, and nothing is dropped while any override
-exists. Reading an already covered message saves nothing. Only frontier-only hints can
-be pruned; older messages may look unread again. No synthetic channel prefix is
-introduced to fit.
+Marks without retained evidence are kept while journal capacity permits. Overrides
+protect inherited channel/thread frontiers; message and row hints may still be
+evicted under pressure. Reading an already covered message saves nothing. Only
+frontier-only hints can be pruned; older messages may look unread again. No synthetic
+channel prefix is introduced to fit. Exact captured-message reads reject the whole
+save if any selected message would be absent from retained journal/reserve state and
+above the existing local floor; their caller leaves the selected unread overlays
+unchanged on rejection.
 The automatic activity keys share these bounded-hint limits. Older clients can
 preserve/republish them but do not interpret their catch-up meaning; mixed-version
 sidebar behavior is not identical. No storage migration is required.
@@ -547,6 +693,20 @@ the reserve does not republish that receipt. Manual unread still wins. Old build
 can load the unchanged sync journal but discard the optional reserve and floor on
 their next save; community leave on any build deletes both together. No database migration
 or wire-format change is involved.
+
+Optional local-only `peerOverlaps` metadata in the same per-viewer/partition journal
+holds pending marker-generation corrections. Keys, counters, coordinates and event
+versions are validated on load; corrupt entries fail loading rather than silently
+dropping intent. A transaction reads the latest checkpoint, preserving unrelated
+pending data from other windows. A matching or newer committed marker ingest retires
+its checkpoint; partition deletion removes it with the journal. A valid newer marker
+can recover from an undecodable superseded envelope without trusting that envelope.
+Pending failed-ingest generations share the existing acceptance backlog and browser
+storage quota; there is no hard aggregate memory/disk bound. Storage failures stay
+visible and retain the previously committed journal. Old journals still load, but
+old writers discard this unknown field on their next
+save. Restart recovery is therefore not preserved through an old-writer round trip
+or downgrade. No IndexedDB database, object-store or version migration is involved.
 
 Override groups, permanent clear floors, directly associated frontiers and possible
 inherited channel/thread frontiers are protected; capacity failure is visible,

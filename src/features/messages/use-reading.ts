@@ -25,7 +25,8 @@ type Reading = {
   /** True while the list shows its latest row in place of the reader's own,
    * still loading: the rows shown are read, but that bottom is not caught up. */
   restoring?: (() => boolean) | undefined;
-  /** False: this list marks nothing read; its owner decides what was read. */
+  /** False: this list marks nothing read; its owner decides what was read, or
+   * when reading may start. Turning it on schedules dwell at once. */
   enabled?: boolean | undefined;
 };
 /** `useReading` for an owner that renders its own `MessageEditScope`. */

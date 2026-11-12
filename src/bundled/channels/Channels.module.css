@@ -220,8 +220,11 @@
   align-self: flex-start;
   margin-inline-start: var(--channel-row-fill-start);
 }
-/* Keep the prominent unread cue while matching the timeline reveal motion. */
+/* Keep the prominent unread cue while matching the timeline reveal motion.
+   The cue floats over the list, so its quiet fill uses the floating control
+   recipe; the panel's subtle fill nearly matches the sidebar in both themes. */
 .unreadEdge {
+  @apply interaction-floating;
   position: absolute;
   left: 50%;
   display: grid;
@@ -584,6 +587,7 @@ details:not([open]) > summary .sectionChevron {
   .panelStack > [data-panel-resize] {
     display: none;
   }
+  /* useCoveredByDock treats position: absolute on the dock as covering. */
   .panelStack {
     --panel-motion-duration: var(--duration-panel-enter);
     --panel-motion-distance: 100%;
@@ -606,6 +610,7 @@ details:not([open]) > summary .sectionChevron {
   .panelStack > [data-panel-resize] {
     display: none;
   }
+  /* useCoveredByDock treats position: absolute on the dock as covering. */
   .panelStack {
     --panel-motion-duration: var(--duration-panel-enter);
     --panel-motion-distance: 100%;

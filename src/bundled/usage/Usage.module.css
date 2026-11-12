@@ -117,12 +117,15 @@
   padding: 0;
   list-style: none;
 }
+/* NavigationItem's geometry, so these rows line up with the ones beside them
+   and an agent's row stays put when its read finishes. */
 .agentRow,
 .staticRow {
   display: flex;
+  min-block-size: var(--size-row);
   align-items: center;
-  gap: var(--space-3);
-  padding-block: var(--space-2);
+  gap: var(--space-row-gap);
+  padding: var(--space-1) var(--space-control-inset);
 }
 .agentText,
 .sessionText {

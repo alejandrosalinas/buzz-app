@@ -55,7 +55,7 @@ export async function respond(
       return result({
         // A connection keeps its client, so its list stays the same. One
         // whose client can't change settings, such as a plugin's, lacks them.
-        tools: sessionTools(added, !!client?.ownerAccess)
+        tools: sessionTools(added)
           .filter(
             ({ name }) => !client || client.settings || !isSettingsTool(name),
           )

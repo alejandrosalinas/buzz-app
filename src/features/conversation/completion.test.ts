@@ -1,7 +1,17 @@
-import { expect, it } from "vitest";
+import { Context } from "@deepseek-ai/cordis";
+import { expect, it, vi } from "vitest";
 import { completionResult, matchCompletion } from "./completion";
-import type { CompletionContext, ComposerCompletion } from "./contracts";
+import type {
+  CompletionContext,
+  CompletionEdit,
+  ComposerCompletion,
+} from "./contracts";
+import { chosenWorkspace, workspaceEdit } from "./workspace-completion";
 import type { Contribution } from "../../plugins/contributions";
+import type { PluginModule } from "../../plugins/api";
+import type { PluginInfo } from "../../plugins/types";
+import { PluginRuntime } from "../../plugins/runtime";
+import { ConversationService } from "./service";
 const observation = { revision: 1, text: "@hi", start: 3, end: 3 };
 const context = {} as CompletionContext;
 const provider = (
@@ -160,5 +170,144 @@ it("copies and freezes batch recipients without allowing malformed or oversized 
         items: [{ id: "bad", label: "Bad", edit: { mentions } }],
       }).items,
     ).toEqual([]);
+  }
+});
+it("keeps a host workspace edit and drops a provider's look-alike", () => {
+  const host = workspaceEdit("design");
+  const result = completionResult({
+    items: [
+      { id: "host", label: "Design", edit: host },
+      {
+        id: "plugin",
+        label: "Design",
+        edit: { workspace: "design" } as unknown as CompletionEdit,
+      },
+    ],
+  });
+  expect(result.items.map((item) => item.id)).toEqual(["host"]);
+  expect(result.items[0]?.edit).toBe(host);
+  expect(chosenWorkspace(host)).toBe("design");
+  expect(chosenWorkspace({ text: "#design" })).toBeUndefined();
+});
+
+it("keeps chip edits only from a provider a bundled plugin registered, for that registration's lifetime", async () => {
+  const folder = {
+    kind: "folder" as const,
+    id: "/notes",
+    label: "@notes",
+  };
+  const offered = {
+    items: [
+      { id: "notes", label: "notes", edit: { token: folder } },
+      { id: "text", label: "Text", edit: { text: "notes" } },
+    ],
+  };
+  // Everything a provider can say about itself looks like the bundled one.
+  const lookalike = (id: string) =>
+    ({
+      id,
+      title: "Mention",
+      order: -10,
+      pluginId: "buzz.mentions",
+      revision: "bundled",
+      bundled: true,
+      match: () => null,
+      component: () => null,
+    }) as ComposerCompletion;
+  const modules: Record<string, PluginModule> = {
+    "buzz.mentions": {
+      inject: ["conversation"],
+      apply(ctx) {
+        ctx.conversation.registerCompletion(lookalike("typeahead"));
+      },
+    },
+    "example.forger": {
+      inject: ["conversation"],
+      apply(ctx) {
+        ctx.conversation.registerCompletion(lookalike("typeahead"));
+        // A child scope can claim the bundled id and revision, not its owner.
+        const forged = ctx.extend({
+          pluginOwner: Object.freeze({
+            id: "buzz.mentions",
+            revision: "bundled",
+            agentHooks: Object.freeze([]),
+          }),
+        });
+        forged.conversation.registerCompletion(lookalike("forged"));
+      },
+    },
+  };
+  const info = (id: string, source: PluginInfo["source"]): PluginInfo => ({
+    manifest: { id, name: id, apiVersion: 1 },
+    enabled: true,
+    source,
+    revision: source === "bundled" ? "bundled" : "one",
+    previous: null,
+    reloadable: source !== "bundled",
+    error: null,
+  });
+  const bundled = info("buzz.mentions", "bundled");
+  const external = info("example.forger", "external");
+  const root = new Context();
+  const runtime = new PluginRuntime(root, async (plugin) => {
+    const module = modules[plugin.manifest.id];
+    if (!module) throw new Error("missing module");
+    return module;
+  });
+  const service = new ConversationService(root);
+  const kept = () =>
+    Object.fromEntries(
+      service.completions
+        .snapshot()
+        .map((entry) => [
+          entry.key,
+          completionResult(offered, entry).items.map((item) => item.id),
+        ]),
+    );
+  try {
+    runtime.reconcile([bundled, external]);
+    await vi.waitFor(() =>
+      expect(service.completions.snapshot()).toHaveLength(3),
+    );
+    const first = service.completions
+      .snapshot()
+      .find((entry) => entry.key === "buzz.mentions/typeahead");
+    expect(kept()).toEqual({
+      "buzz.mentions/typeahead": ["notes", "text"],
+      "example.forger/typeahead": ["text"],
+      "buzz.mentions/forged": ["text"],
+    });
+    const token = first && completionResult(offered, first).items[0]?.edit;
+    expect(token && "token" in token && token.token).toEqual(folder);
+    expect(Object.isFrozen(token && "token" in token && token.token)).toBe(
+      true,
+    );
+    // Without a registered entry, a result never carries a chip.
+    expect(completionResult(offered).items.map((item) => item.id)).toEqual([
+      "text",
+    ]);
+
+    runtime.reconcile([external]);
+    await vi.waitFor(() =>
+      expect(service.completions.snapshot()).toHaveLength(1),
+    );
+    expect(kept()).toEqual({ "example.forger/typeahead": ["text"] });
+
+    runtime.reconcile([bundled, external]);
+    await vi.waitFor(() =>
+      expect(service.completions.snapshot()).toHaveLength(3),
+    );
+    const second = service.completions
+      .snapshot()
+      .find((entry) => entry.key === "buzz.mentions/typeahead");
+    expect(second).not.toBe(first);
+    expect(kept()).toEqual({
+      "buzz.mentions/typeahead": ["notes", "text"],
+      "example.forger/typeahead": ["text"],
+      "buzz.mentions/forged": ["text"],
+    });
+  } finally {
+    await runtime.dispose();
+    await root.fiber.dispose();
   }
 });

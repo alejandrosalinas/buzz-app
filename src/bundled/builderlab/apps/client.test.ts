@@ -313,7 +313,7 @@ it("points the agent at Settings when signed out or refused", async () => {
   expect(signedOut.requests).toEqual([]);
   const refused = await setup([json(401, {})]);
   await expect(refused.client.list()).rejects.toThrow(
-    /refused the sign-in.*HTTP 401.*Settings/,
+    /refused the sign-in for .* \(HTTP 401\)\. Try again\. If it keeps happening, ask your owner to check their Builderlab sign-in at Settings/,
   );
 });
 

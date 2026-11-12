@@ -1,0 +1,7 @@
+{
+  "id": "buzz.charts",
+  "name": "Charts",
+  "apiVersion": 1,
+  "description": "Draw JSON chart code blocks in conversations as interactive charts.",
+  "discovery": { "category": "communication" }
+}

@@ -24,6 +24,7 @@ it("reads each native session's account once and fences requests and viewers to 
   const h = federatedFixture();
   h.request.mockResolvedValueOnce(me("first"));
   const session = createNativeSession(h.service);
+  expect(session.providerName).toBe("builderlab.example");
   expect(session.snapshot().status).toBe("signed-out");
   await session.signIn();
   await expect.poll(() => session.snapshot().status).toBe("signed-in");

@@ -30,6 +30,7 @@ export function createCommunityMembership(relay: RelayData) {
   let controller: AbortController | undefined;
   let disposed = false;
   let demands = 0;
+  let stopLive: (() => void) | undefined;
   let cancellationRetried = "";
   const listeners = new Set<() => void>();
   const publish = (next: MembershipSnapshot) => {
@@ -42,6 +43,8 @@ export function createCommunityMembership(relay: RelayData) {
     if (nextKey !== key) {
       key = nextKey;
       controller?.abort();
+      stopLive?.();
+      stopLive = undefined;
       value = initial;
     }
     return connection;
@@ -52,10 +55,28 @@ export function createCommunityMembership(relay: RelayData) {
       disposed ||
       connection.status !== "ready" ||
       !connection.scope ||
-      !connection.viewer ||
-      (!fresh &&
-        (value.status === "loading" ||
-          (value.status === "ready" && !reacquired)))
+      !connection.viewer
+    )
+      return;
+    if (demands && !stopLive) {
+      const session = connection.session;
+      stopLive = session.subscribeLive(
+        ({ events }) => {
+          if (
+            events.some(
+              (event) =>
+                event.kind === MEMBERSHIP_KIND &&
+                event.pubkey === session.relayAuthor,
+            )
+          )
+            void load(true);
+        },
+        { replay: true },
+      );
+    }
+    if (
+      !fresh &&
+      (value.status === "loading" || (value.status === "ready" && !reacquired))
     )
       return;
     controller?.abort();
@@ -135,12 +156,17 @@ export function createCommunityMembership(relay: RelayData) {
         if (released) return;
         released = true;
         demands--;
+        if (!demands) {
+          stopLive?.();
+          stopLive = undefined;
+        }
       };
     },
     refresh: () => load(true),
     dispose() {
       disposed = true;
       stop();
+      stopLive?.();
       controller?.abort();
       listeners.clear();
     },

@@ -328,5 +328,58 @@
         }
       ]
     }
+  },
+  {
+    "name": "scope filters owner and community before deduplicating identities",
+    "rows": [
+      {
+        "pubkey": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "relay": "wss://other.example",
+        "owner": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+        "auth": "private attestation",
+        "type": "plugin/agent",
+        "name": "Other community"
+      },
+      {
+        "pubkey": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "relay": "wss://relay.example",
+        "owner": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+        "auth": "private attestation",
+        "type": "plugin/agent",
+        "name": "Other account"
+      },
+      {
+        "pubkey": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "relay": "wss://relay.example",
+        "owner": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+        "auth": "private attestation",
+        "type": "plugin/agent",
+        "name": "Current community",
+        "picture": "https://images.example/current.png"
+      }
+    ],
+    "expected": {
+      "definitions": [],
+      "identities": [
+        {
+          "pubkey": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "name": "Other community"
+        },
+        {
+          "pubkey": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+          "name": "Other account"
+        }
+      ]
+    },
+    "scopedExpected": {
+      "definitions": [],
+      "identities": [
+        {
+          "pubkey": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "name": "Current community",
+          "avatar": "https://images.example/current.png"
+        }
+      ]
+    }
   }
 ]

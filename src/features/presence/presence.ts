@@ -22,6 +22,8 @@ export function createPresence(
   const subjects = new Map<string, Subject>();
   const profiles = new Map<string, Subject>();
   let selected = new Map<string, Subject>();
+  /** Told when demand moves subjects within or past the limit. */
+  const selectionListeners = new Set<() => void>();
   let connected = false,
     closed = false,
     reading = false;
@@ -100,15 +102,20 @@ export function createPresence(
         if (subjects.get(key) === subject) selected.set(key, subject);
       }
     }
+    let evicted = false,
+      admitted = false;
     for (const [key, subject] of previous)
       if (!selected.has(key)) {
+        evicted = true;
         change(subject, "unknown");
         for (const listener of subject.listeners.keys()) notify(listener);
       }
     for (const [key, subject] of selected)
-      if (previous.get(key) !== subject)
+      if (previous.get(key) !== subject) {
+        admitted = true;
         for (const listener of subject.listeners.keys()) notify(listener);
-    if ([...selected].some(([key, subject]) => previous.get(key) !== subject)) {
+      }
+    if (admitted) {
       const initial = Math.max(Date.now() + 100, readGate);
       nextRead = previous.size ? Math.min(nextRead, initial) : initial;
     }
@@ -117,6 +124,8 @@ export function createPresence(
       controller?.abort();
     }
     schedule();
+    if (admitted || evicted)
+      for (const listener of selectionListeners) listener();
   }
   let selectionQueued = false;
   function queueDemand() {
@@ -315,6 +324,14 @@ export function createPresence(
       return subjects.get(key)?.status ?? "unknown";
     },
     limited: (key: string) => subjects.has(key) && !selected.has(key),
+    /** Notifies when demand moves subjects within or past the limit, so a
+     * presence layered on this one can keep to the same window. */
+    subscribeSelection(listener: () => void) {
+      selectionListeners.add(listener);
+      return () => {
+        selectionListeners.delete(listener);
+      };
+    },
     subscribe(key: string, listener: () => void, profile = false) {
       if (closed || !/^[0-9a-f]{64}$/.test(key)) return () => {};
       let subject = subjects.get(key);
@@ -377,6 +394,7 @@ export function createPresence(
       subjects.clear();
       profiles.clear();
       selected.clear();
+      selectionListeners.clear();
     },
   };
 }

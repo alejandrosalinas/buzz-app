@@ -57,8 +57,9 @@ export function KeyRestore({
         ? state.candidates.length === 0
           ? "We couldn’t find a key backup in this Builderlab account. If you have a copy of your private key, you can enter it instead."
           : "We found backups, but none contains the key linked to your account. Enter your private key to continue."
-        : failed
-          ? "Try again, or enter your private key if you have a copy."
+        : state?.status === "error"
+          ? // Native names the cause: canceled, timed out, offline or a retry.
+            `${state.error} Or enter your private key if you have a copy.`
           : saving
             ? "Restoring your key…"
             : canceling

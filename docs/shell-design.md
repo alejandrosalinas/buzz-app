@@ -54,8 +54,9 @@ semantic tokens, UI authoring rules and the local component reference.
   reveals the inventory its placement belongs to unless the filter is All. Both
   inventories stay mounted when filtered, retaining section state, and share the
   channel sidebar's surface, resize owner, row treatment and section recipes.
-  Bestie and Inbox lead the left app dock, followed by Messages and the other
-  dock destinations. Sidebar-placed contributions remain in the conversation
+  Bestie leads the left app dock, followed by Messages and the other dock
+  destinations. Activity (Inbox) is host-placed as the first Messages sidebar
+  row. Sidebar-placed contributions remain in the conversation
   sidebar; while one is open, `navigationOwner` keeps Messages selected in the
   dock and the conversation sidebar stays open unless the page supplies its own
   sidebar, which replaces it. The conversation sidebar's plus opens New for
@@ -534,10 +535,11 @@ and their retry controls remain visible.
 The composer preserves the session's text sending and keyboard behavior. Its
 rounded input and lavender send arrow follow the reference; unsupported upload,
 mention, and rich-formatting actions are not presented as working controls.
-Delivery renders like an ordinary message immediately. After ten seconds from the
-message timestamp, unsuccessful/unconfirmed sends show a small notice. Confirmed
-messages never show a success label. Retry remains available for failed/unknown
-operations. `delivery.test.ts` covers the timing boundary and terminal states.
+Delivery renders like an ordinary message immediately. A failed send shows a
+small notice as soon as it fails; an unconfirmed send shows one only after ten
+seconds from the message timestamp. Confirmed messages never show a success
+label. Retry remains available for failed/unknown operations. `delivery.test.ts`
+covers the timing boundary and terminal states.
 
 The shared conversation layer now supplies bounded thread reading/replies and
 [session-owned unread indicators](unread.md). These are separate from this styling

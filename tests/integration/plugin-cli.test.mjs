@@ -7,6 +7,7 @@ import { spawnSync } from "node:child_process";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import test from "node:test";
 import { Context } from "@deepseek-ai/cordis";
+import { publisher, signPackage } from "../fixtures/plugin-release.mjs";
 
 const root = fileURLToPath(new URL("../../", import.meta.url));
 const compiled = spawnSync(
@@ -33,7 +34,11 @@ function cli(...args) {
   return spawnSync(binary, args, {
     cwd: root,
     encoding: "utf8",
-    env: { ...process.env, BUZZODZ_HOME: home },
+    env: {
+      ...process.env,
+      BUZZODZ_HOME: home,
+      BUZZ_REQUIRE_PLUGIN_SIGNATURES: "1",
+    },
   });
 }
 async function project(run) {
@@ -103,6 +108,71 @@ test("CLI help and errors are readable text with appropriate exit codes", () => 
   assert.equal(oldSign.status, 1);
   assert.match(oldSign.stderr, /Usage: buzzodz plugin sign DIST_DIRECTORY/);
 });
+test("CLI rejects unsigned and invalid releases without changing the installed revision", async () => {
+  const directory = await mkdtemp(path.join(tmpdir(), "buzzodz-signatures-"));
+  const testHome = path.join(directory, "home");
+  try {
+    await writeFile(
+      path.join(directory, "manifest.json"),
+      JSON.stringify({ id: "test.signed", name: "Signed", apiVersion: 1 }),
+    );
+    await writeFile(
+      path.join(directory, "plugin.js"),
+      "export function apply() {}",
+    );
+    const unsigned = cli("--home", testHome, "plugin", "install", directory);
+    assert.equal(unsigned.status, 1);
+    assert.match(unsigned.stderr, /External plugins require a signed release/);
+
+    await signPackage(directory);
+    const signaturePath = path.join(directory, "plugin.signature.json");
+    const signature = await readFile(signaturePath, "utf8");
+    await writeFile(
+      signaturePath,
+      JSON.stringify({ ...JSON.parse(signature), sig: "0".repeat(128) }),
+    );
+    const invalid = cli("--home", testHome, "plugin", "install", directory);
+    assert.equal(invalid.status, 1);
+    assert.match(
+      invalid.stderr,
+      /Invalid plugin release event ID or signature/,
+    );
+    await writeFile(signaturePath, signature);
+    const installed = cli("--home", testHome, "plugin", "install", directory);
+    assert.equal(installed.status, 0, installed.stderr);
+    assert.equal(
+      cli("--home", testHome, "plugin", "enable", "test.signed").status,
+      0,
+    );
+
+    const registryPath = path.join(testHome, "profiles/default/registry.json");
+    const before = await readFile(registryPath, "utf8");
+    const artifactPath = path.join(directory, "plugin.artifact.json");
+    await writeFile(artifactPath, `${await readFile(artifactPath, "utf8")}\n`);
+    const tampered = cli("--home", testHome, "plugin", "reload", "test.signed");
+    assert.equal(tampered.status, 1);
+    assert.match(tampered.stderr, /Invalid or ambiguous plugin release x tag/);
+    assert.equal(await readFile(registryPath, "utf8"), before);
+
+    await rm(artifactPath);
+    await rm(signaturePath);
+    const unsignedReload = cli(
+      "--home",
+      testHome,
+      "plugin",
+      "reload",
+      "test.signed",
+    );
+    assert.equal(unsignedReload.status, 1);
+    assert.match(
+      unsignedReload.stderr,
+      /External plugins require a signed release/,
+    );
+    assert.equal(await readFile(registryPath, "utf8"), before);
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});
 test("scaffold builds through pnpm and installs a usable standalone JSX page", async () => {
   await project(async (directory, source) => {
     const built = cli("plugin", "build", source);
@@ -125,6 +195,7 @@ test("scaffold builds through pnpm and installs a usable standalone JSX page", a
     await root.plugin({ inject: module.inject, apply: module.apply });
     assert.equal(Page()[0], "section");
     await root.fiber.dispose();
+    await signPackage(path.join(source, "dist"));
     const installed = cli(
       "--home",
       directory,
@@ -139,7 +210,7 @@ test("scaffold builds through pnpm and installs a usable standalone JSX page", a
     assert.match(enabled.stdout, /Enabled test.page/);
     const listed = cli("--home", directory, "plugin", "list");
     assert.match(listed.stdout, /test.page\s+enabled\s+external\s+Test page/);
-    assert.match(listed.stdout, /Publisher: unsigned/);
+    assert.ok(listed.stdout.includes(`Publisher: ${publisher}`));
     const registryPath = path.join(directory, "profiles/default/registry.json");
     const installedPlugin = async () =>
       JSON.parse(await readFile(registryPath, "utf8")).installed["test.page"];
@@ -149,6 +220,7 @@ test("scaffold builds through pnpm and installs a usable standalone JSX page", a
       'export function apply(ctx: any) { ctx.pages.register({id: "main", title: "Reloaded", component: () => null}); }',
     );
     assert.equal(cli("plugin", "build", source).status, 0);
+    await signPackage(path.join(source, "dist"));
     const reloaded = cli("--home", directory, "plugin", "reload", "test.page");
     assert.equal(reloaded.status, 0, reloaded.stderr);
     assert.match(reloaded.stdout, /Reloaded test.page/);
@@ -165,6 +237,7 @@ test("scaffold builds through pnpm and installs a usable standalone JSX page", a
     const manifest = JSON.parse(await readFile(manifestPath, "utf8"));
     manifest.host = { processes: [{ id: "extra", program: "echo" }] };
     await writeFile(manifestPath, JSON.stringify(manifest));
+    await signPackage(path.join(source, "dist"));
     const accepted = cli("--home", directory, "plugin", "reload", "test.page");
     assert.equal(accepted.status, 0, accepted.stderr);
     assert.match(accepted.stdout, /Previous host access/);
@@ -182,16 +255,34 @@ test("scaffold builds through pnpm and installs a usable standalone JSX page", a
     );
     delete manifest.host;
     await writeFile(manifestPath, JSON.stringify(manifest));
+    await signPackage(path.join(source, "dist"));
     assert.equal(
       cli("--home", directory, "plugin", "reload", "test.page").status,
       0,
     );
     assert.equal((await installedPlugin()).enabled, false);
+    const beforeRollback = await installedPlugin();
+    const rolledBack = cli(
+      "--home",
+      directory,
+      "plugin",
+      "rollback",
+      "test.page",
+    );
+    assert.equal(rolledBack.status, 0, rolledBack.stderr);
+    assert.equal((await installedPlugin()).current, beforeRollback.previous);
+    assert.equal((await installedPlugin()).enabled, false);
+    assert.equal(
+      cli("--home", directory, "plugin", "remove", "test.page").status,
+      0,
+    );
+    assert.equal(await installedPlugin(), undefined);
   });
 });
 test("failed source builds preserve the installed revision", async () => {
   await project(async (directory, source) => {
     assert.equal(cli("plugin", "build", source).status, 0);
+    await signPackage(path.join(source, "dist"));
     assert.equal(
       cli("--home", directory, "plugin", "install", path.join(source, "dist"))
         .status,

@@ -369,10 +369,52 @@ it.each(["source", "event", "timer"] as const)(
       ).toBeTruthy();
     }
     fireEvent.click(screen.getByRole("menuitem", { name: "Delete release" }));
+    // Deleting a watch asks first, like deleting its Interest does. This watch
+    // has no name of its own, so the title names its kind rather than echoing
+    // the Interest's "Delete release?".
+    const confirm = screen.getByRole("alertdialog", {
+      name: type === "timer" ? "Delete this timer?" : "Delete this watch?",
+    });
+    expect(
+      within(confirm).getByText(
+        type === "timer"
+          ? /^This deletes the timer\./
+          : /^This deletes the watch\./,
+      ),
+    ).toBeTruthy();
     await waitFor(() =>
-      expect(screen.queryByRole("menuitem", { name: "Pause" })).toBeNull(),
+      expect(document.activeElement).toBe(
+        within(confirm).getByRole("button", { name: "Cancel" }),
+      ),
     );
+    fireEvent.click(within(confirm).getByRole("button", { name: "Cancel" }));
+    expect(screen.queryByRole("alertdialog")).toBeNull();
+    expect(save).toHaveBeenCalledTimes(1);
+    const pill = screen.getByRole("button", {
+      name: "Watch status for release",
+    });
+    await waitFor(() => expect(document.activeElement).toBe(pill));
+    fireEvent.click(pill);
+    fireEvent.click(screen.getByRole("menuitem", { name: "Delete release" }));
+    fireEvent.click(
+      within(screen.getByRole("alertdialog")).getByRole("button", {
+        name: "Delete",
+      }),
+    );
+    await waitFor(() => expect(screen.queryByRole("alertdialog")).toBeNull());
+    expect(screen.queryByRole("menuitem", { name: "Pause" })).toBeNull();
+    expect(
+      screen.queryByRole("button", { name: "Watch status for release" }),
+    ).toBeNull();
+    // The dialog deletes the watch as paused above, not as first rendered.
     expect(save).toHaveBeenLastCalledWith("membership-a", {
+      attentionExpected: {
+        "watch/check": {
+          slug: "watch/check",
+          modifiedAt: 2,
+          value: { ...value, enabled: false },
+        },
+      },
       attention: { "watch/check": null },
     });
     expect(agent.attention["interest/release"]).toBeTruthy();
@@ -509,6 +551,222 @@ it("keeps subscription controls disabled and the tab open while saving, and pres
   expect(remove.getAttribute("aria-disabled")).not.toBe("true");
   expect(screen.queryByRole("menuitem", { name: "Resume" })).toBeNull();
   expect(save).toHaveBeenCalledTimes(1);
+});
+
+// Ada's Attention tab with one watch, "Build", whose every save is refused.
+function renderRefusedSave() {
+  const record = {
+    key: "membership-a",
+    pubkey: "a",
+    owner: viewer,
+    relay: "wss://example.com",
+    name: "Ada",
+    attentionEnabled: true,
+    timers: {},
+    attention: {
+      "interest/task": {
+        slug: "interest/task",
+        modifiedAt: 1,
+        value: { type: "interest", instructions: "Check builds" },
+      },
+      "watch/check": {
+        slug: "watch/check",
+        modifiedAt: 1,
+        value: {
+          type: "source",
+          name: "Build",
+          interest_id: "task",
+          enabled: true,
+          provider: "attention/command",
+          config: { command: ["check"] },
+        },
+      },
+    },
+  };
+  const snapshot = { status: "ready", running: [record] };
+  const disconnected = { status: "disconnected", ...community };
+  const save = vi.fn(async () => {
+    throw new Error("Could not save");
+  });
+  const ctx = {
+    react: React,
+    agents: {
+      presentWatch: () => undefined,
+      snapshot: () => snapshot,
+      subscribe: () => () => {},
+      save,
+    },
+    relay: { snapshot: () => disconnected, subscribe: () => () => {} },
+  } as unknown as Context;
+  render(
+    React.createElement(createTab(ctx), { agent: { key: "membership-a" } }),
+  );
+  return { save, watch: record.attention["watch/check"] };
+}
+
+it("keeps the watch delete dialog open with the error when the save is refused", async () => {
+  const { save, watch } = renderRefusedSave();
+  fireEvent.click(
+    screen.getByRole("button", { name: "Watch status for Build" }),
+  );
+  fireEvent.click(screen.getByRole("menuitem", { name: "Delete Build" }));
+  const confirm = screen.getByRole("alertdialog", { name: "Delete Build?" });
+  fireEvent.click(within(confirm).getByRole("button", { name: "Delete" }));
+  await waitFor(() =>
+    expect(within(confirm).getByRole("alert").textContent).toBe(
+      "Could not save",
+    ),
+  );
+  // The save deletes the watch the dialog showed, not a later revision.
+  expect(save).toHaveBeenCalledWith("membership-a", {
+    attentionExpected: { "watch/check": watch },
+    attention: { "watch/check": null },
+  });
+  // The modal hides the page from role queries; the row is still there.
+  expect(
+    screen.getByRole("button", {
+      name: "Watch status for Build",
+      hidden: true,
+    }),
+  ).toBeTruthy();
+  // The dialog stays open to retry; the row shows no second copy of the error.
+  expect(screen.getAllByRole("alert", { hidden: true })).toHaveLength(1);
+});
+
+it("opens the watch delete dialog without a stale Pause error", async () => {
+  renderRefusedSave();
+  fireEvent.click(
+    screen.getByRole("button", { name: "Watch status for Build" }),
+  );
+  fireEvent.click(screen.getByRole("menuitem", { name: "Pause" }));
+  // The refused Pause reports under the row and leaves the menu open.
+  await waitFor(() =>
+    expect(screen.getByRole("alert").textContent).toBe("Could not save"),
+  );
+  fireEvent.click(screen.getByRole("menuitem", { name: "Delete Build" }));
+  const confirm = screen.getByRole("alertdialog", { name: "Delete Build?" });
+  // Delete has not been pressed, so the dialog has no error to show.
+  expect(within(confirm).queryByRole("alert")).toBeNull();
+  expect(screen.queryAllByRole("alert", { hidden: true })).toHaveLength(0);
+});
+
+it("deletes the watch the dialog showed, not one revised while it was open", async () => {
+  const watch = {
+    slug: "watch/check",
+    modifiedAt: 1,
+    value: {
+      type: "source",
+      name: "Build",
+      interest_id: "task",
+      enabled: true,
+      provider: "attention/command",
+      config: { command: ["check"] },
+    },
+  };
+  let agent = {
+    key: "membership-a",
+    pubkey: "a",
+    owner: viewer,
+    relay: "wss://example.com",
+    name: "Ada",
+    attentionEnabled: true,
+    timers: {},
+    attention: {
+      "interest/task": {
+        slug: "interest/task",
+        modifiedAt: 1,
+        value: { type: "interest", instructions: "Check builds" },
+      },
+      "watch/check": watch,
+    } as Record<string, unknown>,
+  };
+  let snapshot = { status: "ready", running: [agent] };
+  let changed = () => {};
+  const update = (attention: Record<string, unknown>) => {
+    agent = { ...agent, attention };
+    snapshot = { status: "ready", running: [agent] };
+    changed();
+  };
+  // Refuses a stale expected object, as the service does.
+  const save = vi.fn(
+    async (
+      _key: string,
+      patch: {
+        attentionExpected?: Record<string, unknown>;
+        attention?: Record<string, unknown>;
+      },
+    ) => {
+      for (const [slug, expected] of Object.entries(
+        patch.attentionExpected ?? {},
+      ))
+        if (JSON.stringify(agent.attention[slug]) !== JSON.stringify(expected))
+          throw new Error("Attention changed. Review it and try again.");
+      const attention = { ...agent.attention };
+      for (const [slug, value] of Object.entries(patch.attention ?? {}))
+        if (value === null) delete attention[slug];
+      update(attention);
+    },
+  );
+  const disconnected = { status: "disconnected", ...community };
+  const ctx = {
+    react: React,
+    agents: {
+      presentWatch: () => undefined,
+      snapshot: () => snapshot,
+      subscribe: (listener: () => void) => {
+        changed = listener;
+        return () => {};
+      },
+      save,
+    },
+    relay: { snapshot: () => disconnected, subscribe: () => () => {} },
+  } as unknown as Context;
+  render(
+    React.createElement(createTab(ctx), { agent: { key: "membership-a" } }),
+  );
+  fireEvent.click(
+    screen.getByRole("button", { name: "Watch status for Build" }),
+  );
+  fireEvent.click(screen.getByRole("menuitem", { name: "Delete Build" }));
+  const confirm = screen.getByRole("alertdialog", { name: "Delete Build?" });
+  // The agent revises the watch while the dialog is open.
+  const revised = {
+    ...watch,
+    modifiedAt: 2,
+    value: { ...watch.value, config: { command: ["check", "--all"] } },
+  };
+  act(() => update({ ...agent.attention, "watch/check": revised }));
+  fireEvent.click(within(confirm).getByRole("button", { name: "Delete" }));
+  await waitFor(() =>
+    expect(within(confirm).getByRole("alert").textContent).toBe(
+      "Attention changed. Review it and try again.",
+    ),
+  );
+  expect(save).toHaveBeenCalledWith("membership-a", {
+    attentionExpected: { "watch/check": watch },
+    attention: { "watch/check": null },
+  });
+  expect(agent.attention["watch/check"]).toBe(revised);
+  fireEvent.click(within(confirm).getByRole("button", { name: "Cancel" }));
+  // Reopened, the dialog reviews the revised watch and deletes that one.
+  fireEvent.click(
+    screen.getByRole("button", { name: "Watch status for Build" }),
+  );
+  fireEvent.click(screen.getByRole("menuitem", { name: "Delete Build" }));
+  fireEvent.click(
+    within(screen.getByRole("alertdialog")).getByRole("button", {
+      name: "Delete",
+    }),
+  );
+  await waitFor(() => expect(screen.queryByRole("alertdialog")).toBeNull());
+  expect(save).toHaveBeenLastCalledWith("membership-a", {
+    attentionExpected: { "watch/check": revised },
+    attention: { "watch/check": null },
+  });
+  expect(agent.attention["watch/check"]).toBeUndefined();
+  expect(
+    screen.queryByRole("button", { name: "Watch status for Build" }),
+  ).toBeNull();
 });
 
 it("explains Attention to a new agent with no switch to turn on", () => {

@@ -1500,14 +1500,25 @@ mod tests {
             header.seq
         };
         let mut seqs = Vec::new();
+        // The heartbeat's Ping, as the number of frames the relay read before it.
+        let mut ping = None;
         let recovered = async {
-            // The first heartbeat Ping is the send in flight and the relay reads
-            // nothing yet. Sending frame k+1 waits until the loop has taken frame
-            // k, so once frame 5 is sent, frames 0-4 fill all five slots. Frames
-            // 5-9 are encoded, spending sequence numbers, and dropped.
+            // The relay reads nothing yet, so one send stays in flight and five
+            // messages fill the queue. Sending frame k+1 waits until the loop
+            // has taken frame k. Frames after the queue fills are encoded,
+            // spending sequence numbers, and dropped.
             for _ in 0..10 {
                 mic.send(vec![0.1; FRAME_SAMPLES]).await.unwrap();
             }
+            // Frame 9 still waits in the channel. Once it is taken, the loop has
+            // offered it to the full queue; taken later, after the relay starts
+            // reading, it would find a free slot.
+            drop(mic.reserve().await.unwrap());
+            // The heartbeat's first tick fires about 1 ms in. Let it fire while
+            // the queue is still full: the loop polls the heartbeat before the
+            // socket, so by the roster update below its Ping has been offered
+            // to the stalled queue, and admitted or dropped.
+            tokio::time::sleep(Duration::from_millis(5)).await;
             // The socket is read in order, so the roster update proves the probe
             // was handled while the queue was still full: the explicit Pong was
             // dropped, and any probe Pong on the wire is tungstenite's own.
@@ -1526,6 +1537,7 @@ mod tests {
                 match relay.next().await.unwrap().unwrap() {
                     Message::Binary(frame) if frame.len() == 65536 => fillers += 1,
                     Message::Binary(frame) => seqs.push(wire(&frame)),
+                    Message::Ping(_) => ping = Some(seqs.len()),
                     Message::Pong(payload) => ponged |= &payload[..] == b"probe",
                     _ => {}
                 }
@@ -1534,9 +1546,11 @@ mod tests {
             for _ in 0..3 {
                 mic.send(vec![0.1; FRAME_SAMPLES]).await.unwrap();
             }
-            while seqs.len() < 8 {
-                if let Message::Binary(frame) = relay.next().await.unwrap().unwrap() {
-                    seqs.push(wire(&frame));
+            while seqs.last() != Some(&12) {
+                match relay.next().await.unwrap().unwrap() {
+                    Message::Binary(frame) => seqs.push(wire(&frame)),
+                    Message::Ping(_) => ping = Some(seqs.len()),
+                    _ => {}
                 }
             }
         };
@@ -1544,10 +1558,14 @@ mod tests {
         tokio::time::timeout(Duration::from_millis(1500), recovered)
             .await
             .expect("outbound did not recover");
+        // The stall admits six messages: the send in flight and five queued.
+        // The next heartbeat is 10 s away, so a Ping read was one of the six,
+        // beside frames 0-4. Otherwise it was dropped, and frames 0-5 were.
+        let admitted: u16 = if ping.is_some() { 5 } else { 6 };
         assert_eq!(
             seqs,
-            [0, 1, 2, 3, 4, 10, 11, 12],
-            "accepted order, then the drop gap"
+            (0..admitted).chain(10..=12).collect::<Vec<_>>(),
+            "six admitted (the Ping after {ping:?} frames), then the drop gap"
         );
         // A clean stop, here with the queue already drained, closes in bound.
         stop.send(true).unwrap();

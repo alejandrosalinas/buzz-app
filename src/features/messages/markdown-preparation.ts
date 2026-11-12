@@ -36,7 +36,7 @@ export const isLiteralMarkdownContext = (type: string) =>
     "html",
   ].includes(type);
 
-function literalRanges(
+export function literalRanges(
   tree: MarkdownNode,
   includeLinks: boolean,
 ): readonly LiteralRange[] {

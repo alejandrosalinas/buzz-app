@@ -51,6 +51,7 @@ async function setup(count = 3, profiles?: ProfileQueries) {
     reader,
     host: undefined,
     storage: {
+      capture: async () => structuredClone(journal),
       async update(change) {
         journal = readJournal(change(journal), viewer.pubkey);
         return journal;

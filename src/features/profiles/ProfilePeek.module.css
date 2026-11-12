@@ -35,8 +35,8 @@
   padding: var(--space-4) var(--space-4) var(--space-1);
 }
 .portrait {
-  width: calc(var(--space-6) * 2);
-  height: calc(var(--space-6) * 2);
+  width: calc(var(--space-6) * 4);
+  height: calc(var(--space-6) * 4);
 }
 .identity {
   display: flex;
