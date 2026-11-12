@@ -20,7 +20,15 @@ import { ToastProvider } from "../../shared/design-system/ui/Toast";
 import { ChannelLifecycleDialog } from "./ChannelLifecycleDialog";
 
 beforeEach(() => {
-  vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "performance"] });
+  vi.useFakeTimers({
+    toFake: [
+      "setTimeout",
+      "clearTimeout",
+      "performance",
+      "requestAnimationFrame",
+      "cancelAnimationFrame",
+    ],
+  });
 });
 afterEach(() => {
   cleanup();
@@ -68,8 +76,10 @@ it("keeps a paused delete's confirmation and offers Retry only after the pause, 
     .mockRejectedValueOnce(new ApiPaused(1000))
     .mockResolvedValueOnce();
   const { completed, failed } = mount(lifecycle);
+  const began = performance.now();
   fireEvent.click(screen.getByRole("button", { name: "Delete channel" }));
   await flush();
+  await act(() => vi.advanceTimersToNextFrame());
 
   const dialog = screen.getByRole("dialog", { name: "Delete Fixture?" });
   const retry = screen.getByRole("button", { name: "Retry" });
@@ -86,7 +96,7 @@ it("keeps a paused delete's confirmation and offers Retry only after the pause, 
   fireEvent.click(retry);
   expect(lifecycle.run).toHaveBeenCalledOnce();
 
-  await advance(500);
+  await advance(500 - (performance.now() - began));
   expect(dialog).toHaveAccessibleDescription(/retry in 2 seconds\.$/);
   await advance(1999);
   expect(dialog).toHaveAccessibleDescription(/retry in 1 second\.$/);
