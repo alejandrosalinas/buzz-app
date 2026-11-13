@@ -582,6 +582,13 @@ export const ROLE_GROUPS: RoleGroup[] = [
         status: "core",
       },
       {
+        token: "--text-on-find-match",
+        variable: "--text-on-find-match",
+        pointsAt: "neutral-12 light / neutral-1 dark",
+        use: "Text over find-on-screen match fills: dark in both modes.",
+        status: "core",
+      },
+      {
         token: "text-on-prominent",
         variable: "--text-on-prominent",
         pointsAt: "text-inverse (neutral prominent controls)",
@@ -1308,6 +1315,20 @@ export const ROLE_GROUPS: RoleGroup[] = [
         variable: "--surface-text-selection-own",
         pointsAt: "neutral-12 / accent ink at Buzzin’",
         use: "Neutral selection fill that contrasts with the outgoing bubble at either vibe.",
+        status: "core",
+      },
+      {
+        token: "--surface-find-match",
+        variable: "--surface-find-match",
+        pointsAt: "amber-5 light / amber-9 dark",
+        use: "Find on screen: a match other than the active one; pair with text-on-find-match.",
+        status: "core",
+      },
+      {
+        token: "--surface-find-match-active",
+        variable: "--surface-find-match-active",
+        pointsAt: "orange-7 light / orange-11 dark",
+        use: "Find on screen: the active match; pair with text-on-find-match.",
         status: "core",
       },
       {

@@ -4,6 +4,7 @@ import {
   useLayoutEffect,
   useRef,
   useState,
+  type ReactNode,
 } from "react";
 import type { ChannelSummary } from "../../features/relay/contracts";
 import type { RelaySession } from "../../features/relay/session";
@@ -27,6 +28,7 @@ import styles from "./ChannelTabs.module.css";
 
 type ConversationTabProps = {
   tab: Tab;
+  intro?: ReactNode;
   active: boolean;
   /** Showing the tab visits its conversation, as Channels does. */
   visit?: boolean | undefined;
@@ -52,6 +54,7 @@ type ConversationTabProps = {
 /** Each secondary conversation retains its own editing and media-review scope. */
 export function ConversationTab({
   tab,
+  intro,
   active,
   visit = true,
   focusOnMount = true,
@@ -155,6 +158,7 @@ export function ConversationTab({
         <MessageManagementStatus />
         {tab.kind === "thread" ? (
           <ConversationThread
+            intro={intro}
             active={active}
             messageId={tab.messageId}
             navigation={navigation}
@@ -172,6 +176,7 @@ export function ConversationTab({
           />
         ) : target && inTimeline === false ? (
           <ConversationThread
+            intro={intro}
             active={active}
             messageId={target}
             retainThread
@@ -184,6 +189,7 @@ export function ConversationTab({
         ) : (
           <SoloColumn enabled={soloConversation}>
             <ChannelBody
+              intro={intro}
               viewer={session.viewer}
               cached={!!channel.cached}
               // The composer below mounts TypingIndicator for a live channel.

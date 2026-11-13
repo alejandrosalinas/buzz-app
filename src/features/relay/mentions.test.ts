@@ -3,6 +3,7 @@ import type { EventTemplate } from "nostr-tools";
 import type { RelayEvent } from "./events";
 import type { LiveCallbacks } from "./live";
 import { createRelaySession } from "./session";
+import { localAgentsFixture } from "../agents/local-testing";
 import { mentionConformance } from "../../bundled/mentions/mention-rules.conformance";
 import {
   flush,
@@ -18,7 +19,11 @@ const viewer = keypair(),
   honey = keypair(),
   namesake = keypair();
 const owners: ReturnType<typeof createRelaySession>[] = [];
-function setup(soloMode = false, withLive = false) {
+function setup(
+  soloMode = false,
+  withLive = false,
+  agents?: ReturnType<typeof localAgentsFixture>,
+) {
   const wire = scriptedTransport(viewer.pubkey, relay.pubkey);
   let live: LiveCallbacks | undefined;
   let release: (() => void) | undefined;
@@ -37,6 +42,7 @@ function setup(soloMode = false, withLive = false) {
   const owner = createRelaySession(
     {
       ...wire.transport,
+      ...(agents ? { scope: "https://relay.example.test" } : {}),
       query: (filters, ...args) => {
         if (
           filters[0]?.authors?.[0] === relay.pubkey &&
@@ -71,6 +77,7 @@ function setup(soloMode = false, withLive = false) {
     },
     {
       outboxStorage: { load: () => [], save: () => {} },
+      ...(agents ? { agentChoices: agents } : {}),
     },
   );
   owners.push(owner);
@@ -456,6 +463,56 @@ it("queues a plain one-to-one DM message to an agent while the live stream recon
     // The fresh roster no longer lists them, so they are not the DM partner.
     error: expect.stringMatching(/channel membership/),
   });
+});
+
+it("refuses at signing a recipient whose Delete started after the send began", async () => {
+  const agent = {
+    pubkey: honey.pubkey,
+    name: "Honey",
+    relayUrl: "wss://relay.example.test",
+    owner: viewer.pubkey,
+  };
+  const agents = localAgentsFixture([agent]);
+  const h = setup(false, false, agents);
+  await h.members([viewer.pubkey, honey.pubkey]);
+  expect(h.session.agentChoices.snapshot().identities).toContainEqual(
+    expect.objectContaining({ pubkey: honey.pubkey }),
+  );
+  // Admitted at send; its Delete starts before the event is signed.
+  h.session.messages.send("c", "@Honey", [honey.pubkey]);
+  agents.set({ agents: [{ ...agent, deleting: true }] });
+  await flush();
+  expect(h.publish).not.toHaveBeenCalled();
+  expect(h.session.outbox?.snapshot()).toMatchObject([
+    {
+      delivery: "failed",
+      error: expect.stringMatching(/being deleted/),
+    },
+  ]);
+});
+
+it("still confirms an event signed before its recipient's Delete started", async () => {
+  const agent = {
+    pubkey: honey.pubkey,
+    name: "Honey",
+    relayUrl: "wss://relay.example.test",
+    owner: viewer.pubkey,
+  };
+  const agents = localAgentsFixture([agent]);
+  const h = setup(false, false, agents);
+  await h.members([viewer.pubkey, honey.pubkey]);
+  // Signed and sent, with an outcome the relay never confirmed.
+  h.publish.mockRejectedValueOnce(
+    new Error("Relay delivery could not be confirmed"),
+  );
+  const id = h.session.messages.send("c", "@Honey", [honey.pubkey]);
+  await flush();
+  expect(h.publish).toHaveBeenCalledOnce();
+  agents.set({ agents: [{ ...agent, deleting: true }] });
+  h.session.outbox?.retry(id);
+  await flush();
+  expect(h.publish).toHaveBeenCalledTimes(2);
+  expect(h.publish.mock.calls[1]?.[0].id).toBe(id);
 });
 
 it("still requires a connected live stream to mention anyone else while it reconnects", async () => {

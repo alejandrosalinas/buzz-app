@@ -2,6 +2,7 @@ import { avatarSource } from "../../shared/avatar-source";
 import { newer } from "./events";
 import type { EventData } from "./events";
 import type { Profile } from "./contracts";
+import { profileTimeZone } from "../profiles/local-time";
 
 // Events are immutable; the directory refolds every retained profile per change.
 const projected = new WeakMap<EventData, Profile>();
@@ -51,12 +52,14 @@ export function foldProfiles(
         picture?: unknown;
         about?: unknown;
         nip05?: unknown;
+        tz?: unknown;
         is_agent?: unknown;
         isAgent?: unknown;
       };
       const handle = profileName(body.name);
       const name = profileName(body.display_name) ?? handle;
       const picture = avatarSource(body.picture);
+      const tz = profileTimeZone(body.tz);
       profiles.set(
         pubkey,
         Object.freeze({
@@ -71,6 +74,7 @@ export function foldProfiles(
           ...(typeof body.nip05 === "string" && body.nip05.trim()
             ? { nip05: body.nip05.trim() }
             : {}),
+          ...(tz ? { tz } : {}),
           ...(body.is_agent === true || body.isAgent === true
             ? { isAgent: true as const }
             : {}),

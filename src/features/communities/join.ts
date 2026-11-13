@@ -1,4 +1,8 @@
 import { communityRequest, inspectProfile, publishProfile } from "./api";
+import {
+  deviceTimeZone,
+  withDeviceTimeZone,
+} from "../profiles/share-time-zone";
 import type { JoinConsent } from "./FindCommunity";
 import type { createJoinJournal, PendingJoin } from "./join-journal";
 import type { JoinPolicy } from "./join-policy";
@@ -147,7 +151,12 @@ export async function completeJoin({
             about: publish.about?.trim() ?? "",
           };
     if (!read.exists || !profilesEqual(next, read.profile)) {
-      await publishProfile(community, next, read.existing ?? {});
+      // Local time is shared by default from the first publication.
+      await publishProfile(
+        community,
+        next,
+        withDeviceTimeZone(read.existing ?? {}, deviceTimeZone()),
+      );
       if (!current(transaction)) return false;
       // An accepted replaceable event may already be superseded.
       const confirmed = await inspectProfile(community);

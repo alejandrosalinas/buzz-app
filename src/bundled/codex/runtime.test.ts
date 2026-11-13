@@ -1,4 +1,8 @@
 import { openVoice } from "./voice";
+import {
+  createToolOperation,
+  type AgentToolAuthority,
+} from "../../features/agents/tool-operation";
 import { huddleDescription } from "../../features/huddle/lifecycle";
 import type { AgentExecution } from "../../features/agents/execution";
 import { createHash } from "node:crypto";
@@ -7,6 +11,10 @@ import { bytesToHex } from "nostr-tools/utils";
 import { apply } from "./index";
 import { CodexSetup, explainTurn } from "./setup";
 import { describe, afterEach, expect, it, vi } from "vitest";
+import {
+  assignConversationFolder,
+  conversationKey,
+} from "../../features/agents/conversation-folders";
 import { pubkeyOf } from "../../features/agents/membership";
 import { ownerReads } from "../../features/agents/reads";
 import {
@@ -93,6 +101,7 @@ function fixture(
     host: ConstructorParameters<typeof CodexRuntime>[12];
     handle: ConstructorParameters<typeof CodexRuntime>[13];
   },
+  resolveDirectory?: ConstructorParameters<typeof CodexRuntime>[14],
 ) {
   let terminals = remainingTerminals;
   let options: HostProcessOptions | undefined;
@@ -409,6 +418,7 @@ function fixture(
     undefined,
     security?.host,
     security?.handle,
+    resolveDirectory,
   );
   runtimes.push(runtime);
   const events: EventData[] = [];
@@ -692,6 +702,7 @@ function fixture(
     soloChannels,
     huddleChannels,
     exits,
+    store,
   };
 }
 it("hands over promptly and runs conversations independently on one server", async () => {
@@ -1191,7 +1202,9 @@ it("shares model discovery with active turns and another agent", async () => {
   await vi.waitFor(() => expect(f.publish).toHaveBeenCalledTimes(1));
 });
 
-function protectedPreview() {
+function protectedPreview(
+  resolveDirectory?: ConstructorParameters<typeof CodexRuntime>[14],
+) {
   const engine = () => {
     const next = fixture();
     next.modelIds.splice(0, 2, "protected-model", "protected-deep");
@@ -1238,6 +1251,7 @@ function protectedPreview() {
       },
       handle: (key) => (key === pubkey ? handle : undefined),
     },
+    resolveDirectory,
   );
   const original = {
     ...f.delivery("unused").agent,
@@ -2119,6 +2133,29 @@ it("ends a turn's input with plugins' instructions, once", async () => {
   expect(text.match(/<plugin-instructions /g)).toHaveLength(1);
   expect(text).toMatch(
     /<\/buzz-event>\n\n<plugin-instructions plugin="acme\.dibs">\nRun dibs_check\.\n<\/plugin-instructions>/,
+  );
+});
+
+it("ends a turn's input with its conversation's instructions, keyed as its notes are", async () => {
+  const f = fixture();
+  const delivery = f.delivery("@Codex go on");
+  const conversationInstructions = vi.fn(() => ({
+    plugin: "acme.tasks",
+    text: "Review only.",
+  }));
+  const notes = vi.fn(() => []);
+  await f.runtime.run({
+    ...delivery,
+    agent: { ...delivery.agent, notes, conversationInstructions },
+  });
+  await vi.waitFor(() => expect(f.starts()).toHaveLength(1));
+  const params = f.starts()[0]?.params as { input: { text: string }[] };
+  expect(params.input[0]?.text).toMatch(
+    /<owner-instructions source="acme\.tasks">\n[\s\S]*\n\nReview only\.\n<\/owner-instructions>/,
+  );
+  expect(notes).toHaveBeenCalledOnce();
+  expect(conversationInstructions).toHaveBeenCalledWith(
+    ...(notes.mock.calls[0] as unknown[]),
   );
 });
 
@@ -5251,6 +5288,8 @@ it("continues an owner's Solo chat as one channel conversation posted at the top
     expect(f.sent.filter((w) => w.method === "turn/steer")).toHaveLength(1),
   );
   await vi.waitFor(() => expect(activity.superseded).toHaveBeenCalledOnce());
+  expect(activity.acknowledged).toHaveBeenCalledWith(undefined);
+  expect(next.acknowledged).toHaveBeenCalledWith({ steering: true });
   await f.tool("send", { audience: "everyone", text: "Progress" });
   if (first.trigger.type !== "mention") throw new Error("Expected mention");
   // A stale reply into the chat is returned for correction, not posted.
@@ -7373,6 +7412,38 @@ it("neither lists nor runs the retired owner-read tools, while its own reads wor
   await f.complete();
 });
 
+it("supplies an operation proof only while the native Codex call is active", async () => {
+  const f = fixture();
+  const provider = createToolOperation("example/proposal", () => ({
+    viewer: "a".repeat(64),
+    community: "https://relay.example.test",
+    check: () => {},
+    release: () => {},
+  }));
+  let authority: AgentToolAuthority | undefined;
+  f.added.push({
+    name: "consumer_propose",
+    description: "Propose a question.",
+    inputSchema: { type: "object" },
+    operation: provider.operation,
+    async call(_client, _context, args, proof) {
+      if (!proof) throw new Error("Expected operation proof");
+      authority = provider.resolve(proof, args);
+      authority.check();
+      expect(authority.context.channel).toBe("channel");
+      return "accepted";
+    },
+  });
+  await f.runtime.run(f.delivery("Propose a question"));
+  await vi.waitFor(() => expect(f.starts()).toHaveLength(1));
+  expect(
+    JSON.stringify(await f.tool("consumer_propose", { question: "Question" })),
+  ).toContain("accepted");
+  expect(authority).toBeDefined();
+  expect(() => authority?.check()).toThrow("call has ended");
+  await f.complete();
+});
+
 it("keeps thread session context and defers its admission during New", async () => {
   const f = fixture();
   const session = {
@@ -7436,4 +7507,166 @@ it("keeps thread session context and defers its admission during New", async () 
     true,
   );
   await f.complete();
+});
+
+describe("a conversation given its own folder", () => {
+  const folders = (missing = new Set<string>()) =>
+    vi.fn(async (path: string, options?: { create?: boolean }) => {
+      if (options?.create === false && missing.has(path))
+        throw new Error(`Could not find ${path}`);
+      return path;
+    });
+  const withFolder = async (
+    resolveDirectory: ReturnType<typeof folders>,
+    folder: string,
+    conversation = `channel/${root}`,
+  ) => {
+    const f = fixture(
+      [],
+      undefined,
+      false,
+      {},
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      resolveDirectory,
+    );
+    await assignConversationFolder(
+      f.store,
+      scope,
+      pubkey,
+      conversation,
+      folder,
+    );
+    return f;
+  };
+
+  it("starts its thread there and names the agent's workspace", async () => {
+    const resolveDirectory = folders();
+    const f = await withFolder(resolveDirectory, "/repos/worktree");
+    await f.runtime.run(f.delivery("hello"));
+    await vi.waitFor(() => expect(f.starts()).toHaveLength(1));
+    expect(resolveDirectory).toHaveBeenCalledWith("/repos/worktree", {
+      create: false,
+    });
+    for (const method of ["config/read", "thread/start"])
+      expect(
+        f.sent.find((wire) => wire.method === method)?.params,
+      ).toMatchObject({ cwd: "/repos/worktree" });
+    expect(
+      String(
+        (
+          f.sent.find((wire) => wire.method === "thread/start")?.params as
+            | { developerInstructions?: string }
+            | undefined
+        )?.developerInstructions,
+      ),
+    ).toContain(
+      "Your persistent workspace is at `/tmp/codex-test`, not in your working directory",
+    );
+    f.complete(0, "DONE");
+    await vi.waitFor(() => expect(f.publish).toHaveBeenCalledTimes(1));
+    // Its next turn resumes the thread in the same folder.
+    await f.runtime.run(f.delivery("again"));
+    await vi.waitFor(() => expect(f.starts()).toHaveLength(2));
+    expect(
+      f.sent.find((wire) => wire.method === "thread/resume")?.params,
+    ).toMatchObject({ cwd: "/repos/worktree" });
+    f.complete(1, "DONE AGAIN");
+    await vi.waitFor(() => expect(f.publish).toHaveBeenCalledTimes(2));
+  });
+
+  it("starts a Solo chat's one thread in the folder it was given", async () => {
+    const f = await withFolder(folders(), "/repos/solo", "channel");
+    f.soloChannels.add("channel");
+    await f.runtime.run(f.delivery("hello"));
+    await vi.waitFor(() => expect(f.starts()).toHaveLength(1));
+    expect(
+      f.sent.find((wire) => wire.method === "thread/start")?.params,
+    ).toMatchObject({ cwd: "/repos/solo" });
+    f.complete(0, "DONE");
+    await vi.waitFor(() => expect(f.publish).toHaveBeenCalledTimes(1));
+  });
+
+  it("starts a protected agent's thread there, reading files under its policy", async () => {
+    const f = protectedPreview(folders());
+    const handle = f.handle;
+    if (!handle?.protection) throw new Error("Missing protected handle");
+    await assignConversationFolder(
+      f.store,
+      scope,
+      pubkey,
+      `channel/${root}`,
+      "/repos/worktree",
+    );
+    try {
+      await f.runtime.run({
+        ...f.delivery("post a file"),
+        agent: handle,
+        config: f.agent.config,
+      });
+      await vi.waitFor(() => expect(f.worker.starts()).toHaveLength(1));
+      expect(
+        f.worker.sent.find((wire) => wire.method === "thread/start")?.params,
+      ).toMatchObject({ cwd: "/repos/worktree" });
+      await f.worker.tool("send", {
+        audience: "everyone",
+        path: "answer.txt",
+      });
+      // The policy's containment names no folder; a file the agent sends
+      // is read from the folder, contained as in the workspace.
+      expect(f.spawn).toHaveBeenCalledWith(
+        "read-protected",
+        expect.objectContaining({
+          cwd: "/repos/worktree",
+          args: ["answer.txt"],
+          protection: handle.protection.processProtection,
+        }),
+      );
+      await f.worker.complete(0, "");
+    } finally {
+      f.runtime.dispose();
+    }
+  });
+
+  it("refuses its turn, naming the folder, once the folder is gone", async () => {
+    const f = await withFolder(
+      folders(new Set(["/repos/removed"])),
+      "/repos/removed",
+    );
+    await f.runtime.run(f.delivery("hello"));
+    await vi.waitFor(() => expect(f.publish).toHaveBeenCalledTimes(1));
+    expect(f.publish.mock.calls[0]?.[0]).toMatchObject({
+      content: expect.stringContaining(
+        "This conversation's folder /repos/removed no longer exists",
+      ),
+    });
+    // It never falls back to the agent's workspace.
+    expect(f.sent.some((wire) => wire.method === "thread/start")).toBe(false);
+    expect(f.starts()).toHaveLength(0);
+  });
+
+  it("leaves other conversations in the workspace", async () => {
+    const resolveDirectory = folders();
+    const f = await withFolder(resolveDirectory, "/repos/worktree");
+    await f.runtime.run(f.delivery("elsewhere", "d".repeat(64)));
+    await vi.waitFor(() => expect(f.starts()).toHaveLength(1));
+    expect(
+      f.sent.find((wire) => wire.method === "thread/start")?.params,
+    ).toMatchObject({ cwd: "/tmp/codex-test" });
+    expect(resolveDirectory).not.toHaveBeenCalled();
+    // Listed from its first turn, so Agents gives it no folder later.
+    await vi.waitFor(() =>
+      expect(
+        f.runtime
+          .conversations(pubkey)
+          .map(({ channelId, root }) => conversationKey(channelId, root)),
+      ).toEqual([`channel/${"d".repeat(64)}`]),
+    );
+    f.complete(0, "DONE");
+    await vi.waitFor(() => expect(f.publish).toHaveBeenCalledTimes(1));
+  });
 });

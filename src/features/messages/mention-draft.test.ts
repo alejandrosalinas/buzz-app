@@ -8,6 +8,10 @@ import {
 } from "./mention-draft";
 import { typedDraft } from "./composer-testing";
 import { composerMarkdown } from "./composer-markdown";
+import {
+  composerSchema as schema,
+  projectComposerDocument,
+} from "./composer-document";
 const first = { pubkey: "a".repeat(64), name: "Honey", start: 0, end: 6 };
 const second = { pubkey: "b".repeat(64), name: "Honey", start: 7, end: 13 };
 it("punctuation, quotes and inline Markdown delimiters end a mention as the timeline binds it, but an underscore or a mark extends the name", () => {
@@ -172,4 +176,79 @@ it("addressingOnly holds for selected tags with no prose or chat card", () => {
     ),
   ).toBe(false);
   expect(addressingOnly({ ...tags, chatCards: ["card"] })).toBe(false);
+});
+it("sends chips of different keys sharing a name as `@Name (<hex>)`, others bare", () => {
+  const other = { pubkey: "C".repeat(64), name: "Other", start: 14, end: 20 };
+  const draft = typedDraft(
+    mentionDraft({
+      text: "@Honey @Honey @Other hi",
+      recipients: [first, second, other],
+    }),
+  );
+  expect(composerMarkdown(draft)).toBe(
+    `@Honey (${"a".repeat(64)}) @Honey (${"b".repeat(64)}) @Other hi`,
+  );
+  // A chip the timeline cannot bind stays as typed; its namesake in prose is
+  // still qualified, since both keys are signed.
+  expect(
+    composerMarkdown(
+      typedDraft(
+        mentionDraft({
+          text: "@Honey `@Honey`",
+          recipients: [first, { ...second, start: 8, end: 14 }],
+        }),
+      ),
+    ),
+  ).toBe(`@Honey (${"a".repeat(64)}) \`@Honey\``);
+  // Names differing only in case collide; each keeps its own spelling.
+  expect(
+    composerMarkdown(
+      typedDraft(
+        mentionDraft({
+          text: "@Honey @honey",
+          recipients: [first, { ...second, name: "honey" }],
+        }),
+      ),
+    ),
+  ).toBe(`@Honey (${"a".repeat(64)}) @honey (${"b".repeat(64)})`);
+  // One key under a name, even twice, stays bare.
+  expect(
+    composerMarkdown(
+      typedDraft(
+        mentionDraft({
+          text: "@Honey @Honey",
+          recipients: [first, { ...first, start: 7, end: 13 }],
+        }),
+      ),
+    ),
+  ).toBe("@Honey @Honey");
+  // A chip edited as text keeps its recipient mark; the run is qualified once.
+  const marked = (person: typeof first | typeof second, bold = false) =>
+    schema.text(`@${person.name}`, [
+      schema.marks.recipient.create(person),
+      ...(bold ? [schema.marks.bold.create()] : []),
+    ]);
+  const text = schema.nodes.paragraph.create(null, [
+    marked(first),
+    schema.text(" "),
+    marked(second, true),
+  ]);
+  expect(
+    composerMarkdown(
+      projectComposerDocument(schema.nodes.doc.create(null, text)).draft,
+    ),
+  ).toBe(`@Honey (${"a".repeat(64)}) **@Honey (${"b".repeat(64)})**`);
+  const coded = schema.nodes.paragraph.create(null, [
+    marked(first),
+    schema.text(" "),
+    schema.text("@Honey", [
+      schema.marks.recipient.create(second),
+      schema.marks.code.create(),
+    ]),
+  ]);
+  expect(
+    composerMarkdown(
+      projectComposerDocument(schema.nodes.doc.create(null, coded)).draft,
+    ),
+  ).toBe(`@Honey (${"a".repeat(64)}) \`@Honey\``);
 });

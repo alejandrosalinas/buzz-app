@@ -1,5 +1,5 @@
 import { AvatarStack } from "../../shared/design-system/ui/AvatarStack";
-import { canMessageAgent } from "../agents/choices";
+import { agentUnavailable, canMessageAgent } from "../agents/choices";
 import { avatarMedia } from "../../shared/avatar-source";
 import { useChannelWindow } from "../relay/react";
 import type { ChannelSummary } from "../relay/contracts";
@@ -302,15 +302,18 @@ export function NewMessage({
     const controlled = new Set(
       session.agentChoices
         .snapshot()
-        .identities.filter(canMessageAgent)
+        // Forward-looking: neither archived nor being deleted.
+        .selectable.filter(canMessageAgent)
         .map((agent) => agent.pubkey),
     );
     if (
       recipients.some(
         (person) =>
-          (person.isAgent ||
+          // By key, whatever its profile says.
+          agentUnavailable(session, person.pubkey) ||
+          ((person.isAgent ||
             session.profiles.snapshot().get(person.pubkey)?.isAgent) &&
-          !controlled.has(person.pubkey),
+            !controlled.has(person.pubkey)),
       )
     )
       throw new Error(

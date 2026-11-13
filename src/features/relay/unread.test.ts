@@ -1992,7 +1992,8 @@ it("reads only captured root and reply IDs, leaving other forced rows and later 
   ]);
   h.emit([later]);
   held.release();
-  await reading;
+  const result = await reading;
+  expect(result.undo).toBeDefined();
 
   for (const row of [root, selectedReply])
     expect(unread.attention("room", row.id)).toMatchObject({
@@ -2076,6 +2077,548 @@ it("persists a captured cross-channel set in one save and preserves independent 
   expect(h.journal()?.localUnread[`thread:${root.id}`]).toBeGreaterThan(0);
   expect(h.journal()?.localUnread["message-force:room"]).toBeGreaterThan(0);
 });
+
+it("undoes captured ordinary reads, saved reminders and forced overlays as one exact action", async () => {
+  const h = setup();
+  h.grant("room");
+  h.grant("other");
+  const selected = message(h.alice, "room", "selected", 11);
+  const selectedOther = message(h.alice, "other", "selected other", 12);
+  const selectedWithoutMarker = message(
+    h.alice,
+    "room",
+    "selected without a saved marker",
+    13,
+  );
+  const untouched = message(h.alice, "other", "untouched", 13);
+  h.emit([selected, selectedOther, selectedWithoutMarker, untouched]);
+  const unread = h.session.unread;
+  await unread.markUnreadLocal({
+    kind: "message",
+    channelId: "room",
+    messageId: selected.id,
+  });
+  await unread.markUnreadLocal({
+    kind: "message",
+    channelId: "other",
+    messageId: selectedOther.id,
+  });
+  await unread.markUnreadLocal({
+    kind: "message",
+    channelId: "other",
+    messageId: untouched.id,
+  });
+  await unread.markMessageUnread("room", selected.id);
+  const sharedHint = h.journal()?.localUnread["message-force:room"];
+  assert(sharedHint);
+
+  const result = await requireCapturedRead(unread, [
+    selected.id,
+    selectedOther.id,
+    selectedWithoutMarker.id,
+  ]);
+  expect(result.undoScope).toBe("captured-action");
+  assert(result.undo, "captured reads should return one conditional Undo");
+  const readFrontiers = h.journal()?.state.frontiers;
+  expect(readFrontiers).toEqual({
+    [`msg:${selected.id}`]: selected.created_at,
+    [`msg:${selectedOther.id}`]: selectedOther.created_at,
+    [`msg:${selectedWithoutMarker.id}`]: selectedWithoutMarker.created_at,
+  });
+  expect(h.journal()?.localUnread[`msg:${selected.id}`]).toBeUndefined();
+  expect(h.journal()?.localUnread[`msg:${selectedOther.id}`]).toBeUndefined();
+  expect(
+    h.journal()?.localUnread[`msg:${selectedWithoutMarker.id}`],
+  ).toBeUndefined();
+  expect(h.journal()?.localUnread[`msg:${untouched.id}`]).toBeGreaterThan(0);
+  expect(h.journal()?.localUnread["message-force:room"]).toBe(sharedHint);
+  expect(unread.attention("room", selected.id)).toMatchObject({
+    forced: false,
+    unread: false,
+  });
+
+  const undone = await result.undo();
+  expect(undone).toMatchObject({
+    durability: "saved",
+    sync: "local-only",
+  });
+  expect(undone.undo).toBeUndefined();
+  expect(undone.undoScope).toBeUndefined();
+  expect(h.journal()?.state.frontiers).toEqual({});
+  expect(h.journal()?.localUnread[`msg:${selected.id}`]).toBeGreaterThan(0);
+  expect(h.journal()?.localUnread[`msg:${selectedOther.id}`]).toBeGreaterThan(
+    0,
+  );
+  expect(
+    h.journal()?.localUnread[`msg:${selectedWithoutMarker.id}`],
+  ).toBeUndefined();
+  expect(h.journal()?.localUnread[`msg:${untouched.id}`]).toBeGreaterThan(0);
+  expect(h.journal()?.localUnread["message-force:room"]).toBe(sharedHint);
+  expect(unread.attention("room", selected.id)).toMatchObject({
+    forced: true,
+    unread: true,
+  });
+
+  expect(unread.attention("room", selectedWithoutMarker.id)).toMatchObject({
+    forced: false,
+    unread: true,
+  });
+  // Ordinary unread is not a sticky manual reminder: the next dwell reads it.
+  const reader = unread.reading("room");
+  try {
+    await reader.observe([selectedWithoutMarker.id]);
+    expect(unread.attention("room", selectedWithoutMarker.id).unread).toBe(
+      false,
+    );
+  } finally {
+    reader.dispose();
+  }
+
+  await expect(result.undo()).rejects.toThrow("Reading observation expired");
+  const nextRead = await requireCapturedRead(unread, [
+    selected.id,
+    selectedOther.id,
+    selectedWithoutMarker.id,
+  ]);
+  assert(nextRead.undo, "a fresh captured read should receive a new Undo");
+  expect(h.journal()?.localUnread[`msg:${selected.id}`]).toBeUndefined();
+  expect(h.journal()?.localUnread[`msg:${selectedOther.id}`]).toBeUndefined();
+  expect(
+    h.journal()?.localUnread[`msg:${selectedWithoutMarker.id}`],
+  ).toBeUndefined();
+});
+
+it("captured ordinary Undo preserves already-read and own messages without rewinding synced prefixes", async () => {
+  const h = setup();
+  h.grant("room");
+  const read = message(h.alice, "room", "already read", 11);
+  const forcedRead = message(h.alice, "room", "read but forced", 12);
+  const selected = message(h.alice, "room", "ordinary unread", 13);
+  const own = message(h.viewer, "room", "own", 14);
+  const later = message(h.alice, "room", "not selected", 15);
+  h.emit([read, forcedRead, selected, own, later]);
+  const unread = h.session.unread;
+  await unread.markThrough(
+    { kind: "channel", channelId: "room" },
+    forcedRead.id,
+  );
+  await unread.markMessageUnread("room", forcedRead.id);
+  const before = h.journal();
+
+  const result = await requireCapturedRead(unread, [
+    read.id,
+    forcedRead.id,
+    selected.id,
+    own.id,
+    selected.id,
+  ]);
+  assert(
+    result.undo,
+    "ordinary read effects need an Undo without saved reminders",
+  );
+  await result.undo();
+
+  expect(h.journal()?.own).toEqual(before?.own);
+  expect(h.journal()?.state.frontiers).toEqual(before?.state.frontiers);
+  expect(h.journal()?.localUnread).toEqual(before?.localUnread);
+  expect(unread.attention("room", read.id)).toMatchObject({
+    unread: false,
+    forced: false,
+  });
+  expect(unread.attention("room", forcedRead.id)).toMatchObject({
+    unread: true,
+    forced: true,
+  });
+  expect(unread.attention("room", selected.id)).toMatchObject({
+    unread: true,
+    forced: false,
+  });
+  expect(unread.attention("room", own.id).unread).toBe(false);
+  expect(unread.attention("room", later.id).unread).toBe(true);
+});
+
+it("keeps captured Undo retryable after a failed save without partially restoring overlays", async () => {
+  const h = setup();
+  h.grant("room");
+  const forced = message(h.alice, "room", "forced", 11);
+  const ordinary = message(h.alice, "room", "ordinary", 12);
+  h.emit([forced, ordinary]);
+  const unread = h.session.unread;
+  await unread.markMessageUnread("room", forced.id);
+  const result = await requireCapturedRead(unread, [forced.id, ordinary.id]);
+  assert(result.undo);
+  const afterRead = h.journal();
+  h.failNextSave();
+
+  await expect(result.undo()).rejects.toThrow("Storage update rejected");
+  expect(h.journal()).toEqual(afterRead);
+  for (const row of [forced, ordinary])
+    expect(unread.attention("room", row.id)).toMatchObject({
+      unread: false,
+      forced: false,
+    });
+
+  await result.undo();
+  expect(unread.attention("room", forced.id)).toMatchObject({
+    unread: true,
+    forced: true,
+  });
+  expect(unread.attention("room", ordinary.id)).toMatchObject({
+    unread: true,
+    forced: false,
+  });
+  await expect(result.undo()).rejects.toThrow("Reading observation expired");
+});
+
+it("overlapping captured Undo restores only the latest action and preserves earlier reads", async () => {
+  const h = setup();
+  h.grant("room");
+  const a = message(h.alice, "room", "first", 11);
+  const b = message(h.alice, "room", "second", 12);
+  h.emit([a, b]);
+  const unread = h.session.unread;
+  const first = await requireCapturedRead(unread, [a.id]);
+  const second = await requireCapturedRead(unread, [a.id, b.id]);
+  assert(first.undo && second.undo);
+  const afterRead = h.journal();
+
+  await expect(first.undo()).rejects.toThrow("Reading observation expired");
+  expect(h.journal()).toEqual(afterRead);
+  await second.undo();
+  expect(unread.attention("room", a.id).unread).toBe(false);
+  expect(unread.attention("room", b.id).unread).toBe(true);
+  await expect(first.undo()).rejects.toThrow("Reading observation expired");
+});
+
+it.each(["selected", "unrelated"] as const)(
+  "captured Undo does not overwrite a later %s ordinary read",
+  async (target) => {
+    const h = setup();
+    h.grant("room");
+    const a = message(h.alice, "room", "selected", 11);
+    const b = message(h.alice, "room", "other", 12);
+    h.emit([a, b]);
+    const unread = h.session.unread;
+    const result = await requireCapturedRead(unread, [a.id]);
+    assert(result.undo);
+    const later = target === "selected" ? a : b;
+    await unread.markThrough(
+      { kind: "message", channelId: "room", messageId: later.id },
+      later.id,
+    );
+    const afterRead = h.journal();
+
+    await expect(result.undo()).rejects.toThrow("Reading observation expired");
+    expect(h.journal()).toEqual(afterRead);
+    expect(unread.attention("room", a.id).unread).toBe(false);
+    expect(unread.attention("room", later.id).unread).toBe(false);
+  },
+);
+
+it("rejects captured Undo when newer forced intent is queued before its transaction", async () => {
+  const h = setup();
+  h.grant("room");
+  const row = message(h.alice, "room", "selected", 11);
+  h.emit([row]);
+  const unread = h.session.unread;
+  const result = await requireCapturedRead(unread, [row.id]);
+  assert(result.undo);
+  const held = h.holdSaveStarted();
+  const undoing = result.undo();
+  const rejected = expect(undoing).rejects.toThrow(
+    "Reading observation expired",
+  );
+  try {
+    await held.started;
+    const forcing = unread.markMessageUnread("room", row.id);
+    held.release();
+    await rejected;
+    await forcing;
+    expect(unread.attention("room", row.id)).toMatchObject({
+      unread: true,
+      forced: true,
+    });
+    expect(h.journal()?.state.frontiers[`msg:${row.id}`]).toBe(row.created_at);
+  } finally {
+    held.release();
+  }
+});
+
+it.each([
+  ["force", "room"],
+  ["force", "other"],
+  ["failed-force", "room"],
+  ["failed-force", "other"],
+  ["leave", "other"],
+  ["revoke", "other"],
+  ["revoke-regrant", "other"],
+  ["delete", "other"],
+] as const)(
+  "restores unaffected captured overlays after %s during commit return (%s)",
+  async (action, otherChannel) => {
+    const h = setup();
+    h.grant("room");
+    if (otherChannel !== "room") h.grant(otherChannel);
+    const changed = message(h.alice, "room", "changed", 11);
+    const unaffected = message(h.alice, otherChannel, "unaffected", 12);
+    h.emit([changed, unaffected]);
+    const unread = h.session.unread;
+    for (const row of [changed, unaffected]) {
+      const channelId = row === changed ? "room" : otherChannel;
+      await unread.markThrough({ kind: "channel", channelId }, row.id);
+    }
+    for (const row of [changed, unaffected]) {
+      const channelId = row === changed ? "room" : otherChannel;
+      await unread.markMessageUnread(channelId, row.id);
+    }
+    const result = await requireCapturedRead(unread, [
+      changed.id,
+      unaffected.id,
+    ]);
+    assert(result.undo);
+    const held = h.holdCommit();
+    const undoing = result.undo();
+    let forcing: Promise<unknown> | undefined;
+    try {
+      await held.committed;
+      if (action === "failed-force") h.failNextSave();
+      if (action === "force" || action === "failed-force") {
+        const pending = unread.markMessageUnread("room", changed.id);
+        forcing =
+          action === "failed-force"
+            ? expect(pending).rejects.toThrow("Storage update rejected")
+            : pending;
+      }
+      if (action === "leave") unread.leaveChannel("room");
+      if (action === "revoke" || action === "revoke-regrant")
+        h.emit([roster(h.relay, "room", [], 20)]);
+      if (action === "revoke-regrant") h.grant("room", 21);
+      if (action === "delete")
+        h.emit([
+          signed(h.alice, {
+            kind: 5,
+            created_at: 20,
+            content: "",
+            tags: [["e", changed.id]],
+          }),
+        ]);
+      held.release();
+      await undoing;
+      await forcing;
+      expect(unread.attention(otherChannel, unaffected.id)).toMatchObject({
+        forced: true,
+        unread: true,
+      });
+      expect(unread.attention("room", changed.id).forced).toBe(
+        action === "force" || action === "failed-force",
+      );
+    } finally {
+      held.release();
+    }
+  },
+);
+
+it.each(["leave", "revoke", "dispose", "clear", "delete"] as const)(
+  "does not resurrect a captured overlay when %s happens after the Undo commit",
+  async (action) => {
+    const h = setup();
+    h.grant("room");
+    const row = message(h.alice, "room", "selected", 11);
+    h.emit([row]);
+    const unread = h.session.unread;
+    await unread.markMessageUnread("room", row.id);
+    const result = await requireCapturedRead(unread, [row.id]);
+    assert(result.undo);
+    const held = h.holdCommit();
+    const undoing = result.undo();
+    let clearing: Promise<void> | undefined;
+    try {
+      await held.committed;
+      if (action === "leave") unread.leaveChannel("room");
+      if (action === "revoke") h.emit([roster(h.relay, "room", [], 20)]);
+      if (action === "dispose") h.dispose();
+      if (action === "clear") clearing = h.clearCache();
+      if (action === "delete")
+        h.emit([
+          signed(h.alice, {
+            kind: 5,
+            created_at: 12,
+            content: "",
+            tags: [["e", row.id]],
+          }),
+        ]);
+      held.release();
+      await expect(undoing).resolves.toMatchObject({
+        durability: "saved",
+        sync: "local-only",
+      });
+      await clearing;
+      expect(h.journal()?.state.frontiers[`msg:${row.id}`]).toBeUndefined();
+      expect(unread.attention("room", row.id).forced).toBe(false);
+    } finally {
+      held.release();
+    }
+  },
+);
+
+it("withholds captured-read Undo when a forced unread is queued during its save", async () => {
+  const h = setup();
+  h.grant("room");
+  const row = message(h.alice, "room", "selected", 11);
+  h.emit([row]);
+  const unread = h.session.unread;
+  await unread.markUnreadLocal({
+    kind: "message",
+    channelId: "room",
+    messageId: row.id,
+  });
+
+  const held = h.holdSaveStarted();
+  const reading = requireCapturedRead(unread, [row.id]);
+  try {
+    await held.started;
+    const forcing = unread.markMessageUnread("room", row.id);
+    let forceSettled = false;
+    void forcing.then(
+      () => {
+        forceSettled = true;
+      },
+      () => {
+        forceSettled = true;
+      },
+    );
+    await Promise.resolve();
+    expect(forceSettled).toBe(false);
+
+    held.release();
+    const [saved] = await Promise.all([reading, forcing]);
+    expect(saved.undo).toBeUndefined();
+    expect(saved.undoScope).toBeUndefined();
+    expect(unread.attention("room", row.id)).toMatchObject({
+      unread: true,
+      forced: true,
+    });
+    expect(h.journal()?.localUnread["message-force:room"]).toBeGreaterThan(0);
+  } finally {
+    held.release();
+  }
+});
+
+it("expires captured-read Undo after a newer saved journal revision", async () => {
+  const h = setup();
+  h.grant("room");
+  const row = message(h.alice, "room", "selected", 11);
+  h.emit([row]);
+  const unread = h.session.unread;
+  await unread.markUnreadLocal({
+    kind: "message",
+    channelId: "room",
+    messageId: row.id,
+  });
+  const result = await requireCapturedRead(unread, [row.id]);
+  assert(result.undo);
+  await unread.markUnreadLocal({ kind: "channel", channelId: "room" });
+  const newer = h.journal();
+
+  await expect(result.undo()).rejects.toThrow("Reading observation expired");
+  expect(h.journal()).toEqual(newer);
+  expect(h.journal()?.localUnread[`msg:${row.id}`]).toBeUndefined();
+  expect(h.journal()?.state.frontiers[`msg:${row.id}`]).toBe(row.created_at);
+});
+
+it("expires captured-read Undo after newer message-force intent", async () => {
+  const h = setup();
+  h.grant("room");
+  const row = message(h.alice, "room", "selected", 11);
+  h.emit([row]);
+  const unread = h.session.unread;
+  await unread.markUnreadLocal({
+    kind: "message",
+    channelId: "room",
+    messageId: row.id,
+  });
+  const result = await requireCapturedRead(unread, [row.id]);
+  assert(result.undo);
+  await unread.markMessageUnread("room", row.id);
+  const newer = h.journal();
+
+  await expect(result.undo()).rejects.toThrow("Reading observation expired");
+  expect(h.journal()).toEqual(newer);
+  expect(h.journal()?.localUnread[`msg:${row.id}`]).toBeUndefined();
+  expect(h.journal()?.state.frontiers[`msg:${row.id}`]).toBe(row.created_at);
+  expect(unread.attention("room", row.id)).toMatchObject({ forced: true });
+  expect(h.journal()?.localUnread["message-force:room"]).toBeGreaterThan(0);
+});
+
+it("expires one captured-set Undo when access to one selected channel is revoked", async () => {
+  const h = setup();
+  h.grant("room");
+  h.grant("other");
+  const selected = message(h.alice, "room", "selected", 11);
+  const selectedOther = message(h.alice, "other", "selected other", 12);
+  h.emit([selected, selectedOther]);
+  const unread = h.session.unread;
+  for (const [row, channelId] of [
+    [selected, "room"],
+    [selectedOther, "other"],
+  ] as const)
+    await unread.markUnreadLocal({
+      kind: "message",
+      channelId,
+      messageId: row.id,
+    });
+  const result = await requireCapturedRead(unread, [
+    selected.id,
+    selectedOther.id,
+  ]);
+  assert(result.undo);
+
+  h.emit([roster(h.relay, "other", [], 20)]);
+  const afterRevoke = h.journal();
+  await expect(result.undo()).rejects.toThrow("Reading observation expired");
+  expect(h.journal()).toEqual(afterRevoke);
+  expect(h.journal()?.localUnread[`msg:${selected.id}`]).toBeUndefined();
+  expect(h.journal()?.localUnread[`msg:${selectedOther.id}`]).toBeUndefined();
+});
+
+it.each(["leave", "revoke", "dispose", "delete"] as const)(
+  "expires captured-read Undo when its channel %s",
+  async (action) => {
+    const h = setup();
+    h.grant("room");
+    const row = message(h.alice, "room", "selected", 11);
+    h.emit([row]);
+    const unread = h.session.unread;
+    await unread.markUnreadLocal({
+      kind: "message",
+      channelId: "room",
+      messageId: row.id,
+    });
+    const result = await requireCapturedRead(unread, [row.id]);
+    assert(result.undo);
+    if (action === "leave") unread.leaveChannel("room");
+    if (action === "revoke") h.emit([roster(h.relay, "room", [], 20)]);
+    if (action === "dispose") h.dispose();
+    if (action === "delete")
+      h.emit([
+        signed(h.alice, {
+          kind: 5,
+          created_at: 12,
+          content: "",
+          tags: [["e", row.id]],
+        }),
+      ]);
+    const afterRead = h.journal();
+
+    const expectedError =
+      action === "dispose"
+        ? "Read-state session closed"
+        : "Reading observation expired";
+    await expect(result.undo()).rejects.toThrow(expectedError);
+    expect(h.journal()).toEqual(afterRead);
+    expect(h.journal()?.localUnread[`msg:${row.id}`]).toBeUndefined();
+  },
+);
 
 it("preserves a pre-existing shared force hint owned by another window", async () => {
   const h = setup();
@@ -2199,8 +2742,8 @@ it("failed exact-read persistence keeps forced IDs and retry persists only the s
   expect(unread.attention("room", other.id).forced).toBe(true);
 
   const retried = await requireCapturedRead(unread, [selected.id]);
-  expect(retried).toMatchObject({ durability: "saved", sync: "pending" });
-  expect(unread.sync().status).toBe("pending");
+  expect(retried).toMatchObject({ durability: "saved", sync: "local-only" });
+  expect(unread.sync().status).toBe("local");
   expect(unread.attention("room", selected.id).forced).toBe(false);
   expect(unread.attention("room", other.id).forced).toBe(true);
   expect(h.journal()?.state.frontiers).toEqual({
@@ -5044,6 +5587,7 @@ it("undoes only local targets cleared by the saved channel read, not its frontie
 
   const saved = await unread.prepareChannelRead("room")();
   expect(saved.undo).toBeTypeOf("function");
+  expect(saved.undoScope).toBeUndefined();
   expect(h.journal()?.localUnread).toEqual({
     other: before?.localUnread.other,
   });
@@ -5775,6 +6319,13 @@ it("keeps Undo optional for results returned by older hosts", () => {
     sync: "local-only",
   };
   expect(legacy.undo).toBeUndefined();
+  expect(legacy.undoScope).toBeUndefined();
+  const savedMarkerOnly: ReadMutationResult = {
+    ...legacy,
+    undo: async () => legacy,
+  };
+  expect(savedMarkerOnly.undo).toBeTypeOf("function");
+  expect(savedMarkerOnly.undoScope).toBeUndefined();
 });
 
 it("does not offer Undo when an explicit read cleared no saved unread intent", async () => {

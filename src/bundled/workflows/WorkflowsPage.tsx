@@ -359,6 +359,8 @@ export function WorkflowCommunity({
           scope={
             <WorkflowChannelPicker
               channels={creatable}
+              profiles={session.profiles}
+              names={session.names}
               onSelect={(id) => {
                 setCreateOpen(false);
                 openChannel(id, "new");

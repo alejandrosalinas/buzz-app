@@ -10,6 +10,7 @@ import {
 } from "@testing-library/react";
 import { afterEach, expect, it, vi } from "vitest";
 import { createRelaySession } from "../../features/relay/session";
+import type { EmojiSnapshot } from "../../features/relay/emoji-directory";
 import { relayGifRequests } from "../../features/relay/gifs";
 import { createGifShortcut } from "./gif-shortcut";
 import { EmojiPicker } from "./EmojiPicker";
@@ -88,6 +89,109 @@ it("uses the supplied window owner for GIF discovery, search, retry and selectio
     expect(direct).not.toHaveBeenCalled();
     expect(directSearch).not.toHaveBeenCalled();
   } finally {
+    owner.dispose();
+  }
+});
+
+it("shows a recovering catalog as loading and keeps Retry for deterministic failures", async () => {
+  vi.stubGlobal(
+    "ResizeObserver",
+    class {
+      observe() {}
+      disconnect() {}
+    },
+  );
+  const owner = createRelaySession(null);
+  const listeners = new Set<() => void>();
+  let snapshot: EmojiSnapshot = Object.freeze({
+    status: "error",
+    entries: [],
+    mine: [],
+    error: "ReadError: Relay read timed out",
+    transient: true,
+  });
+  const publish = (next: EmojiSnapshot) => {
+    snapshot = next;
+    for (const listener of listeners) listener();
+  };
+  const refresh = vi.fn(async () => {});
+  const session = {
+    ...owner.session,
+    emoji: {
+      ...owner.session.emoji,
+      snapshot: () => snapshot,
+      subscribe(listener: () => void) {
+        listeners.add(listener);
+        return () => void listeners.delete(listener);
+      },
+      ensure: vi.fn(async () => {}),
+      refresh,
+    },
+  };
+  try {
+    render(
+      <EmojiPicker
+        session={session}
+        scope="a"
+        disabled={false}
+        insert={vi.fn()}
+        reaction
+      />,
+    );
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    fireEvent.click(screen.getByRole("button", { name: "Add reaction" }));
+    // Loading feedback stays silent for a fast read, then announces.
+    await act(() => vi.advanceTimersByTimeAsync(999));
+    expect(screen.queryByRole("status")).toBeNull();
+    expect(screen.queryByText("Loading community emoji…")).toBeNull();
+    await act(() => vi.advanceTimersByTimeAsync(1));
+    vi.useRealTimers();
+    expect(screen.getByRole("status")).toHaveTextContent(
+      "Loading community emoji…",
+    );
+    expect(screen.queryByText(/timed out/)).toBeNull();
+    expect(screen.queryByRole("button", { name: "Retry emoji" })).toBeNull();
+    // A recovery attempt in flight keeps the same loading state.
+    act(() =>
+      publish({
+        ...snapshot,
+        status: "loading",
+        error: undefined,
+        transient: undefined,
+      }),
+    );
+    expect(screen.getByRole("status")).toHaveTextContent(
+      "Loading community emoji…",
+    );
+    act(() => publish({ ...snapshot, status: "ready", entries: [], mine: [] }));
+    expect(screen.queryByText("Loading community emoji…")).toBeNull();
+    // A loaded catalog that recovers a failed refresh stays quiet and usable.
+    act(() =>
+      publish({
+        ...snapshot,
+        error: "ReadError: Relay read timed out",
+        transient: true,
+      }),
+    );
+    expect(screen.queryByText("Loading community emoji…")).toBeNull();
+    expect(screen.queryByText(/timed out/)).toBeNull();
+    expect(screen.queryByRole("button", { name: "Retry emoji" })).toBeNull();
+    act(() => publish({ ...snapshot, error: undefined, transient: undefined }));
+    act(() =>
+      publish({
+        ...snapshot,
+        status: "error",
+        error: "Community emoji exceeds the catalog budget.",
+      }),
+    );
+    expect(screen.queryByText("Loading community emoji…")).toBeNull();
+    expect(
+      screen.getByText("Community emoji exceeds the catalog budget."),
+    ).toHaveAttribute("role", "alert");
+    fireEvent.click(screen.getByRole("button", { name: "Retry emoji" }));
+    expect(refresh).toHaveBeenCalledOnce();
+  } finally {
+    vi.useRealTimers();
     owner.dispose();
   }
 });

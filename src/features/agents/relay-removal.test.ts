@@ -2,10 +2,12 @@ import { createHash } from "node:crypto";
 import { schnorr } from "@noble/curves/secp256k1.js";
 import { bytesToHex } from "nostr-tools/utils";
 import { afterEach, expect, it, vi } from "vitest";
+import { UnattestedProfile } from "../relay/identity-archives";
 import { PublishRejected } from "../relay/outbox";
 import { createRelaySession } from "../relay/session";
 import { archiveRelay, keypair, signed, type Key } from "../relay/testing";
 import {
+  type OwnerConsent,
   publishAgentRecord,
   removeAgentFromChannels,
   removeRelayAgent,
@@ -19,21 +21,22 @@ const owners: (() => Promise<void>)[] = [];
 afterEach(async () => {
   for (const dispose of owners.splice(0)) await dispose();
 });
-function attested(owner: Key) {
+function authTag(owner: Key) {
   const digest = createHash("sha256")
     .update(`nostr:agent-auth:${agent.pubkey}:`)
     .digest();
+  return [
+    "auth",
+    owner.pubkey,
+    "",
+    bytesToHex(schnorr.sign(new Uint8Array(digest), owner.secret)),
+  ];
+}
+function attested(owner: Key) {
   return signed(agent, {
     kind: 0,
     content: JSON.stringify({ name: "Agent", is_agent: true }),
-    tags: [
-      [
-        "auth",
-        owner.pubkey,
-        "",
-        bytesToHex(schnorr.sign(new Uint8Array(digest), owner.secret)),
-      ],
-    ],
+    tags: [authTag(owner)],
   });
 }
 function setup(
@@ -65,6 +68,7 @@ function setup(
   const remove = (
     signal = new AbortController().signal,
     release = () => {},
+    owner?: OwnerConsent,
   ) => {
     const controller = new AbortController();
     const removal = removeRelayAgent(
@@ -72,6 +76,7 @@ function setup(
       viewer.pubkey,
       agent.pubkey,
       AbortSignal.any([signal, controller.signal]),
+      owner,
     );
     // Observe rejection immediately; retain it for the caller's assertion.
     operations.push({
@@ -103,12 +108,44 @@ it("archives, deletes the owner record, then removes channel memberships", async
   expect(instance.session.outbox?.snapshot()).toEqual([]);
 });
 
-it("without an archive consent path still deletes the record and removes channels", async () => {
+it("without an archive consent path removes nothing", async () => {
   const { fixture, remove } = setup(stranger);
-  await remove();
-  expect(fixture.published.map((event) => event.kind)).toEqual([5, 9001]);
-  expect(fixture.deleted).toEqual(new Set([coordinate()]));
-  expect(fixture.archived.has(agent.pubkey)).toBe(false);
+  await expect(remove()).rejects.toThrow(
+    "You can no longer archive this identity",
+  );
+  expect(fixture.published).toEqual([]);
+  expect(fixture.deleted).toEqual(new Set());
+});
+
+it("archives an owned agent whose profile proves nothing once its own profile is republished naming its owner", async () => {
+  const { fixture, remove } = setup(stranger);
+  const issued = authTag(viewer);
+  await remove(undefined, undefined, {
+    issue: async () => issued,
+    // The agent's own profile, naming its saved owner.
+    attest: async () => {
+      fixture.publishProfile(
+        signed(agent, {
+          kind: 0,
+          content: JSON.stringify({ name: "Agent", bot: true }),
+          tags: [authTag(viewer)],
+          created_at: 1_700_000_001,
+        }),
+      );
+    },
+  });
+  expect(fixture.published.map((event) => event.kind)).toEqual([9035, 5, 9001]);
+  expect(fixture.published[0]?.tags).toContainEqual(issued);
+  expect(fixture.archived.has(agent.pubkey)).toBe(true);
+});
+
+it("an owned agent whose profile proves nothing and can't be republished stays", async () => {
+  const { fixture, remove } = setup(stranger);
+  await expect(
+    remove(undefined, undefined, { issue: async () => authTag(viewer) }),
+  ).rejects.toBeInstanceOf(UnattestedProfile);
+  expect(fixture.published).toEqual([]);
+  expect(fixture.deleted).toEqual(new Set());
 });
 
 it("a refused archive stops the later steps and a retry finishes them", async () => {

@@ -154,8 +154,8 @@ esac
     "v01.0.0",
     "v1.0.0-beta.0",
     "v1.0.0-rc.1",
-    "v1.0.0-preview.2.1",
-    "v1.0.0-beta.1-preview.1.1",
+    "v1.0.0-preview.2",
+    "v1.0.0-beta.1-preview.1",
   ]) {
     const result = source(tag);
     assert.notEqual(result.status, 0, tag);
@@ -294,7 +294,7 @@ exit 1
   // Betas and previews are refused before any release is read.
   for (const [feed, version] of [
     ["stable-feed", "1.0.0-beta.1"],
-    ["stable-feed", "1.0.0-preview.2.1"],
+    ["stable-feed", "1.0.0-preview.2"],
     ["preview-feed", "1.0.0"],
     ["preview-feed", "1.0.0-beta.1"],
     ["latest", "1.0.0"],
@@ -307,9 +307,9 @@ exit 1
   // serves a draft a failed publication left: its asset URLs 404 publicly.
   for (const [feed, version, prerelease, draft] of [
     ["stable-feed", "1.0.0", true, false],
-    ["preview-feed", "1.0.0-preview.2.1", false, false],
+    ["preview-feed", "1.0.0-preview.2", false, false],
     ["stable-feed", "1.0.0", false, true],
-    ["preview-feed", "1.0.0-preview.2.1", true, true],
+    ["preview-feed", "1.0.0-preview.2", true, true],
   ]) {
     const result = promote(feed, version, prerelease, draft);
     assert.notEqual(result.status, 0);
@@ -317,7 +317,7 @@ exit 1
   }
   for (const [feed, version, prerelease] of [
     ["stable-feed", "1.0.0", false],
-    ["preview-feed", "1.0.0-preview.2.1", true],
+    ["preview-feed", "1.0.0-preview.2", true],
   ]) {
     const result = promote(feed, version, prerelease);
     // The type check passed, so the next call is the first asset download.
@@ -366,7 +366,7 @@ test("macOS builds run only from main for previews and from the version's own ta
     ["refs/tags/v1.0.0", "1.0.0-beta.1", "refs/tags/v1.0.0-beta.1"],
     // Other branches and previews' own tags never build.
     ["refs/heads/feature", "", "refs/heads/main"],
-    ["refs/tags/v1.0.0-preview.1.1", "", "refs/heads/main"],
+    ["refs/tags/v1.0.0-preview.1", "", "refs/heads/main"],
   ]) {
     const result = guard(ref, version);
     assert.notEqual(result.status, 0, `${ref} ${version}`);

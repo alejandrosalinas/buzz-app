@@ -263,6 +263,34 @@ it("notifies once for a batch of verified owner attestations", async () => {
   }
 });
 
+it("reacts to time-zone-only replacements and drops unknown zones", () => {
+  const wire = scriptedTransport(user.pubkey, keypair().pubkey);
+  const reader = createRelayReader(wire.transport);
+  const directory = createProfileDirectory(reader.reader);
+  const selection = selectProfiles(directory.queries, [user.pubkey]);
+  const changed = vi.fn();
+  const unsubscribe = selection.subscribe(changed);
+  try {
+    directory.accept([profile(user, { name: "Mic", tz: "Asia/Kolkata" }, 1)]);
+    expect(selection.snapshot().get(user.pubkey)?.tz).toBe("Asia/Kolkata");
+    changed.mockClear();
+    directory.accept([
+      profile(user, { name: "Mic", tz: "America/Los_Angeles" }, 2),
+    ]);
+    expect(selection.snapshot().get(user.pubkey)?.tz).toBe(
+      "America/Los_Angeles",
+    );
+    expect(changed).toHaveBeenCalledTimes(1);
+    directory.accept([profile(user, { name: "Mic", tz: "Mars/Olympus" }, 3)]);
+    expect(selection.snapshot().get(user.pubkey)).toEqual({ name: "Mic" });
+    expect(changed).toHaveBeenCalledTimes(2);
+  } finally {
+    unsubscribe();
+    directory.dispose();
+    reader.dispose();
+  }
+});
+
 it("reacts to NIP-05-only replacements and removal without asserting verification", () => {
   const wire = scriptedTransport(user.pubkey, keypair().pubkey);
   const reader = createRelayReader(wire.transport);

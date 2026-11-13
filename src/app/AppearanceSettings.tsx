@@ -300,6 +300,14 @@ export function AppearanceSettings({
             checked={clock.seconds}
             onCheckedChange={(seconds) => setClockPreference({ seconds })}
           />
+          <SwitchPreferenceRow
+            label="Show time zone details on profiles"
+            description="With someone’s local time, shows how far ahead or behind you they are and their time zone."
+            checked={clock.localTimeDetails}
+            onCheckedChange={(localTimeDetails) =>
+              setClockPreference({ localTimeDetails })
+            }
+          />
         </SettingsGroup>
       </div>
       <div className="mt-section-gap">

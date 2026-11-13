@@ -14,6 +14,10 @@ on:
         description: Stable or beta version (X.Y.Z or X.Y.Z-beta.N) built from its v tag; empty builds a preview from main
         type: string
         default: ""
+      preview_version:
+        description: Preview version (X.Y.Z-preview.N) for every platform; required without release_version
+        type: string
+        default: ""
     outputs:
       version:
         description: The version every platform was built as
@@ -33,8 +37,9 @@ env:
   # the stable feed, previews the preview feed; both trust the same key.
   BUZZ_UPDATER_PUBLIC_KEY: ${{ !inputs.candidates && 'dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDJDQjQ2RDZFMUEwOERFMTEKUldRUjNnZ2FibTIwTE10QkVaMzFyYkZlY0R4ajhmbFBjdncvNVRCYnNpSm9kaFNBaHQzemZlZHkK' || '' }}
   BUZZ_UPDATER_ENDPOINT: ${{ !inputs.candidates && (inputs.release_version && 'https://github.com/block/buzz-app/releases/download/stable-feed/latest.json' || 'https://github.com/block/buzz-app/releases/download/preview-feed/latest.json') || '' }}
-  # Read by scripts/candidate-version.mjs; empty selects the preview version.
+  # Read by scripts/candidate-version.mjs; an empty RELEASE_VERSION selects PREVIEW_VERSION.
   RELEASE_VERSION: ${{ inputs.release_version }}
+  PREVIEW_VERSION: ${{ inputs.preview_version }}
 
 jobs:
   build:
@@ -246,8 +251,7 @@ jobs:
           for platform in macos-aarch64 macos-x64 windows linux; do
             (cd "build-assets/$platform" && sha256sum --check SHA256SUMS)
           done
-          # Exact names also reject mixed versions after a partial-job rerun.
-          # Rerun all jobs so every platform uses the same run attempt/version.
+          # Exact names also reject artifacts built as a different version.
           mkdir release-assets
           for arch in aarch64 x64; do
             for asset in dmg app.tar.gz app.tar.gz.sig; do

@@ -19,6 +19,7 @@ import {
 import {
   bounds,
   flush,
+  isNoticeRead,
   keypair,
   message,
   metadata,
@@ -554,17 +555,22 @@ function reconnectHarness(
     wire.pending.filter(
       (entry) => !entry.signal?.aborted && entry.filters[0]?.top_level === true,
     );
-  /** The one outstanding window read, after answering profile reads empty. */
+  /** The one outstanding window read, after answering profile reads empty.
+   * A head's notice read, sent beside it, stays pending. */
   const read = (channelId = "c") => {
     for (const entry of wire.pending.splice(0)) {
       if (entry.signal?.aborted) continue;
       if (entry.filters[0]?.kinds?.includes(0)) entry.respond([]);
       else wire.pending.push(entry);
     }
-    expect(wire.pending.map((entry) => entry.filters)).toMatchObject([
+    const reads = wire.pending.filter((entry) => !isNoticeRead(entry.filters));
+    expect(reads.map((entry) => entry.filters)).toMatchObject([
       [{ "#h": [channelId], top_level: true }],
     ]);
-    return wire.next();
+    const [entry] = reads;
+    assert(entry);
+    wire.pending.splice(wire.pending.indexOf(entry), 1);
+    return entry;
   };
   const page = (
     suffix: string,

@@ -24,6 +24,7 @@ import {
 import {
   communityEmoji,
   contentEmojiTags,
+  CUSTOM_REACTION,
   EMOJI_SET,
   EMOJI_SET_KIND,
   referencedEmoji,
@@ -706,6 +707,12 @@ const HANDLERS: Readonly<Record<string, Handler>> = {
     const emoji = required(args, "emoji");
     if (args.off !== true) {
       const target = await tools.event(id);
+      // A `:shortcode:` reaction renders only with its NIP-30 tag, so one
+      // outside the community palette is refused rather than published bare.
+      const isCustom = CUSTOM_REACTION.test(emoji);
+      const custom = isCustom ? await tools.emoji(emoji) : [];
+      if (isCustom && !custom.length)
+        throw new Error(`unknown custom emoji ${emoji}`);
       await client.publish({
         kind: 7,
         content: emoji,
@@ -718,6 +725,7 @@ const HANDLERS: Readonly<Record<string, Handler>> = {
               client.signingAuthority,
             ),
           ],
+          ...custom,
         ],
       });
       return "reacted";

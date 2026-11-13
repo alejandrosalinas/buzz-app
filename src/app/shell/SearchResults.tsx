@@ -25,7 +25,10 @@ import {
   useUnreadThreadOnly,
 } from "../../bundled/channels/useSidebarFilters";
 import { useAgentChoices } from "../../features/agents/use-choices";
-import { canMessageAgent } from "../../features/agents/choices";
+import {
+  agentUnavailable,
+  canMessageAgent,
+} from "../../features/agents/choices";
 import { useMentionArchives } from "../../features/messages/use-mention-archives";
 import { archiveHides } from "../../features/relay/identity-archives";
 import { foldProfiles } from "../../features/relay/profiles";
@@ -905,7 +908,7 @@ export function SearchResults({
         (agent &&
           !messageableAgents.has(pubkey) &&
           !sessionAgents.has(pubkey)) ||
-        archiveHides(session.archives, pubkey, session.viewer)
+        agentUnavailable(session, pubkey)
         ? []
         : [{ pubkey, source, agent }];
     });
@@ -1218,17 +1221,21 @@ export function SearchResults({
     )
       return openConversation(existing.id);
     if (
-      agent &&
       !existing &&
-      !session.agentChoices
-        .snapshot()
-        .identities.some(
-          (item) => canMessageAgent(item) && item.pubkey === pubkey,
-        )
+      // Whatever its profile says, by key.
+      (agentUnavailable(session, pubkey) ||
+        (agent &&
+          !session.agentChoices
+            .snapshot()
+            .identities.some(
+              (item) => canMessageAgent(item) && item.pubkey === pubkey,
+            )))
     ) {
       setPersonOpen({
         name,
-        error: "This agent is not ready to message in this community.",
+        error: agentUnavailable(session, pubkey)
+          ? "This identity is archived or being deleted in this community."
+          : "This agent is not ready to message in this community.",
       });
       return;
     }

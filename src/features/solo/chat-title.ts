@@ -44,6 +44,8 @@ function chatTitle(
     const tag = `@${recipient.name}`;
     if (!text.startsWith(tag, start + leading)) break;
     start += leading + tag.length;
+    // A namesake is sent with its full key; that qualifier is part of the tag.
+    start += /^ \([0-9a-f]{64}\)/.exec(text.slice(start))?.[0].length ?? 0;
     draftStart = recipient.end;
   }
   const body = text.slice(start).trim();

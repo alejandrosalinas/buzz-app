@@ -183,6 +183,10 @@ function buildCandidates(
     .channels.find((c) => c.id === channelId);
   const members = roster?.map((p) => p.pubkey) ?? channel?.members ?? [];
   const memberKeys = new Set(members);
+  // A saved chat's roster also offers agents that are not in the chat. Its
+  // own member list says who is; a draft with no saved list has only the roster.
+  const joined =
+    roster && channel?.members?.length ? new Set(channel.members) : memberKeys;
   const agents = session.agentChoices.snapshot().identities;
   const executions = new Map(
     agents.map((agent) => [agent.pubkey, agent.execution]),
@@ -280,6 +284,14 @@ function buildCandidates(
         /** The verified name the label is not, shown beside the row's detail. */
         ...(otherName ? { otherName } : {}),
         member: memberKeys.has(recipient.pubkey),
+        /**
+         * In a saved chat's roster but not in its member list: listed and
+         * chosen as a member, but outside the channel for Space (README
+         * section 5).
+         */
+        ...(memberKeys.has(recipient.pubkey) && !joined.has(recipient.pubkey)
+          ? { offered: true as const }
+          : {}),
         /** The host of the owner's other community this agent is in. */
         ...(hosts.has(recipient.pubkey)
           ? { elsewhere: hosts.get(recipient.pubkey) }

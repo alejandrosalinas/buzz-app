@@ -1,5 +1,12 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
+import { scanMarkdown } from "../relay/message-content";
+import { preparedMarkdown } from "./markdown-preparation";
 import { previewLinks } from "./preview-links";
+
+vi.mock("../relay/message-content", async (actual) => {
+  const module = await actual<typeof import("../relay/message-content")>();
+  return { ...module, scanMarkdown: vi.fn(module.scanMarkdown) };
+});
 
 describe("previewLinks", () => {
   it("lists bare and labeled HTTPS links once each, in order", () => {
@@ -61,5 +68,14 @@ describe("previewLinks", () => {
 
   it("finds nothing in prose without links", () => {
     expect(previewLinks("hello there")).toEqual([]);
+  });
+
+  it("scans a body once for its renderer and previews", () => {
+    const content = "Read https://example.com/once and `code`.";
+    vi.mocked(scanMarkdown).mockClear();
+    expect(previewLinks(content)).toEqual(["https://example.com/once"]);
+    expect(preparedMarkdown(content).kind).toBe("markdown");
+    expect(previewLinks(content)).toEqual(["https://example.com/once"]);
+    expect(scanMarkdown).toHaveBeenCalledTimes(1);
   });
 });

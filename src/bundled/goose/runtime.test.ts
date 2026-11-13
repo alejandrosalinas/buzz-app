@@ -1191,6 +1191,23 @@ describe("GooseRuntime", () => {
     expect(memoryOpen).not.toHaveBeenCalled();
   });
 
+  it("ends a turn's prompt with its conversation's instructions", async () => {
+    const { agent, deliver, goose } = setup();
+    const conversationInstructions = vi.fn(() => ({
+      plugin: "acme.tasks",
+      text: "Review only.",
+    }));
+    Object.assign(agent, { conversationInstructions });
+    const mention = message("1", "@Gander hi");
+    await deliver(mention);
+    await vi.waitFor(() => expect(goose()?.turns).toHaveLength(1));
+    expect(goose()?.turns[0]?.text).toMatch(
+      /<owner-instructions source="acme\.tasks">\n[\s\S]*\n\nReview only\.\n<\/owner-instructions>/,
+    );
+    // Keyed as its notes are: the mention's thread session.
+    expect(conversationInstructions).toHaveBeenCalledWith(channel, mention.id);
+  });
+
   it("leaves a Solo chat's session for goose to name, and offers that name", async () => {
     const solo = setup({ hold: true, solo: new Set([channel]) });
     const named = vi.fn();

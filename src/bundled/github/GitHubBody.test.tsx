@@ -1053,3 +1053,31 @@ it("keeps a shown issue when reading it again for its signed image fails", async
     image,
   );
 });
+
+it("resolves relative links against each body's own item, and follows a new item", () => {
+  const media = `[next](../2)\n\n![Shot](${image})\n\n[Movie](${after})`;
+  const view = render(
+    <>
+      <GitHubBody body={media} url="https://github.com/o/a/pull/1" />
+      <GitHubBody body="[next](../2)" url="https://github.com/o/b/pull/1" />
+    </>,
+  );
+  const [first, second] = screen.getAllByRole("link", { name: "next" });
+  expect(first).toHaveAttribute("href", "https://github.com/o/a/2");
+  expect(second).toHaveAttribute("href", "https://github.com/o/b/2");
+  const shot = screen.getAllByAltText("Shot")[0];
+  const movie = view.container.querySelector("video");
+  view.rerender(
+    <>
+      <GitHubBody body={media} url="https://github.com/o/c/pull/1" />
+      <GitHubBody body="[next](../2)" url="https://github.com/o/b/pull/1" />
+    </>,
+  );
+  expect(screen.getAllByRole("link", { name: "next" })[0]).toHaveAttribute(
+    "href",
+    "https://github.com/o/c/2",
+  );
+  // Absolute media does not depend on the item, so it is not reloaded.
+  expect(screen.getAllByAltText("Shot")[0]).toBe(shot);
+  expect(view.container.querySelector("video")).toBe(movie);
+});

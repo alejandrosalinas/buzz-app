@@ -9,6 +9,7 @@ import {
   type SessionTool,
   sessionTools,
 } from "./session-tools";
+import { isBestieTool } from "./bestie";
 import { isSettingsTool } from "./settings";
 import type { Reply } from "./tools";
 
@@ -54,10 +55,14 @@ export async function respond(
     case "tools/list":
       return result({
         // A connection keeps its client, so its list stays the same. One
-        // whose client can't change settings, such as a plugin's, lacks them.
+        // whose client can't change settings or the Bestie, such as a
+        // plugin's, lacks their tools.
         tools: sessionTools(added)
           .filter(
-            ({ name }) => !client || client.settings || !isSettingsTool(name),
+            ({ name }) =>
+              !client ||
+              ((client.settings || !isSettingsTool(name)) &&
+                (client.bestie || !isBestieTool(name))),
           )
           .map(listing.tool ?? (({ load: _, ...tool }) => tool)),
       });

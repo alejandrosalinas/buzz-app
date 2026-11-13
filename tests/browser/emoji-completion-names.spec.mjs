@@ -95,7 +95,7 @@ test("truncated emoji names reveal their full value without taking composer focu
   await input.press("ArrowUp");
   await expect(tooltip).toHaveText(firstName);
   await input.press("Tab");
-  await expect(input).toHaveJSProperty("value", firstName);
+  await expect(input).toHaveJSProperty("value", `${firstName} `);
   await expect(tooltip).toHaveCount(0);
   await expect(input).toBeFocused();
 
@@ -104,14 +104,14 @@ test("truncated emoji names reveal their full value without taking composer focu
   await input.press("ArrowDown");
   await expect(tooltip).toHaveText(secondName);
   await input.press("Enter");
-  await expect(input).toHaveJSProperty("value", secondName);
+  await expect(input).toHaveJSProperty("value", `${secondName} `);
   await expect(tooltip).toHaveCount(0);
 
   await input.fill(":very-long");
   await choices.first().locator("[data-completion-label]").hover();
   await expect(tooltip).toHaveText(firstName);
   await choices.nth(1).click();
-  await expect(input).toHaveJSProperty("value", secondName);
+  await expect(input).toHaveJSProperty("value", `${secondName} `);
   await expect(tooltip).toHaveCount(0);
   await expect(input).toBeFocused();
 
@@ -225,7 +225,7 @@ test("keyboard hints stay on the active emoji while scrolling under a resting po
   await input.press("Enter");
   await expect(input).toHaveJSProperty(
     "value",
-    ":scrolling-emoji-with-a-long-common-name-20:",
+    ":scrolling-emoji-with-a-long-common-name-20: ",
   );
   await expect(tooltip).toHaveCount(0);
   await expect(input).toBeFocused();

@@ -67,6 +67,7 @@ export function MentionPicker({
   const searchInput = useRef<HTMLElement>(null);
   // The picker stays mounted while closed; each opening is its own lifetime.
   const [opening, setOpening] = useState(0);
+  const [addressed, setAddressed] = useState<ReadonlySet<string>>();
   const lifetime = `picker:${useId()}:${opening}`;
   const model = useMentionChoices(
     session,
@@ -75,6 +76,7 @@ export function MentionPicker({
     search,
     lifetime,
     open && !disabled,
+    addressed,
   );
   const {
     profiles,
@@ -144,7 +146,7 @@ export function MentionPicker({
   };
   const personKey = (pubkey: string) => `person:${pubkey}`;
   const teamKey = (id: string) => `team:${id}`;
-  // Order stays rankMentions', shared with inline @ completion and mobile.
+  // Highlight follows the installed order, including addressed-first rows.
   // The highlight skips rows that cannot be chosen, as the arrow keys did.
   const highlight = useSearchHighlight({
     query: search,
@@ -194,6 +196,11 @@ export function MentionPicker({
             : "inside";
         if (next) {
           setOpening((value) => value + 1);
+          setAddressed(
+            audience
+              ? new Set(audience.recipients.map((person) => person.pubkey))
+              : undefined,
+          );
           accepted.current = false;
           if (!draftRoster) session.channels.ensureList();
         }

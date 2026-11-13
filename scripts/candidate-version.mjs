@@ -1,14 +1,13 @@
 import assert from "node:assert/strict";
-import { readFileSync, writeFileSync, appendFileSync } from "node:fs";
+import { writeFileSync, appendFileSync } from "node:fs";
 import { join } from "node:path";
 
 const {
-  GITHUB_RUN_NUMBER: run,
-  GITHUB_RUN_ATTEMPT: attempt,
   RUNNER_TEMP: temp,
   BUZZ_UPDATER_PUBLIC_KEY: pubkey,
   BUZZ_UPDATER_ENDPOINT: endpoint,
   RELEASE_VERSION: release,
+  PREVIEW_VERSION: preview,
 } = process.env;
 let version;
 if (release) {
@@ -19,12 +18,12 @@ if (release) {
   );
   version = release;
 } else {
-  const config = JSON.parse(readFileSync("src-tauri/tauri.conf.json", "utf8"));
-  const base = config.version.split("-")[0];
-  assert.match(base, /^\d+\.\d+\.\d+$/);
-  assert.match(run ?? "", /^[1-9]\d*$/);
-  assert.match(attempt ?? "", /^[1-9]\d*$/);
-  version = `${base}-preview.${run}.${attempt}`;
+  // Computed once per run by scripts/preview-version.mjs.
+  assert.match(
+    preview ?? "",
+    /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)-preview\.[1-9]\d*$/,
+  );
+  version = preview;
 }
 writeFileSync(
   join(temp, "candidate.json"),

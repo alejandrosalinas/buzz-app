@@ -8,12 +8,16 @@ import {
 } from "../../shared/view-state";
 import type { RelayData, RelaySnapshot } from "../relay/service";
 import type { RelaySession } from "../relay/session";
-import type { JsonValue } from "../navigation/targets";
+import { parseOpenTarget, type JsonValue } from "../navigation/targets";
 import type { PluginManager } from "../../plugins/manager";
 import { relayPartition } from "../relay/partition";
 import { ownSolo, soloLabels } from "../solo/labels";
-import { regionLabels, soloRegionLabel } from "../solo/region-labels";
-import { soloDraftTarget } from "./routes";
+import {
+  REGION_PREFIX,
+  regionLabels,
+  soloRegionLabel,
+} from "../solo/region-labels";
+import { soloDraft, soloDraftTarget } from "./routes";
 import { createSoloWorkspaces } from "./solo-workspaces";
 import {
   projectSoloRegions,
@@ -40,9 +44,13 @@ export type SoloNavigationSnapshot = SoloPlacement &
 const readers = new WeakMap<RelaySession, SoloNavigationService>();
 export const soloNavigationFor = (session: RelaySession) =>
   readers.get(session);
-/** A region's New chat draft, one per workspace as for ordinary New chat. */
-export const regionDraftKey = (label: string, workspace?: string) =>
-  `solo:region:${label}${workspace ? `:project:${workspace}` : ""}`;
+/** Region drafts share a workspace slot unless the source supplies a stable key. */
+export const regionDraftKey = (
+  label: string,
+  workspace?: string,
+  key?: string,
+) =>
+  `solo:region:${label}${key ? `:draft:${encodeURIComponent(key)}` : workspace ? `:project:${workspace}` : ""}`;
 /** View state linking a chat to the region draft it was started from. */
 export const regionStartKey = (channelId: string) =>
   `solo-region-start:${channelId}`;
@@ -63,7 +71,11 @@ export class SoloNavigationService extends Service implements SoloNavigation {
   private session: RelaySession | undefined;
   private connection: RelaySnapshot | undefined;
   private stopChannels: (() => void) | undefined;
-  private value: SoloNavigationSnapshot = { regions: [], excluded: new Set() };
+  private value: SoloNavigationSnapshot = {
+    regions: [],
+    excluded: new Set(),
+    managed: new Set(),
+  };
   private readonly titles = new Map<string, string>();
   private readonly states = new Map<string, JsonValue>();
   private pendingReveal: string | undefined;
@@ -318,7 +330,11 @@ export class SoloNavigationService extends Service implements SoloNavigation {
         const binding = this.binding;
         const connection = this.relay.snapshot();
         if (!this.session) {
-          this.value = { regions: [], excluded: new Set() };
+          this.value = {
+            regions: [],
+            excluded: new Set(),
+            managed: new Set(),
+          };
           continue;
         }
         for (const source of entries) {
@@ -353,7 +369,9 @@ export class SoloNavigationService extends Service implements SoloNavigation {
             if (
               !["loading", "ready", "unavailable"].includes(next.status) ||
               (next.notice !== undefined &&
-                (typeof next.notice !== "string" || next.notice.length > 120))
+                (typeof next.notice !== "string" ||
+                  next.notice.length > 120)) ||
+              (next.hidden !== undefined && typeof next.hidden !== "boolean")
             )
               throw new Error("Invalid region snapshot");
             if (
@@ -375,6 +393,14 @@ export class SoloNavigationService extends Service implements SoloNavigation {
             runtime.failed = true;
           }
         }
+        const plugins = this.plugins?.snapshot();
+        const configuration = plugins?.configuration;
+        const pluginForRegionLabel = (label: string) =>
+          configuration?.status === "ready"
+            ? configuration.catalog.plugins.find((plugin) =>
+                label.startsWith(`${REGION_PREFIX}${plugin.manifest.id}:`),
+              )
+            : undefined;
         const placement = projectSoloRegions(
           this.session.channels.list().channels,
           connection.viewer ?? this.session.viewer ?? "",
@@ -394,24 +420,20 @@ export class SoloNavigationService extends Service implements SoloNavigation {
               this.titles.get(cacheKey) ?? readView(scope, key, "Plugin chats");
             return typeof saved === "string" ? saved : "Plugin chats";
           },
+          (label) => pluginForRegionLabel(label)?.enabled === false,
         );
-        const plugins = this.plugins?.snapshot();
-        const configuration = plugins?.configuration;
-        this.value = {
+        const next: SoloNavigationSnapshot = {
           ...placement,
           regions: placement.regions.map((region) => {
             if (region.reason !== "off") return region;
             if (configuration?.status === "loading")
               return { ...region, reason: "loading" as const };
             if (configuration?.status !== "ready") return region;
-            const plugin = configuration.catalog.plugins.find((plugin) =>
-              region.key.startsWith(`${plugin.manifest.id}/`),
-            );
+            const plugin = pluginForRegionLabel(region.label);
             if (!plugin) return { ...region, reason: "not-installed" as const };
             if (
-              !plugin.enabled ||
-              (plugin.source === "external" &&
-                configuration.externalPluginsPaused)
+              plugin.source === "external" &&
+              configuration.externalPluginsPaused
             )
               return region;
             const activation = plugins?.activation[plugin.manifest.id];
@@ -427,6 +449,17 @@ export class SoloNavigationService extends Service implements SoloNavigation {
           }),
           ...(binding ? { binding } : {}),
         };
+        this.value = next;
+        const isDisabledChat = (id: string | undefined) =>
+          id !== undefined &&
+          next.regions.some(
+            (region) =>
+              region.reason === "disabled" &&
+              region.channels.some((channel) => channel.id === id),
+          );
+        if (isDisabledChat(this.pendingReveal)) this.pendingReveal = undefined;
+        if (isDisabledChat(this.pendingHostReveal?.id))
+          this.pendingHostReveal = undefined;
       } while (this.refreshAgain);
     } finally {
       this.refreshing = false;
@@ -442,7 +475,9 @@ export class SoloNavigationService extends Service implements SoloNavigation {
       : undefined;
   }
   async openCreatedWorkspace(workspaceId: string): Promise<boolean> {
-    const region = this.value.regions.find((item) => item.source);
+    const region = this.value.regions.find(
+      (item) => item.source && !item.hidden && item.reason !== "disabled",
+    );
     const source = region?.source;
     if (!source?.composeWorkspaces || !source.openWorkspace) return false;
     const binding = this.value.binding;
@@ -495,18 +530,29 @@ export class SoloNavigationService extends Service implements SoloNavigation {
         saved.region !== label
       )
         return;
-      return "workspace" in saved && typeof saved.workspace === "string"
-        ? {
-            workspace: saved.workspace,
-            ...("lead" in saved && saved.lead === true
-              ? { lead: true as const }
-              : {}),
-          }
-        : {};
+      const draft =
+        "draft" in saved
+          ? soloDraft({
+              kind: "solo-draft",
+              region: label,
+              draft: saved.draft as JsonValue,
+            })?.draft
+          : { context: { saved: saved as JsonValue } };
+      if ("draft" in saved && !draft)
+        throw new Error("This chat's saved draft context is invalid");
+      return {
+        ...("workspace" in saved && typeof saved.workspace === "string"
+          ? {
+              workspace: saved.workspace,
+            }
+          : {}),
+        ...(draft ? { draft } : {}),
+      };
     };
     this.contributions.register(this.ctx, { ...source, identity });
     return Object.freeze({
       label,
+      draftContext: true,
       state(binding) {
         current(binding);
         const registered = host
@@ -519,14 +565,21 @@ export class SoloNavigationService extends Service implements SoloNavigation {
         current(binding);
         const { workspace } = input;
         if (
-          (workspace !== undefined &&
-            (typeof workspace !== "string" ||
-              !workspace ||
-              workspace.length > 256)) ||
-          (input.lead && !workspace)
+          workspace !== undefined &&
+          (typeof workspace !== "string" ||
+            !workspace ||
+            workspace.length > 256)
         )
           throw new Error("Invalid workspace");
-        if (workspace) {
+        // The navigation parser bounds and copies source-owned JSON before retention.
+        const target = parseOpenTarget(
+          soloDraftTarget(binding.scope, {
+            region: label,
+            ...(workspace ? { project: workspace } : {}),
+            ...(input.draft !== undefined ? { draft: input.draft } : {}),
+          }),
+        );
+        if (workspace && !input.draft?.key) {
           // As New chat in a workspace: it starts there, and instructions
           // chosen for another workspace do not carry over.
           const key = regionDraftKey(label, workspace);
@@ -547,13 +600,7 @@ export class SoloNavigationService extends Service implements SoloNavigation {
             });
           writeView(binding.scope, `${key}:new-project`, null);
         }
-        void host.ctx.navigation?.open(
-          soloDraftTarget(binding.scope, {
-            region: label,
-            ...(workspace ? { project: workspace } : {}),
-            ...(workspace && input.lead ? { lead: true } : {}),
-          }),
-        );
+        void host.ctx.navigation?.open(target);
       },
       started,
       forget(binding, channelId) {

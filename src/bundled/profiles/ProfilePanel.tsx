@@ -27,6 +27,7 @@ import { StatusEditor } from "../../features/user-status/StatusEditor";
 import { useStatusEditor } from "../../features/user-status/useStatusEditor";
 import { useUserStatus } from "../../features/user-status/useUserStatus";
 import { ProfilePublicMetadata } from "./ProfilePublicMetadata";
+import { ProfileLocalTime } from "../../features/profiles/ProfileLocalTime";
 import { relayOrigin } from "../../features/communities/destination";
 import type { Navigation } from "../../features/navigation/controller";
 import { ProfileChannels } from "./ProfileChannels";
@@ -639,6 +640,10 @@ function ProfileDetails({
                 }
               </p>
             )}
+            <ProfileLocalTime
+              timeZone={profile?.tz}
+              className="text-body-sm text-secondary"
+            />
             <StatusDisplay session={session} status={userStatus} />
           </div>
           {(canSetStatus || canMessage || canEdit) && (

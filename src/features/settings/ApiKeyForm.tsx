@@ -12,6 +12,7 @@ export function ApiKeyForm({
   onValueChange,
   onSave,
   disabled = false,
+  readOnly = false,
   saving = false,
   variant = "prominent",
   feedback,
@@ -22,6 +23,7 @@ export function ApiKeyForm({
   onValueChange(value: string): void;
   onSave(): void;
   disabled?: boolean;
+  readOnly?: boolean;
   saving?: boolean;
   variant?: "prominent" | "subtle";
   feedback?: ReactNode;
@@ -49,7 +51,7 @@ export function ApiKeyForm({
             type="password"
             autoComplete="off"
             value={value}
-            readOnly={saving}
+            readOnly={saving || readOnly}
             aria-disabled={saving || disabled ? true : undefined}
             onValueChange={onValueChange}
             onKeyDown={(event) => {

@@ -31,6 +31,8 @@ it("starts Claude as the SDK does and initializes it with the system prompt", as
     "stream-json",
     "--verbose",
     "--replay-user-messages",
+    "--system-prompt-snapshot",
+    "off",
     "--thinking-display",
     "summarized",
     "--permission-mode",
@@ -57,6 +59,14 @@ it("starts Claude as the SDK does and initializes it with the system prompt", as
   });
   expect(claude.sessionId).toBe("new-session");
   expect(claude.started).toBe(false);
+});
+
+it("resumes a session on the system prompt it is launched with, not the one it saved", async () => {
+  const { spawn, processes } = fakeSpawn();
+  await ClaudeProcess.start(spawn, { ...launch, resume: "old-session" });
+  const args = processes[0]?.options.args ?? [];
+  expect(args).toContain("--resume");
+  expect(args[args.indexOf("--system-prompt-snapshot") + 1]).toBe("off");
 });
 
 it("lets its Buzz credential act as its agent before it initializes", async () => {
@@ -257,6 +267,7 @@ it("moves activity only when the exact follow-up is acknowledged, without ending
   });
   emit({ ...a, isReplay: true });
   expect(first.acknowledged).toHaveBeenCalledOnce();
+  expect(first.acknowledged).toHaveBeenCalledWith(undefined);
   const steered = claude.send("same text", second);
   const b = fake.received.filter((m) => m.type === "user").at(-1);
   if (!b) throw new Error("Expected follow-up");
@@ -270,6 +281,7 @@ it("moves activity only when the exact follow-up is acknowledged, without ending
   emit({ ...b, isReplay: true });
   expect(first.superseded).toHaveBeenCalledOnce();
   expect(second.acknowledged).toHaveBeenCalledOnce();
+  expect(second.acknowledged).toHaveBeenCalledWith({ steering: true });
   emit({ ...b, isReplay: true });
   const watched = claude.send("watched event");
   const watch = fake.received.filter((m) => m.type === "user").at(-1);
@@ -962,6 +974,7 @@ it("serves the Buzz tools over the pipe and ends a turn on a final send or subth
     "chan/root",
     call,
     expect.any(AbortSignal),
+    expect.any(Function),
   );
   const responses = fake.received
     .filter((message) => message.type === "control_response")

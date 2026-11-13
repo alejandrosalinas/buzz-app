@@ -17,6 +17,10 @@ export type Workspace = {
 };
 const prefix = "<!-- buzz-session-workspace:v1 ";
 const end = "<!-- /buzz-session-workspace -->";
+const worktreeRule =
+  "- Make code changes in that new worktree. A task that only reads code, or does not use a repository, usually does not need one.";
+// What earlier versions wrote instead, which Canvases saved then still hold.
+const earlierWorktreeRule = "- Make all changes in that new worktree.";
 export const emptyWorkspace = (): Workspace => ({ folders: [], canvas: "" });
 
 export function validateWorkspace(value: Workspace): Workspace {
@@ -70,7 +74,7 @@ export function workspaceCanvas(input: Workspace): string {
         ),
         `- Before starting new work, fetch the latest \`${value.worktree.baseBranch}\` branch from origin.`,
         `- For each repository that needs changes, create a new worktree under \`${value.worktree.location}\` from \`origin/${value.worktree.baseBranch}\`.`,
-        "- Make all changes in that new worktree.",
+        worktreeRule,
       ]
     : [
         "## Project folders",
@@ -94,8 +98,12 @@ export function workspaceCanvas(input: Workspace): string {
 export function readWorkspace(content: string): Workspace {
   if (!content.startsWith(prefix)) return { folders: [], canvas: content };
   const value = parseWorkspace(content);
+  const canvas = workspaceCanvas(value);
   // Never silently discard manually edited instructions inside the managed block.
-  if (workspaceCanvas(value) !== content)
+  if (
+    canvas !== content &&
+    canvas.replace(worktreeRule, earlierWorktreeRule) !== content
+  )
     throw new Error(
       "Workspace instructions were edited in Canvas. Use the raw Canvas editor to preserve those changes.",
     );

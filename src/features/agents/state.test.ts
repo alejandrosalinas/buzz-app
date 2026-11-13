@@ -33,6 +33,10 @@ it("moves agent state from localStorage, which replaces what agent storage has",
   local.setItem("buzz.agents.catch-up.v1", "checkpoints");
   local.setItem("buzz.agents.catch-up.v1:aa", "agent checkpoints");
   local.setItem("buzz.agent.execution.v1:aa", "binding");
+  local.setItem(
+    'buzz.agents.conversation-instructions.v1:["s","aa","c"]',
+    "do",
+  );
   local.setItem("buzz.theme", "dark");
   const native = files({
     "buzz.agents.teams.v1": "stale teams",
@@ -51,6 +55,7 @@ it("moves agent state from localStorage, which replaces what agent storage has",
     "buzz.agents.catch-up.v1": "checkpoints",
     "buzz.agents.catch-up.v1:aa": "agent checkpoints",
     "buzz.agent.execution.v1:aa": "binding",
+    'buzz.agents.conversation-instructions.v1:["s","aa","c"]': "do",
     [MOVED_KEY]: "1",
   });
   expect(storage.get("buzz.agents.teams.v1")).toBe("new teams");

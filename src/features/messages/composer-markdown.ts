@@ -12,6 +12,7 @@ import {
 import { gfmStrikethrough } from "micromark-extension-gfm-strikethrough";
 import type { Emphasis, PhrasingContent, Root, Text } from "mdast";
 import type { MentionDraft } from "./mention-draft";
+import { prepareMarkdown } from "./markdown-preparation";
 import {
   Fragment,
   type Node as EditorNode,
@@ -47,8 +48,12 @@ strike.peek = () => "~";
 /** Plain portions are authored Markdown, not rich-editor literal text. Keeping
  * their source verbatim avoids normalizing formats this slice does not edit.
  * Marked content uses CommonMark/GFM delimiter escaping and flanking rules.
- * A chip is its label as literal text in place. */
-export function composerMarkdown(draft: MentionDraft): string {
+ * A chip is its label as literal text in place. Copy passes `authored` to keep
+ * the typed source without the namesake qualifiers a send adds. */
+export function composerMarkdown(
+  draft: MentionDraft,
+  { authored = false }: { authored?: boolean } = {},
+): string {
   const project = (node: EditorNode): EditorNode =>
     node.type.name === "token" && node.attrs.semantic
       ? node.mark(composerSchema.marks.literal.create().addToSet(node.marks))
@@ -56,13 +61,94 @@ export function composerMarkdown(draft: MentionDraft): string {
         ? node
         : node.copy(Fragment.fromArray(node.content.content.map(project)));
   const doc = project(readComposerDocument(draft, []));
-  return [
-    ...(draft.chatCards ?? []),
-    blocksMarkdown(doc),
-    ...(draft.gifs ?? []),
-  ]
-    .filter(Boolean)
-    .join("\n\n");
+  const wire = (body: EditorNode) =>
+    [...(draft.chatCards ?? []), blocksMarkdown(body), ...(draft.gifs ?? [])]
+      .filter(Boolean)
+      .join("\n\n");
+  const qualified = authored ? doc : qualifyNamesakes(doc);
+  if (qualified === doc) return wire(doc);
+  // The timeline renders a too-deep or too-long body as plain text, where no
+  // span binds, so qualifiers there would only add characters.
+  const sent = wire(qualified);
+  return prepareMarkdown(sent).kind === "plain" ? wire(doc) : sent;
+}
+
+/** The timeline binds a bare `@Name` only when one tagged key carries the name.
+ * Chips of different keys sharing a name, ignoring case, are therefore sent as
+ * `@Name (<hex>)`, the form that names one key. A chip the timeline cannot bind,
+ * inside code, a link, an image, a definition or HTML, stays as typed. */
+function qualifyNamesakes(doc: EditorNode): EditorNode {
+  const person = (
+    node?: EditorNode,
+  ): { pubkey: string; name: string } | undefined =>
+    node?.attrs.recipient ??
+    composerSchema.marks.recipient.isInSet(node?.marks ?? [])?.attrs;
+  const keys = new Map<string, Set<string>>();
+  doc.descendants((node) => {
+    const found = person(node);
+    // Mobile readers match names case-insensitively, so case-only namesakes
+    // collide too; each occurrence keeps its own spelling.
+    if (found)
+      keys.set(
+        found.name.toLowerCase(),
+        (keys.get(found.name.toLowerCase()) ?? new Set()).add(found.pubkey),
+      );
+  });
+  if (![...keys.values()].some((set) => set.size > 1)) return doc;
+  const { code, link } = composerSchema.marks;
+  const visit = (
+    node: EditorNode,
+    authored?: () => SourceRange[],
+  ): EditorNode => {
+    if (node.type.spec.code) return node;
+    const children: EditorNode[] = [];
+    // Paragraph offsets match authoredLiteralRanges, as blocksMarkdown reads them.
+    const paragraphs = node.isTextblock
+      ? undefined
+      : authoredLiteralRanges(node);
+    let start = 0;
+    node.forEach((child, offset, index) => {
+      if (!node.isTextblock) {
+        children.push(visit(child, paragraphs?.get(offset)));
+        return;
+      }
+      const from = start;
+      start += child.isText
+        ? child.textContent.length
+        : child.type.name === "hard_break"
+          ? 1
+          : child.attrs.source.length;
+      const found = person(child);
+      if (
+        !found ||
+        (keys.get(found.name.toLowerCase())?.size ?? 0) < 2 ||
+        code.isInSet(child.marks) ||
+        link.isInSet(child.marks) ||
+        authored?.().some((range) => from < range.end && start > range.start)
+      ) {
+        children.push(child);
+        return;
+      }
+      const qualifier = ` (${found.pubkey.toLowerCase()})`;
+      if (!child.isText) {
+        children.push(
+          child.type.create(
+            { ...child.attrs, source: child.attrs.source + qualifier },
+            null,
+            child.marks,
+          ),
+        );
+        return;
+      }
+      children.push(child);
+      // A marked run of text takes the qualifier once, after its last node.
+      const next = node.maybeChild(index + 1);
+      if (!next?.isText || person(next)?.pubkey !== found.pubkey)
+        children.push(composerSchema.text(qualifier, child.marks));
+    });
+    return node.copy(Fragment.from(children));
+  };
+  return visit(doc);
 }
 
 function blocksMarkdown(doc: EditorNode): string {

@@ -1,4 +1,5 @@
 import { assert, expect, it, vi } from "vitest";
+import { ReadError } from "./errors";
 import { foldMessages } from "./fold";
 import { createRelaySession } from "./session";
 import {
@@ -414,6 +415,297 @@ it("prepared disk heads retain signed membership evidence and subject profiles f
     );
   } finally {
     second.dispose();
+  }
+});
+
+it("reads a head's newest notices beside it, showing those that land first with its rows", async () => {
+  const wire = scriptedTransport(viewer.pubkey, relay.pubkey, {
+    notices: true,
+  });
+  const owner = createRelaySession(wire.transport, {
+    readStateFloor: () => 0,
+    prepared: true,
+  });
+  const q = owner.session.channels;
+  try {
+    q.ensureList();
+    wire
+      .next()
+      .respond([
+        roster(relay, "a", [viewer.pubkey]),
+        metadata(relay, "a", "A"),
+      ]);
+    await flush();
+    q.ensure("a");
+    await flush();
+    // Both reads are out before either answers.
+    const head = take(wire, isWindow);
+    const notices = take(wire, isNotices);
+    const joined = addition(pinky.pubkey, 21);
+    notices.respond([joined]);
+    await flush();
+    // Notices alone never render; they wait for the head's rows.
+    expect(q.window("a")).toMatchObject({ status: "loading", rows: [] });
+    const hello = message(viewer, "a", "Hello", 20);
+    head.respond([hello, end()]);
+    await flush();
+    expect(q.window("a").rows.map((r) => r.id)).toEqual([hello.id, joined.id]);
+    // The notice read beside the head was its only one.
+    expect(wire.pending.some((entry) => entry.filters.some(isNotices))).toBe(
+      false,
+    );
+  } finally {
+    owner.dispose();
+  }
+});
+
+it("saves a head's notices with it and restores only relay-signed ones", async () => {
+  let saved: SavedHead[] = [];
+  const disk: HeadPersistence = {
+    read: async () => saved,
+    write: async (record) => {
+      saved = [record];
+    },
+    retain: async () => {},
+    remove: async () => {},
+    clear: async () => {},
+    close() {},
+  };
+  const hello = message(viewer, "a", "Hello", 20);
+  const joined = addition(pinky.pubkey, 21);
+  const wire = scriptedTransport(viewer.pubkey, relay.pubkey, {
+    notices: true,
+  });
+  const first = createRelaySession(wire.transport, {
+    readStateFloor: () => 0,
+    prepared: true,
+    persistence: disk,
+  });
+  try {
+    first.session.channels.ensureList();
+    wire
+      .next()
+      .respond([
+        roster(relay, "a", [viewer.pubkey]),
+        metadata(relay, "a", "A"),
+      ]);
+    await flush();
+    first.session.channels.ensure("a");
+    await flush();
+    take(wire, isWindow).respond([hello, end()]);
+    take(wire, isNotices).respond([joined]);
+    await flush();
+    expect(saved[0]?.notices).toEqual([
+      expect.objectContaining({ id: joined.id }),
+    ]);
+  } finally {
+    first.dispose();
+  }
+  // A notice the relay did not sign is dropped on restore.
+  const forged = activity(
+    { type: "member_joined", actor: viewer.pubkey, target: brain.pubkey },
+    22,
+    viewer,
+  );
+  saved = saved.map((record) => ({
+    ...record,
+    notices: [...(record.notices ?? []), forged],
+  }));
+  const secondWire = scriptedTransport(viewer.pubkey, relay.pubkey, {
+    notices: true,
+  });
+  const second = createRelaySession(secondWire.transport, {
+    readStateFloor: () => 0,
+    prepared: true,
+    persistence: disk,
+  });
+  try {
+    second.session.channels.ensureList();
+    secondWire
+      .next()
+      .respond([
+        roster(relay, "a", [viewer.pubkey]),
+        metadata(relay, "a", "A"),
+      ]);
+    await flush();
+    await flush();
+    second.session.channels.ensure("a");
+    // The saved head shows with its notices before any read answers.
+    await vi.waitFor(() =>
+      expect(second.session.channels.window("a").rows.map((r) => r.id)).toEqual(
+        [hello.id, joined.id],
+      ),
+    );
+  } finally {
+    second.dispose();
+  }
+});
+
+it("does not rewrite a restored head whose notice names are already saved", async () => {
+  const hello = message(viewer, "a", "Hello", 20);
+  const joined = addition(pinky.pubkey, 21);
+  let writes = 0;
+  const disk: HeadPersistence = {
+    read: async () => [
+      {
+        channelId: "a",
+        savedAt: Date.now(),
+        events: [hello, end()],
+        notices: [joined],
+        profiles: [
+          profile(viewer, { name: "Wes" }),
+          profile(pinky, { name: "Pinky" }),
+        ],
+      },
+    ],
+    write: async () => {
+      writes++;
+    },
+    retain: async () => {},
+    remove: async () => {},
+    clear: async () => {},
+    close() {},
+  };
+  const wire = scriptedTransport(viewer.pubkey, relay.pubkey, {
+    notices: true,
+  });
+  const owner = createRelaySession(wire.transport, {
+    readStateFloor: () => 0,
+    prepared: true,
+    persistence: disk,
+  });
+  try {
+    owner.session.channels.ensureList();
+    wire
+      .next()
+      .respond([
+        roster(relay, "a", [viewer.pubkey]),
+        metadata(relay, "a", "A"),
+      ]);
+    await flush();
+    await flush();
+    owner.session.channels.ensure("a");
+    await vi.waitFor(() =>
+      expect(owner.session.channels.window("a").rows.map((r) => r.id)).toEqual([
+        hello.id,
+        joined.id,
+      ]),
+    );
+    await flush();
+    expect(writes).toBe(0);
+  } finally {
+    owner.dispose();
+  }
+});
+
+it("opens a channel over the established stream with its notices read beside the head, saved with their names", async () => {
+  let saved: SavedHead[] = [];
+  const disk: HeadPersistence = {
+    read: async () => saved,
+    write: async (record) => {
+      saved = [record];
+    },
+    retain: async () => {},
+    remove: async () => {},
+    clear: async () => {},
+    close() {},
+  };
+  const wire = scriptedTransport(viewer.pubkey, relay.pubkey, {
+    notices: true,
+  });
+  let live!: LiveCallbacks;
+  const owner = createRelaySession(
+    {
+      ...wire.transport,
+      subscribe(callbacks) {
+        live = callbacks;
+        return { update() {}, retry() {}, dispose() {} };
+      },
+    },
+    { readStateFloor: () => 0, prepared: true, persistence: disk },
+  );
+  const q = owner.session.channels;
+  try {
+    q.ensureList();
+    wire
+      .next()
+      .respond([
+        roster(relay, "a", [viewer.pubkey]),
+        metadata(relay, "a", "A"),
+      ]);
+    await flush();
+    live.state({ status: "connected", routes: [] });
+    live.established("a");
+    await flush();
+    q.ensure("a");
+    await flush();
+    // The catch-up sends both reads before either answers.
+    const head = take(wire, isWindow);
+    const notices = take(wire, isNotices);
+    const joined = addition(pinky.pubkey, 21);
+    notices.respond([joined]);
+    await flush();
+    expect(q.window("a").rows).toEqual([]);
+    const hello = message(viewer, "a", "Hello", 20);
+    head.respond([hello, end()]);
+    await flush();
+    expect(q.window("a").rows.map((r) => r.id)).toEqual([hello.id, joined.id]);
+    // Each name read answers only the names it asks for, so the joiner's name
+    // lands after the head's own save.
+    const names = new Map([
+      [viewer.pubkey, profile(viewer, { name: "Wes" })],
+      [pinky.pubkey, profile(pinky, { name: "Pinky" })],
+    ]);
+    for (let round = 0; round < 3; round++) {
+      for (const entry of wire.pending.splice(0))
+        entry.respond(
+          entry.filters.flatMap((filter) =>
+            isNames(filter)
+              ? (filter.authors ?? []).flatMap((id) => names.get(id) ?? [])
+              : [],
+          ),
+        );
+      await flush();
+    }
+    expect(saved[0]?.notices).toEqual([
+      expect.objectContaining({ id: joined.id }),
+    ]);
+    expect(saved[0]?.profiles).toContainEqual(
+      expect.objectContaining({ pubkey: pinky.pubkey, kind: 0 }),
+    );
+  } finally {
+    owner.dispose();
+  }
+});
+
+it("leaves a failed head's window empty though its notices landed first", async () => {
+  const wire = scriptedTransport(viewer.pubkey, relay.pubkey, {
+    notices: true,
+  });
+  const owner = createRelaySession(wire.transport, {
+    readStateFloor: () => 0,
+    prepared: true,
+  });
+  const q = owner.session.channels;
+  try {
+    q.ensureList();
+    wire
+      .next()
+      .respond([
+        roster(relay, "a", [viewer.pubkey]),
+        metadata(relay, "a", "A"),
+      ]);
+    await flush();
+    q.ensure("a");
+    await flush();
+    const head = take(wire, isWindow);
+    take(wire, isNotices).respond([addition(pinky.pubkey, 21)]);
+    await flush();
+    head.fail(new ReadError("unavailable", "head failed"));
+    await flush();
+    expect(q.window("a")).toMatchObject({ status: "error", rows: [] });
+  } finally {
+    owner.dispose();
   }
 });
 

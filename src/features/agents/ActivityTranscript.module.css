@@ -201,21 +201,6 @@ html[data-keyboard-navigation] .context summary:focus-visible {
 .markdown > :last-child {
   margin-block-end: 0;
 }
-.markdown :is(ul, ol) {
-  padding-left: var(--space-5);
-}
-.markdown ul {
-  list-style: disc;
-}
-.markdown ol {
-  list-style: decimal;
-}
-.markdown :is(strong, b, h1, h2, h3, h4, h5, h6) {
-  font: inherit;
-  letter-spacing: inherit;
-}
-.markdown code,
-.markdown pre,
 .pre {
   font-family: var(--font-mono);
   font-size: var(--text-mono);
@@ -223,11 +208,13 @@ html[data-keyboard-navigation] .context summary:focus-visible {
   letter-spacing: var(--text-mono--letter-spacing);
   font-weight: var(--text-mono--font-weight);
 }
-.markdown pre {
-  overflow-x: auto;
-}
-.markdown a {
-  text-decoration: underline;
+/* The code scrolls under the cap, so the copy action stays pinned. The
+   frame's borders sit outside the code, so the whole block stays at 24rem. */
+.markdown pre code {
+  max-height: calc(24rem - 2px);
+  overflow: auto;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
 }
 .diff {
   margin: var(--space-1) 0 0;
@@ -245,7 +232,6 @@ html[data-keyboard-navigation] .context summary:focus-visible {
   flex-shrink: 1;
   overflow-wrap: anywhere;
 }
-.markdown pre,
 .pre {
   max-height: 24rem;
   overflow: auto;

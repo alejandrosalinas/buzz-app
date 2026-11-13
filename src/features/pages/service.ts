@@ -32,6 +32,8 @@ export type Page = Readonly<{
   component: ComponentType<PageProps>;
   /** Replace the conversation sidebar while this page is selected. */
   sidebar?: ComponentType<PageSidebarProps>;
+  /** Keep the Messages sidebar and dock selection while this page is open. */
+  conversationNavigation?: boolean;
   layout?: "document" | "workspace";
   // Opt in only when every page state places the supplied companion card.
   companion?: boolean;
@@ -101,6 +103,8 @@ export class PagesService extends Service implements Pages {
       !page.title.trim() ||
       typeof page.component !== "function" ||
       (page.sidebar !== undefined && typeof page.sidebar !== "function") ||
+      (page.conversationNavigation !== undefined &&
+        typeof page.conversationNavigation !== "boolean") ||
       (page.layout !== undefined &&
         page.layout !== "document" &&
         page.layout !== "workspace") ||

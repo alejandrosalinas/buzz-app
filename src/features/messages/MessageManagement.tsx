@@ -24,6 +24,7 @@ import { useConversationPresentation } from "../conversation/ConversationPresent
 import { useAgentOwnerEvidence } from "../profiles/useAgentOwnerEvidence";
 import type { ChannelMessage } from "../relay/contracts";
 import { useListedChannel } from "../relay/listed-channel";
+import { headReadPending } from "../relay/live-recovery";
 import type { RelaySession } from "../relay/session";
 import type { MessageAttention } from "../relay/unread";
 import type { AgentOwnerAuthorization } from "../relay/messages";
@@ -109,7 +110,8 @@ type MessageVisit = Readonly<{
   session: RelaySession;
   channelId: string | undefined;
   token: object;
-  entryMessageIds: ReadonlySet<string>;
+  /** Unset when the window showed no verified page: the first one defines them. */
+  entryMessageIds: ReadonlySet<string> | undefined;
   entryHistoryComplete: boolean;
   entryReadRevision: number;
   entryAttention: ReadonlyMap<
@@ -296,6 +298,9 @@ export function MessageManagement({
   const captureVisit = () => {
     const window = channelId ? session.channels.window(channelId) : undefined;
     const rows = window?.rows ?? [];
+    // An older page can mark the window verified while the catch-up head read
+    // is still queued or in flight: those rows are not yet the head.
+    const headPending = !!channelId && headReadPending(session.live, channelId);
     const entryAttention = new Map<
       string,
       Pick<MessageAttention, "unread" | "forced"> | null
@@ -314,11 +319,21 @@ export function MessageManagement({
       session,
       channelId,
       visitChannelId,
-      entryMessageIds: new Set(rows.map((row) => row.id)),
+      // A window first opened this session or evicted since has no rows yet,
+      // and one restored from disk, or whose stream dropped, shows rows its
+      // head read has not verified. Either set would rule out every message
+      // that arrived while the channel was not being followed.
+      entryMessageIds:
+        window?.status === "ready" &&
+        window.freshness === "verified" &&
+        !headPending
+          ? new Set(rows.map((row) => row.id))
+          : undefined,
       entryHistoryComplete:
         window?.status === "ready" &&
         window.freshness === "verified" &&
         !window.refreshing &&
+        !headPending &&
         !window.loadingOlder &&
         !window.hasMore &&
         !window.historyLimited,

@@ -20,7 +20,7 @@ import { ConversationPresentation } from "../conversation/ConversationPresentati
 import { ToastProvider } from "../../shared/design-system/ui/Toast";
 import { useKeyboardFocusVisibility } from "../../shared/design-system/useKeyboardFocusVisibility";
 const render = (ui: ReactElement) => rtlRender(ui, { wrapper: ToastProvider });
-import { MessageActionBar } from "./MessageActionBar";
+import { MessageActionBar, MessageContextMenus } from "./MessageActionBar";
 import { MenuItem } from "../../shared/design-system/ui/Menu";
 import { PreviewCard } from "../../shared/design-system/ui/PreviewCard";
 import { hoverOpenTiming } from "../../shared/design-system/ui/hoverIntent";
@@ -34,7 +34,7 @@ afterEach(() => {
 });
 
 it.each([true, false])(
-  "offers forwarding in the toolbar and menu with link available=%s",
+  "offers forwarding only in the menu with link available=%s",
   async (available) => {
     pointerMedia(false);
     const user = userEvent.setup();
@@ -47,24 +47,19 @@ it.each([true, false])(
       />,
     );
     fireEvent.pointerEnter(screen.getByTestId("message"));
-    const button = await screen.findByRole("button", {
-      name: "Forward message",
-    });
-    expect((button as HTMLButtonElement).disabled).toBe(!available);
-    if (available) {
-      await user.click(button);
-      expect(forward).toHaveBeenCalledTimes(1);
-    }
     await user.click(
-      screen.getByRole("button", { name: "More message actions" }),
+      await screen.findByRole("button", { name: "More message actions" }),
     );
+    expect(
+      screen.queryByRole("button", { name: "Forward message" }),
+    ).toBeNull();
     const item = await screen.findByRole("menuitem", {
       name: "Forward message",
     });
     expect(item.hasAttribute("data-disabled")).toBe(!available);
     if (available) {
       await user.click(item);
-      await waitFor(() => expect(forward).toHaveBeenCalledTimes(2));
+      await waitFor(() => expect(forward).toHaveBeenCalledTimes(1));
       expect(screen.queryByRole("menu")).toBeNull();
     }
   },
@@ -133,6 +128,54 @@ it("leaves portalled message content outside its context-menu target", () => {
   ).toBe(true);
   fireEvent.keyDown(viewer, { key: "F10", shiftKey: true });
   expect(screen.queryByRole("menu")).toBeNull();
+});
+
+it("leaves a message's links, media, fields, selection and touch native", () => {
+  vi.useFakeTimers();
+  try {
+    render(
+      <MessageActionBar withToolbar copyText={() => "Message"}>
+        <div>
+          <p>Plain text</p>
+          <a href="https://example.com/">Plain link</a>
+          <img alt="Sunset" src="data:," />
+          <textarea aria-label="Draft" />
+        </div>
+      </MessageActionBar>,
+    );
+    const text = screen.getByText("Plain text");
+    for (const target of [
+      screen.getByRole("link", { name: "Plain link" }),
+      screen.getByRole("img", { name: "Sunset" }),
+      screen.getByRole("textbox", { name: "Draft" }),
+    ])
+      expect(fireEvent.contextMenu(target, { button: 2 })).toBe(true);
+    fireEvent.touchStart(text, { touches: [{ clientX: 5, clientY: 5 }] });
+    act(() => vi.advanceTimersByTime(1000));
+    fireEvent.touchEnd(text);
+    expect(screen.queryByRole("menu")).toBeNull();
+
+    // jsdom has no layout: the selected text occupies 0–10 on both axes.
+    Range.prototype.getClientRects = () =>
+      [new DOMRect(0, 0, 10, 10)] as unknown as DOMRectList;
+    const range = document.createRange();
+    range.selectNodeContents(text);
+    document.getSelection()?.removeAllRanges();
+    document.getSelection()?.addRange(range);
+    fireEvent.pointerDown(text, { button: 2, clientX: 5, clientY: 5 });
+    expect(fireEvent.contextMenu(text, { button: 2 })).toBe(true);
+    expect(screen.queryByRole("menu")).toBeNull();
+
+    // A press beside the selection opens the message's menu.
+    fireEvent.pointerDown(text, { button: 2, clientX: 20, clientY: 5 });
+    expect(fireEvent.contextMenu(text, { button: 2 })).toBe(false);
+    act(() => vi.runOnlyPendingTimers());
+    expect(screen.getByRole("menuitem", { name: "Copy link" })).toBeDefined();
+  } finally {
+    document.getSelection()?.removeAllRanges();
+    delete (Range.prototype as Partial<Range>).getClientRects;
+    vi.useRealTimers();
+  }
 });
 
 it.each([
@@ -771,4 +814,129 @@ it("retires the native top-layer bar and its open menu with the source", async (
     Reflect.deleteProperty(HTMLElement.prototype, "hidePopover");
     vi.unstubAllGlobals();
   }
+});
+
+it("opens a list's menu with the actions of the row under the press", async () => {
+  function List({ rows }: { rows: string[] }) {
+    return (
+      <MessageContextMenus>
+        <div>
+          <p>List header</p>
+          {rows.map((id) => (
+            <MessageActionBar
+              key={id}
+              withToolbar
+              messageId={id}
+              copyText={() => id}
+              overflowItems={<MenuItem>{`Edit ${id}`}</MenuItem>}
+            >
+              <div data-message-id={id}>
+                <p>{`Text ${id}`}</p>
+              </div>
+            </MessageActionBar>
+          ))}
+        </div>
+      </MessageContextMenus>
+    );
+  }
+  const view = render(<List rows={["a", "b"]} />);
+  expect(
+    fireEvent.contextMenu(screen.getByText("List header"), { button: 2 }),
+  ).toBe(true);
+  expect(screen.queryByRole("menu")).toBeNull();
+
+  expect(fireEvent.contextMenu(screen.getByText("Text a"), { button: 2 })).toBe(
+    false,
+  );
+  expect(await screen.findByRole("menuitem", { name: "Edit a" })).toBeTruthy();
+  fireEvent.keyDown(screen.getByRole("menu"), { key: "Escape" });
+  await waitFor(() => expect(screen.queryByRole("menu")).toBeNull());
+
+  fireEvent.contextMenu(screen.getByText("Text b"), { button: 2 });
+  expect(await screen.findByRole("menuitem", { name: "Edit b" })).toBeTruthy();
+  expect(screen.queryByRole("menuitem", { name: "Edit a" })).toBeNull();
+
+  view.rerender(<List rows={["a"]} />);
+  await waitFor(() => expect(screen.queryByRole("menu")).toBeNull());
+});
+
+it("drops a row's queued Forward when the row goes before its list's menu closes", async () => {
+  const forward = vi.fn();
+  function List({ rows }: { rows: string[] }) {
+    return (
+      <MessageContextMenus>
+        <div>
+          {rows.map((id) => (
+            <MessageActionBar
+              key={id}
+              withToolbar
+              messageId={id}
+              link={`buzz://${id}`}
+              copyText={() => id}
+              onForward={forward}
+            >
+              <div data-message-id={id}>
+                <p>{`Text ${id}`}</p>
+              </div>
+            </MessageActionBar>
+          ))}
+        </div>
+      </MessageContextMenus>
+    );
+  }
+  const view = render(<List rows={["a"]} />);
+  fireEvent.contextMenu(screen.getByText("Text a"), { button: 2 });
+  const item = await screen.findByRole("menuitem", { name: "Forward message" });
+  act(() => {
+    fireEvent.click(item);
+    view.rerender(<List rows={[]} />);
+  });
+  await waitFor(() => expect(screen.queryByRole("menu")).toBeNull());
+  await new Promise((resolve) => setTimeout(resolve, 50));
+  expect(forward).not.toHaveBeenCalled();
+});
+
+it("opens a list's menu from the keyboard and keeps its focus in the list", async () => {
+  const focused = vi.fn();
+  render(
+    <MessageContextMenus>
+      {/* biome-ignore lint/a11y/noStaticElementInteractions: Observes focus within the list, as the timeline does. */}
+      <div
+        onFocus={(event) =>
+          focused(
+            event.target.closest("[role=menu]") ? "menu" : "row",
+            event.target.closest<HTMLElement>("[data-message-id]")?.dataset
+              .messageId,
+          )
+        }
+      >
+        <button type="button">Jump to latest</button>
+        <MessageActionBar
+          withToolbar
+          messageId="a"
+          copyText={() => "a"}
+          overflowItems={<MenuItem>Edit a</MenuItem>}
+        >
+          <div data-message-id="a">
+            <button type="button">Open a</button>
+          </div>
+        </MessageActionBar>
+      </div>
+    </MessageContextMenus>,
+  );
+  fireEvent.keyDown(screen.getByRole("button", { name: "Jump to latest" }), {
+    key: "F10",
+    shiftKey: true,
+  });
+  expect(screen.queryByRole("menu")).toBeNull();
+
+  const control = screen.getByRole("button", { name: "Open a" });
+  control.focus();
+  fireEvent.keyDown(control, { key: "F10", shiftKey: true });
+  const menu = await screen.findByRole("menu");
+  await waitFor(() => expect(menu.contains(document.activeElement)).toBe(true));
+  // The list sees focus enter message a's menu, as it did a row's own.
+  expect(focused).toHaveBeenLastCalledWith("menu", "a");
+  fireEvent.keyDown(menu, { key: "Escape" });
+  await waitFor(() => expect(document.activeElement).toBe(control));
 });

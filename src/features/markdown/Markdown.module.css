@@ -1,0 +1,268 @@
+.document p {
+  line-height: inherit;
+}
+.document > :first-child:not([data-single-emoji]) {
+  margin-top: 0;
+}
+.document > :last-child {
+  margin-bottom: 0;
+}
+.document :where(p, ul, ol, blockquote, pre, .codeFrame, table, hr) {
+  margin: var(--space-4) 0;
+}
+.document > p:has(+ :is(ul, ol)) {
+  margin-bottom: var(--space-2);
+}
+.document > p + :where(ul, ol) {
+  margin-top: var(--space-2);
+}
+.document :where(h1, h2, h3, h4, h5, h6) {
+  margin: var(--space-4) 0 var(--space-1h);
+  color: var(--text-standard);
+  font-size: var(--text-body);
+  line-height: var(--text-body--line-height);
+  letter-spacing: var(--text-body--letter-spacing);
+}
+.message h1 {
+  font-size: var(--text-heading);
+  line-height: var(--text-heading--line-height);
+  letter-spacing: var(--text-heading--letter-spacing);
+}
+.message h2 {
+  font-size: var(--text-body-lg);
+  line-height: var(--text-body-lg--line-height);
+  letter-spacing: var(--text-body-lg--letter-spacing);
+}
+.message h3 {
+  font-size: var(--text-label);
+  line-height: var(--text-label--line-height);
+  letter-spacing: var(--text-label--letter-spacing);
+}
+.message :where(h1, h2, h3) {
+  font-weight: var(--type-weight-medium);
+}
+.message :where(h4, h5, h6) {
+  font-weight: var(--type-weight-medium);
+}
+.document.document :where(ul, ol) {
+  padding-left: var(--space-6);
+}
+.document ol {
+  list-style: decimal;
+}
+.document ul {
+  list-style: disc;
+}
+.document li + li {
+  margin-top: var(--space-1);
+}
+.document li > :where(p, ul, ol) {
+  margin-top: var(--space-1);
+  margin-bottom: var(--space-1);
+}
+.document blockquote {
+  position: relative;
+  padding: var(--space-half) 0 var(--space-half) var(--space-3);
+  border-left: 3px solid transparent;
+}
+.document blockquote::before {
+  content: "";
+  position: absolute;
+  inset-block: 0;
+  left: -3px;
+  width: 3px;
+  border-radius: var(--radius-pill);
+  background: color-mix(
+    in srgb,
+    var(--border-prominent),
+    var(--border-standard)
+  );
+}
+@media (forced-colors: active) {
+  .document blockquote::before {
+    background: CanvasText;
+  }
+}
+.document blockquote > :first-child {
+  margin-top: 0;
+}
+.document blockquote > :last-child {
+  margin-bottom: 0;
+}
+.document code,
+.inline code {
+  border-radius: var(--radius-chip);
+  background: var(--affordance-subtle);
+  padding: var(--space-half) var(--space-1h);
+  font-family: var(--font-system-mono);
+  font-size: var(--text-mono-sm);
+  line-height: var(--text-mono-sm--line-height);
+  letter-spacing: var(--text-mono-sm--letter-spacing);
+}
+/* The code scrolls inside its frame so the copy action stays in the corner.
+   A plugin-presented block keeps the same frame and action. */
+.document :is(pre, .codeFrame) {
+  position: relative;
+  max-width: 100%;
+  overflow: hidden;
+  border: 1px solid var(--border-standard);
+  border-radius: var(--radius-row);
+  background: var(--surface-panel);
+}
+.document pre code {
+  display: block;
+  overflow-x: auto;
+  border-radius: 0;
+  background: transparent;
+  padding: var(--space-3) var(--space-3);
+  scrollbar-width: thin;
+  white-space: pre;
+  overflow-wrap: normal;
+}
+/* Source shown in place of a rejected document wraps like prose. */
+.document pre.source code {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+/* Keep every line end reachable beside the pinned action. */
+.document pre:has(> .codeActions) code {
+  padding-inline-end: calc(var(--size-control-sm) + var(--space-3));
+}
+/* `pre` clips, so a focusable scroller draws its ring inside. */
+html[data-keyboard-navigation] .document pre code:focus-visible {
+  outline-offset: -2px;
+}
+.codeActions {
+  position: absolute;
+  display: flex;
+  gap: var(--space-half);
+  top: var(--space-1);
+  inset-inline-end: var(--space-1);
+  border-radius: var(--radius-icon-button);
+  background: var(--surface-panel);
+  user-select: none;
+}
+@media (hover: hover) and (pointer: fine) {
+  .document :is(pre, .codeFrame):not(:hover, :focus-within) .codeActions {
+    opacity: 0;
+  }
+}
+.document table {
+  display: block;
+  width: max-content;
+  max-width: 100%;
+  overflow-x: auto;
+  border: 1px solid var(--border-standard);
+  border-radius: var(--radius-control);
+  border-collapse: separate;
+  border-spacing: 0;
+  font-size: var(--text-body-sm);
+  line-height: var(--text-body-sm--line-height);
+  letter-spacing: var(--text-body-sm--letter-spacing);
+  overflow-wrap: normal;
+  scrollbar-width: thin;
+  /* Columns don't wrap; authored spaces stay, as in the rest of the body. */
+  white-space: pre;
+}
+/* Measured overflow chooses the scrollbar in style; see MessageMarkdown. */
+.document table[data-overflow="true"] {
+  overflow-x: scroll;
+}
+.document table[data-overflow="false"] {
+  overflow-x: hidden;
+}
+.document :where(th, td) {
+  border: 0;
+  border-right: 1px solid var(--border-standard);
+  border-bottom: 1px solid var(--border-standard);
+  padding: var(--space-1) var(--space-2);
+  text-align: left;
+  vertical-align: top;
+}
+.document :where(th, td):last-child {
+  border-right: 0;
+}
+.document tbody tr:last-child td {
+  border-bottom: 0;
+}
+.document th {
+  background: var(--affordance-subtle);
+  font-weight: var(--type-weight-medium);
+}
+.document hr {
+  border: 0;
+  border-top: 1px solid var(--border-standard);
+}
+.document input[type="checkbox"] {
+  width: 1em;
+  height: 1em;
+  margin: 0 var(--space-1h) var(--space-half) 0;
+  vertical-align: middle;
+  accent-color: var(--affordance-prominent);
+}
+.document a:not([data-solo-link]),
+.inline a:not([data-solo-link]) {
+  color: var(--text-link);
+  text-decoration: underline;
+  text-decoration-thickness: 1px;
+  text-underline-offset: 2px;
+}
+.document a:not([data-solo-link]):hover,
+.inline a:not([data-solo-link]):hover {
+  text-decoration-thickness: 2px;
+}
+.imageAlt {
+  color: var(--text-subtle);
+  font-style: italic;
+}
+
+/* Document scale: a page's hierarchy, from the title role down. */
+.documentScale h1 {
+  font-size: var(--text-title);
+  line-height: var(--text-title--line-height);
+  letter-spacing: var(--text-title--letter-spacing);
+  font-weight: var(--text-title--font-weight);
+}
+.documentScale h2 {
+  font-size: var(--text-heading);
+  line-height: var(--text-heading--line-height);
+  letter-spacing: var(--text-heading--letter-spacing);
+  font-weight: var(--text-heading--font-weight);
+}
+.documentScale h3 {
+  font-size: var(--text-body-lg);
+  line-height: var(--text-body-lg--line-height);
+  letter-spacing: var(--text-body-lg--letter-spacing);
+  font-weight: var(--type-weight-medium);
+}
+.documentScale :where(h4, h5, h6) {
+  font-weight: var(--type-weight-medium);
+}
+.documentScale :where(h5, h6) {
+  color: var(--text-subtle);
+}
+.documentScale :is(ul, ol) ul {
+  list-style: circle;
+}
+.documentScale :is(ul, ol) :is(ul, ol) ul {
+  list-style: square;
+}
+
+/* Compact scale: headings inside a dense list keep label roles. */
+.compact :where(h1, h2, h3, h4, h5, h6) {
+  margin-top: var(--space-2);
+  color: var(--text-standard);
+  font-size: var(--text-label-sm);
+  line-height: var(--text-label-sm--line-height);
+  letter-spacing: var(--text-label-sm--letter-spacing);
+  font-weight: var(--text-label-sm--font-weight);
+}
+.compact h1 {
+  font-size: var(--text-label);
+  line-height: var(--text-label--line-height);
+  letter-spacing: var(--text-label--letter-spacing);
+  font-weight: var(--text-label--font-weight);
+}
+.compact :where(p, ul, ol, blockquote, pre, .codeFrame, table, hr) {
+  margin: var(--space-2) 0;
+}

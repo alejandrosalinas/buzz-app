@@ -347,6 +347,16 @@ export class AcpProcess {
     return session;
   }
 
+  /** Whether an open session can be given a new system prompt in place. */
+  get repromptable() {
+    return !!this.hooks.systemPrompt;
+  }
+  /** Gives an open session `systemPrompt` in place of the one it was opened
+   * with, keeping its conversation. */
+  async reprompt(session: AcpSession, systemPrompt: string) {
+    await this.hooks.systemPrompt?.(this, session.id, systemPrompt);
+  }
+
   private names() {
     const { names } = this.hooks;
     this.naming ??= names ? names(this) : Promise.resolve(false);

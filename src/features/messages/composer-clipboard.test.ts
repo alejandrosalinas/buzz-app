@@ -1,6 +1,10 @@
 // @vitest-environment jsdom
 import { expect, it } from "vitest";
-import { buzzCopyDocument, composerClipboard } from "./composer-clipboard";
+import {
+  buzzCopyDocument,
+  composerClipboard,
+  pastedFiles,
+} from "./composer-clipboard";
 import { composerSchema } from "./composer-document";
 import { spoilerDelimiter } from "./selection-copy";
 
@@ -163,4 +167,41 @@ it("reads crafted HTML whose anchors have no text as an empty paste, not an erro
       },
     ],
   });
+});
+
+it("pastes text whose picture rides beside it, and attaches every other file", () => {
+  const paste = (
+    flavors: { html?: string | undefined; plain?: string | undefined },
+    ...files: File[]
+  ) =>
+    pastedFiles({
+      items: files.map((file) => ({ kind: "file", getAsFile: () => file })),
+      getData: (type: string) =>
+        (type === "text/html" ? flavors.html : flavors.plain) ?? "",
+    } as unknown as DataTransfer);
+  const picture = new File(["png"], "image.png", { type: "image/png" });
+  const pdf = new File(["pdf"], "notes.pdf", { type: "application/pdf" });
+  // Copied office cells: their text, their HTML and a picture of them.
+  const cells = { html: "<table><tr><td>Q3</td></tr></table>", plain: "Q3" };
+  expect(paste(cells, picture)).toEqual([]);
+  // Without plain text no text path can insert, so the picture is the paste.
+  for (const plain of [undefined, "", " \n"])
+    expect(paste({ ...cells, plain }, picture)).toEqual([picture]);
+  expect(
+    paste({ html: "<span><style>.x{}</style></span>", plain: "" }, picture),
+  ).toEqual([picture]);
+  // A screenshot, a copied image and copied files stay attachments.
+  expect(paste({ plain: "image.png" }, picture)).toEqual([picture]);
+  expect(
+    paste(
+      { html: '<img src="https://example.com/a.png">', plain: "a" },
+      picture,
+    ),
+  ).toEqual([picture]);
+  expect(paste({ html: "<p>notes.pdf</p>", plain: "notes.pdf" }, pdf)).toEqual([
+    pdf,
+  ]);
+  expect(paste(cells, picture, pdf)).toEqual([picture, pdf]);
+  expect(paste(cells)).toEqual([]);
+  expect(pastedFiles(null)).toEqual([]);
 });

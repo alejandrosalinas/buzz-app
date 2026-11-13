@@ -63,7 +63,12 @@ export function useChannelMenuActions() {
   );
 }
 
-type LifecycleCallbacks = { close(): void; completed(): void };
+type LifecycleCallbacks = {
+  close(): void;
+  /** Submission checks the originating visit; confirmed deletion checks the
+   * current destination, including a reopened visit to the deleted chat. */
+  depart(visit: "origin" | "current"): void;
+};
 
 type PreparingDm = { existing: Set<string>; members: Set<string | undefined> };
 type State = {
@@ -105,9 +110,7 @@ type Handoff = State & {
   muteRecovery: RefObject<
     { focus(channelId: string): void; closeMenu(): void } | undefined
   >;
-  lifecycleCallbacks: RefObject<
-    { close(): void; completed(): void } | undefined
-  >;
+  lifecycleCallbacks: RefObject<LifecycleCallbacks | undefined>;
   /** The Solo sidebar's shown chats nearest one, nearest first. */
   soloNeighbors: RefObject<((channelId: string) => string[]) | undefined>;
   activityThread: RefObject<ActivityThread | undefined>;
@@ -146,9 +149,7 @@ export function ChannelNavigationProvider({
   >(undefined);
   // biome-ignore lint/correctness/useExhaustiveDependencies: retire all sidebar callbacks when the relay session or scope changes.
   const menuActions = useMemo(createMenuActions, [connection.session, scope]);
-  const lifecycleCallbacks = useRef<
-    { close(): void; completed(): void } | undefined
-  >(undefined);
+  const lifecycleCallbacks = useRef<LifecycleCallbacks | undefined>(undefined);
   const soloNeighbors = useRef<((channelId: string) => string[]) | undefined>(
     undefined,
   );
@@ -202,6 +203,11 @@ export function ChannelNavigationProvider({
     );
   }, [queuedUndo, update]);
   const lifecycleOrigin = state.lifecycleDialog?.origin;
+  // Navigation is presentation, not evidence of deletion. Keep the session's
+  // write owner and listed chat until the relay confirms removal.
+  const departOnSubmit =
+    state.lifecycleDialog?.channel.channelType === "solo" &&
+    state.lifecycleDialog.action === "delete";
   useLayoutEffect(() => {
     if (!lifecycleOrigin) return;
     const retire = () =>
@@ -268,6 +274,7 @@ export function ChannelNavigationProvider({
         );
       },
       beginLifecycle() {
+        if (relay.snapshot().session !== connection.session) return;
         // A confirmed operation belongs to the session, not its originating visit.
         update((previous) =>
           previous.lifecycleDialog
@@ -280,6 +287,10 @@ export function ChannelNavigationProvider({
               }
             : previous,
         );
+        if (departOnSubmit)
+          (
+            state.lifecycleDialog?.callbacks ?? lifecycleCallbacks.current
+          )?.depart("origin");
       },
       closeLifecycle() {
         update((previous) => ({ ...previous, lifecycleDialog: undefined }));
@@ -314,6 +325,8 @@ export function ChannelNavigationProvider({
       connection.viewer,
       update,
       clearPreparingDm,
+      departOnSubmit,
+      relay,
     ],
   );
   const archived = state.lifecycleDialog?.channel;
@@ -388,11 +401,17 @@ export function ChannelNavigationProvider({
             completed={() => {
               (
                 state.lifecycleDialog?.callbacks ?? lifecycleCallbacks.current
-              )?.completed();
+              )?.depart(departOnSubmit ? "current" : "origin");
               value.closeLifecycle();
             }}
             failed={(title, message) => {
-              setFailure({ session: connection.session, title, message });
+              setFailure({
+                session: connection.session,
+                title,
+                message: departOnSubmit
+                  ? `${state.lifecycleDialog?.channel.name}: ${message}`
+                  : message,
+              });
               value.closeLifecycle();
             }}
           />

@@ -279,6 +279,16 @@ it("reads files and resolves directories as the calling plugin", async () => {
   await expect(plugin.host.readFile?.("/notes.md")).rejects.toThrow(
     /No such file/,
   );
+  vi.mocked(invoke).mockResolvedValueOnce("/home/me/work");
+  await expect(
+    plugin.host.resolveDirectory?.("~/work", { create: false }),
+  ).resolves.toBe("/home/me/work");
+  expect(invoke).toHaveBeenLastCalledWith("plugin_host_resolve_directory", {
+    id: "example.plugin",
+    revision: "abc",
+    path: "~/work",
+    create: false,
+  });
   vi.mocked(isTauri).mockReturnValue(false);
   await expect(plugin.host.readFile?.("/notes.md")).rejects.toThrow(
     /desktop plugin/,

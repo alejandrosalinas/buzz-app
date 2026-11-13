@@ -5,27 +5,15 @@ app for team chat and AI agents: join a community, talk in channels and direct
 messages, and run agents such as Claude, Codex, Goose or Pi on your own
 computer that answer you right in the conversation.
 
-![A Buzz chat with an agent replying](docs/assets/readme/solo-chat.png)
-
-> [!IMPORTANT]
-> **Buzz 1.0 is in beta.** Buzz 0.X is still available and supported in
-> [block/buzz](https://github.com/block/buzz).
+[![A 38-second demo of Buzz: an agent answers a question in a team channel, then a chat with two agents is shared with that channel](docs/assets/readme/demo.webp)](https://buzz.xyz/#demo)
 
 ## Get started
 
 ### 1. Download
 
-Get the newest build from the [releases page](https://github.com/block/buzz-app/releases).
-
-| Platform | Download | Notes |
-| --- | --- | --- |
-| macOS (Apple Silicon) | `Buzz_…_aarch64.dmg` | Signed and notarized. |
-| macOS (Intel) | `Buzz_…_x64.dmg` | Signed and notarized. |
-| Windows (x64) | `Buzz_…_x64_unsigned.exe` | Not code-signed, so Windows SmartScreen warns you before it runs. |
-| Linux (x64) | `Buzz_…_amd64.deb` or `Buzz_…_x86_64.AppImage` | Built on Ubuntu 24.04. |
-
-Once installed, Buzz updates itself. You can also check from
-**Settings → Software updates**.
+Download the latest release from [buzz.xyz](https://buzz.xyz) or view
+[all releases](https://github.com/block/buzz-app/releases). Available for
+macOS, Windows and Linux.
 
 ### 2. Set up your identity
 
@@ -95,14 +83,17 @@ edit files there.
 
 ### 6. Use the command line (optional)
 
-Buzz includes the `buzz` command line client at
-`/Applications/Buzz.app/Contents/Resources/bin/buzz`, so scripts and agents need
-no separate install. To run it as `buzz`, link it into your `PATH`:
+Buzz includes the `buzz` command line client, so scripts and agents need no
+separate install. On macOS and Linux (except the AppImage), Buzz links it to
+`~/.local/bin/buzz` each time it starts. If your shell doesn't find `buzz`, add
+that folder to your `PATH` in `~/.zshrc` or `~/.bashrc`:
 
 ```sh
-mkdir -p ~/.local/bin
-ln -sf /Applications/Buzz.app/Contents/Resources/bin/buzz ~/.local/bin/buzz
+export PATH="$HOME/.local/bin:$PATH"
 ```
+
+On Windows, the installer adds it to your `PATH`; open a new terminal after
+installing.
 
 ## Preview limitations
 

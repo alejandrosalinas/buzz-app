@@ -15,6 +15,186 @@ const scope = "https://relay.test:viewer",
   agent = "a".repeat(64),
   root = "b".repeat(64),
   reply = "c".repeat(64);
+it.each([false, true])(
+  "keeps source history across initial and threaded input (flat: %s)",
+  (flat) => {
+    const local = createLocalAgentActivity();
+    const input = {
+      scope,
+      agent,
+      channelId: "channel",
+      ...(flat ? { sourceRootId: null } : {}),
+    };
+    const a = local.begin(
+      { ...input, messageId: root, threadRootId: root },
+      undefined,
+      { author: "owner", text: "Request A" },
+    );
+    a.acknowledged();
+    a.sending("Reply A")(true);
+    a.finish({ ok: true });
+    const b = local.begin(
+      { ...input, messageId: reply, threadRootId: reply },
+      undefined,
+      { author: "owner", text: "Request B" },
+    );
+    b.acknowledged();
+    expect(
+      local.reader.work()[1]?.evidence?.messages.map(({ text }) => text),
+    ).toEqual(flat ? ["Request A", "Reply A", "Request B"] : ["Request B"]);
+    const followUp = local.begin(
+      { ...input, messageId: "d".repeat(64), threadRootId: root, thread: true },
+      undefined,
+      { author: "owner", text: "Follow up A" },
+    );
+    followUp.acknowledged();
+    expect(
+      local.reader.work()[2]?.evidence?.messages.map(({ text }) => text),
+    ).toEqual(
+      flat
+        ? ["Request A", "Reply A", "Request B", "Follow up A"]
+        : ["Request A", "Reply A", "Follow up A"],
+    );
+  },
+);
+
+it("captures accepted boundaries independently of steps and publication, rejecting stale callbacks", () => {
+  const local = createLocalAgentActivity();
+  const input = {
+    scope,
+    agent,
+    channelId: "channel",
+    threadRootId: root,
+    messageId: root,
+  };
+  const first = local.begin(input, undefined, {
+    author: "owner",
+    text: "Can you test it?",
+  });
+  first.started();
+  expect(local.reader.work()[0]?.evidence).toBeNull();
+  first.acknowledged();
+  const wake = local.reader.work()[0]?.evidence;
+  expect(wake?.lifecycle.phase).toBe("wake");
+  first.acknowledged({ steering: true });
+  first.step("Read", "private-path");
+  const sent = first.sending("Please choose a scope");
+  expect(local.reader.work()[0]?.evidence).toBe(wake);
+  first.finish({ ok: true });
+  const handoff = local.reader.work()[0]?.evidence;
+  expect(local.reader.work()[0]?.publishing).toBe(1);
+  expect(handoff?.lifecycle.phase).toBe("handoff");
+  expect(handoff?.lifecycle.revision).toBeGreaterThan(
+    wake?.lifecycle.revision ?? 0,
+  );
+  expect(
+    handoff?.messages.map(({ role, text, delivery }) => ({
+      role,
+      text,
+      delivery,
+    })),
+  ).toEqual([
+    { role: "user", text: "Can you test it?", delivery: undefined },
+    { role: "assistant", text: "Please choose a scope", delivery: "pending" },
+  ]);
+  sent(true);
+  first.finish({ ok: true });
+  expect(local.reader.work()[0]?.evidence).toBe(handoff);
+  const next = local.begin({ ...input, messageId: reply }, undefined, {
+    author: "owner",
+    text: "Use staging",
+  });
+  next.acknowledged({ steering: true });
+  const steer = local.reader.work()[1]?.evidence;
+  expect(steer?.lifecycle.phase).toBe("steer");
+  expect(steer?.messages.map(({ text }) => text)).toEqual([
+    "Can you test it?",
+    "Please choose a scope",
+    "Use staging",
+  ]);
+  expect(steer?.messages[1]?.delivery).toBe("published");
+  next.started();
+  const failed = next.sending("An undelivered answer");
+  failed(false);
+  expect(local.reader.work()[1]?.evidence).toBe(steer);
+  expect(local.reader.work()[1]?.state).toBe("working");
+  next.finish({ ok: false, error: "Publication failed" });
+  expect(local.reader.work()[1]?.state).toBe("error");
+  expect(local.reader.work()[1]?.evidence?.messages.at(-1)).toMatchObject({
+    text: "An undelivered answer",
+    delivery: "failed",
+  });
+  const replaced = local.begin({ ...input, messageId: reply });
+  next.finish({ ok: true });
+  expect(local.reader.work()[1]?.evidence).toBeNull();
+  replaced.acknowledged();
+  expect(local.reader.work()[1]?.evidence?.lifecycle.id).not.toBe(
+    steer?.lifecycle.id,
+  );
+  local.clear();
+  replaced.acknowledged();
+  replaced.finish({ ok: true });
+  expect(local.reader.work()).toEqual([]);
+});
+
+it("bounds visible history, marks synthetic input, and isolates logical sessions and sources", () => {
+  const local = createLocalAgentActivity();
+  const input = {
+    scope,
+    agent,
+    channelId: "channel",
+    threadRootId: root,
+    messageId: root,
+    syntheticMessage: true as const,
+    requestText: "Wake now",
+  };
+  const first = local.begin(input);
+  first.associate({ sessionKey: "one", router: "router", association: null });
+  first.acknowledged();
+  expect(local.reader.work()[0]?.evidence?.messages[0]).toMatchObject({
+    author: "host",
+    text: "Wake now",
+    synthetic: true,
+  });
+  for (let i = 0; i < 65; i++) first.sending(String(i))(true);
+  first.finish({ ok: true });
+  const bounded = local.reader.work()[0]?.evidence;
+  expect(bounded?.messages).toHaveLength(64);
+  expect(bounded?.messages[0]?.text).toBe("1");
+  expect(bounded?.omitted.messages).toBe(2);
+  for (const [messageId, patch, sessionKey] of [
+    ["new-session", {}, "two"],
+    ["other-thread", { thread: true as const }, "one"],
+    ["other-agent", { agent: "other" }, "one"],
+    ["other-scope", { scope: "other" }, "one"],
+  ] as const) {
+    const work = local.begin({
+      ...input,
+      messageId,
+      ...patch,
+      requestText: messageId,
+    });
+    work.associate({ sessionKey, router: "router", association: null });
+    work.acknowledged();
+    expect(
+      local.reader
+        .work()
+        .at(-1)
+        ?.evidence?.messages.map(({ text }) => text),
+    ).toEqual([messageId]);
+  }
+  const large = local.begin({
+    ...input,
+    messageId: "large",
+    requestText: "x".repeat(65_540),
+  });
+  large.acknowledged();
+  expect(local.reader.work().at(-1)?.evidence?.messages[0]?.text).toHaveLength(
+    65_536,
+  );
+  expect(local.reader.work().at(-1)?.evidence?.omitted.characters).toBe(4);
+});
+
 it("projects one local source into channel, exact thread and message without needing observer telemetry", () => {
   const local = createLocalAgentActivity();
   let allowed = true;

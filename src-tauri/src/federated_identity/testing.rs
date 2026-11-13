@@ -411,4 +411,19 @@ impl FederatedIdentity {
         self.install_session(&mut state, tests::record());
         state.restored = true;
     }
+    /// [`Self::finish_restore_for_test`], for a session with `email`.
+    pub(crate) fn finish_restore_as_for_test(&self, email: &str) {
+        let mut session = tests::record();
+        Arc::get_mut(&mut session).unwrap().record.email = Some(email.into());
+        let mut state = self.state();
+        self.install_session(&mut state, session);
+        state.restored = true;
+    }
+    /// The restore found no saved session, as after one expired and was
+    /// removed in an earlier run: signed out, with no sign-out recorded.
+    pub(crate) fn finish_restore_signed_out_for_test(&self) {
+        let mut state = self.state();
+        state.snapshot.status = Status::SignedOut;
+        state.restored = true;
+    }
 }

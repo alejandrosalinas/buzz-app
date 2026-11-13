@@ -43,6 +43,10 @@ export type FakeGoose = {
   deleted: string[];
   /** Each `session/set_config_option`, as `sessionId configId=value`. */
   configured: string[];
+  /** When set, the next system prompt set fails with it. */
+  promptError?: string;
+  /** When set, system prompt sets wait for it. */
+  promptGate?: Promise<void>;
   /** When set, `session/set_config_option` fails with it. */
   configError?: string;
   /** The environment it started with. */
@@ -285,9 +289,22 @@ export function fakeSpawn(
             configOptions: configOptions(sessionId),
           });
         }
-        case "_goose/unstable/session/system-prompt/set":
-          fake.prompts.set(sessionId, String(params.text));
-          return reply(id, {});
+        case "_goose/unstable/session/system-prompt/set": {
+          const failure = fake.promptError;
+          delete fake.promptError;
+          if (failure)
+            return send({
+              jsonrpc: "2.0",
+              ...(id !== undefined && { id }),
+              error: { code: -32603, message: failure },
+            });
+          const set = () => {
+            fake.prompts.set(sessionId, String(params.text));
+            reply(id, {});
+          };
+          if (fake.promptGate) return void fake.promptGate.then(set);
+          return set();
+        }
         case "session/prompt": {
           const runId = `run-${fake.turns.length + 1}`;
           const text = (params.prompt as { text: string }[])

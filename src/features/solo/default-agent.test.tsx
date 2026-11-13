@@ -10,6 +10,7 @@ import {
   clearDefaultAgent,
   clearDeletedDefaultAgent,
   chooseDefaultAgent,
+  defaultAgentControl,
   forgetDefaultAgent,
   restoreDefaultAgent,
   savedAgentStore,
@@ -1081,4 +1082,309 @@ it("a choice in another community doesn't keep a failed removal from coming back
   expect(readView("turn-here", "solo:default-agent", null)).toBe(
     "b".repeat(64),
   );
+});
+
+/** The owner's session for their agents' Bestie tools: the real choices over
+ * their local agents here, beside one someone else owns and one in another
+ * community, and an account record. */
+function ownerSession(saved: string | null | undefined) {
+  const owner = "f".repeat(64);
+  const agent = (pubkey: string, more: object = {}) => ({
+    pubkey,
+    name: pubkey.slice(0, 1),
+    relayUrl: "wss://relay.example.test",
+    owner,
+    ...more,
+  });
+  let local: { status: "ready" | "error"; agents: object[]; error?: string } = {
+    status: "ready",
+    agents: [
+      agent("a".repeat(64)),
+      agent("b".repeat(64)),
+      agent("c".repeat(64), { owner: "e".repeat(64) }),
+      agent("d".repeat(64), { relayUrl: "wss://other.example.test" }),
+    ],
+  };
+  let held: Promise<void> | undefined;
+  const inventory = vi.fn(async () => held);
+  const account = {
+    read: vi.fn(async () => saved),
+    write: vi.fn(async (agent: string | null) => {
+      saved = agent;
+    }),
+  };
+  const session = {
+    mainAgent: account,
+    agentChoices: createAgentChoices({
+      scope: `https://relay.example.test:${owner}`,
+      library: createAgentLibrary(undefined).queries,
+      native: {
+        snapshot: () => local,
+        subscribe: () => () => {},
+        refresh: inventory,
+      } as unknown as Parameters<typeof createAgentChoices>[0]["native"],
+      signal: new AbortController().signal,
+    }),
+  } as unknown as RelaySession;
+  return {
+    session,
+    account,
+    fail: (error: string) => {
+      local = { status: "error", agents: [], error };
+    },
+    inventory,
+    /** Holds inventory reads until the returned release runs. */
+    hold: () => {
+      let release!: () => void;
+      held = new Promise((resolve) => {
+        release = resolve;
+      });
+      return () => {
+        held = undefined;
+        release();
+      };
+    },
+  };
+}
+
+it("an agent's Bestie change saves an owned agent to the device and the account", async () => {
+  const pubkey = "b".repeat(64);
+  const { session, account } = ownerSession(undefined);
+  const bestie = defaultAgentControl(session, "bestie-set");
+  expect(await bestie.set(pubkey)).toEqual({
+    device: pubkey,
+    account: pubkey,
+    here: true,
+  });
+  expect(readView("bestie-set", "solo:default-agent", null)).toBe(pubkey);
+  expect(account.write).toHaveBeenCalledExactlyOnceWith(pubkey);
+  expect(await bestie.read()).toEqual({
+    device: pubkey,
+    account: pubkey,
+    here: true,
+  });
+});
+
+it("an agent's Bestie removal saves none to the device and the account", async () => {
+  const { session, account } = ownerSession("a".repeat(64));
+  setDefaultAgent("bestie-clear", "a".repeat(64));
+  const bestie = defaultAgentControl(session, "bestie-clear");
+  const none = { device: null, account: null, here: false };
+  expect(await bestie.clear()).toEqual(none);
+  expect(account.write).toHaveBeenCalledExactlyOnceWith(null);
+  expect(readView("bestie-clear", "solo:default-agent", null)).toBeNull();
+  expect(await bestie.read()).toEqual(none);
+});
+
+it("refuses an agent the owner doesn't own or can't tag here, or that doesn't exist, changing nothing", async () => {
+  const { session, account, fail } = ownerSession("a".repeat(64));
+  setDefaultAgent("bestie-refused", "a".repeat(64));
+  const bestie = defaultAgentControl(session, "bestie-refused");
+  // Someone else's, one in another community, an unknown key, and a name.
+  for (const agent of ["c", "d", "9"].map((c) => c.repeat(64)).concat("a"))
+    await expect(bestie.set(agent)).rejects.toThrow(
+      "Only an agent your owner owns and can tag in this community can be their Bestie.",
+    );
+  // An inventory that can't be read says so, rather than that it isn't theirs.
+  fail("Agents couldn't be read.");
+  await expect(bestie.set("b".repeat(64))).rejects.toThrow(
+    "Agents couldn't be read.",
+  );
+  await expect(bestie.read()).rejects.toThrow("Agents couldn't be read.");
+  expect(account.write).not.toHaveBeenCalled();
+  expect(readView("bestie-refused", "solo:default-agent", null)).toBe(
+    "a".repeat(64),
+  );
+});
+
+it("saves nothing when the agent's turn ends while its Bestie change reads the agents", async () => {
+  const { session, account, inventory, hold } = ownerSession("a".repeat(64));
+  setDefaultAgent("bestie-ended", "a".repeat(64));
+  const release = hold();
+  let ended = false;
+  const setting = defaultAgentControl(session, "bestie-ended").set(
+    "b".repeat(64),
+    () => {
+      if (ended) throw new Error("The turn has ended");
+    },
+  );
+  try {
+    expect(inventory).toHaveBeenCalledOnce();
+    ended = true;
+  } finally {
+    release();
+  }
+  await expect(setting).rejects.toThrow("The turn has ended");
+  expect(account.write).not.toHaveBeenCalled();
+  expect(readView("bestie-ended", "solo:default-agent", null)).toBe(
+    "a".repeat(64),
+  );
+});
+
+it("refuses an agent's Bestie change while another is still saving", async () => {
+  const { session, account } = ownerSession("a".repeat(64));
+  setDefaultAgent("bestie-busy", "a".repeat(64));
+  let finish!: () => void;
+  account.write.mockImplementationOnce(
+    () =>
+      new Promise<void>((resolve) => {
+        finish = resolve;
+      }),
+  );
+  // Make my bestie, still saving to the account.
+  const choosing = chooseDefaultAgent(session, "bestie-busy", "b".repeat(64));
+  const bestie = defaultAgentControl(session, "bestie-busy");
+  const busy =
+    "Another change to your owner's Bestie is still saving. Try again.";
+  try {
+    await expect(bestie.set("a".repeat(64))).rejects.toThrow(busy);
+    await expect(bestie.clear()).rejects.toThrow(busy);
+  } finally {
+    finish();
+  }
+  await choosing;
+  expect(account.write).toHaveBeenCalledExactlyOnceWith("b".repeat(64));
+  expect(readView("bestie-busy", "solo:default-agent", null)).toBe(
+    "b".repeat(64),
+  );
+});
+
+it.each([
+  ["set", "b".repeat(64)],
+  ["clear", null],
+] as const)(
+  "refuses an agent's Bestie change until a failed %s has put back the previous choice",
+  async (_first, agent) => {
+    // Whichever moment the second change finishes reading the agents, before
+    // or after the first one's save fails, device and account still match.
+    for (let ticks = -8; ticks <= 8; ticks++) {
+      const scope = `bestie-rollback-${agent ? "set" : "clear"}-${ticks}`;
+      const previous = "a".repeat(64);
+      const { session, account, hold } = ownerSession(previous);
+      setDefaultAgent(scope, previous);
+      let refuse!: (error: Error) => void;
+      account.write
+        .mockImplementationOnce(
+          () =>
+            new Promise<void>((_, reject) => {
+              refuse = reject;
+            }),
+        )
+        .mockRejectedValueOnce(new Error("offline"));
+      const bestie = defaultAgentControl(session, scope);
+      const first = agent ? bestie.set(agent) : bestie.clear();
+      await vi.waitFor(() => expect(account.write).toHaveBeenCalledOnce());
+      const release = hold();
+      const second = bestie.set(previous);
+      const later = async (count: number) => {
+        for (let tick = 0; tick < count; tick++) await Promise.resolve();
+      };
+      try {
+        if (ticks < 0) {
+          release();
+          await later(-ticks);
+          refuse(new Error("offline"));
+        } else {
+          refuse(new Error("offline"));
+          await later(ticks);
+          release();
+        }
+      } finally {
+        release();
+      }
+      await Promise.allSettled([first, second]);
+      expect(await account.read()).toBe(previous);
+      expect(readView(scope, "solo:default-agent", null)).toBe(previous);
+    }
+  },
+);
+
+it("keeps a newer Bestie choice still saving when an agent's change to the same agent fails", async () => {
+  const pubkey = "b".repeat(64);
+  const { session, account } = ownerSession("a".repeat(64));
+  setDefaultAgent("bestie-newer", "a".repeat(64));
+  let refuse!: (error: Error) => void;
+  let finish!: () => void;
+  account.write
+    .mockImplementationOnce(
+      () =>
+        new Promise<void>((_, reject) => {
+          refuse = reject;
+        }),
+    )
+    .mockImplementationOnce(
+      () =>
+        new Promise<void>((resolve) => {
+          finish = resolve;
+        }),
+    );
+  const setting = defaultAgentControl(session, "bestie-newer").set(pubkey);
+  await vi.waitFor(() => expect(account.write).toHaveBeenCalledOnce());
+  const choosing = chooseDefaultAgent(session, "bestie-newer", pubkey);
+  try {
+    refuse(new Error("offline"));
+    await expect(setting).rejects.toThrow(
+      "Your bestie couldn't be saved to your account. Try again.",
+    );
+    expect(readView("bestie-newer", "solo:default-agent", null)).toBe(pubkey);
+  } finally {
+    finish();
+  }
+  await choosing;
+  expect(readView("bestie-newer", "solo:default-agent", null)).toBe(pubkey);
+});
+
+it("keeps the previous choice when an agent's Bestie change can't be saved to the account", async () => {
+  const previous = "a".repeat(64);
+  const { session, account } = ownerSession(previous);
+  setDefaultAgent("bestie-unsaved", previous);
+  account.write.mockRejectedValueOnce(new Error("offline"));
+  const bestie = defaultAgentControl(session, "bestie-unsaved");
+  await expect(bestie.set("b".repeat(64))).rejects.toThrow(
+    "Your bestie couldn't be saved to your account. Try again.",
+  );
+  expect(await bestie.read()).toEqual({
+    device: previous,
+    account: previous,
+    here: true,
+  });
+  // With no previous choice, none is kept.
+  const first = ownerSession(undefined);
+  first.account.write.mockRejectedValueOnce(new Error("offline"));
+  await expect(
+    defaultAgentControl(first.session, "bestie-first").set("b".repeat(64)),
+  ).rejects.toThrow(
+    "Your bestie couldn't be saved to your account. Try again.",
+  );
+  expect(readView("bestie-first", "solo:default-agent", null)).toBeNull();
+});
+
+it("reads a stale Bestie as not here, beside what the account saved", async () => {
+  const stale = "9".repeat(64);
+  const { session } = ownerSession(stale);
+  setDefaultAgent("bestie-stale", stale);
+  expect(await defaultAgentControl(session, "bestie-stale").read()).toEqual({
+    device: stale,
+    account: stale,
+    here: false,
+  });
+});
+
+it("reads whether the Bestie it reports is here, though the device changes during the read", async () => {
+  const chosen = "a".repeat(64);
+  const { session, inventory, hold } = ownerSession(chosen);
+  setDefaultAgent("bestie-moved", chosen);
+  const release = hold();
+  const reading = defaultAgentControl(session, "bestie-moved").read();
+  try {
+    await vi.waitFor(() => expect(inventory).toHaveBeenCalledOnce());
+    setDefaultAgent("bestie-moved", "9".repeat(64));
+  } finally {
+    release();
+  }
+  expect(await reading).toEqual({
+    device: chosen,
+    account: chosen,
+    here: true,
+  });
 });

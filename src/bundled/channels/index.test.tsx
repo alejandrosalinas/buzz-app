@@ -15,6 +15,7 @@ function registered() {
     conversation: {
       registerCompletion() {},
       registerTabs() {},
+      registerWorkspace() {},
       registerMessageAction() {},
     },
     settingsCards: { register() {} },

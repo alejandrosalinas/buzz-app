@@ -17,6 +17,7 @@ import { createHash } from "node:crypto";
 import { callTool, memoryVersion, TOOLS } from "./tools";
 import { callSessionTool, sessionTools } from "./session-tools";
 import { PLUGIN_TOOLS } from "./plugins";
+import { BESTIE_TOOLS } from "./bestie";
 import { SETTINGS_TOOLS } from "./settings";
 import { SOLO_WORKER_TOOLS } from "./solo-worker";
 import { Context } from "@deepseek-ai/cordis";
@@ -157,8 +158,8 @@ it.each([false, true])(
         if (property === "protect")
           return protectedSession ? protect : undefined;
         if (property === "nativeToolGate") return undefined;
-        // The tool list checks whether settings can change here.
-        if (property === "settings") return undefined;
+        // The tool list checks whether settings and the Bestie can change here.
+        if (property === "settings" || property === "bestie") return undefined;
         throw new Error(`Help must not access the host: ${String(property)}`);
       },
     });
@@ -725,6 +726,49 @@ it("tags the community emoji a message or edit uses, as the composer does", asyn
       ["emoji", "wave", "https://relay/media/wave.png"],
     ],
   ]);
+});
+
+it("tags a community emoji reaction and refuses a shortcode outside the palette", async () => {
+  const approve = "https://relay/media/approve.png";
+  const { client, published } = fake([
+    ...community,
+    event({ id: root, pubkey: alice }),
+    event({
+      id: "e".repeat(64),
+      pubkey: bob,
+      created_at: 20,
+      kind: 30030,
+      tags: [
+        ["d", "buzz:custom-emoji"],
+        ["emoji", "approve", approve],
+      ],
+    }),
+  ]);
+  await callTool(client, {}, "react", { id: root, emoji: ":Approve:" });
+  await callTool(client, {}, "react", { id: root, emoji: "👍" });
+  expect(published).toEqual([
+    {
+      kind: 7,
+      content: ":Approve:",
+      tags: [
+        ["e", root],
+        ["p", alice],
+        ["emoji", "approve", approve],
+      ],
+    },
+    {
+      kind: 7,
+      content: "👍",
+      tags: [
+        ["e", root],
+        ["p", alice],
+      ],
+    },
+  ]);
+  await expect(
+    callTool(client, {}, "react", { id: root, emoji: ":foo:" }),
+  ).rejects.toThrow("unknown custom emoji :foo:");
+  expect(published).toHaveLength(2);
 });
 
 it("reads no emoji sets for a message without a shortcode", async () => {
@@ -1408,13 +1452,14 @@ it("lists its tools before it can call them", async () => {
     },
   )) as { result: { tools: unknown[] } };
   // Every app session lists the same tools: the Buzz, attention, Solo worker,
-  // plugin and settings tools.
+  // plugin, settings and Bestie tools.
   expect(list.result.tools).toHaveLength(
     TOOLS.length +
       ATTENTION_TOOLS.length +
       SOLO_WORKER_TOOLS.length +
       PLUGIN_TOOLS.length +
-      SETTINGS_TOOLS.length,
+      SETTINGS_TOOLS.length +
+      BESTIE_TOOLS.length,
   );
   await expect(
     respond(

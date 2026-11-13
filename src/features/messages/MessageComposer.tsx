@@ -13,6 +13,7 @@ import {
 } from "../../bundled/emoji/GifDraftPreview";
 import { accentButtonStyle } from "../../shared/theme/accent";
 import { stageChatCards } from "./composer-chat-cards";
+import { pastedFiles } from "./composer-clipboard";
 import { chatCardIds } from "./chat-cards";
 import { ComposerChatCards } from "./ComposerChatCards";
 import { useConversationPresentation } from "../conversation/ConversationPresentation";
@@ -36,7 +37,6 @@ import {
 import { DraftMentionRoster } from "./draft-mention-roster";
 import {
   allowsOutsideMentions,
-  archivedMention,
   mentionAdmission,
   pastedMentionRecipient,
 } from "./mention-admission";
@@ -76,6 +76,7 @@ import { useEditWithUpArrowPreference } from "./edit-key-preference";
 import { matches } from "../shortcuts/bindings";
 import { isApplePlatform } from "../shortcuts/format";
 import { useChosenAgent } from "../solo/default-agent";
+import { agentUnavailable } from "../agents/choices";
 import { useAgentChoices } from "../agents/use-choices";
 import {
   soloAgentsOnly,
@@ -1778,6 +1779,35 @@ function Composer({
     setError(undefined);
     return true;
   }
+  /** Completed and picked emoji are followed by a space, so typing continues
+   * as a new word. A space or tab already at `at` is reused: the caret moves
+   * past it instead of doubling it. */
+  function insertEmoji(
+    text: string,
+    at: number,
+    range?: CompletionQuery,
+    terminator?: string,
+  ) {
+    const separated = /^[ \t]/.test(valueRef.current.text.slice(at));
+    if (!insert(separated ? text : `${text} `, undefined, range, terminator))
+      return false;
+    const field = input.current;
+    const end = field?.selectionEnd ?? 0;
+    // A typed colon can land without conversion at the length limit; the
+    // caret then stays after the literal colon.
+    if (separated && field?.value.slice(end - text.length, end) === text)
+      field.setSelectionRange(end + 1, end + 1);
+    return true;
+  }
+  function insertToolText(text: string) {
+    const end = input.current?.selectionEnd;
+    return (
+      attachGif(text) ??
+      (end !== undefined && isEmojiOnly(text, emojiCatalog.entries)
+        ? insertEmoji(text, end)
+        : insert(text))
+    );
+  }
   /** A tool's lone GIF joins the attachment row, sent after the caption like
    * the row's other media, rather than sitting in prose at the caret. An edit
    * has no attachment row, so its GIF stays in the text. */
@@ -2204,15 +2234,11 @@ function Composer({
       completion.invalidate();
       return input.current?.insertToken(edit.token, query) ?? false;
     }
-    return (
-      typeof edit.text === "string" &&
-      insert(
-        `${edit.text}${isEmojiOnly(edit.text, emojiCatalog.entries) ? "" : " "}`,
-        undefined,
-        query,
-        key === ":" ? key : undefined,
-      )
-    );
+    if (typeof edit.text !== "string") return false;
+    const terminator = key === ":" ? key : undefined;
+    return isEmojiOnly(edit.text, emojiCatalog.entries)
+      ? insertEmoji(edit.text, query.end, query, terminator)
+      : insert(`${edit.text} `, undefined, query, terminator);
   }
   const currentAdmission = () =>
     live.current &&
@@ -2789,14 +2815,14 @@ function Composer({
         (agents?.joinable() ?? []).map((agent) => agent.pubkey),
       );
       if (
-        capturedRecipients.some(
-          (p) => archivedMention(session, p.pubkey) && !bringable.has(p.pubkey),
+        capturedRecipients.some((p) =>
+          agentUnavailable(session, p.pubkey, bringable),
         )
       )
         throw new Error(
           routing && !captured.recipients.length
-            ? "An agent you're sending to is archived. Choose another agent to send."
-            : "A selected recipient is archived. Remove it before sending.",
+            ? "An agent you're sending to is archived or being deleted. Choose another agent to send."
+            : "A selected recipient is archived or being deleted. Remove it before sending.",
         );
       if (
         ownSoloConversation &&
@@ -3386,10 +3412,7 @@ function Composer({
           }
         }}
         onPasteCapture={(event) => {
-          const files = Array.from(event.clipboardData.items)
-            .filter((item) => item.kind === "file")
-            .map((item) => item.getAsFile())
-            .filter((file): file is File => file !== null);
+          const files = pastedFiles(event.clipboardData);
           if (!files.length) return;
           event.preventDefault();
           event.stopPropagation();
@@ -3792,7 +3815,7 @@ function Composer({
                     inviteAgents={agentChoices && !editing.target}
                     recipients={recipients}
                     audience={audience}
-                    insertText={(text) => attachGif(text) ?? insert(text)}
+                    insertText={insertToolText}
                     insertMention={insertMention}
                     insertMentions={insertMentions}
                     replaceRecipients={replaceRecipients}

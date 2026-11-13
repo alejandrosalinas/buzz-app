@@ -98,10 +98,13 @@ export function SoloRegions({
   const snapshot = useSoloNavigation(session);
   const service = soloNavigationFor(session);
   const regions = orderContributedSidebarSections(
-    snapshot.regions.map((region) => ({
-      key: `solo-region:${region.key}`,
-      region,
-    })),
+    // Hidden sources draw nothing; explicitly disabled chats use ordinary Solo.
+    snapshot.regions
+      .filter((region) => !region.hidden && region.reason !== "disabled")
+      .map((region) => ({
+        key: `solo-region:${region.key}`,
+        region,
+      })),
     sidebar.contributionOrder,
   ).map(({ region }) => region);
   const primary = regions.findIndex((region) => region.source);

@@ -32,7 +32,7 @@ test("old disabled flags cannot hide built-in emoji or mentions", async ({
   const emoji = page.getByRole("listbox", { name: "Emoji suggestions" });
   await expect(emoji.getByRole("option").first()).toContainText(":smile:");
   await composer.press("Tab");
-  await expect(composer).toHaveText("😄");
+  await expect(composer).toHaveJSProperty("value", "😄 ");
   await composer.fill("@");
   await expect(
     page.getByRole("listbox", { name: "Mention suggestions" }),

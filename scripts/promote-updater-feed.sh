@@ -13,7 +13,7 @@ VERSION="$2"
 # Validate the version before using it in release asset paths.
 case "$feed" in
   preview-feed)
-    [[ "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+-preview\.[0-9]+\.[0-9]+$ ]] || exit 1
+    [[ "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+-preview\.[1-9][0-9]*$ ]] || exit 1
     prerelease=true
     title='Buzz preview updater feed'
     notes='Rolling manifest for desktop previews. Not the stable channel.' ;;

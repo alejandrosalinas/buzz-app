@@ -165,23 +165,25 @@ export function createProfileDirectory(
       verification.authority,
       verification.subscribe,
       () => {
-        verifiedFlush ??= setTimeout(() => {
-          verifiedFlush = undefined;
-          verifiedRevision++;
-          for (const subject of verified?.takeAccepted() ?? []) {
-            acceptedAt.delete(subject);
-            acceptedAt.set(subject, verifiedRevision);
-          }
-          for (const [subject, revision] of acceptedAt) {
-            if (acceptedAt.size <= PROFILE_CACHE_MAX) break;
-            acceptedAt.delete(subject);
-            forgottenAt = revision;
-          }
-          if (!closed) publish();
-        });
+        verifiedFlush ??= setTimeout(flushVerified);
       },
       verification.refresh,
     );
+  function flushVerified() {
+    clearTimeout(verifiedFlush);
+    verifiedFlush = undefined;
+    verifiedRevision++;
+    for (const subject of verified?.takeAccepted() ?? []) {
+      acceptedAt.delete(subject);
+      acceptedAt.set(subject, verifiedRevision);
+    }
+    for (const [subject, revision] of acceptedAt) {
+      if (acceptedAt.size <= PROFILE_CACHE_MAX) break;
+      acceptedAt.delete(subject);
+      forgottenAt = revision;
+    }
+    if (!closed) publish();
+  }
   // A background read of many pages publishes once, when its pages settle:
   // every publish refolds all profiles and wakes every listener, and an open
   // mention menu re-ranks its whole roster on each one. The session accepts
@@ -303,6 +305,7 @@ export function createProfileDirectory(
         old?.picture === value.picture &&
         old?.about === value.about &&
         old?.nip05 === value.nip05 &&
+        old?.tz === value.tz &&
         old?.isAgent === value.isAgent &&
         old?.ownerPubkey === value.ownerPubkey &&
         (old?.verified === value.verified ||
@@ -610,6 +613,14 @@ export function createProfileDirectory(
           const event = events.peek(id);
           return event ? [event] : [];
         });
+    },
+    /** Up to `count` held verified heads, for the device mirror. */
+    verifiedHeads: (count: number) => verified?.heads(count) ?? [],
+    /** Verified heads an earlier session saved, shown as cached until checked. */
+    restoreVerified(saved: readonly RelayEvent[]) {
+      verified?.restore(saved);
+      // Published now, so a restored session never starts without them.
+      if (verifiedFlush !== undefined) flushVerified();
     },
     stats: () => events.stats(),
     dispose() {

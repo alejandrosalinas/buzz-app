@@ -9,7 +9,6 @@ import {
   useRef,
   type ReactNode,
 } from "react";
-import Markdown, { type Components } from "react-markdown";
 import remarkGfm from "remark-gfm";
 import {
   sectionTitle,
@@ -21,6 +20,11 @@ import {
   type TranscriptTurn,
 } from "./activity-transcript";
 import { MAX_MARKDOWN_LENGTH, scanMarkdown } from "../relay/message-content";
+import {
+  MarkdownDocument,
+  sharedComponents,
+} from "../markdown/MarkdownDocument";
+import type { MarkdownProfile } from "../markdown/profiles";
 import {
   BulbIcon,
   CheckCircleIcon,
@@ -618,18 +622,13 @@ function Item({
 }
 
 // Module-scoped so rerenders keep rendered links (and their focus) in place.
-const REMARK = [remarkGfm];
-const MARKDOWN: Components = {
-  a: ({ href, children }) =>
-    href ? (
-      <a href={href} target="_blank" rel="noreferrer">
-        {children}
-      </a>
-    ) : (
-      <>{children}</>
-    ),
-  img: ({ alt }) => alt ?? null,
+// The react-markdown default URL policy; links open externally.
+const PROFILE: MarkdownProfile = {
+  syntax: [remarkGfm],
+  transforms: [],
+  html: "literal",
 };
+const CAPABILITIES = { copy: true };
 
 /** Agent replies are Markdown; remote images stay unloaded. */
 function Reply({ text }: { text: string }) {
@@ -639,11 +638,14 @@ function Reply({ text }: { text: string }) {
   );
   if (!bounded) return <div className={styles.plain}>{text}</div>;
   return (
-    <div className={styles.markdown}>
-      <Markdown remarkPlugins={REMARK} components={MARKDOWN}>
-        {text}
-      </Markdown>
-    </div>
+    <MarkdownDocument
+      content={text}
+      profile={PROFILE}
+      components={sharedComponents}
+      capabilities={CAPABILITIES}
+      scale="message"
+      className={styles.markdown}
+    />
   );
 }
 

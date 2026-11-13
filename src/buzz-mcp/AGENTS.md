@@ -19,6 +19,9 @@ deliberately.
 - `settings.ts`: the settings tools (`settings_list`, `settings_get`,
   `settings_set`). The settings themselves are the host's catalog
   (`src/app/device-settings.ts`); the tools never name one.
+- `bestie.ts`: the Bestie tools (`bestie_get`, `bestie_set`, `bestie_clear`),
+  which read and change the owner's Bestie through
+  `src/features/solo/default-agent.ts`.
 - `session-tools.ts`: what a session lists, each tool's `load` (`always` or
   `search`), and the server instructions that cover the whole tool set.
 - `prompt.md`: the posting conventions every agent gets after the shared base

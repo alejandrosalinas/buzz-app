@@ -143,7 +143,7 @@ it.each([
       target: `target-${index}`,
     }));
     act(() => {
-      state.setEntries(entries);
+      for (const entry of entries) workspace.open(entry, true);
       if (pane === "main")
         for (const entry of entries)
           state.moveEntry(`app:${entry.target}`, "main");
@@ -188,6 +188,16 @@ it.each([
       draft,
     );
     expect(draft).toHaveValue("Unfinished reply");
+    if (pane === "side") {
+      act(() => {
+        state.moveEntry("app:target-49", "main");
+        workspace.open(entries[49], true, "side");
+      });
+      expect(
+        document.querySelector("[data-panel-workspace]")?.contains(draft),
+      ).toBe(true);
+      expect(draft).toHaveValue("Unfinished reply");
+    }
     view.rerender(
       <StrictMode>
         <Harness channelId="beta" />

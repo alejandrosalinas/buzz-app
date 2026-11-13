@@ -1,0 +1,43 @@
+@reference "../../shared/styles/globals.css";
+
+/* Chrome's find bar: below the top bar at the window's trailing edge. */
+.bar {
+  /* Shown as a popover in the top layer; undo its default placement. */
+  position: fixed;
+  inset: auto;
+  margin: 0;
+  border: 0;
+  overflow: visible;
+  top: calc(var(--size-topbar) + var(--space-2));
+  right: max(var(--space-4), env(safe-area-inset-right));
+  z-index: var(--layer-popover);
+  display: flex;
+  align-items: center;
+  gap: var(--space-half);
+  width: min(24rem, calc(100vw - 2 * var(--space-4)));
+  @apply popover-surface;
+  --floating-inset: var(--space-1);
+  padding: var(--floating-inset);
+}
+.field {
+  flex: 1;
+  min-width: 0;
+}
+.count {
+  align-self: center;
+  color: var(--text-subtle);
+  font-size: var(--text-caption);
+  line-height: var(--text-caption--line-height);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+  padding-inline-end: var(--space-2);
+}
+
+:root[data-find-on-screen] ::highlight(buzz-find) {
+  background-color: var(--surface-find-match);
+  color: var(--text-on-find-match);
+}
+:root[data-find-on-screen] ::highlight(buzz-find-active) {
+  background-color: var(--surface-find-match-active);
+  color: var(--text-on-find-match);
+}

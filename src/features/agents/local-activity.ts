@@ -16,6 +16,30 @@ export type WorkOutcome = Readonly<{
 }>;
 /** A harness step: its own tool name and, when known, what it acts on. */
 export type WorkStep = Readonly<{ tool: string; target?: string }>;
+export type LocalVisibleMessage = Readonly<{
+  id: string;
+  author: string;
+  role: "user" | "assistant";
+  text: string;
+  order: number;
+  observedAt: number;
+  /** Synthetic inputs are host wakes, not signed user messages. */
+  synthetic?: true;
+  /** Outgoing text is an attempt until publication succeeds. */
+  delivery?: "pending" | "published" | "failed";
+}>;
+export type LocalConversationEvidence = Readonly<{
+  lifecycle: Readonly<{
+    id: string;
+    revision: number;
+    phase: "wake" | "steer" | "handoff";
+    observedAt: number;
+  }>;
+  messages: readonly LocalVisibleMessage[];
+  omitted: Readonly<{ messages: number; characters: number }>;
+  /** Only inputs accepted and output attempted on this device; never an archive. */
+  history: "local";
+}>;
 export type LocalWork = Readonly<{
   session?: AgentSessionAssociation;
   scope: string;
@@ -24,7 +48,11 @@ export type LocalWork = Readonly<{
   messageId: string;
   /** The request ID has no published message to open. */
   syntheticMessage?: true;
+  /** The synthetic request text supplied to the harness, without truncation. */
+  requestText?: string;
   threadRootId: string;
+  /** Canonical evidence source: a thread root, or null for a flat conversation. */
+  sourceRootId?: string | null;
   /** The request is in this thread; absent means channel-level work. */
   thread?: true;
   /** The request is in a relay-verified Solo chat, not a DM or channel. */
@@ -33,6 +61,8 @@ export type LocalWork = Readonly<{
   conversationName?: string;
   state: LocalWorkState;
   startedAt: number;
+  /** Null until acceptance; absent on hosts without lifecycle evidence support. */
+  evidence?: LocalConversationEvidence | null;
   /** This run's messages still awaiting publication acknowledgement. */
   publishing?: number;
   /** Recent messages this run published here; their relay echoes are not separate alerts. */
@@ -77,12 +107,21 @@ export function createLocalAgentActivity() {
   let work: readonly LocalWork[] = [];
   const workListeners = new Set<() => void>();
   const entries = new Map<symbol, LocalWork>();
+  const visible = new Map<symbol, readonly LocalVisibleMessage[]>();
+  const omissions = new Map<symbol, { messages: number; characters: number }>();
+  let revision = 0;
+  let order = 0;
   /** How to stop each stoppable request's turn, until it settles. */
   const stops = new Map<symbol, () => Promise<void>>();
   /** How to ask each retryable request again, while its row is kept. */
   const retries = new Map<symbol, () => void>();
   const replyTimers = new Map<symbol, ReturnType<typeof setTimeout>>();
   const publish = () => {
+    for (const id of visible.keys())
+      if (!entries.has(id)) {
+        visible.delete(id);
+        omissions.delete(id);
+      }
     work = Object.freeze([...entries.values()]);
     for (const listener of workListeners) listener();
   };
@@ -158,8 +197,10 @@ export function createLocalAgentActivity() {
         | "dismissed"
         | "stoppable"
         | "retryable"
+        | "evidence"
       >,
       retry?: () => void,
+      request?: Readonly<{ author: string; text: string }>,
     ) {
       // Keep the newest accepted handling of one exact message; late completions
       // retain their own token and cannot overwrite its replacement. A retry
@@ -193,6 +234,89 @@ export function createLocalAgentActivity() {
         }
       }
       const id = Symbol();
+      const lifecycleId = crypto.randomUUID();
+      const sourceRootId =
+        input.sourceRootId === undefined
+          ? (localWorkRoot(input) ?? null)
+          : input.sourceRootId;
+      let accepted = false;
+      const retain = (item: LocalVisibleMessage) => {
+        const omitted = omissions.get(id) ?? { messages: 0, characters: 0 };
+        omitted.characters += Math.max(0, item.text.length - 65_536);
+        const messages = [
+          ...(visible.get(id) ?? []),
+          Object.freeze({ ...item, text: item.text.slice(-65_536) }),
+        ];
+        // Each work entry and each emitted conversation have the same bounds.
+        let characters = messages.reduce(
+          (n, message) => n + message.text.length,
+          0,
+        );
+        while (messages.length > 64 || characters > 65_536) {
+          const first = messages.shift();
+          if (first) {
+            characters -= first.text.length;
+            omitted.messages++;
+            omitted.characters += first.text.length;
+          }
+        }
+        visible.set(id, Object.freeze(messages));
+        omissions.set(id, omitted);
+      };
+      const capture = (
+        phase: LocalConversationEvidence["lifecycle"]["phase"],
+      ) => {
+        const current = entries.get(id);
+        if (!current || settled(current.state)) return;
+        const matching = [...entries].filter(
+          ([, row]) =>
+            row.scope === current.scope &&
+            row.agent === current.agent &&
+            row.channelId === current.channelId &&
+            row.sourceRootId === current.sourceRootId &&
+            row.session?.sessionKey === current.session?.sessionKey,
+        );
+        const all = matching
+          .flatMap(([key]) => visible.get(key) ?? [])
+          .sort((a, b) => a.order - b.order);
+        let characters = all.reduce((n, message) => n + message.text.length, 0);
+        let omittedMessages = matching.reduce(
+          (n, [key]) => n + (omissions.get(key)?.messages ?? 0),
+          0,
+        );
+        let omittedCharacters = matching.reduce(
+          (n, [key]) => n + (omissions.get(key)?.characters ?? 0),
+          0,
+        );
+        while (all.length > 64 || characters > 65_536) {
+          const first = all.shift();
+          if (first) {
+            omittedMessages++;
+            omittedCharacters += first.text.length;
+            characters -= first.text.length;
+          }
+        }
+        entries.set(
+          id,
+          Object.freeze({
+            ...current,
+            evidence: Object.freeze({
+              lifecycle: Object.freeze({
+                id: lifecycleId,
+                revision: ++revision,
+                phase,
+                observedAt: Date.now(),
+              }),
+              messages: Object.freeze(all),
+              omitted: Object.freeze({
+                messages: omittedMessages,
+                characters: omittedCharacters,
+              }),
+              history: "local",
+            }),
+          }),
+        );
+      };
       if (retry) retries.set(id, retry);
       const expireReplies = () => {
         replyTimers.delete(id);
@@ -234,6 +358,8 @@ export function createLocalAgentActivity() {
         id,
         Object.freeze({
           ...input,
+          sourceRootId,
+          evidence: null,
           state: "waiting",
           startedAt,
           ...(replyMessages?.length ? { replyMessages } : {}),
@@ -287,6 +413,18 @@ export function createLocalAgentActivity() {
       };
       return {
         channelId: input.channelId,
+        threadRootId: input.threadRootId,
+        requestText: (requestText: string) => {
+          const current = entries.get(id);
+          if (
+            !current?.syntheticMessage ||
+            settled(current.state) ||
+            current.requestText === requestText
+          )
+            return;
+          entries.set(id, Object.freeze({ ...current, requestText }));
+          publish();
+        },
         associate: (session: AgentSessionAssociation) => {
           const current = entries.get(id);
           if (!current) return;
@@ -300,6 +438,26 @@ export function createLocalAgentActivity() {
           publish();
         },
         started: () => update("working"),
+        acknowledged: (input?: Readonly<{ steering?: true }>) => {
+          const current = entries.get(id);
+          if (!current || settled(current.state) || accepted) return;
+          accepted = true;
+          const text = current.syntheticMessage
+            ? current.requestText
+            : request?.text;
+          if (text !== undefined)
+            retain({
+              id: current.messageId,
+              author: request?.author ?? "host",
+              role: "user",
+              text,
+              order: ++order,
+              observedAt: Date.now(),
+              ...(current.syntheticMessage ? { synthetic: true } : {}),
+            });
+          capture(input?.steering ? "steer" : "wake");
+          publish();
+        },
         confirmSolo: (conversationName?: string) => {
           const current = entries.get(id);
           if (!current || current.soloChat) return;
@@ -315,9 +473,20 @@ export function createLocalAgentActivity() {
           );
           publish();
         },
-        sending: () => {
+        sending: (text?: string) => {
           const current = entries.get(id);
           if (!current) return () => {};
+          const messageId = crypto.randomUUID();
+          if (text !== undefined)
+            retain({
+              id: messageId,
+              author: current.agent,
+              role: "assistant",
+              text,
+              order: ++order,
+              observedAt: Date.now(),
+              delivery: "pending",
+            });
           entries.set(
             id,
             Object.freeze({
@@ -327,9 +496,29 @@ export function createLocalAgentActivity() {
           );
           publish();
           let active = true;
-          return () => {
+          return (published?: boolean) => {
             if (!active) return;
             active = false;
+            const messages = visible.get(id);
+            if (messages)
+              visible.set(
+                id,
+                Object.freeze(
+                  messages.map((message) =>
+                    message.id === messageId
+                      ? Object.freeze({
+                          ...message,
+                          delivery:
+                            published === undefined
+                              ? ("pending" as const)
+                              : published
+                                ? ("published" as const)
+                                : ("failed" as const),
+                        })
+                      : message,
+                  ),
+                ),
+              );
             const latest = entries.get(id);
             if (!latest?.publishing) return;
             const publishing = latest.publishing - 1;
@@ -392,13 +581,15 @@ export function createLocalAgentActivity() {
               ...(on ? { target: on } : {}),
             });
         },
-        finish: (result: WorkOutcome) =>
+        finish: (result: WorkOutcome) => {
+          if (accepted) capture("handoff");
           update(
             result.stopped ? "stopped" : result.ok ? "done" : "error",
             result.ok
               ? undefined
               : result.error || "Could not finish this request",
-          ),
+          );
+        },
         /** The harness's way to stop this request's turn, offered as Stop. */
         interruptible: (stop: () => Promise<void>) => {
           const current = entries.get(id);

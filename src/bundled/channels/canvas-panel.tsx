@@ -59,6 +59,7 @@ export function registerCanvas(ctx: Context) {
         scope={state.scope}
         channelId={channelContext.channelId}
         openLink={openLink}
+        codeBlocks={ctx.conversation.codeBlocks}
       />
     );
   }

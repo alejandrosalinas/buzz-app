@@ -949,7 +949,12 @@ it("shows a session's prompt once over the latest turns it swaps in", async () =
   // The runtime's own method, with only what it reads.
   const latest = (held: readonly TranscriptTurn[]) =>
     ClaudeRuntime.prototype.latestTurns.call(
-      { spawn, reads: () => undefined, prompts: () => prompts } as never,
+      {
+        spawn,
+        reads: () => undefined,
+        prompts: () => prompts,
+        place: (_agent: string, _key: string, workspace: string) => workspace,
+      } as never,
       conversation,
       "~/.buzz",
       false,

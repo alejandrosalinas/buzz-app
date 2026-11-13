@@ -1597,6 +1597,36 @@ it("reads the roster again after a write that couldn't be sent", async () => {
   expect(added.size).toBe(0);
 });
 
+it("leaves out an agent whose Delete started", async () => {
+  const t = batchSetup();
+  await t.ready();
+  const [first = "", second = "", deleting = ""] = people(3);
+  const choices = t.session.agentChoices;
+  const session = Object.create(t.session, {
+    agentChoices: {
+      value: {
+        ...choices,
+        snapshot: () => ({
+          ...choices.snapshot(),
+          identities: [{ pubkey: deleting, name: "Gone", deleting: true }],
+        }),
+      },
+    },
+  }) as RelaySession;
+  await addChannelMembersAtOnce(
+    session,
+    t.id,
+    [first, second, deleting],
+    new Map(),
+    new AbortController().signal,
+  );
+  expect(
+    t.published.map((event) =>
+      event.tags.flatMap(([tag, value]) => (tag === "p" ? [value] : [])),
+    ),
+  ).toEqual([[first, second]]);
+});
+
 it("leaves out someone archived while the roster is read", async () => {
   const t = batchSetup();
   await t.ready();

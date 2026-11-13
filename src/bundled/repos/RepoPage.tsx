@@ -1,5 +1,12 @@
-import { useEffect, useMemo, useRef, useState } from "react";
-import Markdown from "react-markdown";
+import {
+  createContext,
+  useContext,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
+import type { Components } from "react-markdown";
 import remarkGfm from "remark-gfm";
 import type { PageProps } from "../../features/pages/service";
 import type { PageNavigation } from "../../features/navigation/service";
@@ -45,6 +52,15 @@ import { Button } from "../../shared/design-system/ui/Button";
 import { IconButton } from "../../shared/design-system/ui/IconButton";
 import { Tabs } from "../../shared/design-system/ui/Tabs";
 import { CopyIcon, FileTextIcon } from "../../shared/design-system/icons";
+import type {
+  CodeBlockRenderer,
+  ContributionReader,
+} from "../../features/conversation/contracts";
+import {
+  MarkdownDocument,
+  sharedComponents,
+} from "../../features/markdown/MarkdownDocument";
+import type { MarkdownProfile } from "../../features/markdown/profiles";
 import "./repos.css";
 import { writeClipboardText } from "../../shared/clipboard";
 
@@ -73,7 +89,13 @@ export function RepoPage({
   relay,
   navigation,
   open,
-}: PageProps & { relay: RelayData; open: Open }) {
+  codeBlocks,
+}: PageProps & {
+  relay: RelayData;
+  open: Open;
+  /** Plugin code-block renderers for README and description bodies. */
+  codeBlocks?: ContributionReader<CodeBlockRenderer> | undefined;
+}) {
   const connection = useRelayConnection(relay);
   const request = useMemo(
     () => navigation?.forSession(relay, connection),
@@ -114,28 +136,30 @@ export function RepoPage({
       request.complete({ status: "failed", reason: "unavailable" });
   }, [request, connection, scope, target]);
   return (
-    <FullPageSurface aria-label="Repository">
-      <div className="repos-page text-body">
-        {connection.status === "ready" && request && scope ? (
-          <Destination
-            key={`${connection.scope}:${connection.generation}`}
-            session={connection.session}
-            request={request}
-            open={open}
-            scope={scope}
-          />
-        ) : (
-          <>
-            <h1 className="text-title">Repository</h1>
-            <p role="status">
-              {connection.status === "connecting"
-                ? "Connecting to your community..."
-                : "Select a community to open a repository."}
-            </p>
-          </>
-        )}
-      </div>
-    </FullPageSurface>
+    <RepoCodeBlocks value={codeBlocks}>
+      <FullPageSurface aria-label="Repository">
+        <div className="repos-page text-body">
+          {connection.status === "ready" && request && scope ? (
+            <Destination
+              key={`${connection.scope}:${connection.generation}`}
+              session={connection.session}
+              request={request}
+              open={open}
+              scope={scope}
+            />
+          ) : (
+            <>
+              <h1 className="text-title">Repository</h1>
+              <p role="status">
+                {connection.status === "connecting"
+                  ? "Connecting to your community..."
+                  : "Select a community to open a repository."}
+              </p>
+            </>
+          )}
+        </div>
+      </FullPageSurface>
+    </RepoCodeBlocks>
   );
 }
 
@@ -612,7 +636,42 @@ function CopyLink({ route }: { route: EntityRoute }) {
     </div>
   );
 }
-function Body({
+const PROFILE: MarkdownProfile = {
+  syntax: [remarkGfm],
+  transforms: [],
+  html: "literal",
+};
+const RepoCodeBlocks = createContext<
+  ContributionReader<CodeBlockRenderer> | undefined
+>(undefined);
+const RepoLinks = createContext<{ open: Open; scope: NavigationScope } | null>(
+  null,
+);
+const COMPONENTS: Components = {
+  ...sharedComponents,
+  a: function RepoLink({ href, children }) {
+    const links = useContext(RepoLinks);
+    return (
+      <a
+        href={href}
+        target="_blank"
+        rel="noopener noreferrer"
+        onClick={(event) => {
+          if (links && href && isBuzzLink(href)) {
+            event.preventDefault();
+            const target = buzzLinkTarget(href, links.scope);
+            if (target) void links.open(target);
+          }
+        }}
+      >
+        {children}
+      </a>
+    );
+  },
+  // A README's own images load, as on the repository's host.
+  img: ({ node: _node, alt, ...props }) => <img alt={alt ?? ""} {...props} />,
+};
+export function Body({
   text,
   open,
   scope,
@@ -621,40 +680,28 @@ function Body({
   open: Open;
   scope: NavigationScope;
 }) {
+  const codeBlocks = useContext(RepoCodeBlocks);
   const plain = useMemo(
     () => text.length > MAX_MARKDOWN_LENGTH || scanMarkdown(text).tooDeep,
     [text],
   );
+  const links = useMemo(() => ({ open, scope }), [open, scope]);
   if (plain) return <div className="repo-markdown repo-plain">{text}</div>;
   return (
-    <div className="repo-markdown">
-      <Markdown
-        remarkPlugins={[remarkGfm]}
+    <RepoLinks value={links}>
+      <MarkdownDocument
+        content={text}
+        profile={PROFILE}
+        // Buzz links are admitted only in the current scope.
         urlTransform={(url) => {
           if (isBuzzLink(url)) return buzzLinkTarget(url, scope) ? url : "";
           return /^(https?:|mailto:)/i.test(url) ? url : "";
         }}
-        components={{
-          a: ({ href, children }) => (
-            <a
-              href={href}
-              target="_blank"
-              rel="noopener noreferrer"
-              onClick={(event) => {
-                if (href && isBuzzLink(href)) {
-                  event.preventDefault();
-                  const target = buzzLinkTarget(href, scope);
-                  if (target) void open(target);
-                }
-              }}
-            >
-              {children}
-            </a>
-          ),
-        }}
-      >
-        {text}
-      </Markdown>
-    </div>
+        components={COMPONENTS}
+        capabilities={{ codeBlocks, copy: true }}
+        scale="document"
+        className="repo-markdown"
+      />
+    </RepoLinks>
   );
 }

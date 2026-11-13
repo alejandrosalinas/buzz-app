@@ -286,6 +286,8 @@ const BOUNDARY_ROLES = [
 
 const TINT_PAIRS = [
   ["--text-warning", "--affordance-warning"],
+  ["--text-on-find-match", "--surface-find-match"],
+  ["--text-on-find-match", "--surface-find-match-active"],
   ["--text-success", "--affordance-success"],
   ["--text-success", "--affordance-success-hover"],
   ["--text-success", "--affordance-success-pressed"],

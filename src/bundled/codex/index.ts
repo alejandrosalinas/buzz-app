@@ -70,6 +70,7 @@ export const apply: PluginModule["apply"] = (ctx) => {
     undefined,
     ctx.host,
     (pubkey) => ctx.agents.handle(pubkey),
+    ctx.host.resolveDirectory?.bind(ctx.host),
   );
   // Failed turns' notices link to where Codex signs in.
   runtime.explain = (notice) =>
@@ -158,6 +159,7 @@ export const apply: PluginModule["apply"] = (ctx) => {
   );
   ctx.agents.register<Config>({
     id: TYPE_ID,
+    conversationFolders: true,
     voice: async (seat) => {
       if (typeof RTCPeerConnection !== "function")
         throw new Error("Voice is unsupported on this device");

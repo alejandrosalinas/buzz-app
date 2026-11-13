@@ -42,8 +42,7 @@
   height: 100%;
 }
 .document > h2,
-.document > p,
-.markdown > * {
+.document > p {
   margin-block: 0;
 }
 .description {
@@ -138,30 +137,6 @@
 }
 .markdown {
   overflow-wrap: anywhere;
-}
-.markdown > * + * {
-  margin-block-start: var(--space-4);
-}
-.markdown pre {
-  overflow: auto;
-  white-space: pre-wrap;
-}
-/* General inline links: the neutral link role with a persistent underline.
-   A chat chip keeps its own treatment. */
-.markdown a:not([data-solo-link]) {
-  color: var(--text-link);
-  text-decoration: underline;
-}
-.markdown img {
-  max-width: 100%;
-}
-.markdown table {
-  display: block;
-  overflow: auto;
-}
-.markdown ul,
-.markdown ol {
-  padding-inline-start: var(--space-6);
 }
 @media (max-width: 52rem) {
   .split[data-side] {

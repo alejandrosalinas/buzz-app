@@ -20,10 +20,7 @@ const root = fileURLToPath(new URL("../../", import.meta.url));
 const { jobs } = parse(
   readFileSync(join(root, ".github/workflows/desktop-build.yml"), "utf8"),
 );
-const baseVersion = JSON.parse(
-  readFileSync(join(root, "src-tauri/tauri.conf.json"), "utf8"),
-).version.split("-")[0];
-const version = `${baseVersion}-preview.42.2`;
+const version = "1.0.2-preview.42";
 const sha = "a".repeat(40);
 const hash = (bytes) => createHash("sha256").update(bytes).digest("hex");
 const assets = {
@@ -87,7 +84,7 @@ function temp(t) {
   return dir;
 }
 
-test("every platform takes its version from one generator: preview from the run, release from the tag", (t) => {
+test("every platform takes its version from one generator: preview from the run's one derivation, release from the tag", (t) => {
   // macOS, Windows and Linux all run the same script, so they cannot disagree.
   for (const job of [jobs.build, jobs.windows, jobs.linux])
     assert.ok(
@@ -100,18 +97,17 @@ test("every platform takes its version from one generator: preview from the run,
       .run,
     /--config "\$RUNNER_TEMP\/candidate\.json"/,
   );
-  const generate = (release) => {
+  const generate = (release, preview = version) => {
     const dir = temp(t);
     const env = {
       ...process.env,
-      GITHUB_RUN_NUMBER: "42",
-      GITHUB_RUN_ATTEMPT: "2",
       RUNNER_TEMP: dir,
       GITHUB_ENV: join(dir, "env"),
       GITHUB_OUTPUT: join(dir, "outputs"),
       BUZZ_UPDATER_PUBLIC_KEY: "fixture-key",
       BUZZ_UPDATER_ENDPOINT: "https://example.com/feed",
       RELEASE_VERSION: release,
+      PREVIEW_VERSION: preview,
     };
     const result = spawnSync(
       process.execPath,
@@ -138,6 +134,15 @@ test("every platform takes its version from one generator: preview from the run,
     return config.version;
   };
   assert.equal(generate(""), version);
+  // Previews never fall back to tauri.conf.json.
+  for (const invalid of [
+    "",
+    "1.0.2",
+    "1.0.2-preview.0",
+    "1.0.2-preview.4.1",
+    "1.0.2-beta.1",
+  ])
+    assert.equal(generate("", invalid), undefined, invalid);
   assert.equal(generate("1.0.0"), "1.0.0");
   assert.equal(generate("1.2.3-beta.4"), "1.2.3-beta.4");
   for (const invalid of [
@@ -145,7 +150,7 @@ test("every platform takes its version from one generator: preview from the run,
     "01.0.0",
     "1.0.0-beta.0",
     "1.0.0-rc.1",
-    "1.0.0-preview.1.1",
+    "1.0.0-preview.1",
     "v1.0.0",
   ])
     assert.equal(generate(invalid), undefined, invalid);
@@ -213,7 +218,7 @@ for (const failure of [
     const file = assets.windows[0];
     if (failure === "corrupt") writeFileSync(join(windows, file), "corrupted");
     if (failure === "mixed version") {
-      const older = file.replace("42.2", "42.1");
+      const older = file.replace("preview.42", "preview.41");
       renameSync(join(windows, file), join(windows, older));
       writeFileSync(join(windows, "SHA256SUMS"), `${hash(file)}  ./${older}\n`);
     }
@@ -341,4 +346,78 @@ esac
     assert.equal(option("--title"), title);
     assert.ok(publish.args.includes("release-assets/SHA256SUMS"), release);
   }
+});
+
+test("preview version is one patch above the highest stable tag reachable from the commit", (t) => {
+  const dir = temp(t);
+  const git = (...args) =>
+    spawnSync("git", args, { cwd: dir, encoding: "utf8" });
+  const commit = () =>
+    git(
+      "-c",
+      "user.name=fixture",
+      "-c",
+      "user.email=fixture@example.com",
+      "commit",
+      "--allow-empty",
+      "-qm",
+      "fixture",
+    );
+  const derive = (ref = "HEAD") => {
+    const output = join(dir, `output-${Math.random()}`);
+    const result = spawnSync(
+      process.execPath,
+      [join(root, "scripts/preview-version.mjs"), ref],
+      {
+        cwd: dir,
+        env: {
+          ...process.env,
+          GITHUB_OUTPUT: output,
+        },
+        encoding: "utf8",
+      },
+    );
+    if (result.status !== 0) return { error: result.stderr };
+    const version = result.stdout.trim();
+    assert.equal(readFileSync(output, "utf8"), `version=${version}\n`);
+    return version;
+  };
+  git("init", "-q");
+  commit();
+  assert.match(derive().error, /No stable vX\.Y\.Z tag is reachable/);
+  // Betas, previews and malformed tags never count.
+  for (const tag of ["v9.0.0-beta.1", "v9.0.0-preview.1", "v09.0.0", "9.0.0"])
+    git("tag", tag);
+  assert.match(derive().error, /No stable/);
+  git("tag", "v1.0.1");
+  assert.equal(derive(), "1.0.2-preview.1");
+  // The counter follows published preview tags of the same base, on any
+  // commit, compared numerically; old-format, beta and malformed tags are ignored.
+  git("tag", "v1.0.2-preview.1");
+  assert.equal(derive(), "1.0.2-preview.2");
+  for (const tag of [
+    "v1.0.2-preview.9",
+    "v1.0.2-preview.10",
+    "v1.0.2-preview.300.1",
+    "v1.0.2-preview.099",
+    "v1.0.2-beta.50",
+    "v1.0.20-preview.70",
+    "v1.0.2-preview.80-x",
+  ])
+    git("tag", tag);
+  assert.equal(derive(), "1.0.2-preview.11");
+  // Unchanged until its tag is published, so a re-run reuses the number.
+  assert.equal(derive(), "1.0.2-preview.11");
+  // Numeric, not lexical, order picks the highest release.
+  commit();
+  git("tag", "v1.0.10");
+  git("tag", "v1.0.9");
+  // A new base starts over at 1.
+  assert.equal(derive(), "1.0.11-preview.1");
+  // A tag on a later commit is not in an earlier commit's history.
+  commit();
+  git("tag", "v1.1.0");
+  git("tag", "v1.1.1-preview.4", "HEAD~2");
+  assert.equal(derive(), "1.1.1-preview.5");
+  assert.equal(derive("HEAD~1"), "1.0.11-preview.1");
 });

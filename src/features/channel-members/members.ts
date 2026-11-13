@@ -1,4 +1,4 @@
-import { archiveHides } from "../relay/identity-archives";
+import { agentUnavailable } from "../agents/choices";
 import type { RelaySession } from "../relay/session";
 import type { ChannelSummary } from "../relay/contracts";
 import type { LocalEvents, OutgoingEvent } from "../relay/outbox";
@@ -164,9 +164,9 @@ async function addOneMember(
       throw new Error(
         "This channel cannot add members right now. Refresh and try again.",
       );
-    if (archiveHides(session.archives, pubkey, session.viewer))
+    if (agentUnavailable(session, pubkey))
       throw new Error(
-        "Archived identities cannot be added. Choose someone else.",
+        "Archived identities and agents being deleted cannot be added. Choose someone else.",
       );
   };
   checkAccess();
@@ -497,7 +497,7 @@ export async function addChannelMembersAtOnce(
       !intents.get(key)?.retry &&
       !pending.has(key) &&
       !legacy.has(key) &&
-      !archiveHides(session.archives, key, session.viewer) &&
+      !agentUnavailable(session, key) &&
       // A Solo chat's agents keep their own receipts, so a recovering share
       // can finish its exact Bot grant.
       !(soloParticipant && knownAgent(session, key)),
@@ -539,7 +539,7 @@ export async function addChannelMembersAtOnce(
             (key) =>
               !roster?.members?.includes(key) &&
               // Archives may refresh during any read, as the single addition rechecks.
-              !archiveHides(session.archives, key, session.viewer),
+              !agentUnavailable(session, key),
           );
           if (!recipients.length) continue;
           dispatched = true;

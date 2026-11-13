@@ -37,7 +37,7 @@ import { DotsThreeIcon } from "../../shared/design-system/icons";
 import type { Navigation } from "../navigation/controller";
 import type { ChannelSummary } from "../relay/contracts";
 import type { RelaySession } from "../relay/session";
-import { conversationTarget } from "./routes";
+import { conversationTarget, matchesConversation } from "./routes";
 import { soloSuccessor } from "./solo-successor";
 import type { SoloRegion } from "./solo-navigation-model";
 import type {
@@ -136,10 +136,18 @@ export function RegionConversation(props: SoloConversationProps) {
                     if (trigger?.isConnected)
                       trigger.focus({ preventScroll: true });
                   },
-                  completed() {
-                    // The row can unmount before completion. Keep the captured
-                    // Solo visit, unless the user has already navigated away.
-                    if (leavesOpenChat && !visit.attempt.signal.aborted)
+                  depart(check) {
+                    // The row can unmount before completion, or the user can
+                    // reopen its chat while the session-owned deletion runs.
+                    const active =
+                      check === "current"
+                        ? matchesConversation(
+                            navigator.snapshot().entry.target,
+                            scope,
+                            channel.id,
+                          )
+                        : leavesOpenChat && !visit.attempt.signal.aborted;
+                    if (active)
                       void navigator.open(
                         soloSuccessor(
                           scope,
@@ -187,10 +195,12 @@ export function RegionConversation(props: SoloConversationProps) {
   );
   const state: ConversationState = {
     channel,
-    selected: current === channel.id,
+    selected: props.selected ?? current === channel.id,
     menu,
     open() {
-      if (active()) void navigator.open(conversationTarget(scope, channel.id));
+      if (!active()) return;
+      if (props.onOpen) props.onOpen();
+      else void navigator.open(conversationTarget(scope, channel.id));
     },
     canRename:
       session.channelDetails.available && !channel.readOnly && !channel.cached,

@@ -1,6 +1,15 @@
 name: Desktop previews
 
 on:
+  # A daily preview from main.
+  schedule:
+    - cron: "37 9 * * *"
+  # A preview of main right after each published stable release (always in
+  # main's history), so preview installs get its code without leaving the
+  # preview feed. The release only gates the run; main's head is built.
+  workflow_run:
+    workflows: [Desktop stable release]
+    types: [completed]
   workflow_dispatch:
     inputs:
       candidates:
@@ -8,22 +17,50 @@ on:
         type: boolean
         default: false
       promote_version:
-        description: Promote a validated version (e.g. 0.7.0-preview.22.1) to the preview updater feed; no build
+        description: Promote a validated version (e.g. 1.0.2-preview.3) to the preview updater feed; no build
         type: string
         default: ""
-  schedule:
-    - cron: "17 */6 * * *"
 
 permissions:
   contents: read
 
 concurrency:
-  group: desktop-preview-${{ inputs.candidates && github.ref || 'macos-prerelease' }}
+  # Stable completions the source job skips get their own group, so they can't
+  # replace a legitimate preview waiting in the shared one. Keep this test
+  # identical to the source job's.
+  group: >-
+    desktop-preview-${{ !(github.event_name != 'workflow_run' || (github.event.workflow_run.conclusion == 'success' &&
+      github.event.workflow_run.event == 'push' && !contains(github.event.workflow_run.head_branch, '-'))) &&
+      format('skipped-{0}', github.run_id) || (inputs.candidates && github.ref || 'macos-prerelease') }}
   cancel-in-progress: false
 
 jobs:
+  source:
+    # Only a successful stable vX.Y.Z publication starts a preview; betas
+    # (vX.Y.Z-beta.N) contain '-' and do not.
+    if: >-
+      ${{ github.repository == 'block/buzz-app' && !inputs.promote_version && (inputs.candidates || github.ref == 'refs/heads/main') &&
+          (github.event_name != 'workflow_run' || (github.event.workflow_run.conclusion == 'success' &&
+            github.event.workflow_run.event == 'push' && !contains(github.event.workflow_run.head_branch, '-'))) }}
+    name: Derive preview version
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # All history for the stable base and every tag for the preview counter.
+          fetch-depth: 0
+          fetch-tags: true
+          persist-credentials: false
+      - name: Derive the preview version
+        id: version
+        run: node scripts/preview-version.mjs HEAD
+
   desktop:
     # Candidate-only runs may build a feature branch; previews build main.
+    needs: source
     if: github.repository == 'block/buzz-app' && !inputs.promote_version && (inputs.candidates || github.ref == 'refs/heads/main')
     uses: ./.github/workflows/desktop-build.yml
     permissions:
@@ -32,6 +69,7 @@ jobs:
     secrets: inherit
     with:
       candidates: ${{ inputs.candidates == true }}
+      preview_version: ${{ needs.source.outputs.version }}
 
   promote_preview:
     name: Promote verified preview

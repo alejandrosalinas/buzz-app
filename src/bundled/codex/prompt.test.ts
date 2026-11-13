@@ -58,3 +58,15 @@ it("tells a turn a mention starts what it owes the mention, and a wake's turn no
   expect(instructions).not.toContain("MUST reply");
   expect(instructions).not.toContain("MUST publish");
 });
+
+it("names the agent's workspace for a thread in a conversation folder", () => {
+  const agent = { name: "Codex", pubkey: "b".repeat(64) };
+  const own = developerInstructions(agent, "/home/me/.buzz");
+  expect(own).toContain(
+    "Your persistent workspace is at `/home/me/.buzz`, not in your working directory",
+  );
+  expect(own).toContain("do not create them in your working directory");
+  expect(developerInstructions(agent)).toContain(
+    "Your persistent workspace is in your working directory:",
+  );
+});

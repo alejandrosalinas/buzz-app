@@ -114,8 +114,12 @@ export const plainProseTree = (content: string) => ({
     })),
 });
 
-/** Pure, immutable Markdown work; MessageMarkdown keeps recent results. */
-export function prepareMarkdown(content: string): PreparedMarkdown {
+/** Pure, immutable Markdown work; `preparedMarkdown` keeps recent results.
+ * `scanned` receives the prepared content's scan when one was made. */
+export function prepareMarkdown(
+  content: string,
+  scanned?: (scan: ReturnType<typeof scanMarkdown>) => void,
+): PreparedMarkdown {
   if (content.length > MAX_MARKDOWN_LENGTH)
     return Object.freeze({ kind: "plain", content });
   // Nothing in plain prose is literal, a wrapped link or a spoiler.
@@ -141,6 +145,7 @@ export function prepareMarkdown(content: string): PreparedMarkdown {
     if (scan.tooDeep) return Object.freeze({ kind: "plain", content });
   }
 
+  scanned?.(scan);
   return Object.freeze({
     kind: "markdown",
     content: normalized,
@@ -148,3 +153,43 @@ export function prepareMarkdown(content: string): PreparedMarkdown {
     spoilerDelimiters: spoilerDelimiters(normalized),
   });
 }
+
+/** Switching channels remounts every row. Keep recent results so a revisit
+ * does not prepare and parse unchanged bodies again. */
+export function recentResults<T>(
+  budget: number,
+  weigh: (key: string, value: T) => number,
+) {
+  const results = new Map<string, Readonly<{ value: T; weight: number }>>();
+  let total = 0;
+  return (key: string, make: () => T) => {
+    let entry = results.get(key);
+    if (entry) results.delete(key);
+    else {
+      const value = make();
+      entry = { value, weight: weigh(key, value) };
+      // Keeping a result heavier than the budget would evict all the others.
+      if (entry.weight > budget) return value;
+      total += entry.weight;
+    }
+    results.set(key, entry);
+    for (const [oldest, { weight }] of results) {
+      if (total <= budget) break;
+      results.delete(oldest);
+      total -= weight;
+    }
+    return entry.value;
+  };
+}
+// A prepared body keeps its content and literal ranges: ~200k characters.
+const preparedBodies = recentResults<PreparedMarkdown>(
+  200_000,
+  (content) => 100 + content.length,
+);
+
+/** A message body's prepared Markdown, shared by its renderer and link
+ * previews so a row prepares it once. */
+export const preparedMarkdown = (
+  content: string,
+  scanned?: Parameters<typeof prepareMarkdown>[1],
+) => preparedBodies(content, () => prepareMarkdown(content, scanned));

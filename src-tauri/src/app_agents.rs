@@ -1025,17 +1025,21 @@ fn publish_error(event_id: &str, error: String) -> String {
 
 /// Publishes changed public metadata. Safe to call any time; one publication
 /// runs per agent at a time and records only what its community accepted.
+/// `force` republishes it even when unchanged. It is always the app's own
+/// profile (name, bot, picture, about and the saved owner proof), so it
+/// replaces any other fields or tags the relay's latest profile has.
 #[tauri::command]
 pub(crate) async fn app_agent_publish_profile(
     state: tauri::State<'_, AppAgentHost>,
     pubkey: String,
     relay: String,
+    force: Option<bool>,
 ) -> Result<(), String> {
     let turn = state.profile_turn(&pubkey);
     let _turn = turn.lock().await;
     let incarnation = state.tokens.stamp(&pubkey, &relay)?;
     let agent = state.agent(pubkey, relay).await?;
-    if agent.profile_is_current() {
+    if !agent.profile_due(force.unwrap_or(false)) {
         return Ok(());
     }
     let (agent, key) = state.key(agent).await?;

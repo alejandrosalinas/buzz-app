@@ -251,7 +251,10 @@ it("publishes a differing profile, confirms it by readback, then saves the membe
     "joined",
     "setItem",
   ]);
-  expect(publishProfile).toHaveBeenCalledWith(community, next, {});
+  // Local time is shared by default from the first publication.
+  expect(publishProfile).toHaveBeenCalledWith(community, next, {
+    tz: new Intl.DateTimeFormat().resolvedOptions().timeZone,
+  });
   expect(service.joined).toHaveBeenCalledWith(
     { id: community, name: "relay.example.com" },
     next,

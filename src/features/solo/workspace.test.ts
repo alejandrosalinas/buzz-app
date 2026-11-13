@@ -81,6 +81,33 @@ it("reads folder-only Canvas saved by earlier versions without treating it as ed
     canvas: "Instructions",
   });
 });
+it("reads worktree Canvas saved with the earlier worktree rule without treating it as edited", () => {
+  const saved = [
+    '<!-- buzz-session-workspace:v1 {"folders":["/repo"],"worktree":{"location":"~/trees","baseBranch":"main"}} -->',
+    "## Workspace instructions",
+    "",
+    "- Use `/repo` for review only. Do not make changes directly in it.",
+    "- Before starting new work, fetch the latest `main` branch from origin.",
+    "- For each repository that needs changes, create a new worktree under `~/trees` from `origin/main`.",
+    "- Make all changes in that new worktree.",
+    "<!-- /buzz-session-workspace -->",
+    "",
+    "Instructions",
+  ].join("\n");
+  const workspace = {
+    folders: ["/repo"],
+    worktree: { location: "~/trees", baseBranch: "main" },
+    canvas: "Instructions",
+  };
+  expect(readWorkspace(saved)).toEqual(workspace);
+  // Saved again, it gets the current rule.
+  expect(workspaceCanvas(workspace)).toContain(
+    "- Make code changes in that new worktree.",
+  );
+  expect(() =>
+    readWorkspace(saved.replace("Make all changes", "Make no changes")),
+  ).toThrow("edited");
+});
 it("preserves ordinary Canvas and refuses malformed or manually changed workspace blocks", () => {
   expect(readWorkspace("# Existing\nKeep me")).toEqual({
     folders: [],
@@ -180,6 +207,7 @@ it("names the saved defaults it read, even when they change while agents load", 
           complete: true,
           identities: [{ pubkey, name: "Agent", managed: false }],
         },
+        identities: [],
         archives: { status: "ready", archived: [] },
       }),
     },
@@ -227,6 +255,7 @@ it.each([
           complete,
           identities: [{ pubkey, name: "Agent", managed: false }],
         },
+        identities: [],
         archives: {
           status: "ready",
           archived: state === "archived" ? [pubkey] : [],

@@ -16,7 +16,12 @@ export const apply: PluginModule["apply"] = (ctx) => {
       validate: (params) => parseEntityRoute(params) !== null,
     },
     component: (props) => (
-      <RepoPage {...props} relay={ctx.relay} open={ctx.navigation.open} />
+      <RepoPage
+        {...props}
+        relay={ctx.relay}
+        open={ctx.navigation.open}
+        codeBlocks={ctx.conversation.codeBlocks}
+      />
     ),
   });
   ctx.conversation.registerTool({

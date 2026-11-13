@@ -34,6 +34,8 @@ pub(crate) fn onboarding_preserve_window<R: Runtime>(
         let native = window.ns_window().map_err(|error| error.to_string())?;
         let native: &objc2_app_kit::NSWindow = unsafe { &*native.cast() };
         native.setAnimationBehavior(objc2_app_kit::NSWindowAnimationBehavior::None);
+        // Undo `opaque_background` while still hidden: the intro shows the desktop.
+        native.setBackgroundColor(Some(&objc2_app_kit::NSColor::clearColor()));
     }
     let app = window.app_handle();
     let dir = app.path().app_config_dir().map_err(|e| e.to_string())?;
@@ -47,6 +49,37 @@ pub(crate) fn onboarding_preserve_window<R: Runtime>(
     .map_err(|e| e.to_string())?;
     let bytes = std::fs::read(dir.join(app.filename())).map_err(|e| e.to_string())?;
     preserve_intro_geometry(&target, &bytes)
+}
+
+/// The Mac window shows `--bg-app` (tokens.css) under the page instead of the
+/// desktop, so it is solid before first paint and if WebKit never paints. Only
+/// the first-welcome intro is see-through: `onboarding_preserve_window` clears
+/// this again before the intro shows the window.
+#[cfg(target_os = "macos")]
+pub(crate) fn opaque_background<R: Runtime>(window: &tauri::WebviewWindow<R>) -> tauri::Result<()> {
+    use objc2_app_kit::{NSAppearance, NSAppearanceNameAqua, NSAppearanceNameDarkAqua, NSColor};
+    let native: &objc2_app_kit::NSWindow = unsafe { &*window.ns_window()?.cast() };
+    let srgb = |r: f64, g: f64, b: f64| {
+        NSColor::colorWithSRGBRed_green_blue_alpha(r / 255.0, g / 255.0, b / 255.0, 1.0)
+    };
+    // Resolved by the system appearance: Buzz's own light/dark choice is page
+    // state, so it can differ until the page paints.
+    let (light, dark) = (srgb(241.0, 241.0, 242.0), srgb(16.0, 16.0, 16.0));
+    let provider = block2::RcBlock::new(move |appearance: std::ptr::NonNull<NSAppearance>| {
+        let names = unsafe { [NSAppearanceNameAqua, NSAppearanceNameDarkAqua] };
+        let best = unsafe { appearance.as_ref() }
+            .bestMatchFromAppearancesWithNames(&objc2_foundation::NSArray::from_slice(&names));
+        let color = if best.as_deref() == Some(names[1]) {
+            &dark
+        } else {
+            &light
+        };
+        // The block owns both colours, and the dynamic colour retains the block.
+        std::ptr::NonNull::from(&**color)
+    });
+    let color = unsafe { NSColor::colorWithName_dynamicProvider(None, &provider) };
+    native.setBackgroundColor(Some(&color));
+    Ok(())
 }
 
 fn preserve_intro_geometry(target: &std::path::Path, bytes: &[u8]) -> Result<(), String> {

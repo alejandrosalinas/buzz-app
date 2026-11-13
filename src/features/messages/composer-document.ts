@@ -510,14 +510,22 @@ function project(doc: EditorNode) {
     },
     position(offset: number, bias = 1) {
       offset = Math.max(0, Math.min(offset, text.length));
-      let closest = carets[0] ?? 1;
-      for (const position of carets) {
-        const value = positions[position] ?? text.length;
-        if (value === offset) return position;
-        if (value > offset) return bias < 0 ? closest : position;
-        closest = position;
+      // Carets are in document order and their offsets never decrease, so
+      // binary search finds the first caret at or after the offset; every
+      // decoration resolves its range here on each keystroke.
+      let low = 0,
+        high = carets.length;
+      while (low < high) {
+        const middle = (low + high) >> 1;
+        if ((positions[carets[middle] ?? 0] ?? text.length) < offset)
+          low = middle + 1;
+        else high = middle;
       }
-      return closest;
+      const position = carets[low];
+      if (position === undefined) return carets.at(-1) ?? 1;
+      return (positions[position] ?? text.length) > offset && bias < 0
+        ? (carets[low - 1] ?? position)
+        : position;
     },
   };
 }

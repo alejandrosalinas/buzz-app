@@ -217,64 +217,24 @@
 .body {
   overflow-wrap: anywhere;
 }
-.body a {
+/* GitHub links keep the body's ink, as on GitHub. */
+.body a:not([data-solo-link]) {
   color: var(--text-standard);
-  text-decoration: underline;
-  text-underline-offset: 2px;
 }
 .plainBody {
   white-space: pre-wrap;
   overflow-wrap: anywhere;
 }
 .paragraph,
-.body ul,
-.body ol,
-.body blockquote,
-.body pre,
 .attachment {
   margin: var(--space-3) 0;
-}
-.body :is(h1, h2, h3, h4, h5, h6) {
-  margin: var(--space-4) 0 var(--space-2);
-  font-size: var(--text-body-lg);
-  line-height: var(--text-body-lg--line-height);
-  letter-spacing: var(--text-body-lg--letter-spacing);
-}
-.body ul,
-.body ol {
-  padding-left: var(--space-5);
-}
-.body ul {
-  list-style: disc;
-}
-.body ol {
-  list-style: decimal;
 }
 .body [class~="contains-task-list"] {
   list-style: none;
 }
-.body blockquote {
-  margin-left: 0;
-  padding-left: var(--space-3);
-  border-left: 2px solid var(--border-standard);
-  color: var(--text-subtle);
-}
-.body pre,
 .tableScroll {
   max-width: 100%;
   overflow-x: auto;
-}
-.body pre {
-  padding: var(--space-3);
-  background: var(--surface-panel);
-}
-.body table {
-  border-collapse: collapse;
-}
-.body th,
-.body td {
-  padding: var(--space-2);
-  border: 1px solid var(--border-standard);
 }
 .attachment > a {
   display: block;

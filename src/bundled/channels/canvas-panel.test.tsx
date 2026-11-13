@@ -70,9 +70,12 @@ it("lets a joined Guest read the canvas and reacts to promotion and demotion", a
     snapshot: () => snapshot,
     subscribe: () => () => {},
   });
+  root.provide("conversation", {
+    codeBlocks: { snapshot: () => [], subscribe: () => () => {} },
+  });
   const fiber = root
     .extend({ pluginOwner: { id: "channels", revision: "test" } })
-    .plugin(registerCanvas);
+    .plugin({ inject: ["conversation"], apply: registerCanvas });
   try {
     await fiber.await();
     const panel = panels.snapshot()[0];

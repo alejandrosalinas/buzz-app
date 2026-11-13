@@ -10,11 +10,33 @@ Close other Buzz builds before confirming and retain a compatible build. Cancel
 leaves files unchanged; earlier protected previews prompt at startup. See the
 [upgrade and recovery contract](agent-protection.md#local-storage-upgrade).
 
+## Preview channel (opt in)
+
+Previews are an opt-in early-access channel. Each build has one updater feed
+compiled in, and the app keeps no channel setting: the build you install decides
+where it updates from. Preview builds check the
+[preview feed](#preview-updater-feed-automatic-promotion-manual-recovery);
+stable releases check the [stable feed](#stable-updater-feed).
+
+- **Join:** install a preview (a prerelease named `Buzz X.Y.Z-preview.N`)
+  from the [Releases page](https://github.com/block/buzz-app/releases). From then
+  on the app updates to each new preview.
+- **Leave:** install the release marked **Latest** from the same page. From then
+  on the app updates only to stable releases. This installs an older version
+  over a newer one: a preview may have changed local data in a way the older
+  stable build cannot read (see the
+  [agent protection notice](#agent-protection-compatibility-notice)).
+
+A preview of `main` is built every day, and again right after each stable
+release is published. Stable tags are always in `main`'s history, so that
+preview includes the release, and preview installs get its code without
+leaving the channel.
+
 ## Preview artifacts
 
 The **Desktop previews** workflow (`release.yml`) builds all supported desktop
-platforms from `main` and publishes one GitHub prerelease, tagged
-`v<app-version>-preview.<run-number>.<attempt>` at the built commit. The
+platforms and publishes one GitHub prerelease, tagged
+`v<version>-preview.<N>` at the built commit. The
 build, verification, updater signing and publication jobs live in the reusable
 `desktop-build.yml`, which [stable and beta releases](#stable-and-beta-releases)
 share, so every lane publishes the same assets:
@@ -29,15 +51,43 @@ Publication waits for every platform job, their existing payload checks and
 the Windows/Linux updater signatures. A failed platform blocks publication and
 automatic feed promotion; it does not publish a partial release. Downloads are
 checked against each job's checksums before assembly. If a job fails, use
-**Re-run all jobs**, not just failed jobs: the run attempt is part of the version,
-and publication rejects mixed-version artifacts. Windows/Linux previews are not
+**Re-run all jobs**. The re-run works out the number again from the tags that
+exist at that moment, so it gets the same version only if no other preview has
+published since; publication still rejects artifacts built as any other version. Windows/Linux previews are not
 Authenticode-signed Windows releases or evidence of completed desktop acceptance.
 
-Runs are scheduled at **00:17, 06:17, 12:17, and 18:17 UTC**. To start one manually:
+Previews build from three triggers:
 
-```sh
-gh workflow run release.yml --repo block/buzz-app --ref main
-```
+- **Daily**, from `main`'s head (09:37 UTC).
+- **After each stable release.** When **Desktop stable release** succeeds for a
+  `vX.Y.Z` tag, the workflow builds `main`'s head, which includes that release.
+  Betas start no preview.
+- **By hand**, from `main`'s head:
+
+  ```sh
+  gh workflow run release.yml --repo block/buzz-app --ref main
+  ```
+
+The version is set automatically, once per run, before any platform builds:
+one patch above the highest stable `vX.Y.Z` tag in the built commit's history,
+then `-preview.<N>`. `N` is one above the highest existing
+`v<base>-preview.<N>` tag (compared numerically), or 1 if there is none, so it
+counts published previews of that base and starts over with each new base.
+After `v1.0.1`, previews are `1.0.2-preview.1`, `.2`, `.3`…; after `v1.1.0`,
+`1.1.1-preview.1`, and so on. A daily run, the run after a stable release and
+a manual run each take the next number. A run takes its number once its tag
+exists, even if promotion or cleanup fails afterward; a run that fails before
+publishing creates no tag and takes none.
+`tauri.conf.json`'s version is not used, and beta and preview tags never count.
+A run whose commit has no stable tag in its history fails. By SemVer
+precedence a preview sorts above the stable release it follows and below the
+next one (`1.1.0-preview.9` < `1.1.0` < `1.1.1-preview.1`), and `N` orders
+previews of the same base. Runs share one concurrency group, so two previews
+never compute the same number; candidate runs compute one but never publish.
+Cleanup keeps the newest 10 previews overall, so the current base's highest `N`
+is never deleted. It can delete every tag of an older base, though; a full
+re-run of an old run from that base may then reuse one of its numbers, and the
+feed refuses to promote it. Older `-preview.<run>.<attempt>` previews are left as they are.
 
 The macOS builds run on Apple Silicon `macos-latest` with the repository's
 pinned toolchain; the Intel build cross-compiles `x86_64-apple-darwin` after
@@ -59,7 +109,6 @@ administrator password.
 
 The release automatically promotes each eligible build to the rolling preview
 feed after the signed prerelease is published and the promotion gate passes.
-This includes scheduled runs and manual builds without `promote_version`.
 An updater-less artifact, invalid signature, or rollback leaves the existing feed
 unchanged, but the promotion job fails and needs investigation. The workflow
 does **not** publish to the legacy `block/buzz` updater. Older installed apps
@@ -86,7 +135,7 @@ repromotion, dispatch an existing version from `main`:
 
 ```sh
 gh workflow run release.yml --repo block/buzz-app --ref main \
-  -f promote_version=0.7.0-preview.<run>.<attempt>
+  -f promote_version=1.0.2-preview.<N>
 ```
 
 After the first eligible build publishes, exercise discovery, signature
@@ -118,13 +167,17 @@ The job builds the Tauri manifest with each artifact's signature from that
 release and an immutable versioned asset URL: `darwin-aarch64`, `darwin-x86_64`, `windows-x86_64`,
 `linux-x86_64-deb` and `linux-x86_64-appimage`. Linux has no generic entry, so
 a deb install never receives an AppImage. The job refuses full-SemVer rollback and
-changed same-version metadata, and replaces the rolling manifest last. The
+changed same-version metadata, and replaces the rolling manifest last. The preview
+feed may hold a stable `X.Y.Z` (for example, one preview installs were moved to);
+a preview replaces it only when it sorts above it, so `1.0.2-preview.N` replaces
+`1.0.1` and `1.0.1-preview.N` is refused as a rollback. The stable feed never
+accepts a preview. The
 archive and signature remain on the versioned release. The job reads back
 and compares the GitHub API asset; this is not evidence of public endpoint
 availability. Confirm the endpoint in an installed client after the first
 promotion. GitHub asset replacement can briefly return 404 while the old asset
 is replaced. Promotion is serialized with the release workflow, and a failed
-upload needs investigation before the next scheduled run.
+upload needs investigation before the next preview run.
 Recover from a broken feed by promoting a higher tested build; for key loss or
 client failure, distribute a manually installed build (an Apple-signed DMG on macOS). Do not assume
 rolling back a signed archive can undo an installed update.
@@ -139,8 +192,8 @@ old versioned preview releases **and their Git tags**, keeping the union of:
 - the preview currently referenced by `preview-feed/latest.json`.
 
 Cleanup only considers non-draft prereleases with canonical
-`v<app-version>-preview.<run-number>.<attempt>` tags. Stable releases, other tag
-formats, and the rolling `preview-feed` release are never deleted. The feed is
+`v<version>-preview.<N>` tags. Stable releases, other tag formats (including
+old `-preview.<run>.<attempt>` previews), and the rolling `preview-feed` release are never deleted. The feed is
 read again before cleanup; an unavailable/invalid feed, missing target, failed
 listing, or invalid preview publication date aborts before deletion. A deletion
 failure stops cleanup and fails the job, without rolling back the promoted feed;
@@ -175,7 +228,7 @@ twelve assets and `SHA256SUMS` as previews, with two differences:
 
 A stable tag publishes a full release marked **Latest**; a beta publishes a
 prerelease. Both publish on the existing tag (`--verify-tag`) and never create
-or move one. Previews' own tags (`v…-preview.N.M`) and the internal
+or move one. Previews' own tags (`v…-preview.N`) and the internal
 `desktop-v*` tags described below never start this workflow.
 
 The workflow first refuses, before building, unless:
@@ -195,9 +248,9 @@ git push origin refs/tags/v1.0.0
 ```
 
 If a platform job fails, use **Re-run all jobs**, as for previews. A published
-tag is never moved or reused; cut a new version instead. After tagging a stable
-release, raise `tauri.conf.json`'s version above it, so previews version above
-the release they follow.
+tag is never moved or reused; cut a new version instead. Publishing a stable
+release also starts a [preview](#preview-artifacts) of `main`, which includes
+the release and is versioned above it; nothing needs bumping by hand.
 
 ### Stable updater feed
 
@@ -466,7 +519,7 @@ gh workflow run release.yml --repo block/buzz-app \
   --ref <candidate-branch> -f candidates=true
 ```
 
-Scheduled runs and dispatches without this switch build and publish all three
+Dispatches without this switch build and publish all three
 platforms. A `promote_version` recovery run skips all platform builds and only
 updates the feed. Candidate-only runs remain artifact-only, are built without the updater, and can run from
 a feature branch, without signing credentials or publication. They use the same

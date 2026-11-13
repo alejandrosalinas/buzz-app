@@ -5,8 +5,8 @@
   padding: var(--space-6);
   color: var(--text-standard);
 }
-.repos-page h1,
-.repos-page h2 {
+/* README headings keep the shared Markdown spacing. */
+.repos-page :is(h1, h2):not(.repo-markdown *) {
   margin: 0;
   overflow-wrap: anywhere;
 }
@@ -74,9 +74,6 @@
 }
 .repo-plain {
   white-space: pre-wrap;
-}
-.repo-markdown pre {
-  overflow: auto;
 }
 .repo-markdown img {
   max-width: 100%;

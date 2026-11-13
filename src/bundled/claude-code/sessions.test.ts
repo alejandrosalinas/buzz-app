@@ -1007,7 +1007,7 @@ it("marks a message whose process could not start as never delivered", async () 
   const { pool } = sessions({ launched });
   await expect(pool.deliver("a", "one", 1)).resolves.toEqual({
     ok: false,
-    error: "Claude could not start",
+    error: "Claude could not start: no settings",
     undelivered: true,
   });
 });

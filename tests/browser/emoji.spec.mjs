@@ -819,7 +819,7 @@ test("community picker uses keyboard, proxy thumbnails, event-local history and 
     }
     await search.fill("aonly");
     await search.press("Enter");
-    await expect(draft()).toHaveJSProperty("value", ":aonly:");
+    await expect(draft()).toHaveJSProperty("value", ":aonly: ");
     await picker.click();
     await search.fill("");
     await expect(
@@ -832,14 +832,29 @@ test("community picker uses keyboard, proxy thumbnails, event-local history and 
       page.getByRole("button", { name: ":grinning:", exact: true }),
     ).toBeVisible();
     await page.getByRole("button", { name: "😀", exact: true }).click();
-    await expect(draft()).toHaveJSProperty("value", ":aonly:😀");
+    await expect(draft()).toHaveJSProperty("value", ":aonly: 😀 ");
+    // An existing space is reused; typing continues after it.
+    await draft().fill("before after");
+    await draft().evaluate((el) => el.setSelectionRange(6, 6));
+    await picker.press("Enter");
+    await search.focus();
+    await search.fill("grinning");
+    await page.getByRole("button", { name: "😀", exact: true }).click();
+    await expect(draft()).toHaveJSProperty("value", "before😀 after");
+    await expect(draft()).toBeFocused();
+    await expect(draft()).toHaveJSProperty(
+      "selectionStart",
+      "before😀 ".length,
+    );
+    await draft().pressSequentially("hi ");
+    await expect(draft()).toHaveJSProperty("value", "before😀 hi after");
     await draft().fill("before after");
     await draft().evaluate((el) => el.setSelectionRange(7, 7));
     await picker.press("Enter");
     await search.focus();
     await search.fill("party");
     await search.press("Enter");
-    await expect(draft()).toHaveJSProperty("value", "before :party:after");
+    await expect(draft()).toHaveJSProperty("value", "before :party: after");
     await expect(draft()).toBeFocused();
     await draft().press("Enter");
     await expect
@@ -887,7 +902,7 @@ test("community picker uses keyboard, proxy thumbnails, event-local history and 
       /emoji-media\/b\/.*1.png/,
     );
     await insert.click();
-    await expect(draft()).toHaveJSProperty("value", ":party:");
+    await expect(draft()).toHaveJSProperty("value", ":party: ");
     await expect(draft()).toBeFocused();
     await draft().press("Enter");
     await expect
@@ -899,7 +914,7 @@ test("community picker uses keyboard, proxy thumbnails, event-local history and 
     await picker.click();
     await search.fill("party");
     await insert.click();
-    await expect(draft()).toHaveJSProperty("value", ":party:");
+    await expect(draft()).toHaveJSProperty("value", ":party: ");
     await expect(draft()).toBeFocused();
     await draft().press("Enter");
     await expect
@@ -942,7 +957,7 @@ test("community picker uses keyboard, proxy thumbnails, event-local history and 
     ).toHaveCount(1);
     await search.fill("grinning");
     await page.getByRole("button", { name: "😀", exact: true }).click();
-    await expect(draft()).toHaveJSProperty("value", "😀A draft");
+    await expect(draft()).toHaveJSProperty("value", "😀 A draft");
     // The shared popup retains its contents through its exit transition.
     // Finish that lifecycle before inspecting the separate composer error.
     await expect(region).toHaveCount(0);
@@ -1139,6 +1154,87 @@ test("community picker uses keyboard, proxy thumbnails, event-local history and 
     expect(errors.unexplained()).toEqual([]);
   } finally {
     releaseHistoric();
+    await server?.close();
+  }
+});
+
+test("emoji picker recovers from repeated catalog timeouts in place and across reopening", async ({
+  page,
+}) => {
+  let server;
+  try {
+    server = await createServer({
+      root: fileURLToPath(new URL("../../", import.meta.url)),
+      configFile: false,
+      envFile: false,
+      plugins: [react()],
+      logLevel: "error",
+      server: { host: "127.0.0.1", port: 0, strictPort: false },
+    });
+    const errors = watchPageErrors(page);
+    await page.route("**/emoji-media/**", (route) =>
+      route.fulfill({
+        contentType: "image/svg+xml",
+        body: '<svg xmlns="http://www.w3.org/2000/svg" width="22" height="22"><circle cx="11" cy="11" r="10" fill="purple"/></svg>',
+      }),
+    );
+    await server.listen();
+    // The passive read and its foreground promotion are held, then time out;
+    // the automatic retry is held until the close/reopen assertions finish.
+    await page.goto(
+      `http://127.0.0.1:${server.httpServer.address().port}/tests/fixtures/emoji.html?catalog-timeouts=2&hold-catalog`,
+    );
+    await page.evaluate(() => {
+      window.sawTimeout = false;
+      new MutationObserver(() => {
+        if (document.body.textContent?.includes("timed out"))
+          window.sawTimeout = true;
+      }).observe(document.body, {
+        subtree: true,
+        childList: true,
+        characterData: true,
+      });
+    });
+    const picker = page.getByRole("button", {
+      name: "Emoji and GIFS",
+      exact: true,
+    });
+    const region = page.getByRole("dialog", { name: "Emoji picker" });
+    const loading = region.getByRole("status").filter({
+      hasText: "Loading community emoji…",
+    });
+    const reads = () =>
+      page.evaluate(() => window.emojiFixture.report.reads.length);
+    try {
+      await picker.click();
+      await expect.poll(reads).toBe(2);
+      await expect(loading).toBeVisible();
+      // Time out the held reads and hold the automatic retry.
+      await page.evaluate(() => {
+        window.emojiFixture.releaseCatalog();
+        window.emojiFixture.holdCatalog();
+      });
+      await expect.poll(reads).toBe(3);
+      await expect(loading).toBeVisible();
+      await expect(region.getByRole("alert")).toHaveCount(0);
+      // Closing and reopening mid-recovery neither shows the error nor stops recovery.
+      await page.keyboard.press("Escape");
+      await expect(region).toHaveCount(0);
+      await picker.click();
+      await expect(loading).toBeVisible();
+      await expect(region.getByRole("alert")).toHaveCount(0);
+    } finally {
+      await page.evaluate(() => window.emojiFixture.releaseCatalog());
+    }
+    await expect(
+      page.locator('em-emoji-picker [data-id="buzz-custom"]'),
+    ).toHaveCount(1);
+    await expect(loading).toHaveCount(0);
+    await expect(region.getByRole("alert")).toHaveCount(0);
+    expect(await reads()).toBe(3);
+    expect(await page.evaluate(() => window.sawTimeout)).toBe(false);
+    expect(errors.unexplained()).toEqual([]);
+  } finally {
     await server?.close();
   }
 });

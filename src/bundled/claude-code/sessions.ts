@@ -543,9 +543,11 @@ export class AgentSessions {
       (error): Settled => {
         if (this.opening.get(key) === opened) this.opening.delete(key);
         console.warn("Claude could not start", error);
+        // Its reason, such as a conversation folder that is gone, is the
+        // owner's to act on.
         return {
           ok: false,
-          error: "Claude could not start",
+          error: `Claude could not start: ${error instanceof Error ? error.message : String(error)}`,
           undelivered: true,
         };
       },

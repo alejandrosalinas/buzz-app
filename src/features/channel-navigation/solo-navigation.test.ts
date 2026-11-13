@@ -2,7 +2,9 @@ import { createChannelDetails } from "../relay/channel-details";
 import { keypair, signed } from "../relay/testing";
 import type { RelayEvent } from "../relay/events";
 import { createRelaySession } from "../relay/session";
+import type { ConfigurationState } from "../../plugins/types";
 import { createSoloRegionFixture } from "./solo-navigation-testing";
+import { prepareSoloMove } from "./solo-navigation";
 import { afterEach, expect, it, vi } from "vitest";
 
 function deferred() {
@@ -24,6 +26,25 @@ function fixture() {
   cleanup.push(h.dispose);
   return h;
 }
+const pluginConfiguration = (enabled: boolean): ConfigurationState => ({
+  status: "ready",
+  externalPluginsPaused: false,
+  catalog: {
+    profile: "fixture",
+    location: "Fixture",
+    plugins: [
+      {
+        manifest: { id: "example", name: "Example", apiVersion: 1 },
+        source: "external",
+        enabled,
+        revision: "one",
+        previous: null,
+        reloadable: false,
+        error: null,
+      },
+    ],
+  },
+});
 
 it("keeps labeled channels in one live or recovery placement throughout registration and disposal", async () => {
   const h = fixture();
@@ -92,6 +113,62 @@ it.each(["bind", "subscribe", "read"] as const)(
     expect([...h.service.snapshot().excluded]).toEqual(["owned", "shared"]);
   },
 );
+
+it("marks a ready region hidden without losing its chats or ownership, and recovers it when the source is not ready", async () => {
+  const h = fixture();
+  const source = await h.register();
+  source.update({
+    status: "ready",
+    binding: source.binding(),
+    revision: 2,
+    hidden: true,
+  });
+  const hidden = h.service.snapshot().regions[0];
+  expect(hidden).toMatchObject({ hidden: true });
+  expect(hidden?.reason).toBeUndefined();
+  expect([...(hidden?.live ?? [])]).toEqual(["owned", "shared"]);
+  expect([...h.service.snapshot().excluded]).toEqual(["owned", "shared"]);
+  // Hiding is presentation only: the source still owns, files and starts its chats.
+  expect(prepareSoloMove(h.session, "owned")).toBe(
+    "This chat is managed by Work.",
+  );
+  expect(h.service.draftRegion(label)?.source.id).toBe("work");
+  source.update({
+    status: "loading",
+    binding: source.binding(),
+    revision: 3,
+    hidden: true,
+  });
+  expect(h.service.snapshot().regions[0]).toMatchObject({ reason: "loading" });
+  expect(h.service.snapshot().regions[0]?.hidden).toBeUndefined();
+  source.update({ status: "ready", binding: source.binding(), revision: 4 });
+  expect([...(h.service.snapshot().regions[0]?.live ?? [])]).toEqual([
+    "owned",
+    "shared",
+  ]);
+  source.update({
+    status: "ready",
+    binding: source.binding(),
+    revision: 5,
+    hidden: true,
+  });
+  await source.fiber.dispose();
+  expect(h.service.snapshot().regions[0]).toMatchObject({ reason: "off" });
+  expect([...h.service.snapshot().excluded]).toEqual(["owned", "shared"]);
+});
+
+it("fails a source whose snapshot has a non-boolean hidden", async () => {
+  const h = fixture();
+  const source = await h.register();
+  source.update({
+    status: "ready",
+    binding: source.binding(),
+    revision: 2,
+    hidden: "yes" as unknown as boolean,
+  });
+  expect(h.service.snapshot().regions[0]).toMatchObject({ reason: "failed" });
+  expect([...h.service.snapshot().excluded]).toEqual(["owned", "shared"]);
+});
 
 it("uses the code-point-lowest external region label and excludes no unknown or archived channel", () => {
   vi.spyOn(console, "warn").mockImplementation(() => {});
@@ -373,7 +450,199 @@ it.each([
   });
 });
 
-it.each(["starting", "failed", "disabled", "paused", "stale"] as const)(
+it.each([false, true])(
+  "shows disabled region chats in ordinary Solo and reclaims them when re-enabled (hidden: %s)",
+  async (hidden) => {
+    const h = fixture();
+    const source = await h.register();
+    source.update({
+      status: "ready",
+      binding: source.binding(),
+      revision: 2,
+      hidden,
+    });
+    const active = {
+      example: { revision: "one", status: "active" as const, error: null },
+    };
+    const before = h.session.channels
+      .list()
+      .channels.find((channel) => channel.id === "owned");
+    expect([...h.service.snapshot().excluded]).toEqual(["owned", "shared"]);
+
+    h.plugins(pluginConfiguration(false), active);
+    const disabled = h.service.snapshot();
+    expect(disabled.regions[0]?.hidden).toBeUndefined();
+    expect([...disabled.excluded]).toEqual([]);
+    expect([...disabled.managed]).toEqual(["owned", "shared"]);
+    expect(prepareSoloMove(h.session, "owned")).toBe(
+      "This chat is managed by Work.",
+    );
+    expect(prepareSoloMove(h.session, "chat")).toBeUndefined();
+    expect(
+      h.session.channels
+        .list()
+        .channels.find((channel) => channel.id === "owned"),
+    ).toEqual(before);
+
+    h.plugins(pluginConfiguration(true), active);
+    const enabled = h.service.snapshot();
+    expect(enabled.regions[0]?.hidden).toBe(hidden || undefined);
+    expect([...enabled.excluded]).toEqual(["owned", "shared"]);
+    expect([...enabled.managed]).toEqual(["owned", "shared"]);
+  },
+);
+
+it("matches disabled plugins by exact id without misclassifying an uninstalled plugin", () => {
+  const h = fixture();
+  h.roster([
+    ...h.session.channels.list().channels,
+    {
+      id: "prefix",
+      name: "Prefix",
+      channelType: "solo",
+      creator: h.session.viewer,
+      labels: ["buzz.solo", "buzz.region:example-other:work"],
+    },
+  ]);
+  h.plugins(pluginConfiguration(false));
+
+  const snapshot = h.service.snapshot();
+  expect(
+    snapshot.regions.find((region) => region.label === label)?.reason,
+  ).toBe("disabled");
+  expect(
+    snapshot.regions.find(
+      (region) => region.label === "buzz.region:example-other:work",
+    )?.reason,
+  ).toBe("not-installed");
+  expect([...snapshot.excluded]).toEqual(["prefix"]);
+  expect([...snapshot.managed]).toEqual(["owned", "shared", "prefix"]);
+});
+
+it("keeps disabled chats ordinary through loading, re-enable, and reconnect", async () => {
+  const h = fixture();
+  const active = {
+    example: { revision: "one", status: "active" as const, error: null },
+  };
+  h.plugins(pluginConfiguration(false), active);
+  expect(h.service.snapshot().regions[0]?.reason).toBe("disabled");
+  expect([...h.service.snapshot().excluded]).toEqual([]);
+
+  h.plugins({ status: "loading" });
+  expect(h.service.snapshot().regions[0]?.reason).toBe("loading");
+  expect([...h.service.snapshot().excluded]).toEqual(["owned", "shared"]);
+
+  h.plugins(pluginConfiguration(true), active);
+  expect(h.service.snapshot().regions[0]?.reason).toBe("off");
+  const source = await h.register();
+  expect(h.service.snapshot().regions[0]?.reason).toBeUndefined();
+  expect([...h.service.snapshot().excluded]).toEqual(["owned", "shared"]);
+
+  await source.fiber.dispose();
+  h.plugins(pluginConfiguration(false), active);
+  h.reconnect();
+  expect(h.service.snapshot().regions[0]?.reason).toBe("disabled");
+  expect([...h.service.snapshot().excluded]).toEqual([]);
+  expect([...h.service.snapshot().managed]).toEqual(["owned", "shared"]);
+});
+
+it("does not reveal disabled chats or replay a reveal queued before disabling", async () => {
+  const h = fixture();
+  const source = await h.register();
+  const sourceEntry = h.service.sources()[0];
+  if (!sourceEntry) throw new Error("Expected the registered Solo source");
+  const revealRequests = h.service.presentation(
+    sourceEntry,
+    source.binding(),
+  ).revealRequests;
+  const sourceReveal = vi.fn();
+  const stopSourceReveal = revealRequests.subscribe(sourceReveal);
+  await h.navigate({
+    version: 1,
+    kind: "conversation",
+    scope: {
+      communityOrigin: "https://fixture.invalid",
+      viewer: h.session.viewer ?? "",
+    },
+    channelId: "owned",
+  });
+  const listener = vi.fn();
+  h.service.reveal("owned");
+  expect(sourceReveal).toHaveBeenCalledWith("owned");
+  h.plugins(pluginConfiguration(false), {
+    example: { revision: "one", status: "active", error: null },
+  });
+  h.service.reveal("owned");
+  expect(sourceReveal).toHaveBeenCalledTimes(1);
+  h.plugins(pluginConfiguration(true), {
+    example: { revision: "one", status: "active", error: null },
+  });
+  expect(sourceReveal).toHaveBeenCalledTimes(1);
+  const stop = h.service.subscribeReveal(listener, true);
+  expect(listener).not.toHaveBeenCalled();
+  stop();
+  stopSourceReveal();
+
+  h.service.reveal("owned");
+  const replayed = vi.fn(() => true);
+  const stopReplay = h.service.subscribeReveal(replayed, true);
+  expect(replayed).toHaveBeenCalledWith("owned", true);
+  stopReplay();
+});
+
+it("skips a disabled source when opening a newly created workspace", async () => {
+  const h = fixture();
+  const disabledOpen = vi.fn(async () => {});
+  const enabledOpen = vi.fn(async () => {});
+  await h.register({
+    order: -1,
+    composeWorkspaces: true,
+    openWorkspace: disabledOpen,
+  });
+  await h.register(
+    {
+      composeWorkspaces: true,
+      openWorkspace: enabledOpen,
+    },
+    "another",
+  );
+  const disabledConfiguration = pluginConfiguration(false);
+  if (disabledConfiguration.status !== "ready")
+    throw new Error("Expected plugin configuration to be ready");
+  const example = disabledConfiguration.catalog.plugins[0];
+  if (!example) throw new Error("Expected the example plugin");
+  h.plugins(
+    {
+      ...disabledConfiguration,
+      catalog: {
+        ...disabledConfiguration.catalog,
+        plugins: [
+          example,
+          {
+            ...example,
+            manifest: { ...example.manifest, id: "another", name: "Another" },
+            enabled: true,
+          },
+        ],
+      },
+    },
+    {
+      another: { revision: "one", status: "active", error: null },
+    },
+  );
+
+  expect(h.service.snapshot().regions[0]?.reason).toBe("disabled");
+  await expect(
+    h.service.openCreatedWorkspace("created-workspace"),
+  ).resolves.toBe(true);
+  expect(disabledOpen).not.toHaveBeenCalled();
+  expect(enabledOpen).toHaveBeenCalledWith(
+    expect.objectContaining({ viewer: h.session.viewer }),
+    "created-workspace",
+  );
+});
+
+it.each(["starting", "failed", "paused", "stale"] as const)(
   "uses the installed plugin's current activation for recovery (%s)",
   (state) => {
     const h = fixture();
@@ -388,7 +657,7 @@ it.each(["starting", "failed", "disabled", "paused", "stale"] as const)(
             {
               manifest: { id: "example", name: "Example", apiVersion: 1 },
               source: "external",
-              enabled: state !== "disabled",
+              enabled: true,
               revision: "one",
               previous: null,
               reloadable: false,

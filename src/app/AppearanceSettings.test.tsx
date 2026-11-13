@@ -60,6 +60,7 @@ afterEach(() => {
     hourCycle: "system",
     seconds: false,
     messageTimestamps: "show",
+    localTimeDetails: true,
   });
   localStorage.clear();
   vi.unstubAllGlobals();
@@ -425,7 +426,7 @@ it("preserves follow-up choice and save recovery when Appearance is hidden", asy
   );
 });
 
-it("saves the clock, seconds and message timestamp choices", async () => {
+it("saves the clock, seconds, message timestamp and profile local time choices", async () => {
   const user = userEvent.setup();
   render(preferencesPage(), { wrapper: ToastProvider });
   const clock = screen.getByRole("combobox", { name: "Clock" });
@@ -439,10 +440,14 @@ it("saves the clock, seconds and message timestamp choices", async () => {
   await user.click(
     await screen.findByRole("option", { name: "Hide in Solo chats" }),
   );
+  await user.click(
+    screen.getByRole("switch", { name: "Show time zone details on profiles" }),
+  );
   expect(clockPreference()).toEqual({
     hourCycle: "h23",
     seconds: true,
     messageTimestamps: "hide-solo",
+    localTimeDetails: false,
   });
   expect(JSON.parse(localStorage.getItem("buzz-clock.v1") ?? "")).toEqual(
     clockPreference(),

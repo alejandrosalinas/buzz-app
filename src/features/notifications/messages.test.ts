@@ -270,7 +270,7 @@ it.each([9, 40002])(
     const original = h.make;
     h.make = (text, age = 0, author = h.peer) =>
       signed(author, { ...original(text, age, author), kind });
-    const historic = h.make("finite");
+    const historic = h.make("finite", 121);
     h.query.mockResolvedValueOnce([historic]);
     await h.owner.session.read([{ ids: [historic.id], limit: 1 }]);
     h.emit([historic], "live");

@@ -1845,3 +1845,34 @@ fn protected_clock_rejects_missing_invalid_or_exhausted_state_without_partial_wr
         MAX_PROTECTION_REVISION
     );
 }
+
+#[test]
+fn a_forced_profile_republishes_a_current_one_with_its_saved_owner_proof() {
+    let dir = tempfile::tempdir().unwrap();
+    let credentials = Memory::default();
+    let (agents, agent) = created(dir.path(), &credentials);
+    let key = agent.read_key(&credentials).unwrap();
+    let first = agent.profile_event(&key).unwrap();
+    agents
+        .published(
+            &agent.pubkey,
+            RELAY,
+            Published {
+                name: agent.name.clone(),
+                picture: agent.picture.clone(),
+                about: agent.about.clone(),
+                created_at: first["created_at"].as_u64().unwrap(),
+            },
+        )
+        .unwrap();
+    let current = agents.get(&agent.pubkey, RELAY).unwrap();
+    assert!(current.profile_is_current());
+    assert!(!current.profile_due(false));
+    assert!(current.profile_due(true));
+    let event = current.profile_event(&key).unwrap();
+    assert_eq!(event["kind"], 0);
+    assert_eq!(event["pubkey"], agent.pubkey.as_str());
+    let saved: Vec<String> = serde_json::from_str(&current.auth).unwrap();
+    assert_eq!(event["tags"], serde_json::json!([saved]));
+    assert!(event["created_at"].as_u64() > first["created_at"].as_u64());
+}

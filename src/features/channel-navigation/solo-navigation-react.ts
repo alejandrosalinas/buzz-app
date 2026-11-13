@@ -5,7 +5,11 @@ import {
   type SoloNavigationSnapshot,
 } from "./solo-navigation";
 
-const empty: SoloNavigationSnapshot = { regions: [], excluded: new Set() };
+const empty: SoloNavigationSnapshot = {
+  regions: [],
+  excluded: new Set(),
+  managed: new Set(),
+};
 const noSubscription = () => () => {};
 export function useSoloNavigation(session: RelaySession) {
   const reader = soloNavigationFor(session);

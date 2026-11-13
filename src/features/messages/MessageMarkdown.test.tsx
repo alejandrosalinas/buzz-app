@@ -761,6 +761,21 @@ describe("Markdown profile mentions", () => {
     expect(html).toContain("@Mic Smith and <button");
   });
 
+  it("renders full-key-qualified namesakes as two named controls", () => {
+    const html = render(`@Mic (${mic}) @Mic (${other})`, {
+      patch: { mentions: [mic, other] },
+      participantProfiles: new Map([
+        [mic, { name: "Mic" }],
+        [other, { name: "Mic" }],
+      ]),
+    });
+    expect(html.match(/<button/g)).toHaveLength(2);
+    expect(html).toContain(`data-profile-target="${profileTarget(mic)}"`);
+    expect(html).toContain(`data-profile-target="${profileTarget(other)}"`);
+    expect(html.match(/data-mention-name="Mic"/g)).toHaveLength(2);
+    expect(html).not.toContain(`(${mic})`);
+  });
+
   it("updates a mounted mention label without changing signed binding or profile target", () => {
     const owned = createRelaySession(null);
     const session = owned.session;

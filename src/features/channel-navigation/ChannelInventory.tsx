@@ -1198,7 +1198,7 @@ export function ChannelInventory({
               ? lifecycleDialog.trigger
               : lifecycleDialog.focusFallback;
           },
-          completed: () => {
+          depart: () => {
             const id = lifecycleDialog.channel.id;
             lifecycleFocus.current = id;
             // Archive changes visibility, not access or the current destination.

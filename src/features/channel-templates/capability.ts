@@ -173,7 +173,7 @@ export function createChannelKit({
           update({
             ...state,
             status: "error",
-            error: String(error),
+            error: error instanceof Error ? error.message : String(error),
             transient: isTransientFailure(error) || undefined,
           });
       } finally {

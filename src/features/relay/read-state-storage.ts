@@ -49,6 +49,8 @@ export type ReadJournal = Readonly<{
   }>[];
   /** Further slots this installation owns after `slot`, in placement order. */
   spill?: readonly string[];
+  /** Conditional captured-read inverse; any later durable save retires it. */
+  capturedReadUndo?: string;
   revision: number;
   /** Saves among `revision` that read nothing (row `seen:` marks), from any
    * window, so unread intent is `revision - quiet`. */
@@ -94,6 +96,7 @@ export function readJournal(raw: unknown, viewer: string): ReadJournal {
     !record(raw.state.overrides) ||
     !record(raw.localUnread) ||
     !uint32(raw.lastCreatedAt) ||
+    (raw.capturedReadUndo !== undefined && !slotId(raw.capturedReadUndo)) ||
     !Number.isSafeInteger(raw.revision) ||
     (raw.revision as number) < 0 ||
     !Number.isSafeInteger(raw.acceptedRevision) ||
@@ -287,6 +290,9 @@ export function readJournal(raw: unknown, viewer: string): ReadJournal {
     ...(raw.floor ? { floor: raw.floor } : {}),
     own: Object.freeze({ ...own }),
     spill: Object.freeze([...(spill as string[])]),
+    ...(raw.capturedReadUndo !== undefined && {
+      capturedReadUndo: raw.capturedReadUndo as string,
+    }),
     revision: raw.revision as number,
     ...(raw.quiet !== undefined && { quiet: raw.quiet as number }),
     acceptedRevision: raw.acceptedRevision as number,

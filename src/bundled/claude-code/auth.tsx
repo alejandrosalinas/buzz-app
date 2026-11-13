@@ -8,8 +8,8 @@
 // names and shapes when changing it. The optional ClaudeAuth.Settings surface
 // belongs to this authentication method; other implementations may omit it.
 import { invoke, isTauri } from "@tauri-apps/api/core";
-import { type ComponentType, useEffect, useState } from "react";
-import { ClaudeSettings } from "./ClaudeSettings";
+import { type ComponentType, type ReactNode, useEffect, useState } from "react";
+import { ClaudeSettings, type ClaudeConnection } from "./ClaudeSettings";
 import { ApiKeyForm } from "../../features/settings/ApiKeyForm";
 import inlineStyles from "../../shared/InlineReference.module.css";
 import type { Spawn } from "./claude";
@@ -18,8 +18,8 @@ import type { ClaudeSetup } from "./setup";
 const NO_KEY =
   "Claude needs an Anthropic API key. Add one in Settings → Claude.";
 /** What setup says first: the key is one for all of Claude, not per agent. */
-const KEY_ONCE =
-  "Claude requires an API key to connect to your account. Create one at console.anthropic.com and paste it below. You only have to set this up once, and Buzz keeps it securely on this computer.";
+export const KEY_ONCE =
+  "Claude requires an API key to connect to your account. Create one at console.anthropic.com and paste it below. You only have to set this up once.";
 const REJECTED_KEY =
   "Anthropic rejected the Claude API key. It may have been revoked or run out of credit. Paste a working key in Settings → Claude.";
 
@@ -100,13 +100,15 @@ export class ClaudeAuth {
     | ComponentType<{
         setup: ClaudeSetup;
         active(): boolean;
+        connection?: ClaudeConnection | undefined;
       }>
     | undefined {
-    return ({ setup, active }) => (
+    return ({ setup, active, connection }) => (
       <ClaudeSettings
         setup={setup}
         active={active}
         clearKey={() => this.clear()}
+        connection={connection}
       />
     );
   }
@@ -234,27 +236,37 @@ const message = (error: unknown) =>
 export function SignIn({
   setup,
   disabled = false,
+  readOnly = false,
+  variant = "full",
   onSaved,
   active,
   onSavingChange,
+  render,
 }: {
   setup: ClaudeSetup;
   disabled?: boolean;
-  variant?: "full" | "compact";
+  readOnly?: boolean;
+  variant?: "full" | "compact" | "dialog";
   onSaved?: (() => void) | undefined;
   active?: (() => boolean) | undefined;
   onSavingChange?: ((saving: boolean) => void) | undefined;
+  /** Keep the form owner alive while its navigated presentation is hidden. */
+  render?: ((form: ReactNode) => ReactNode) | undefined;
 }) {
   return (
     <div className="grid gap-3">
-      {/* One paragraph says it all; the field adds no description of its own. */}
-      <p className="m-0 text-body-sm text-secondary">{KEY_ONCE}</p>
+      {/* Settings puts the introduction in its shared page header. */}
+      {variant !== "dialog" && (
+        <p className="m-0 text-body-sm text-secondary">{KEY_ONCE}</p>
+      )}
       <KeyForm
         setup={setup}
         disabled={disabled}
+        readOnly={readOnly}
         onSaved={onSaved}
         active={active}
         onSavingChange={onSavingChange}
+        render={render}
       />
     </div>
   );
@@ -311,17 +323,21 @@ export function Missing({
 function KeyForm({
   setup,
   disabled = false,
+  readOnly = false,
   replace = false,
   onSaved,
   active = () => true,
   onSavingChange,
+  render,
 }: {
   setup: ClaudeSetup;
   disabled?: boolean;
+  readOnly?: boolean;
   replace?: boolean;
   onSaved?: (() => void) | undefined;
   active?: (() => boolean) | undefined;
   onSavingChange?: ((saving: boolean) => void) | undefined;
+  render?: ((form: ReactNode) => ReactNode) | undefined;
 }) {
   const [key, setKey] = useState("");
   const [saving, setSaving] = useState<AbortController>();
@@ -349,18 +365,19 @@ function KeyForm({
       onSavingChange?.(false);
     }
   };
-  return (
+  const form = (
     <ApiKeyForm
       label={replace ? "Replace API key" : "Anthropic API key"}
       description={
         replace
           ? "Create a key at console.anthropic.com. Buzz keeps it securely on this computer and gives it only to Claude, so commands your Claude agents run can read it."
-          : undefined
+          : "Your key will be stored securely on this computer."
       }
       value={key}
       onValueChange={setKey}
       onSave={() => void save()}
       disabled={disabled}
+      readOnly={readOnly}
       saving={!!saving}
       variant={replace ? "subtle" : "prominent"}
       feedback={
@@ -377,4 +394,5 @@ function KeyForm({
       }
     />
   );
+  return render ? render(form) : form;
 }

@@ -182,6 +182,10 @@ it.skipIf(!existsSync("/bin/zsh"))(
   async () => {
     const pi = await disk();
     await rm(join(pi.bin, "node"));
+    // A system Node must not bypass the shell lookup this test exercises.
+    await writeFile(join(pi.bin, "node"), "#!/bin/sh\nexit 1\n", {
+      mode: 0o755,
+    });
     // Only .zshrc, which a plain login shell skips, has this Node, which
     // notes that it ran.
     const managed = join(pi.home, "nvm");
@@ -195,7 +199,7 @@ it.skipIf(!existsSync("/bin/zsh"))(
       join(pi.home, ".zshrc"),
       `echo "Welcome back"\nexport PATH=${JSON.stringify(managed)}:$PATH\n`,
     );
-    const out = await pi.step({ PATH: "/usr/bin:/bin", SHELL: "/bin/zsh" });
+    const out = await pi.step({ SHELL: "/bin/zsh" });
     expect(JSON.parse(out)).toMatchObject({ line: "hello" });
     expect(existsSync(join(pi.home, "ran"))).toBe(true);
   },

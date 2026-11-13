@@ -13,6 +13,7 @@ import userEvent from "@testing-library/user-event";
 import { afterEach, expect, it, vi } from "vitest";
 import { createRelaySession } from "../../features/relay/session";
 import { ChatNotStarted } from "../../features/relay/channel-writes";
+import { ApiPaused } from "../../features/relay/http-admission";
 import { keypair, signed } from "../../features/relay/testing";
 import type { RelayData } from "../../features/relay/service";
 import type { ChannelSummary } from "../../features/relay/contracts";
@@ -380,13 +381,16 @@ function fixture({
     complete,
     resolve: () => true,
   };
-  const open = vi.fn(async () => ({ status: "opened" as const }));
+  const open = vi.fn<Navigation["open"]>(async (target) => {
+    navigationSnapshot.entry.target = target;
+    return { status: "opened" as const };
+  });
   const navigationSnapshot = {
     entry: {
       id: navigation.entryId,
       target: behindSettings
         ? { version: 1, kind: "settings", scope: null }
-        : navigation.target,
+        : (navigation.target as OpenTarget),
     },
     attempt: { signal: abort.signal },
   };
@@ -439,9 +443,11 @@ function fixture({
     /** The navigator moved this page's visit to `next`. */
     show(next: OpenTarget) {
       navigation = { ...navigation, target: next };
+      navigationSnapshot.entry.target = next;
       rendered?.rerender(<ToastProvider>{page()}</ToastProvider>);
     },
-    mountWithSidebar: () => render(page(true)),
+    mountWithSidebar: (toasts = false) =>
+      render(toasts ? <ToastProvider>{page(true)}</ToastProvider> : page(true)),
     abort,
     archive,
     read,
@@ -836,6 +842,38 @@ it("gives a new chat that could not be started its draft's place in Back history
   );
 });
 
+it("routes between keyed region drafts without reusing the other editor", async () => {
+  const region = "buzz.region:example:work";
+  const destination = (scope: string, key: string) =>
+    soloDraftTarget(scope, {
+      region,
+      draft: { key, context: { item: key } },
+    });
+  const f = fixture({ target: (scope) => destination(scope, "first") });
+  writeView(
+    f.scope,
+    `solo:region:${region}:draft:first:new-draft`,
+    "First intent",
+  );
+  writeView(
+    f.scope,
+    `solo:region:${region}:draft:second:new-draft`,
+    "Second intent",
+  );
+  f.mountWithToasts();
+  expect(
+    await screen.findByRole("textbox", { name: "Message your agents" }),
+  ).toHaveTextContent("First intent");
+  f.show(destination(f.scope, "second"));
+  expect(
+    await screen.findByRole("textbox", { name: "Message your agents" }),
+  ).toHaveTextContent("Second intent");
+  f.show(JSON.parse(JSON.stringify(destination(f.scope, "first"))));
+  expect(
+    await screen.findByRole("textbox", { name: "Message your agents" }),
+  ).toHaveTextContent("First intent");
+});
+
 it("keeps a written new chat in Back history when its draft cannot be saved", async () => {
   const f = fixture({ target: (scope) => soloDraftTarget(scope, { agent }) });
   const draftStorageKey = `buzz-view.v1:${JSON.stringify([f.scope, "solo:new-draft"])}`;
@@ -1214,6 +1252,167 @@ it.each([
   },
 );
 
+it.each(["Chat actions", "Actions for Planning"])(
+  "keeps a submitted delete alive from %s and reports failure with its chat name",
+  async (trigger) => {
+    const other = "22222222-2222-4222-8222-222222222222";
+    const f = fixture({ others: [other] });
+    let reject!: (error: Error) => void;
+    const pending = new Promise<void>((_resolve, fail) => {
+      reject = fail;
+    });
+    f.run.mockImplementationOnce(() => pending);
+    f.mountWithSidebar(true);
+    const user = userEvent.setup();
+    try {
+      await user.click(await screen.findByRole("button", { name: trigger }));
+      await user.click(
+        await screen.findByRole("menuitem", { name: "Delete chat" }),
+      );
+      const confirm = await screen.findByRole("button", {
+        name: "Delete chat",
+      });
+      fireEvent.click(confirm);
+      fireEvent.click(confirm);
+      await waitFor(() => expect(f.run).toHaveBeenCalledOnce());
+      expect(f.open).toHaveBeenCalledExactlyOnceWith(
+        conversationTarget(f.scope, other),
+      );
+      const signal = f.run.mock.calls[0]?.[2];
+      expect(signal?.aborted).toBe(false);
+      expect(
+        f.session.channels.list().channels.some((chat) => chat.id === id),
+      ).toBe(true);
+      await act(async () => reject(new Error("Deletion refused")));
+      const failure = await screen.findByRole("dialog", {
+        name: "Delete chat failed",
+      });
+      expect(failure).toHaveTextContent("Planning: Deletion refused");
+      expect(
+        f.session.channels.list().channels.some((chat) => chat.id === id),
+      ).toBe(true);
+      expect(f.open).toHaveBeenCalledOnce();
+    } finally {
+      await act(async () => reject(new Error("Test finished")));
+    }
+  },
+);
+
+it.each([
+  ["Chat actions", "Cancel"],
+  ["Chat actions", "Retry"],
+  ["Actions for Planning", "Cancel"],
+  ["Actions for Planning", "Retry"],
+] as const)(
+  "keeps a paused Solo delete recoverable after departure from %s (%s)",
+  async (trigger, choice) => {
+    const other = "22222222-2222-4222-8222-222222222222";
+    const f = fixture({ others: [other] });
+    f.run.mockRejectedValueOnce(new ApiPaused(0));
+    // A real route change aborts the old visit before the paused result arrives.
+    f.open.mockImplementation(async (target) => {
+      f.show(target);
+      f.abort.abort();
+      return { status: "opened" as const };
+    });
+    f.mountWithSidebar(true);
+    const user = userEvent.setup();
+    await user.click(await screen.findByRole("button", { name: trigger }));
+    await user.click(
+      await screen.findByRole("menuitem", { name: "Delete chat" }),
+    );
+    await user.click(
+      await screen.findByRole("button", { name: "Delete chat" }),
+    );
+    const retry = await screen.findByRole("button", { name: "Retry" });
+    const confirmation = screen.getByRole("dialog", {
+      name: "Delete Planning?",
+    });
+    expect(confirmation).toHaveTextContent("nothing was deleted");
+    expect(f.open).toHaveBeenCalledExactlyOnceWith(
+      conversationTarget(f.scope, other),
+    );
+    expect(
+      f.session.channels.list().channels.some((chat) => chat.id === id),
+    ).toBe(true);
+    expect(f.run).toHaveBeenCalledOnce();
+    await user.click(
+      choice === "Retry"
+        ? retry
+        : within(confirmation).getByRole("button", { name: "Cancel" }),
+    );
+    await waitFor(() => expect(confirmation).not.toBeInTheDocument());
+    if (choice === "Retry") {
+      await screen.findByRole("dialog", { name: "Chat deleted: Planning" });
+      expect(f.run).toHaveBeenCalledTimes(2);
+      expect(
+        f.session.channels.list().channels.some((chat) => chat.id === id),
+      ).toBe(false);
+    } else {
+      expect(f.run).toHaveBeenCalledOnce();
+      expect(
+        f.session.channels.list().channels.some((chat) => chat.id === id),
+      ).toBe(true);
+    }
+    expect(f.open).toHaveBeenCalledOnce();
+  },
+);
+
+it.each([
+  ["Chat actions", true],
+  ["Chat actions", false],
+  ["Actions for Planning", true],
+  ["Actions for Planning", false],
+] as const)(
+  "retires a reopened deleted chat from %s, preserving other destinations (%s)",
+  async (trigger, reopened) => {
+    const other = "22222222-2222-4222-8222-222222222222";
+    const last = "33333333-3333-4333-8333-333333333333";
+    const f = fixture({ others: [other, last] });
+    let release!: () => void;
+    const pending = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const run = f.run.getMockImplementation();
+    if (!run) throw new Error("Missing lifecycle fixture implementation");
+    f.run.mockImplementationOnce(async (...args) => {
+      await pending;
+      await run(...args);
+    });
+    f.mountWithSidebar(true);
+    const user = userEvent.setup();
+    try {
+      await user.click(await screen.findByRole("button", { name: trigger }));
+      await user.click(
+        await screen.findByRole("menuitem", { name: "Delete chat" }),
+      );
+      await user.click(
+        await screen.findByRole("button", { name: "Delete chat" }),
+      );
+      await waitFor(() => expect(f.run).toHaveBeenCalledOnce());
+      expect(f.open).toHaveBeenCalledExactlyOnceWith(
+        conversationTarget(f.scope, other),
+      );
+      act(() => {
+        f.abort.abort();
+        f.show(conversationTarget(f.scope, reopened ? id : last));
+      });
+      await act(async () => {
+        release();
+      });
+      await screen.findByRole("dialog", { name: "Chat deleted: Planning" });
+      expect(f.open).toHaveBeenCalledTimes(reopened ? 2 : 1);
+      expect(f.open).toHaveBeenLastCalledWith(
+        conversationTarget(f.scope, other),
+      );
+    } finally {
+      await act(async () => {
+        release();
+      });
+    }
+  },
+);
+
 it.each([
   ["Chat actions", "confirmation"],
   ["Chat actions", "pending"],
@@ -1222,7 +1421,7 @@ it.each([
   ["Actions for Planning", "pending"],
   ["Actions for Planning", "all-hidden"],
 ] as const)(
-  "rechecks plugin-hidden successors from %s during %s",
+  "chooses visible successors from %s on delete submission (%s)",
   async (trigger, phase) => {
     const other = "22222222-2222-4222-8222-222222222222";
     const last = "33333333-3333-4333-8333-333333333333";
@@ -1266,7 +1465,11 @@ it.each([
         within(dialog).getByRole("button", { name: "Delete chat" }),
       );
       await waitFor(() => expect(f.run).toHaveBeenCalledOnce());
-      expect(f.open).not.toHaveBeenCalled();
+      const successor = conversationTarget(
+        f.scope,
+        phase === "confirmation" ? last : other,
+      );
+      expect(f.open).toHaveBeenCalledExactlyOnceWith(successor);
       if (phase !== "confirmation")
         act(() => {
           f.updateChat(other, { lastActivityAt: 1 });
@@ -1276,13 +1479,8 @@ it.each([
       await act(async () => {
         release();
       });
-      await waitFor(() =>
-        expect(f.open).toHaveBeenCalledExactlyOnceWith(
-          phase === "all-hidden"
-            ? soloDraftTarget(f.scope)
-            : conversationTarget(f.scope, last),
-        ),
-      );
+      // Completion must not navigate again, even if sidebar visibility changed.
+      expect(f.open).toHaveBeenCalledExactlyOnceWith(successor);
     } finally {
       release();
     }

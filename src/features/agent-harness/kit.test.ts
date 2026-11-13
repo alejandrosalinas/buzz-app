@@ -289,6 +289,28 @@ describe("harnessKit.turnPrompt", () => {
     expect(again.text).toBe(later.text);
   });
 
+  it("ends the prompt with its conversation's instructions, keyed as its notes are", async () => {
+    const root = message("1", "Kick off");
+    const event = reply("4", "1", "@Ampy and now?");
+    const { kit, agent, delivery } = setup({ thread: [root, event] });
+    const conversationInstructions = vi.fn(() => ({
+      plugin: "acme.tasks",
+      text: "Review only.",
+    }));
+    Object.assign(agent, { conversationInstructions });
+    const d = delivery({ type: "mention", event });
+    const conversation = await kit.conversation(d, "thread");
+    if (!conversation) throw new Error("not admitted");
+    const { text } = await kit.turnPrompt(d, conversation);
+    expect(text).toMatch(
+      /<owner-instructions source="acme\.tasks">\n[\s\S]*\n\nReview only\.\n<\/owner-instructions>$/,
+    );
+    expect(conversationInstructions).toHaveBeenCalledWith(
+      channel,
+      "1".repeat(64),
+    );
+  });
+
   it("keeps a mark for each thread of a channel conversation", async () => {
     const rootA = message("1", "Thread A");
     const rootB = message("2", "Thread B");

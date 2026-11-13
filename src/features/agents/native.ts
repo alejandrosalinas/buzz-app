@@ -221,7 +221,8 @@ export type AgentsNative = {
   ): Promise<RelayEvent>;
   /** Publishes its name and picture as its profile in one community unless
    * that community already has it. */
-  publishProfile(member: Membership): Promise<void>;
+  /** `force` republishes it even when unchanged. */
+  publishProfile(member: Membership, force?: boolean): Promise<void>;
   /** Whether this app runs the agent: every copy of the app on this machine
    * shares the agent list, and one runs each agent. The installed app always
    * runs what it can; a dev build lets go while it does. */
@@ -342,8 +343,8 @@ export const nativeAgents = (): AgentsNative | undefined =>
           invoke("app_agent_git_auth", { pubkey, relay, owner, repo }),
         remember: ({ pubkey, relay }, slug, body, after) =>
           invoke("app_agent_remember", { pubkey, relay, slug, body, after }),
-        publishProfile: ({ pubkey, relay }) =>
-          invoke("app_agent_publish_profile", { pubkey, relay }),
+        publishProfile: ({ pubkey, relay }, force) =>
+          invoke("app_agent_publish_profile", { pubkey, relay, force }),
         claim: (pubkey, revision) =>
           invoke("app_agent_claim", { pubkey, revision: revision ?? 0 }),
         release: (pubkey) => invoke("app_agent_release", { pubkey }),

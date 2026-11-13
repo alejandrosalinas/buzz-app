@@ -12,6 +12,7 @@ import { MessageComposer } from "../../src/features/messages/MessageComposer";
 import { MessageRow } from "../../src/features/messages/MessageRow";
 import { createRelaySession } from "../../src/features/relay/session";
 import { PublishRejected } from "../../src/features/relay/outbox";
+import { ReadError } from "../../src/features/relay/errors";
 import { foldMessages } from "../../src/features/relay/fold";
 import { mediaUrl } from "../../src/features/relay/transport";
 import {
@@ -69,7 +70,14 @@ const sessions = ["a", "b"].map((community) => {
   let live!: LiveCallbacks;
   let catalogRead: Promise<void> | undefined;
   let coldFailure = new URLSearchParams(location.search).has("cold-error");
+  let timeouts = Number(
+    new URLSearchParams(location.search).get("catalog-timeouts") ?? 0,
+  );
   let releaseCatalogRead: (() => void) | undefined;
+  if (new URLSearchParams(location.search).has("hold-catalog"))
+    catalogRead = new Promise<void>((resolve) => {
+      releaseCatalogRead = resolve;
+    });
   const makeSet = (empty = false) =>
     signed(member, {
       kind: 30030,
@@ -147,6 +155,10 @@ const sessions = ["a", "b"].map((community) => {
             throw new Error("Fixture catalog offline");
           }
           if (fail) throw new Error("Fixture catalog offline");
+          if (timeouts > 0) {
+            timeouts--;
+            throw new ReadError("unavailable", "Relay read timed out");
+          }
           return [catalog];
         }
         if (

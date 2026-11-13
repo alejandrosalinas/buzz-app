@@ -67,6 +67,28 @@ export function verifiedProfileDiscovery(
   });
 }
 
+/** An authority this device saved from an earlier discovery, or undefined. */
+export function savedVerifiedProfileAuthority(
+  value: unknown,
+): VerifiedProfileAuthority | undefined {
+  if (!value || typeof value !== "object") return;
+  const { pubkey, multipleIssuers, searchable } = value as Record<
+    string,
+    unknown
+  >;
+  if (
+    typeof pubkey !== "string" ||
+    !key.test(pubkey) ||
+    typeof multipleIssuers !== "boolean"
+  )
+    return;
+  return Object.freeze({
+    pubkey,
+    multipleIssuers,
+    ...(searchable === true ? { searchable: true as const } : {}),
+  });
+}
+
 export function validVerifiedName(value: string): boolean {
   return (
     [...value].length >= 1 &&

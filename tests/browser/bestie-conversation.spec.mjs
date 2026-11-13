@@ -385,7 +385,10 @@ test("Bestie main and thread messages open the shared forwarding dialog", async 
   const rootId = await root.getAttribute("data-message-id");
   await hoverMessage(root);
   await root
-    .getByRole("button", { name: "Forward message", exact: true })
+    .getByRole("button", { name: "More message actions", exact: true })
+    .click();
+  await page
+    .getByRole("menuitem", { name: "Forward message", exact: true })
     .click();
   const dialog = page.getByRole("dialog", {
     name: "Forward message",

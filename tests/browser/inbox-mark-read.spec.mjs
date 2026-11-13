@@ -91,9 +91,8 @@ test("Activity filter choices combine, persist, and hold menu focus through row 
   await unreadSwitch(inbox).click();
   await rows.getByRole("button", { name: /^Open / }).focus();
   await page.keyboard.press("Shift+F10");
-  await expect(
-    page.getByRole("menuitem", { name: "Mark unread", exact: true }),
-  ).toBeDisabled();
+  // An unread row offers only Mark as read.
+  await expect(page.getByRole("menuitem")).toHaveText(["Mark as read"]);
   await page
     .getByRole("menuitem", { name: "Mark as read", exact: true })
     .click();

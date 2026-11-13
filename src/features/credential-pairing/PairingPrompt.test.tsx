@@ -75,7 +75,7 @@ const holdListen = () => {
 const settled = () => new Promise((resolve) => setTimeout(resolve));
 
 it("names the tool, community and process, with Deny focused", async () => {
-  render(<PairingPrompt communities={["wss://relay.example"]} />);
+  render(<PairingPrompt communities={["wss://relay.example"]} active={null} />);
   await ask(request);
   const dialog = await screen.findByRole("alertdialog");
   expect(dialog).toHaveTextContent(
@@ -93,25 +93,30 @@ it("names the tool, community and process, with Deny focused", async () => {
   expect(screen.queryByRole("alertdialog")).toBeNull();
 });
 
-it("tells native code the communities saved here", async () => {
+it("tells native code the communities saved here and the one open", async () => {
   const { rerender } = render(
-    <PairingPrompt communities={["wss://relay.example"]} />,
+    <PairingPrompt
+      communities={["wss://relay.example"]}
+      active="wss://relay.example"
+    />,
   );
   await vi.waitFor(() =>
     expect(invoke).toHaveBeenCalledWith("credential_pairing_communities", {
       communities: ["https://relay.example"],
+      active: "https://relay.example",
     }),
   );
-  rerender(<PairingPrompt communities={[]} />);
+  rerender(<PairingPrompt communities={[]} active={null} />);
   await vi.waitFor(() =>
     expect(invoke).toHaveBeenLastCalledWith("credential_pairing_communities", {
       communities: [],
+      active: null,
     }),
   );
 });
 
 it("closes when native ends the request, and when its time runs out", async () => {
-  render(<PairingPrompt communities={["wss://relay.example"]} />);
+  render(<PairingPrompt communities={["wss://relay.example"]} active={null} />);
   await ask(request);
   await screen.findByRole("alertdialog");
   act(() => handlers.get("credential-pair-closed")?.({ payload: "r1" }));
@@ -130,7 +135,7 @@ it("closes when native ends the request, and when its time runs out", async () =
 it("lets native ask only once it listens, and not after it leaves", async () => {
   const listeners = holdListen();
   const { unmount } = render(
-    <PairingPrompt communities={["wss://relay.example"]} />,
+    <PairingPrompt communities={["wss://relay.example"]} active={null} />,
   );
   try {
     await vi.waitFor(() =>
@@ -151,7 +156,7 @@ it("lets native ask only once it listens, and not after it leaves", async () => 
 it("refuses a request heard after it stopped, since nobody can show it", async () => {
   const listeners = holdListen();
   const { unmount } = render(
-    <PairingPrompt communities={["wss://relay.example"]} />,
+    <PairingPrompt communities={["wss://relay.example"]} active={null} />,
   );
   try {
     await vi.waitFor(() =>
@@ -174,7 +179,7 @@ it("refuses a request heard after it stopped, since nobody can show it", async (
 it("is mounted once under a development remount", async () => {
   const { unmount } = render(
     <StrictMode>
-      <PairingPrompt communities={["wss://relay.example"]} />
+      <PairingPrompt communities={["wss://relay.example"]} active={null} />
     </StrictMode>,
   );
   await vi.waitFor(() => expect(prompts()).toEqual([{ mounted: true }]));

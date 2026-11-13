@@ -8,6 +8,7 @@ import {
   useSyncExternalStore,
 } from "react";
 import type { RelaySession } from "../../features/relay/session";
+import { readView, writeView } from "../../shared/view-state";
 import type { PanelOpening } from "../../features/panels/service";
 import type { ChannelDrawerOpening } from "./useChannelPanels";
 import {
@@ -187,6 +188,7 @@ function withThread(
   intent: ThreadIntent | undefined,
   pane: TabPane,
   attention = false,
+  relocate = false,
 ): State {
   const existing = threadTab(state.tabs, channelId, rootId);
   const baseId = `thread:${channelId}:${rootId}`;
@@ -221,8 +223,8 @@ function withThread(
       intent === "reveal"
         ? (prior?.revealRequest ?? 0) + 1
         : prior?.revealRequest,
-    // An already-open thread stays wherever it was placed.
-    pane: prior ? tabPane(prior) : pane,
+    // Detail visits need the source thread in the other pane.
+    pane: prior && !relocate ? tabPane(prior) : pane,
     rootId: prior?.rootId,
     name: prior?.name,
   };
@@ -244,6 +246,100 @@ const visitOwners = new Map<string, { channels: Record<string, Retirement> }>();
 const forgetVisits = (scope: string) => {
   visitOwners.delete(scope);
 };
+// A thread tab's name lasts until the tab is closed, across channel switches
+// and restarts, unlike the layout: a thread's tab takes its name again when
+// it reopens. One record per account/community keeps the 256 newest names,
+// keyed `<channel>:<root>`, "" for a cleared one, oldest first. Leaving the
+// community clears it with its other view state.
+type ThreadTab = Extract<ConversationTab, { kind: "thread" }>;
+const NAMES = "tab-names";
+const MAX_NAMES = 256;
+const nameKey = (tab: ThreadTab) => `${tab.channelId}:${rootOfTab(tab)}`;
+const savedNames = (scope: string) => {
+  const names = readView<unknown>(scope, NAMES, undefined);
+  return new Map(
+    names && typeof names === "object" && !Array.isArray(names)
+      ? Object.entries(names)
+      : [],
+  );
+};
+/** A thread's saved name, "" once cleared, or undefined if never named. */
+const readThreadTabName = (scope: string, key: string) => {
+  const name = savedNames(scope).get(key);
+  return typeof name === "string" ? name : undefined;
+};
+/** Saves a name as the newest; undefined forgets it. */
+const saveThreadTabName = (
+  scope: string,
+  key: string,
+  name: string | undefined,
+) => {
+  const names = savedNames(scope);
+  const existed = names.delete(key);
+  if (name !== undefined) names.set(key, name);
+  if (existed || name !== undefined)
+    writeView(scope, NAMES, Object.fromEntries([...names].slice(-MAX_NAMES)));
+};
+function withSavedNames(
+  scope: string,
+  previous: State,
+  next: State,
+  /** The session's other workspaces' tabs, read only when a thread leaves. */
+  elsewhere: () => readonly ConversationTab[],
+): State {
+  if (next.tabs === previous.tabs) return next;
+  let restored = false;
+  const tabs = next.tabs.map((tab) => {
+    if (tab.kind !== "thread") return tab;
+    const prior = previous.tabs.find(
+      (item): item is ThreadTab => item.kind === "thread" && item.id === tab.id,
+    );
+    const key = nameKey(tab);
+    if (prior && nameKey(prior) === key) {
+      // A cleared name is kept as "" so a stale provisional name cannot
+      // replace it later.
+      if (prior.name !== tab.name)
+        saveThreadTabName(scope, key, tab.name ?? "");
+      return tab;
+    }
+    if (tab.name) {
+      // A provisional tab's name moves to the root its reader verified,
+      // unless that root has its own name or clear, as when it merges into
+      // its tab. Another copy's newer name or clear of the provisional root
+      // wins over this tab's.
+      if (prior) {
+        const saved = readThreadTabName(scope, key);
+        const name =
+          saved ?? readThreadTabName(scope, nameKey(prior)) ?? tab.name;
+        if (saved === undefined) saveThreadTabName(scope, key, name);
+        if (name !== tab.name) {
+          restored = true;
+          return { ...tab, name: name || undefined };
+        }
+      }
+      return tab;
+    }
+    const name = readThreadTabName(scope, key);
+    if (!name) return tab;
+    restored = true;
+    return { ...tab, name };
+  });
+  // A thread no tab shows any more forgets its name: a closed tab, a
+  // provisional tab merged into its root's tab or retargeted to its root.
+  // Another tab of the same thread, in any workspace, keeps it.
+  const held = (tabs: readonly ConversationTab[]) =>
+    new Set(
+      tabs.flatMap((tab) => (tab.kind === "thread" ? [nameKey(tab)] : [])),
+    );
+  const kept = held(next.tabs);
+  const released = [...held(previous.tabs)].filter((key) => !kept.has(key));
+  if (released.length) {
+    const open = held(elsewhere());
+    for (const key of released)
+      if (!open.has(key)) saveThreadTabName(scope, key, undefined);
+  }
+  return restored ? { ...next, tabs } : next;
+}
 function createTabStore(scope?: string) {
   const owner = { channels: (scope && visitOwners.get(scope)?.channels) || {} };
   let channels: Record<string, State> = Object.fromEntries(
@@ -298,6 +394,9 @@ function createTabStore(scope?: string) {
           }));
       }
     },
+    /** A thread's saved name, "" once cleared, or undefined if never named. */
+    savedName: (tab: ThreadTab) =>
+      scope ? readThreadTabName(scope, nameKey(tab)) : undefined,
     snapshot: () => channels,
     subscribe(listener: () => void) {
       listeners.add(listener);
@@ -308,8 +407,15 @@ function createTabStore(scope?: string) {
     /** Changes one page's channel workspace. */
     update(key: string, change: (previous: State) => State) {
       const previous = channels[key] ?? empty;
-      const next = change(previous);
-      if (next === previous) return;
+      const changed = change(previous);
+      if (changed === previous) return;
+      const next = scope
+        ? withSavedNames(scope, previous, changed, () =>
+            Object.entries(channels).flatMap(([other, state]) =>
+              other === key ? [] : state.tabs,
+            ),
+          )
+        : changed;
       channels = { ...channels, [key]: next };
       // A stale session may still update its own store, but cannot overwrite
       // the successor's retirement metadata. Records are copy-on-write.
@@ -620,6 +726,8 @@ export function useChannelTabState(
             thread.rootId,
             "select",
             thread.pane ?? threadPlacementPreference(),
+            false,
+            !!detail && thread.pane === "main",
           );
         const saved = visits?.[visit];
         return saved
@@ -751,8 +859,12 @@ export function useChannelTabState(
         // or retargets another reader after the user has left this provisional tab.
         const foreground =
           selected && (tabPane(tab) === "main" || state.paneOpen);
-        // A name given to the provisional tab survives an unnamed owner.
-        const name = owner.name ?? tab.name;
+        // A name given to the provisional tab, or saved for it since by
+        // another copy, survives an owner never named.
+        const saved = store.savedName(owner);
+        const name =
+          owner.name ??
+          ((saved ?? store.savedName(tab) ?? tab.name) || undefined);
         const merged = foreground
           ? { ...owner, messageId: tab.messageId, rootId, name }
           : { ...owner, name };
@@ -784,7 +896,7 @@ export function useChannelTabState(
                 : {}),
             };
       }),
-    [update],
+    [store, update],
   );
   const selectMain = useCallback(
     (mainSelected: string | undefined) =>

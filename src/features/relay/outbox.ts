@@ -904,14 +904,15 @@ export function createOutbox(
         await outbox.ready();
         const saved = recoveryValue(recovery);
         if (!saved) throw new Error("Invalid outbox recovery state");
+        const shared = (await storage.load({ readOnly: true })).find(
+          (entry) => entry.event.id === id,
+        );
+        if (closed) throw abortError();
         let item = visible.find((entry) => entry.event.id === id);
         if (!item || dismissing.has(id))
           throw new Error(
             "The original operation is unavailable. Refresh before retrying.",
           );
-        const shared = (await storage.load({ readOnly: true })).find(
-          (entry) => entry.event.id === id,
-        );
         if (!shared && restoredReceipts.has(id))
           throw new Error(
             "The original operation was removed in another window. Try Send again.",
@@ -925,11 +926,17 @@ export function createOutbox(
           consume?.();
           return;
         }
-        if (shared && restoredReceipts.has(id)) item = shared;
-        if (item.acknowledged) {
+        if (item.acknowledged || shared?.acknowledged) {
           consume?.();
           return;
         }
+        // Shared ownership still applies when this window verifies an echo
+        // after the journal read starts. That echo remains delivery evidence.
+        if (shared && restoredReceipts.has(id))
+          item =
+            item.delivery === "seen" && item.signed
+              ? { ...shared, signed: item.signed, delivery: "seen" }
+              : shared;
         if (
           (item.recovery &&
             (item.recovery.key !== saved.key ||

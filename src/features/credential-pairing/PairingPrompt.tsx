@@ -13,16 +13,19 @@ import {
  * code declines a community not saved here without asking. */
 export function PairingPrompt({
   communities,
+  active,
 }: {
   communities: readonly string[];
+  /** The community open here, which a tool naming none pairs for. */
+  active: string | null;
 }) {
   const [request, setRequest] = useState<PairRequest | null>(null);
   const [left, setLeft] = useState(0);
   const deny = useRef<HTMLButtonElement>(null);
   const saved = communities.join("\n");
   useEffect(() => {
-    void setPairingCommunities(saved ? saved.split("\n") : []);
-  }, [saved]);
+    void setPairingCommunities(saved ? saved.split("\n") : [], active);
+  }, [saved, active]);
   // Native asks only while a prompt listens. This one is mounted only in the
   // app shell, so behind sign-in, setup or restoring screens native refuses.
   useEffect(() => {

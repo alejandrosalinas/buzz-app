@@ -1,5 +1,6 @@
 import { useProfileGeneration } from "../../features/relay/react";
 import Markdown from "react-markdown";
+import markdownStyles from "../../features/markdown/Markdown.module.css";
 import { parseBuzzLink } from "../../features/navigation/buzz-links";
 import { profileKey } from "../../features/profiles/target";
 import { safeLinkUrl } from "../../features/relay/message-content";
@@ -513,7 +514,7 @@ export function TodosPanel({
               label=""
             />
             <div
-              className={`${styles.label} text-body-sm ${item.status === "done" ? "text-secondary" : ""}`}
+              className={`${styles.label} ${markdownStyles.inline} text-body-sm ${item.status === "done" ? "text-secondary" : ""}`}
               data-completed={item.status === "done" || undefined}
             >
               <Markdown

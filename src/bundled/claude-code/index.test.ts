@@ -7,6 +7,12 @@ import { ClaudeRuntime } from "./runtime";
 import { apply, inject } from "./index";
 import { ClaudeAuth } from "./auth";
 import { ClaudeSetup } from "./setup";
+import type { ReactElement, FunctionComponent, ComponentProps } from "react";
+import type { SettingsCard } from "../../features/settings/service";
+import type { PageNavigation } from "../../features/navigation/service";
+import { createNavigationController } from "../../features/navigation/controller";
+import { createMemoryHistory } from "../../features/navigation/history";
+import type { ClaudeConnection } from "./ClaudeSettings";
 
 vi.mock("@tauri-apps/api/core", () => ({ isTauri: () => true }));
 afterEach(() => vi.restoreAllMocks());
@@ -30,7 +36,9 @@ it.each([true, false])(
     } as never);
     root.provide("host", { request: vi.fn() } as never);
     root.provide("agentProtection", { registerModels: vi.fn() } as never);
-    root.provide("navigation", { open: vi.fn() } as never);
+    const controller = createNavigationController(createMemoryHistory());
+    const navigation = controller.navigation;
+    root.provide("navigation", navigation);
     const cards = new SettingsCardsService(root);
     const scope = root.extend({
       pluginOwner: { id: "buzz.claude-code", revision: "r1" },
@@ -49,9 +57,48 @@ it.each([true, false])(
             ]
           : [],
       );
+      if (settings) {
+        const parent = {
+          version: 1,
+          kind: "settings",
+          section: "buzz.claude-code/credentials",
+          scope: null,
+        } as const;
+        const Card = cards.snapshot()[0]?.component as FunctionComponent<
+          ComponentProps<SettingsCard["component"]>
+        >;
+        const presentation = () => {
+          const { entry, attempt } = navigation.snapshot();
+          controller.complete(attempt, { status: "opened" });
+          const page = {
+            target: entry.target,
+            signal: attempt.signal,
+          } as PageNavigation;
+          return (
+            Card({ active: () => true, navigation: page }) as ReactElement<{
+              connection: ClaudeConnection;
+            }>
+          ).props.connection;
+        };
+        void navigation.open(parent);
+        presentation().onOpenChange(true);
+        expect(navigation.snapshot().entry.target).toEqual({
+          ...parent,
+          route: { version: 1, params: "connect" },
+        });
+        expect(presentation().open).toBe(true);
+        navigation.back();
+        expect(presentation().open).toBe(false);
+        navigation.forward();
+        expect(presentation().open).toBe(true);
+        presentation().onOpenChange(false);
+        expect(navigation.snapshot().entry.target).toEqual(parent);
+        expect(navigation.snapshot().canGoForward).toBe(false);
+      }
       await fiber.dispose();
       expect(cards.snapshot()).toEqual([]);
     } finally {
+      controller.dispose();
       await root.fiber.dispose();
     }
   },

@@ -149,6 +149,11 @@ function setup({
     profiles = new Map();
   const choices = {
     identities: [] as { pubkey: string; managed: boolean }[],
+    // None is archived or being deleted.
+    get selectable() {
+      return this.identities;
+    },
+    archives: { status: "ready", archived: [] },
     pending: false,
   };
   const directMessages = {
@@ -736,6 +741,40 @@ it.each([true, false])(
     expect(screen.getByRole("button", { name: "Cancel" })).toBeEnabled();
   },
 );
+
+it("refuses at submit someone whose Delete started after preparation, without agent flags", async () => {
+  const user = userEvent.setup();
+  const { directMessages, messages, choices } = setup();
+  directMessages.people.mockResolvedValue({
+    people: [{ pubkey: recipient, name: "Avery Chen" }],
+    hasMore: false,
+  });
+  let release = () => {};
+  const gate = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  directMessages.open.mockImplementationOnce(async () => {
+    await gate;
+    return destination;
+  });
+  try {
+    await choose(user);
+    await user.click(screen.getByRole("button", { name: "Forward" }));
+    await waitFor(() => expect(directMessages.open).toHaveBeenCalledOnce());
+    choices.identities = [
+      { pubkey: recipient, managed: true, deleting: true } as {
+        pubkey: string;
+        managed: boolean;
+      },
+    ];
+  } finally {
+    await act(async () => release());
+  }
+  expect(await screen.findByRole("alert")).toHaveTextContent(
+    "no longer available for direct messages",
+  );
+  expect(messages.send).not.toHaveBeenCalled();
+});
 
 it("closes the people list on Escape, then the dialog, retiring its visit", async () => {
   const user = userEvent.setup();

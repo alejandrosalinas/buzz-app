@@ -1,5 +1,7 @@
 import { expect, it } from "vitest";
 import { startingChatTitle } from "./chat-title";
+import { mentionDraft } from "../messages/mention-draft";
+import { typedDraft } from "../messages/composer-testing";
 
 const link = `buzz://message?channel=design&id=${"c".repeat(64)}`;
 
@@ -62,4 +64,13 @@ it("never titles a link-only prompt with the link, but keeps later links", () =>
   expect(startingChatTitle("Look at buzz://channel/design")).toBe(
     "Look at buzz://channel/design",
   );
+});
+
+it("drops leading namesake tags with their full-key qualifiers", () => {
+  const a = { pubkey: "a".repeat(64), name: "Jitter", start: 0, end: 7 };
+  const b = { pubkey: "b".repeat(64), name: "Jitter", start: 8, end: 15 };
+  const draft = typedDraft(
+    mentionDraft({ text: "@Jitter @Jitter fix the build", recipients: [a, b] }),
+  );
+  expect(startingChatTitle(draft)).toBe("fix the build");
 });

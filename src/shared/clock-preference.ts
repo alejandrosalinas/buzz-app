@@ -6,6 +6,9 @@ export type ClockPreference = {
   hourCycle: "system" | HourCycle;
   seconds: boolean;
   messageTimestamps: "show" | "hide-solo" | "hide";
+  /** Profile local times include how far ahead or behind the viewer they
+   * are, and name the zone on a line of its own. */
+  localTimeDetails: boolean;
 };
 
 const preferenceKey = "buzz-clock.v1";
@@ -21,7 +24,7 @@ function read(): ClockPreference {
   try {
     saved = Object(JSON.parse(localStorage.getItem(preferenceKey) ?? "{}"));
   } catch {}
-  const { hourCycle, seconds, messageTimestamps } = saved;
+  const { hourCycle, seconds, messageTimestamps, localTimeDetails } = saved;
   return {
     hourCycle:
       hourCycle === "h12" || hourCycle === "h23" ? hourCycle : "system",
@@ -30,6 +33,7 @@ function read(): ClockPreference {
       messageTimestamps === "hide-solo" || messageTimestamps === "hide"
         ? messageTimestamps
         : "show",
+    localTimeDetails: localTimeDetails !== false,
   };
 }
 
@@ -89,8 +93,9 @@ function subscribe(listener: () => void) {
 }
 
 function key() {
-  const { hourCycle, seconds, messageTimestamps } = clockPreference();
-  return `${hourCycle} ${system} ${seconds} ${messageTimestamps}`;
+  const { hourCycle, seconds, messageTimestamps, localTimeDetails } =
+    clockPreference();
+  return `${hourCycle} ${system} ${seconds} ${messageTimestamps} ${localTimeDetails}`;
 }
 const pending = () => unsaved;
 

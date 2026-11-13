@@ -88,6 +88,8 @@ export type Profile = Readonly<{
   about?: string;
   /** Self-declared NIP-05 identifier; not proof of DNS verification. */
   nip05?: string;
+  /** Self-declared IANA time zone, already checked to be one this runtime knows. */
+  tz?: string;
   /** Self-declared display hint, not proof of ownership, membership or authority. */
   isAgent?: true;
   /** Owner named by the profile auth tag; display metadata, never authorization. */

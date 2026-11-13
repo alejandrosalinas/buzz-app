@@ -8,7 +8,7 @@ import {
 import type { EventData } from "../../features/relay/events";
 import { messageAuthor } from "../../features/relay/fold";
 import {
-  BASE_PROMPT,
+  basePromptFor,
   mentionSection,
 } from "../../features/agent-harness/base-prompt";
 import { coreMemorySection } from "../../features/agent-harness/core-memory";
@@ -40,6 +40,9 @@ export function systemPrompt(
   input: Readonly<{
     scope: Scope;
     cwd: string;
+    /** The agent's workspace, absolute, when `cwd` is a folder of the
+     * conversation's own instead. */
+    workspace?: string;
     /** Who the agent is, so it can name itself and the session viewer can too. */
     agent?: Readonly<{ name: string; pubkey: string }>;
     instructions?: string;
@@ -54,7 +57,7 @@ export function systemPrompt(
   }>,
 ) {
   const model = input.scope === "thread" ? threadModel : channelModel;
-  const base = [BASE_PROMPT, BUZZ_PROMPT, model];
+  const base = [basePromptFor(input.workspace), BUZZ_PROMPT, model];
   return [
     input.agent
       ? section(

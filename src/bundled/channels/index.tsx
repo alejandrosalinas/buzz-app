@@ -4,7 +4,7 @@ import { channelQuery } from "./channel-query";
 import { isChannelRoute } from "../../features/channel-navigation/routes";
 import type { PluginModule } from "../../plugins/api";
 import { ChannelsPage } from "./ChannelsPage";
-import { PageTabs } from "./PageTabs";
+import { ConversationWorkspace, PageTabs } from "./PageTabs";
 import { registerCanvas } from "./canvas-panel";
 import { ChannelTemplateSettings } from "./ChannelTemplateSettings";
 import { ChatCircleIcon, CopyIcon } from "../../shared/design-system/icons";
@@ -38,6 +38,9 @@ export const apply: PluginModule["apply"] = (ctx) => {
   const extensions = ctx.conversation;
   extensions.registerTabs((props) => (
     <PageTabs {...props} host={ctx} extensions={extensions} />
+  ));
+  extensions.registerWorkspace((props) => (
+    <ConversationWorkspace {...props} host={ctx} extensions={extensions} />
   ));
   const relay = ctx.relay;
   const navigator = ctx.navigation;

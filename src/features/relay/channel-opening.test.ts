@@ -214,6 +214,8 @@ it("selecting an already queued background catch-up promotes it without releasin
     h.owner.session.channels.ensure("z");
     const initialZ = h.wire.next();
     h.owner.session.channels.ensure("a");
+    // Z's notice read, sent beside its head, holds a read slot until it settles.
+    await flush();
     h.wire.next().respond([h.empty("a")]);
     await flush();
     h.live.state({ status: "connected", routes: [] });

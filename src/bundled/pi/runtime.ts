@@ -622,6 +622,8 @@ export class PiRuntime {
               ? { wake: { ...wake, text: (await wakeText?.()) ?? wake.text } }
               : {}),
           }),
+          channel,
+          key === channel ? undefined : root,
         );
       // A conversation's tools default to its thread; a conversation shared
       // by several threads is told which to reply in instead.
@@ -1183,8 +1185,8 @@ export class PiRuntime {
 
   /** What a turn runs with: the agent's model and thinking level or the
    * owner's pick, its prompt, its `core` memory as read now (none when it
-   * could not be read), and its workspace. The memory is apart, as Pi keeps
-   * what a conversation was shown of it until a compaction. */
+   * could not be read), and its workspace. The memory is apart, so an edit
+   * re-sends only its own section. */
   private async turnOf(
     entry: Entry,
     agent: AgentKey,
@@ -1213,17 +1215,20 @@ export class PiRuntime {
       ...(memory === undefined
         ? {}
         : {
-            core: {
-              text: coreMemorySection(memory),
-              placeholder: coreMemorySection(null),
-            },
+            core: { text: coreMemorySection(memory) },
           }),
     };
   }
 
-  /** `text` with the Buzz tools' end-of-turn note, when they have one. */
-  private review(entry: Entry, text: string) {
-    const note = turnNote(entry.handle);
+  /** `text` with the Buzz tools' end-of-turn note for its conversation, when
+   * they have one. */
+  private review(
+    entry: Entry,
+    text: string,
+    channelId: string,
+    root: string | undefined,
+  ) {
+    const note = turnNote(entry.handle, channelId, root);
     return note ? `${text}\n\n${note}` : text;
   }
 

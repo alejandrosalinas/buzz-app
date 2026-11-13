@@ -1,4 +1,6 @@
 use super::*;
+#[cfg(target_os = "macos")]
+use crate::relay::tests::scripted_media_server;
 use crate::relay::tests::{
     hung_up, media_blob, media_response, ranged_media_server, spool_files_deleted,
     spool_files_reach, whole_media_server, SPOOL_TESTS,
@@ -356,6 +358,48 @@ async fn menu_downloads_refuse_an_oversized_declared_total() {
             saves,
             "{total}"
         );
+    }
+}
+
+/// The media menu downloads an image from the listener with one GET for all
+/// of it. Whether the relay answers the listener's block read by `Range` or
+/// sends the image whole, the reply declares the image's length, which the
+/// menu's limit accepts.
+#[cfg(target_os = "macos")]
+#[tokio::test]
+async fn a_whole_image_get_declares_a_length_menu_downloads_accept() {
+    let blob = media_blob(4096);
+    let total = blob.len();
+    let image = |status: &str, headers: &str| {
+        let head = String::from_utf8(media_response(status, headers, &[])).unwrap();
+        [
+            head.replace("video/mp4", "image/png").into_bytes(),
+            blob.clone(),
+        ]
+        .concat()
+    };
+    let ranged = image(
+        "206 Partial Content",
+        &format!(
+            "Content-Range: bytes 0-{}/{total}\r\nContent-Length: {total}\r\n",
+            total - 1
+        ),
+    );
+    let whole = image("200 OK", &format!("Content-Length: {total}\r\n"));
+    let stream = stream();
+    for (response, name) in [(ranged, "c"), (whole, "d")] {
+        let (origin, served) = scripted_media_server(vec![response]);
+        let url = origin
+            .join(&format!("/media/{}.png", name.repeat(64)))
+            .unwrap();
+        let reply = get(&stream, &url, "").await;
+        assert_eq!(reply.status, 200, "{name}");
+        assert_eq!(reply.header("content-type"), Some("image/png"));
+        assert_eq!(reply.header("content-range"), None);
+        assert_eq!(length(&reply), total);
+        assert_eq!(reply.body, blob);
+        assert!(crate::media_context_menu::fits(length(&reply) as i64));
+        assert_eq!(served.load(std::sync::atomic::Ordering::SeqCst), 1);
     }
 }
 

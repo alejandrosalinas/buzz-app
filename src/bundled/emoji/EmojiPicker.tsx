@@ -4,6 +4,7 @@ import type { GifShortcut } from "./gif-shortcut";
 import { useConversationPresentation } from "../../features/conversation/ConversationPresentation";
 import { Tabs } from "../../shared/design-system/ui/Tabs";
 import { Button } from "../../shared/design-system/ui/Button";
+import { LoadingRegion } from "../../shared/design-system/ui/LoadingRegion";
 import { IconButton } from "../../shared/design-system/ui/IconButton";
 import {
   type RefObject,
@@ -341,7 +342,15 @@ export function EmojiPicker({
           </Button>
         </div>
       )}
-      {tab === "emoji" && catalog.error && (
+      {/* Session recovery retries a transient failure; Unicode stays usable. */}
+      {tab === "emoji" &&
+        (catalog.status === "loading" ||
+          (catalog.status === "error" && catalog.transient)) && (
+          <LoadingRegion pending label="Loading community emoji…">
+            {null}
+          </LoadingRegion>
+        )}
+      {tab === "emoji" && catalog.error && !catalog.transient && (
         <div className={styles.emojiStatus}>
           <p role="alert">{catalog.error}</p>
           <Button type="button" onClick={() => void session.emoji.refresh()}>

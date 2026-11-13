@@ -2,7 +2,13 @@ import type { PluginModule } from "../../plugins/api";
 import { NotesPage } from "./NotesPage";
 import { notesRoute } from "./routes";
 
-export const inject = ["pages", "relay", "navigation", "panels"];
+export const inject = [
+  "pages",
+  "relay",
+  "navigation",
+  "panels",
+  "conversation",
+];
 export const apply: PluginModule["apply"] = (ctx) => {
   const relay = ctx.relay;
   ctx.pages.register({
@@ -18,6 +24,7 @@ export const apply: PluginModule["apply"] = (ctx) => {
         relay={relay}
         navigator={ctx.navigation}
         panels={ctx.panels}
+        codeBlocks={ctx.conversation.codeBlocks}
       />
     ),
   });

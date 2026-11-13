@@ -37,8 +37,7 @@ test("candidate version embeds the updater only when both values are set, never 
           RUNNER_TEMP: directory,
           GITHUB_ENV: output,
           GITHUB_OUTPUT: join(directory, "outputs"),
-          GITHUB_RUN_NUMBER: "42",
-          GITHUB_RUN_ATTEMPT: "2",
+          PREVIEW_VERSION: "1.0.2-preview.42",
         },
       },
     );
@@ -46,12 +45,12 @@ test("candidate version embeds the updater only when both values are set, never 
     assert.deepEqual(
       JSON.parse(readFileSync(join(directory, "candidate.json"))),
       {
-        version: "0.7.0-preview.42.2",
+        version: "1.0.2-preview.42",
         bundle: { createUpdaterArtifacts: false },
         ...(plugins && { plugins }),
       },
     );
-    assert.equal(readFileSync(output, "utf8"), "VERSION=0.7.0-preview.42.2\n");
+    assert.equal(readFileSync(output, "utf8"), "VERSION=1.0.2-preview.42\n");
   }
 });
 
@@ -71,6 +70,50 @@ function selected(
   );
 }
 
+test("previews build main daily and after each stable release, with one version per run", () => {
+  const caller = parse(read(".github/workflows/release.yml"));
+  assert.equal(caller.on.schedule.length, 1);
+  assert.match(caller.on.schedule[0].cron, /^[1-9]\d? \d+ \* \* \*$/);
+  assert.deepEqual(caller.on.workflow_run, {
+    workflows: ["Desktop stable release"],
+    types: ["completed"],
+  });
+  assert.equal(
+    parse(read(".github/workflows/desktop-stable.yml")).name,
+    "Desktop stable release",
+  );
+  const { source, desktop } = caller.jobs;
+  assert.match(source.if, /workflow_run\.conclusion == 'success'/);
+  assert.match(
+    source.if,
+    /!contains\(github\.event\.workflow_run\.head_branch, '-'\)/,
+  );
+  // Runs the source job skips must stay out of the shared preview queue.
+  const eligible = (expr) =>
+    expr
+      .replace(/\s+/g, " ")
+      .match(/\(github\.event_name != 'workflow_run' \|\| .*?'-'\)\)\)/)?.[0];
+  assert.ok(eligible(source.if));
+  assert.equal(eligible(caller.concurrency.group), eligible(source.if));
+  assert.match(
+    caller.concurrency.group.replace(/\s+/g, " "),
+    /\$\{\{ !\(github\.event_name.*\) && format\('skipped-\{0\}', github\.run_id\) \|\| \(inputs\.candidates && github\.ref \|\| 'macos-prerelease'\) \}\}$/,
+  );
+  // The release only gates the run: main's head is built, with its own scripts.
+  const [checkout, derive] = source.steps;
+  assert.equal(checkout.with.ref, undefined);
+  assert.equal(checkout.with["fetch-depth"], 0);
+  assert.equal(derive.run, "node scripts/preview-version.mjs HEAD");
+  assert.equal(desktop.needs, "source");
+  assert.equal(
+    desktop.with.preview_version,
+    `\${{ needs.source.outputs.version }}`,
+  );
+  assert.equal(desktop.with.source_sha, undefined);
+  const build = parse(read(".github/workflows/desktop-build.yml"));
+  assert.equal(build.env.PREVIEW_VERSION, `\${{ inputs.preview_version }}`);
+});
+
 test("all-platform releases preserve candidate isolation and read-only installer jobs", () => {
   const caller = parse(read(".github/workflows/release.yml"));
   assert.equal(caller.on.workflow_dispatch.inputs.candidates.default, false);
@@ -85,7 +128,7 @@ test("all-platform releases preserve candidate isolation and read-only installer
     true,
   );
   assert.equal(
-    selected(desktop, { promote_version: "0.0.0-preview.42.2" }),
+    selected(desktop, { promote_version: "0.0.0-preview.42" }),
     false,
   );
   assert.equal(

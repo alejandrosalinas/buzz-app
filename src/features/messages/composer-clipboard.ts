@@ -163,7 +163,9 @@ export function composerClipboard(doc: EditorNode, document: Document) {
   const container = document.createElement("div");
   container.appendChild(fragment);
   return {
-    text: composerMarkdown(projectComposerDocument(humanised(doc)).draft),
+    text: composerMarkdown(projectComposerDocument(humanised(doc)).draft, {
+      authored: true,
+    }),
     html: `<div data-buzz-copy="composer">${container.innerHTML}</div>`,
   };
 }
@@ -192,6 +194,27 @@ function sourced(node: EditorNode): EditorNode | null {
       node.content.content.flatMap((child) => sourced(child) ?? []),
     ),
   );
+}
+
+/** The files a paste attaches. Office and iWork put a picture of copied text
+ * beside it, which WebKit offers as an image file; when the HTML flavor has
+ * text, those images render it and the paste is that text. Every text path,
+ * raw and code included, can fall back to plain text, so it must have some. */
+export function pastedFiles(data: DataTransfer | null): File[] {
+  const files = Array.from(data?.items ?? [])
+    .filter((item) => item.kind === "file")
+    .map((item) => item.getAsFile())
+    .filter((file): file is File => file !== null);
+  const html =
+    files.length &&
+    files.every((file) => file.type.startsWith("image/")) &&
+    data?.getData("text/plain").trim()
+      ? data.getData("text/html")
+      : "";
+  return html &&
+    new DOMParser().parseFromString(html, "text/html").body.textContent?.trim()
+    ? []
+    : files;
 }
 
 /** External HTML contributes web links, never Buzz identity metadata or styling. */

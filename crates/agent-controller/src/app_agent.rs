@@ -244,6 +244,12 @@ impl AppAgent {
             last.name == self.name && last.picture == self.picture && last.about == self.about
         })
     }
+    /// Whether to publish its profile: when it changed, or when `force` asks
+    /// to republish the same one, for example so the relay's latest profile
+    /// carries the saved owner proof again before an owner archives it.
+    pub fn profile_due(&self, force: bool) -> bool {
+        force || !self.profile_is_current()
+    }
     /// Its profile as this row describes it, replacing the last one accepted.
     pub fn profile_event(&self, key: &Secret) -> Result<serde_json::Value> {
         valid_name(&self.name)?;

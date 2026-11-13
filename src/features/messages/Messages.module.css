@@ -280,7 +280,17 @@ html[data-keyboard-navigation] .authorLink:focus-visible {
   overflow-wrap: anywhere;
 }
 .text {
+  composes: document message from "../markdown/Markdown.module.css";
   white-space: pre-wrap;
+}
+.codeBlock {
+  composes: codeFrame from "../markdown/Markdown.module.css";
+}
+.codeActions {
+  composes: codeActions from "../markdown/Markdown.module.css";
+}
+.imageAlt {
+  composes: imageAlt from "../markdown/Markdown.module.css";
 }
 .text[data-single-emoji] {
   --inline-emoji-size: var(--size-emoji-display);
@@ -418,25 +428,22 @@ html[data-keyboard-navigation] .authorLink:focus-visible {
 .reactionGlyph .reactionNativeEmoji {
   padding: var(--space-half);
 }
-.reactionFallbackEmoji {
-  display: inline-block;
-  min-width: 0;
-  max-width: var(--compact-control-size, var(--size-control-sm));
-  font-size: var(--text-caption);
-  line-height: 1;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
 .reactionCustomEmoji {
   display: block;
   width: 0.75rem;
   height: 0.75rem;
   object-fit: contain;
 }
+/* A shortcode without usable artwork shows this neutral glyph, never its text. */
+.reactionPlaceholder {
+  display: block;
+  width: 0.75rem;
+  height: 0.75rem;
+}
 /* Paint 12px artwork at 14px (10.5pt), keeping the capsule's layout box. */
 .reactionGlyph [data-reaction-artwork],
-.reactionGlyph .reactionCustomEmoji {
+.reactionGlyph .reactionCustomEmoji,
+.reactionGlyph .reactionPlaceholder {
   scale: calc(7 / 6);
 }
 .visuallyHidden {
@@ -477,7 +484,8 @@ html[data-keyboard-navigation] .authorLink:focus-visible {
   /* Color glyph ink extends beyond its em square, especially on macOS. */
   line-height: 1.25;
 }
-.reactionPreviewEmoji .reactionCustomEmoji {
+.reactionPreviewEmoji .reactionCustomEmoji,
+.reactionPreviewEmoji .reactionPlaceholder {
   width: calc(var(--space-6) * 2);
   height: calc(var(--space-6) * 2);
 }
@@ -1751,215 +1759,6 @@ button.mediaPreview {
 .text :where(p, li),
 .plainText {
   text-wrap-style: pretty;
-}
-.text p {
-  line-height: inherit;
-}
-.text > :first-child:not([data-single-emoji]) {
-  margin-top: 0;
-}
-.text > :last-child {
-  margin-bottom: 0;
-}
-.text :where(p, ul, ol, blockquote, pre, .codeBlock, table, hr) {
-  margin: var(--space-4) 0;
-}
-.text > p:has(+ :is(ul, ol)) {
-  margin-bottom: var(--space-2);
-}
-.text > p + :where(ul, ol) {
-  margin-top: var(--space-2);
-}
-.text :where(h1, h2, h3, h4, h5, h6) {
-  margin: var(--space-4) 0 var(--space-1h);
-  color: var(--text-standard);
-  font-size: var(--text-body);
-  line-height: var(--text-body--line-height);
-  letter-spacing: var(--text-body--letter-spacing);
-}
-.text h1 {
-  font-size: var(--text-heading);
-  line-height: var(--text-heading--line-height);
-  letter-spacing: var(--text-heading--letter-spacing);
-}
-.text h2 {
-  font-size: var(--text-body-lg);
-  line-height: var(--text-body-lg--line-height);
-  letter-spacing: var(--text-body-lg--letter-spacing);
-}
-.text h3 {
-  font-size: var(--text-label);
-  line-height: var(--text-label--line-height);
-  letter-spacing: var(--text-label--letter-spacing);
-}
-.text :where(h1, h2, h3) {
-  font-weight: var(--type-weight-medium);
-}
-.text :where(h4, h5, h6) {
-  font-weight: var(--type-weight-medium);
-}
-.text.text :where(ul, ol) {
-  padding-left: var(--space-6);
-}
-.text ol {
-  list-style: decimal;
-}
-.text ul {
-  list-style: disc;
-}
-.text li + li {
-  margin-top: var(--space-1);
-}
-.text li > :where(p, ul, ol) {
-  margin-top: var(--space-1);
-  margin-bottom: var(--space-1);
-}
-.text blockquote {
-  position: relative;
-  padding: var(--space-half) 0 var(--space-half) var(--space-3);
-  border-left: 3px solid transparent;
-}
-.text blockquote::before {
-  content: "";
-  position: absolute;
-  inset-block: 0;
-  left: -3px;
-  width: 3px;
-  border-radius: var(--radius-pill);
-  background: color-mix(
-    in srgb,
-    var(--border-prominent),
-    var(--border-standard)
-  );
-}
-@media (forced-colors: active) {
-  .text blockquote::before {
-    background: CanvasText;
-  }
-}
-.text blockquote > :first-child {
-  margin-top: 0;
-}
-.text blockquote > :last-child {
-  margin-bottom: 0;
-}
-.text code {
-  border-radius: var(--radius-chip);
-  background: var(--affordance-subtle);
-  padding: var(--space-half) var(--space-1h);
-  font-family: var(--font-system-mono);
-  font-size: var(--text-mono-sm);
-  line-height: var(--text-mono-sm--line-height);
-  letter-spacing: var(--text-mono-sm--letter-spacing);
-}
-/* The code scrolls inside its frame so the copy action stays in the corner.
-   A plugin-presented block keeps the same frame and action. */
-.text :is(pre, .codeBlock) {
-  position: relative;
-  max-width: 100%;
-  overflow: hidden;
-  border: 1px solid var(--border-standard);
-  border-radius: var(--radius-row);
-  background: var(--surface-panel);
-}
-.text pre code {
-  display: block;
-  overflow-x: auto;
-  border-radius: 0;
-  background: transparent;
-  padding: var(--space-3) var(--space-3);
-  scrollbar-width: thin;
-  white-space: pre;
-  overflow-wrap: normal;
-}
-/* Keep every line end reachable beside the pinned action. */
-.text pre:has(> .codeActions) code {
-  padding-inline-end: calc(var(--size-control-sm) + var(--space-3));
-}
-/* `pre` clips, so a focusable scroller draws its ring inside. */
-html[data-keyboard-navigation] .text pre code:focus-visible {
-  outline-offset: -2px;
-}
-.codeActions {
-  position: absolute;
-  display: flex;
-  gap: var(--space-half);
-  top: var(--space-1);
-  inset-inline-end: var(--space-1);
-  border-radius: var(--radius-icon-button);
-  background: var(--surface-panel);
-  user-select: none;
-}
-@media (hover: hover) and (pointer: fine) {
-  .text :is(pre, .codeBlock):not(:hover, :focus-within) .codeActions {
-    opacity: 0;
-  }
-}
-.text table {
-  display: block;
-  width: max-content;
-  max-width: 100%;
-  overflow-x: auto;
-  border: 1px solid var(--border-standard);
-  border-radius: var(--radius-control);
-  border-collapse: separate;
-  border-spacing: 0;
-  font-size: var(--text-body-sm);
-  line-height: var(--text-body-sm--line-height);
-  letter-spacing: var(--text-body-sm--letter-spacing);
-  overflow-wrap: normal;
-  scrollbar-width: thin;
-  /* Columns don't wrap; authored spaces stay, as in the rest of the body. */
-  white-space: pre;
-}
-/* Measured overflow chooses the scrollbar in style; see MessageMarkdown. */
-.text table[data-overflow="true"] {
-  overflow-x: scroll;
-}
-.text table[data-overflow="false"] {
-  overflow-x: hidden;
-}
-.text :where(th, td) {
-  border: 0;
-  border-right: 1px solid var(--border-standard);
-  border-bottom: 1px solid var(--border-standard);
-  padding: var(--space-1) var(--space-2);
-  text-align: left;
-  vertical-align: top;
-}
-.text :where(th, td):last-child {
-  border-right: 0;
-}
-.text tbody tr:last-child td {
-  border-bottom: 0;
-}
-.text th {
-  background: var(--affordance-subtle);
-  font-weight: var(--type-weight-medium);
-}
-.text hr {
-  border: 0;
-  border-top: 1px solid var(--border-standard);
-}
-.text input[type="checkbox"] {
-  width: 1em;
-  height: 1em;
-  margin: 0 var(--space-1h) var(--space-half) 0;
-  vertical-align: middle;
-  accent-color: var(--affordance-prominent);
-}
-.text a:not([data-solo-link]) {
-  color: var(--text-link);
-  text-decoration: underline;
-  text-decoration-thickness: 1px;
-  text-underline-offset: 2px;
-}
-.text a:not([data-solo-link]):hover {
-  text-decoration-thickness: 2px;
-}
-.imageAlt {
-  color: var(--text-subtle);
-  font-style: italic;
 }
 
 /* Metadata after the body's last line; on its own line after a closing block

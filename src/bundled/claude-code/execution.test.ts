@@ -165,6 +165,7 @@ it("carries Claude tools, hooks and Stop over guest stdio with guest authenticat
       undefined,
       expect.objectContaining({ method: "tools/call" }),
       expect.any(AbortSignal),
+      expect.any(Function),
     );
     expect(hook).toHaveBeenCalledWith("session-1", "PermissionRequest", {
       session_id: "session-1",

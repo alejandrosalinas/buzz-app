@@ -11,7 +11,7 @@ const apply = args[0] === "--apply";
 const repository = process.env.GH_REPO;
 assert.equal(repository, "block/buzz-app", "Unexpected cleanup repository");
 const versionPattern =
-  /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)-preview\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/;
+  /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)-preview\.([1-9]\d*)$/;
 const gh = (...arguments_) =>
   execFileSync("gh", arguments_, {
     encoding: "utf8",

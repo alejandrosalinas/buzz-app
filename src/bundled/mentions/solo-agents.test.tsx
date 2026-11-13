@@ -541,6 +541,244 @@ it("picking an addressed row while several agents are addressed toggles it", asy
   test.library.dispose();
 });
 
+it.each([1, 2])(
+  "typed exact-name Enter chooses Al with %i agents addressed",
+  async (count) => {
+    const test = setup(false),
+      user = userEvent.setup();
+    const alexandra = { pubkey: "c".repeat(64), name: "Alexandra" },
+      bob = { pubkey: "d".repeat(64), name: "Bob" },
+      al = { pubkey: "e".repeat(64), name: "Al" };
+    const identities = [alexandra, bob, al];
+    const library = createAgentLibrary(async () => ({
+      definitions: [],
+      identities,
+    }));
+    // Load all three choices before opening: this tests ranking, not arrival order.
+    await library.queries.refresh();
+    const session = {
+      ...test.session,
+      agentLibrary: library.queries,
+      agentChoices: createAgentChoices({
+        scope: "exact-name",
+        library: library.queries,
+        signal: new AbortController().signal,
+      }),
+    };
+    const { view, toggle } = renderAudiencePicker(
+      { ...test, session },
+      [alexandra, bob].slice(0, count),
+    );
+    try {
+      await user.click(screen.getByRole("button", { name: /Change agents/ }));
+      await screen.findByRole("button", {
+        name: rowName("Al", "Adds to chat when you send"),
+      });
+      const search = screen.getByRole("searchbox");
+      await user.type(search, "Al");
+      // Assert the action first: wrong ordering used to remove Alexandra,
+      // or hit the composer's last-agent guard when she was addressed alone.
+      await user.keyboard("{Enter}");
+      expect(toggle).toHaveBeenCalledExactlyOnceWith(al);
+      expect(
+        [...document.querySelectorAll("[data-mention-choice]")].map((row) =>
+          row.getAttribute("data-mention-choice"),
+        ),
+      ).toEqual([al.pubkey, alexandra.pubkey]);
+      expect(search).toHaveFocus();
+      expect(search).toBeVisible();
+    } finally {
+      view.unmount();
+      library.dispose();
+      test.library.dispose();
+    }
+  },
+);
+
+it("installs addressed exact keys before the cap and keeps toggle order until reopening", async () => {
+  const test = setup(false),
+    user = userEvent.setup();
+  // More than 50 choices is intentional: sorting a capped list loses Zulu.
+  const identities = Array.from({ length: 52 }, (_, i) => ({
+    pubkey: (i + 16).toString(16).padStart(64, "0"),
+    name: i === 51 ? "Zulu" : `Agent ${String(i).padStart(2, "0")}`,
+  }));
+  const library = createAgentLibrary(async () => ({
+    definitions: [],
+    identities,
+  }));
+  const list = {
+    status: "ready" as const,
+    channels: [
+      {
+        id: "parent",
+        name: "Chat",
+        channelType: "solo" as const,
+        members: [] as string[],
+      },
+    ],
+  };
+  const session = {
+    ...test.session,
+    channels: {
+      ...test.session.channels,
+      list: () => list,
+    },
+    agentLibrary: library.queries,
+    agentChoices: createAgentChoices({
+      scope: "cap",
+      library: library.queries,
+      signal: new AbortController().signal,
+    }),
+  };
+  const zulu = identities[51],
+    alpha = identities[0];
+  if (!zulu || !alpha) throw new Error("Missing cap fixture");
+  let recipients = [zulu];
+  const toggle = vi.fn((person: MentionRecipient) => {
+    recipients = recipients.some((p) => p.pubkey === person.pubkey)
+      ? recipients.filter((p) => p.pubkey !== person.pubkey)
+      : [...recipients, person];
+    view.rerender(picker());
+  });
+  const picker = () => (
+    <MentionPicker
+      session={session}
+      scope="test"
+      channelId="parent"
+      disabled={false}
+      inviteAgents
+      audience={{ recipients, named: false, only: vi.fn(), toggle }}
+      select={() => true}
+    />
+  );
+  const view = render(picker());
+  const open = () =>
+    user.click(
+      screen.getByRole("button", { name: /Change agents|Choose agent/ }),
+    );
+  const labels = identities.map((p) => p.name);
+  const shown = () =>
+    [...document.querySelectorAll("[data-mention-choice]")].map(
+      (row) =>
+        identities.find(
+          (p) => p.pubkey === row.getAttribute("data-mention-choice"),
+        )?.name,
+    );
+  try {
+    await open();
+    const zuluRow = await screen.findByRole("button", {
+      name: rowName("Zulu", "Adds to chat when you send"),
+    });
+    expect(shown()).toEqual(["Zulu", ...labels.slice(0, 49)]);
+    expect(zuluRow).toHaveAttribute("aria-pressed", "true");
+    expect(new Set(shown()).size).toBe(50);
+    await user.click(
+      screen.getByRole("button", {
+        name: rowName(alpha.name, "Adds to chat when you send"),
+      }),
+    );
+    zuluRow.focus();
+    await user.keyboard("{Enter}");
+    expect(toggle.mock.calls.map(([p]) => p.pubkey)).toEqual([
+      alpha.pubkey,
+      zulu.pubkey,
+    ]);
+    expect(zuluRow).toHaveAttribute("aria-pressed", "false");
+    expect(shown()[0]).toBe("Zulu");
+    expect(screen.getByRole("searchbox")).toBeVisible();
+    await user.keyboard("{Escape}");
+    await open();
+    await screen.findByRole("button", {
+      name: rowName(alpha.name, "Adds to chat when you send"),
+    });
+    expect(shown()).toEqual(labels.slice(0, 50));
+    await user.type(screen.getByRole("searchbox"), "Zulu");
+    await screen.findByRole("button", {
+      name: rowName("Zulu", "Adds to chat when you send"),
+    });
+    expect(shown()).toEqual(["Zulu"]);
+    act(() => test.setArchived([zulu.pubkey]));
+    expect(
+      screen.getByRole("button", { name: /^Zulu.*Archived/ }),
+    ).toBeDisabled();
+  } finally {
+    view.unmount();
+    library.dispose();
+    test.library.dispose();
+  }
+});
+
+it("checks only the addressed namesake and appends late choices without moving it", async () => {
+  const test = setup(false),
+    user = userEvent.setup();
+  let identities = [
+    { pubkey: "c".repeat(64), name: "Twin" },
+    { pubkey: "d".repeat(64), name: "Twin" },
+  ];
+  const library = createAgentLibrary(async () => ({
+    definitions: [],
+    identities,
+  }));
+  const list = {
+    status: "ready" as const,
+    channels: [
+      {
+        id: "parent",
+        name: "Chat",
+        channelType: "solo" as const,
+        members: [] as string[],
+      },
+    ],
+  };
+  const session = {
+    ...test.session,
+    channels: {
+      ...test.session.channels,
+      list: () => list,
+    },
+    agentLibrary: library.queries,
+    agentChoices: createAgentChoices({
+      scope: "twins",
+      library: library.queries,
+      signal: new AbortController().signal,
+    }),
+  };
+  const addressed = identities[1];
+  if (!addressed) throw new Error("Missing namesake fixture");
+  const view = renderAudiencePicker({ ...test, session }, [addressed]);
+  try {
+    await user.click(screen.getByRole("button", { name: /Change agents/ }));
+    const twins = await screen.findAllByRole("button", {
+      name: /Twin.*Adds to chat when you send/,
+    });
+    expect(twins).toHaveLength(2);
+    expect(twins.map((row) => row.getAttribute("aria-pressed"))).toEqual([
+      "true",
+      "false",
+    ]);
+    identities = [...identities, { pubkey: "e".repeat(64), name: "Aaron" }];
+    await act(() => library.queries.refresh());
+    await screen.findByRole("button", {
+      name: rowName("Aaron", "Adds to chat when you send"),
+    });
+    expect(
+      [...document.querySelectorAll("[data-mention-choice]")].map((row) =>
+        row.getAttribute("data-mention-choice"),
+      ),
+    ).toEqual([addressed.pubkey, "c".repeat(64), "e".repeat(64)]);
+    expect(
+      screen.getAllByRole("button", {
+        name: /Twin.*Adds to chat when you send/,
+      })[0],
+    ).toBe(twins[0]);
+  } finally {
+    view.view.unmount();
+    library.dispose();
+    test.library.dispose();
+  }
+});
+
 it("closing the pill menu resumes typing in the draft, unless the click went elsewhere", async () => {
   const test = setup(),
     user = userEvent.setup();
@@ -3856,61 +4094,185 @@ it("Space selects someone outside the channel by a pasted npub once the director
   }
 });
 it.each([
-  { name: "Jose", namesake: false, space: true },
-  { name: "Jose", namesake: true, space: true },
-  { name: "Jose (agent)", namesake: false, space: false },
+  { name: "Jose", namesake: false, member: false },
+  { name: "Jose", namesake: true, member: false },
+  // A literal `Jose (agent)` is a longer name. Only a member's longer name
+  // blocks a member's exact name, so this agent is in the channel.
+  { name: "Jose (agent)", namesake: false, member: true },
 ])(
   "Space distinguishes an agent qualifier from the real name (%j)",
-  async ({ name, namesake, space }) => {
-    const h = spaceFixture("Jose");
+  async ({ name, namesake, member }) => {
+    const agent = member ? otherMember : outsideJose;
+    const h = spaceFixture("Jose", member ? { [agent]: name } : {});
     try {
       await waitFor(() =>
         expect(h.people).toHaveBeenCalledWith("jose", 1, expect.anything()),
       );
-      expect(h.result()?.spaceId).toBe(h.member);
       await h.finish({
         people: [
-          { pubkey: outsideJose, name, isAgent: true },
+          { pubkey: agent, name, isAgent: true },
           ...(namesake
             ? [{ pubkey: "e".repeat(64), name, isAgent: true as const }]
             : []),
         ],
         hasMore: false,
       });
+      // Both show `Jose (agent)`; only the literal name continues `jose`.
       await waitFor(() =>
         expect(
-          h.result()?.items.find((item) => item.id === outsideJose)?.label,
+          h.result()?.items.find((item) => item.id === agent)?.label,
         ).toMatch(namesake ? /^Jose \(agent\) · / : /^Jose \(agent\)$/),
       );
-      expect(h.result()?.spaceId).toBe(space ? h.member : undefined);
-      expect(h.canSpace(h.member)).toBe(space);
-      expect(h.canSpace(outsideJose)).toBe(false);
+      expect(h.result()?.spaceId).toBe(member ? undefined : h.member);
+      expect(h.canSpace(h.member)).toBe(!member);
+      expect(h.canSpace(agent)).toBe(false);
     } finally {
       h.dispose();
     }
   },
 );
-it("Space leaves a member's name as prose once the directory finds a longer outside name", async () => {
+it("Space keeps a member's name when the directory finds a longer outside name", async () => {
   const h = spaceFixture("Jose");
   try {
     await waitFor(() =>
       expect(h.people).toHaveBeenCalledWith("jose", 1, expect.anything()),
     );
-    // A longer outside name cannot block before the directory reports it.
     await waitFor(() => expect(h.result()?.spaceId).toBe(h.member));
     await h.finish({
-      people: [{ pubkey: outsideJose, name: "Jose Luis" }],
+      people: [{ pubkey: outsideJose, name: "Jose-Luis" }],
       hasMore: false,
     });
-    await waitFor(() =>
-      expect(h.result()?.items.some((item) => item.id === outsideJose)).toBe(
-        true,
-      ),
-    );
-    expect(h.result()?.spaceId).toBeUndefined();
-    expect(h.canSpace(h.member)).toBe(false);
+    const outside = () =>
+      h.result()?.items.find((item) => item.id === outsideJose);
+    await waitFor(() => expect(outside()?.detail).toBe("Not in channel"));
+    // Only another member's longer name could make the member's name ambiguous.
+    expect(h.result()?.spaceId).toBe(h.member);
+    expect(h.canSpace(h.member)).toBe(true);
+    // The outside row is still listed and can still be chosen explicitly.
+    expect(outside()?.canSelect?.("Enter")).toBe(true);
+    expect(h.canSpace(outsideJose)).toBe(false);
   } finally {
     h.dispose();
+  }
+});
+it("Space keeps a member agent's name beside the viewer's longer agent name offered outside a stream", async () => {
+  const test = setup();
+  // The viewer's agents: Claude is in the stream, Claude Code is not.
+  const library = createAgentLibrary(async () => ({
+    definitions: [],
+    identities: [
+      { pubkey: test.member, name: "Claude" },
+      { pubkey: test.key, name: "Claude Code" },
+    ],
+  }));
+  await library.queries.refresh();
+  test.profiles.set(test.member, { name: "Claude" });
+  let finish!: (page: DirectoryPage) => void;
+  const people = vi.fn(
+    () =>
+      new Promise<DirectoryPage>((resolve) => {
+        finish = resolve;
+      }),
+  );
+  const session = {
+    ...test.session,
+    // Can add members, so the stream offers Claude Code (section 1).
+    outbox: { supports: () => true },
+    agentChoices: createAgentChoices({
+      scope: "test",
+      library: library.queries,
+      signal: new AbortController().signal,
+    }),
+    directMessages: { ...test.session.directMessages, people },
+  } as unknown as RelaySession;
+  const publish = vi.fn();
+  const result = () =>
+    publish.mock.lastCall?.[0] as CompletionResult | undefined;
+  const offered = () => result()?.items.find((item) => item.id === test.key);
+  const view = render(
+    <MentionCompletion
+      session={session}
+      scope="space-test"
+      channelId="parent"
+      observation={{ revision: 1, text: "@claude", start: 7, end: 7 }}
+      query={{ start: 0, end: 7, query: "claude" }}
+      publish={publish}
+    />,
+  );
+  try {
+    await waitFor(() => expect(offered()?.detail).toBe("Not in channel"));
+    await waitFor(() =>
+      expect(people).toHaveBeenCalledWith("claude", 1, expect.anything()),
+    );
+    // Local, yet outside the channel: Claude Code no more blocks the member
+    // than a directory name does, so `@Claude Code` mentions Claude.
+    expect(result()?.spaceId).toBe(test.member);
+    expect(
+      result()
+        ?.items.find((item) => item.id === test.member)
+        ?.canSelect?.(" "),
+    ).toBe(true);
+    // Picking the row is how to add and mention Claude Code.
+    expect(offered()?.canSelect?.("Enter")).toBe(true);
+    expect(offered()?.canSelect?.(" ")).toBe(false);
+  } finally {
+    await act(async () => finish?.({ people: [], hasMore: false }));
+    view.unmount();
+    library.dispose();
+    test.library.dispose();
+  }
+});
+it("Space keeps a member agent's name beside the viewer's longer agent name outside a Solo chat that invites agents", async () => {
+  const test = setup(false);
+  // The Solo chat's own agent list: Claude is in the chat, Claude Code is not.
+  const library = createAgentLibrary(async () => ({
+    definitions: [],
+    identities: [
+      { pubkey: test.member, name: "Claude" },
+      { pubkey: test.key, name: "Claude Code" },
+    ],
+  }));
+  await library.queries.refresh();
+  test.profiles.set(test.member, { name: "Claude" });
+  const session = {
+    ...test.session,
+    agentChoices: createAgentChoices({
+      scope: "test",
+      library: library.queries,
+      signal: new AbortController().signal,
+    }),
+  };
+  const publish = vi.fn();
+  const result = () =>
+    publish.mock.lastCall?.[0] as CompletionResult | undefined;
+  const invited = () => result()?.items.find((item) => item.id === test.key);
+  const view = render(
+    <MentionCompletion
+      {...emptyCompletion}
+      session={session}
+      inviteAgents
+      observation={{ revision: 1, text: "@claude", start: 7, end: 7 }}
+      query={{ start: 0, end: 7, query: "claude" }}
+      publish={publish}
+    />,
+  );
+  try {
+    await waitFor(() => expect(invited()?.detail).toBe("Adds to chat"));
+    // The same rule as in a stream: an agent outside the chat does not block
+    // a member's exact name, so `@Claude Code` mentions Claude.
+    expect(result()?.spaceId).toBe(test.member);
+    expect(
+      result()
+        ?.items.find((item) => item.id === test.member)
+        ?.canSelect?.(" "),
+    ).toBe(true);
+    // Picking the row is how to mention Claude Code, which sending adds.
+    expect(invited()?.canSelect?.("Enter")).toBe(true);
+    expect(invited()?.canSelect?.(" ")).toBe(false);
+  } finally {
+    view.unmount();
+    library.dispose();
+    test.library.dispose();
   }
 });
 it.each([
@@ -4258,8 +4620,9 @@ it("the resolver continues a roster name into the roster's longer name without t
   const h = spaceFixture("Jose");
   try {
     const luis = { pubkey: outsideJose, name: "Jose Luis" };
+    // A draft with no saved member list: everyone in its roster is a member.
     const scope = {
-      channelId: "parent",
+      channelId: "draft",
       roster: { recipients: [{ pubkey: h.member, name: "Josefa" }, luis] },
       selected: [],
     };
@@ -4509,6 +4872,145 @@ it("Space keeps waiting after a member's profile read fails until a retry settle
     h.dispose();
   }
 });
+
+it.each([
+  // The member's profile read is still in flight.
+  { loading: "member's profile", search: "running" },
+  // The `jose` search then lists the member by name before the profile read
+  // settles: over that complete page the member's exact name selects.
+  { loading: "member's profile", search: "settled" },
+  // The member list itself is still loading, so nobody is a member yet.
+  { loading: "channel's member list", search: "running" },
+] as const)(
+  "Space holds a member's name while the $loading loads, even beside a longer outside name already listed (search $search)",
+  async ({ loading, search }) => {
+    // `@jos` found `Jose-Luis` outside the channel on a truncated page, which
+    // `@jose` keeps showing while its own search runs. Until the member and
+    // their name are known, the member may yet be the exact `Jose`, which no
+    // outside name blocks: Space may hold the name, not decline it.
+    const h = setup();
+    const jose = keypair();
+    const reads: ((events: RelayEvent[]) => void)[] = [];
+    const directory = createProfileDirectory({
+      read: () => new Promise<RelayEvent[]>((resolve) => reads.push(resolve)),
+    });
+    const channel = { id: "parent", channelType: "stream" as const };
+    const ready = {
+      status: "ready",
+      channels: [{ ...channel, members: [jose.pubkey] }],
+    };
+    const membersLoading = loading === "channel's member list";
+    let list = membersLoading
+      ? { status: "loading", channels: [channel] }
+      : ready;
+    const listeners = new Set<() => void>();
+    const searches: ((page: DirectoryPage) => void)[] = [];
+    const people = vi.fn(
+      (_query: string) =>
+        new Promise<DirectoryPage>((resolve) => searches.push(resolve)),
+    );
+    const names = bindNames(
+      { profiles: directory.queries, agentLibrary: h.library.queries },
+      { snapshot: () => [createAgentDirectory()], subscribe: () => () => {} },
+    );
+    const session = {
+      ...h.session,
+      profiles: directory.queries,
+      names,
+      channels: {
+        ...h.session.channels,
+        list: () => list,
+        subscribeList(listener: () => void) {
+          listeners.add(listener);
+          return () => listeners.delete(listener);
+        },
+      },
+      directMessages: { ...h.session.directMessages, people },
+    } as unknown as RelaySession;
+    const publish = vi.fn();
+    const result = () =>
+      publish.mock.lastCall?.[0] as CompletionResult | undefined;
+    // The host remounts the provider on each keystroke of one `@` token.
+    const typed = (query: string) => (
+      <MentionCompletion
+        key={query}
+        session={session}
+        scope="space-test"
+        channelId="parent"
+        observation={{
+          revision: query.length,
+          text: `@${query}`,
+          start: query.length + 1,
+          end: query.length + 1,
+        }}
+        query={{ start: 0, end: query.length + 1, query }}
+        publish={publish}
+      />
+    );
+    const view = render(typed("jos"));
+    try {
+      if (!membersLoading) await waitFor(() => expect(reads).toHaveLength(1));
+      await waitFor(() =>
+        expect(people).toHaveBeenCalledWith("jos", 1, expect.anything()),
+      );
+      await act(async () =>
+        searches[0]?.({
+          people: [{ pubkey: outsideJose, name: "Jose-Luis" }],
+          hasMore: true,
+        }),
+      );
+      view.rerender(typed("jose"));
+      await waitFor(() =>
+        expect(people).toHaveBeenCalledWith("jose", 1, expect.anything()),
+      );
+      // Rows wait for the member list; the kept page is a candidate already.
+      if (!membersLoading)
+        await waitFor(() =>
+          expect(result()?.items.some((item) => item.id === outsideJose)).toBe(
+            true,
+          ),
+        );
+      expect(result()?.spaceId).toBeUndefined();
+      expect(result()?.spacePending?.name).toBe("jose");
+      const pending = result()?.spacePending?.resolve(
+        new AbortController().signal,
+      );
+      if (search === "settled") {
+        await act(async () =>
+          searches[1]?.({
+            people: [
+              { pubkey: jose.pubkey, name: "Jose" },
+              { pubkey: outsideJose, name: "Jose-Luis" },
+            ],
+            hasMore: false,
+          }),
+        );
+        // The page names the member while the profile read is still held.
+        await waitFor(() => expect(result()?.spaceId).toBe(jose.pubkey));
+      }
+      if (membersLoading) {
+        act(() => {
+          list = ready;
+          for (const listener of listeners) listener();
+        });
+        await waitFor(() => expect(reads).toHaveLength(1));
+      }
+      await act(async () => reads[0]?.([profile(jose, { name: "Jose" })]));
+      // Named now: the member's exact name selects beside the outside one.
+      await expect(pending).resolves.toEqual({
+        pubkey: jose.pubkey,
+        name: "Jose",
+      });
+      await waitFor(() => expect(result()?.spaceId).toBe(jose.pubkey));
+      expect(reads).toHaveLength(1);
+    } finally {
+      view.unmount();
+      names.dispose();
+      directory.dispose();
+      h.library.dispose();
+    }
+  },
+);
 
 function rosterFixture(
   members: readonly string[],

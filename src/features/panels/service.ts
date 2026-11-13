@@ -80,6 +80,8 @@ export type Panel = Readonly<{
   /** Tabs opened from links stay until closed, like a channel tool's, instead
    * of giving way to the next link or thread. */
   keepOpen?: boolean;
+  /** Opt into conversation detail addresses and Back/Forward/Close behavior. */
+  addressable?: true;
   /** Mount tab content on first selection, then retain it for the workspace visit.
    * Component-provided titles and local detail tabs are also deferred. */
   deferUntilShown?: boolean;
@@ -206,6 +208,8 @@ export class PanelsService extends Service implements Panels {
       throw new Error("A channel placement must be bottom, side or tab");
     if (panel.keepOpen !== undefined && typeof panel.keepOpen !== "boolean")
       throw new Error("A panel's keepOpen must be a boolean");
+    if (panel.addressable !== undefined && panel.addressable !== true)
+      throw new Error("A panel's addressable must be true when set");
     if (
       panel.deferUntilShown !== undefined &&
       typeof panel.deferUntilShown !== "boolean"

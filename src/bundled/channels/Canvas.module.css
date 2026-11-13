@@ -10,6 +10,11 @@
   overflow: auto;
   padding: var(--space-panel-inset);
 }
+/* The views track stays at the panel's width, so a long code line scrolls
+   inside its block instead of widening the Canvas. */
+.views {
+  grid-template-columns: minmax(0, 1fr);
+}
 .footer {
   display: flex;
   flex-wrap: wrap;
@@ -20,36 +25,6 @@
 }
 .markdown {
   overflow-wrap: anywhere;
-}
-.markdown > * {
-  margin-block: 0;
-}
-.markdown > * + * {
-  margin-block-start: var(--space-4);
-}
-.markdown pre {
-  overflow: auto;
-  white-space: pre-wrap;
-}
-.markdown a:not([data-solo-link]) {
-  color: var(--text-link);
-  text-decoration: underline;
-}
-.markdown table {
-  display: block;
-  overflow: auto;
-  border-collapse: collapse;
-}
-.markdown th,
-.markdown td {
-  padding: var(--space-1) var(--space-3);
-  border: 1px solid var(--border-standard);
-  text-align: start;
-  vertical-align: top;
-}
-.markdown ul,
-.markdown ol {
-  padding-inline-start: var(--space-6);
 }
 .failure {
   display: flex;

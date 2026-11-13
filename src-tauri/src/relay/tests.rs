@@ -2571,7 +2571,7 @@ async fn failed_media_blocks_are_fetched_again() {
 }
 
 /// Answers each connection with the next canned response, ignoring the request.
-fn scripted_media_server(
+pub(super) fn scripted_media_server(
     responses: Vec<Vec<u8>>,
 ) -> (Url, std::sync::Arc<std::sync::atomic::AtomicUsize>) {
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();

@@ -65,6 +65,7 @@ it("an explicit clock overrides the system and can show seconds", async () => {
     hourCycle: "h12",
     seconds: true,
     messageTimestamps: "show",
+    localTimeDetails: true,
   });
   hook.unmount();
 });

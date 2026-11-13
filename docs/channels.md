@@ -1638,10 +1638,10 @@ with local ephemeral signing keys; it does not contact the deployed relay.
 The smile button in channel and thread composers opens Emoji Mart with standard
 Unicode emoji, skin tones, and the selected community's custom category. Its data
 and search load only when opened. Fuzzy search by name/shortcode, then choose an emoji
-to insert at the cursor; Enter selects a search result and Escape closes the picker
+to insert at the cursor, followed by a space unless one already follows; Enter selects a search result and Escape closes the picker
 and returns focus. You can also type `:shortcode:`: the closing colon after one
 exact Unicode or community shortcode, such as `:+1:` or `:-1:`, replaces it with
-that emoji, while partial names, namesakes, times, URLs and code keep the typed
+that emoji and the same space, while partial names, namesakes, times, URLs and code keep the typed
 text, including raw Markdown code in pasted or restored drafts. Replacement requires
 both catalogs to load successfully; partial suggestions and retry remain available
 without automatically accepting the colon. One undo restores the full typed shortcode,
@@ -1667,8 +1667,8 @@ In the composer, Shift+Left/Right selects each rendered custom emoji as one unit
 preserving its full shortcode for copying, replacement and deletion. Reversing
 direction shrinks the selection by one emoji. Visible shortcode text and emoji
 that cannot be rendered retain ordinary text selection.
-Custom emoji autocomplete adds no trailing space. The native caret uses the
-regular composer text size while the emoji preview remains large.
+The native caret uses the regular composer text size while the emoji preview
+remains large.
 
 Message and thread reactions use one bubble per emoji, counting unique people from
 the second reactor; custom emoji with different URLs stay separate.

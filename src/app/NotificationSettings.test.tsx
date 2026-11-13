@@ -15,7 +15,46 @@ import { provideNavigation } from "../features/navigation/service";
 import { NotificationsService } from "../features/notifications/service";
 import { DEFAULT_SOUND } from "../features/notifications/sound";
 import { NotificationSettings } from "./NotificationSettings";
+import { playNotificationSound } from "../features/notifications/sound";
 import { PluginRuntime } from "../plugins/runtime";
+
+function stubSoundPlayback() {
+  const players: ReturnType<typeof createContext>[] = [];
+  function createContext() {
+    const source = {
+      buffer: null,
+      onended: null as (() => void) | null,
+      start: vi.fn(),
+      stop: vi.fn(),
+      connect: vi.fn(),
+      disconnect: vi.fn(),
+    };
+    return {
+      source,
+      destination: {},
+      resume: vi.fn(async () => {}),
+      decodeAudioData: vi.fn(async () => ({})),
+      createBufferSource: () => source,
+      close: vi.fn(async () => {}),
+    };
+  }
+  vi.stubGlobal(
+    "AudioContext",
+    vi.fn(function AudioContext() {
+      const context = createContext();
+      players.push(context);
+      return context;
+    }),
+  );
+  vi.stubGlobal(
+    "fetch",
+    vi.fn(async () => ({
+      ok: true,
+      arrayBuffer: async () => new ArrayBuffer(0),
+    })),
+  );
+  return players;
+}
 
 const contexts: Context[] = [];
 afterEach(async () => {
@@ -216,20 +255,50 @@ async function chooseSound(label: string, name: string) {
   await user.click(await screen.findByRole("option", { name }));
 }
 
-it("owns one preview and stops it across replacement, disablement, inactivity, errors, and unmount", async () => {
-  const audios: FakeAudio[] = [];
-  class FakeAudio {
-    currentTime = 0;
-    onended: (() => void) | null = null;
-    onpause: (() => void) | null = null;
-    onerror: (() => void) | null = null;
-    pause = vi.fn();
-    play = vi.fn(() => Promise.resolve());
-    constructor(public src: string) {
-      audios.push(this);
-    }
-  }
-  vi.stubGlobal("Audio", FakeAudio);
+it("keeps same-sound alerts and previews independent", async () => {
+  const audios = stubSoundPlayback();
+  const ctx = new Context();
+  contexts.push(ctx);
+  const runtime = new PluginRuntime(ctx, async () => ({ apply() {} }));
+  ctx.effect(() => () => runtime.dispose());
+  const service = new NotificationsService(
+    ctx,
+    provideNavigation(ctx).navigation,
+    {
+      label: "Browser",
+      permission: async () => "granted",
+      requestPermission: async () => "granted",
+      show: async () => {},
+      dispose() {},
+    },
+  );
+  service.selectViewer("a".repeat(64));
+  const view = render(<NotificationSettings notifications={service} />);
+  const firstAlert = playNotificationSound("ping");
+  await vi.waitFor(() =>
+    expect(audios[0]?.source.start).toHaveBeenCalledOnce(),
+  );
+  await chooseSound("Direct messages", "ping");
+  expect(audios[0]?.close).not.toHaveBeenCalled();
+  expect(audios[1]?.source.start).toHaveBeenCalledOnce();
+  const secondAlert = playNotificationSound("ping");
+  await act(async () => {
+    await firstAlert?.finished;
+  });
+  await vi.waitFor(() =>
+    expect(audios[2]?.source.start).toHaveBeenCalledOnce(),
+  );
+  expect(audios[0]?.close).toHaveBeenCalledOnce();
+  expect(audios[1]?.close).not.toHaveBeenCalled();
+  view.unmount();
+  expect(audios[1]?.close).toHaveBeenCalledOnce();
+  expect(audios[2]?.close).not.toHaveBeenCalled();
+  secondAlert?.stop();
+  await secondAlert?.finished;
+});
+
+it("owns one preview and stops it across replacement, disablement, inactivity, completion, and unmount", async () => {
+  const audios = stubSoundPlayback();
   const ctx = new Context();
   contexts.push(ctx);
   const runtime = new PluginRuntime(ctx, async () => ({ apply() {} }));
@@ -252,55 +321,51 @@ it("owns one preview and stops it across replacement, disablement, inactivity, e
     screen.queryByRole("button", { name: /Preview|Pause/ }),
   ).not.toBeInTheDocument();
   await chooseSound("Direct messages", "ping");
-  expect(audios[0]?.src).toBe("/sounds/ping.mp3");
-  expect(audios[0]?.play).toHaveBeenCalledOnce();
+  expect(fetch).toHaveBeenCalledWith("/sounds/ping.mp3", {
+    signal: expect.any(AbortSignal),
+  });
+  expect(audios[0]?.source.start).toHaveBeenCalledOnce();
   await chooseSound("@Mentions", "boo");
-  expect(audios[0]?.pause).toHaveBeenCalledOnce();
-  expect(audios[0]?.onended).toBeNull();
+  expect(audios[0]?.close).toHaveBeenCalledOnce();
+  expect(audios[0]?.source.onended).toBeNull();
   expect(audios).toHaveLength(2);
   act(() => service.updatePreferences({ categories: { mention: false } }));
-  expect(audios[1]?.pause).toHaveBeenCalledOnce();
+  expect(audios[1]?.close).toHaveBeenCalledOnce();
   act(() => service.updatePreferences({ categories: { mention: true } }));
   await chooseSound("@Mentions", "doo");
   view.rerender(
     <NotificationSettings notifications={service} active={false} />,
   );
-  expect(audios[2]?.pause).toHaveBeenCalledOnce();
+  expect(audios[2]?.close).toHaveBeenCalledOnce();
   view.rerender(<NotificationSettings notifications={service} />);
   expect(audios).toHaveLength(3);
   await chooseSound("@Mentions", "boo");
-  act(() => audios[3]?.onerror?.());
-  expect(audios[3]?.pause).toHaveBeenCalledOnce();
+  act(() => audios[3]?.source.onended?.());
+  await act(async () => {});
+  expect(audios[3]?.close).toHaveBeenCalledOnce();
   await chooseSound("@Mentions", "doo");
   act(() => service.updatePreferences({ sound: false }));
-  expect(audios[4]?.pause).toHaveBeenCalledOnce();
+  expect(audios[4]?.close).toHaveBeenCalledOnce();
   act(() => service.updatePreferences({ sound: true }));
   await chooseSound("@Mentions", "boo");
   fireEvent.click(screen.getByRole("switch", { name: "Desktop alerts" }));
-  expect(audios[5]?.pause).toHaveBeenCalledOnce();
+  expect(audios[5]?.close).toHaveBeenCalledOnce();
   fireEvent.click(screen.getByRole("switch", { name: "Desktop alerts" }));
   await chooseSound("@Mentions", "doo");
   view.unmount();
-  expect(audios[6]?.pause).toHaveBeenCalledOnce();
-  expect(audios[6]?.onerror).toBeNull();
+  expect(audios[6]?.close).toHaveBeenCalledOnce();
+  expect(audios[6]?.source.onended).toBeNull();
 });
 
 it("cleans up the preview when playback rejects", async () => {
-  const pause = vi.fn();
+  const audios = stubSoundPlayback();
   let reject!: (error: Error) => void;
-  class RejectingAudio {
-    onended: (() => void) | null = null;
-    onpause: (() => void) | null = null;
-    onerror: (() => void) | null = null;
-    pause = pause;
-    play = vi.fn(
-      () =>
-        new Promise<void>((_resolve, rejectPromise) => {
-          reject = rejectPromise;
-        }),
-    );
-  }
-  vi.stubGlobal("Audio", RejectingAudio);
+  vi.mocked(fetch).mockImplementationOnce(
+    () =>
+      new Promise((_resolve, rejectPromise) => {
+        reject = rejectPromise;
+      }),
+  );
   const ctx = new Context();
   contexts.push(ctx);
   const runtime = new PluginRuntime(ctx, async () => ({ apply() {} }));
@@ -320,7 +385,7 @@ it("cleans up the preview when playback rejects", async () => {
   render(<NotificationSettings notifications={service} />);
   await chooseSound("Direct messages", "ping");
   await act(async () => reject(new Error("blocked")));
-  expect(pause).toHaveBeenCalledOnce();
+  expect(audios[0]?.close).toHaveBeenCalledOnce();
 });
 it("keeps an explicit permission check focused and busy until the native read finishes", async () => {
   const ctx = new Context();
@@ -416,16 +481,7 @@ it("repeated identical permission failures retain feedback without leaving Setti
 });
 
 it("selects and restores Silent for every category, stops previews, and can restore a sound", async () => {
-  const pause = vi.fn();
-  const play = vi.fn(async () => {});
-  vi.stubGlobal(
-    "Audio",
-    class {
-      currentTime = 0;
-      pause = pause;
-      play = play;
-    },
-  );
+  const audios = stubSoundPlayback();
   const ctx = new Context();
   contexts.push(ctx);
   const runtime = new PluginRuntime(ctx, async () => ({ apply() {} }));
@@ -457,8 +513,8 @@ it("selects and restores Silent for every category, stops previews, and can rest
       "Silent",
     );
   }
-  expect(pause).toHaveBeenCalledOnce();
-  expect(play).toHaveBeenCalledOnce();
+  expect(audios[0]?.close).toHaveBeenCalledOnce();
+  expect(audios).toHaveLength(1);
   act(() => service.reloadPreferences());
   expect(service.snapshot().preferences.sounds).toEqual({
     direct: "silent",
@@ -466,12 +522,12 @@ it("selects and restores Silent for every category, stops previews, and can rest
     thread: "silent",
     agent: "flutter",
   });
-  expect(play).toHaveBeenCalledOnce();
+  expect(audios).toHaveLength(1);
   expect(screen.getByRole("switch", { name: "Desktop alerts" })).toBeChecked();
   expect(screen.getByRole("switch", { name: "Sound" })).toBeChecked();
   await user.click(screen.getByRole("combobox", { name: "Direct messages" }));
   await user.click(await screen.findByRole("option", { name: "flutter" }));
-  expect(play).toHaveBeenCalledTimes(2);
+  expect(audios).toHaveLength(2);
   expect(service.snapshot().preferences.sounds.direct).toBe("flutter");
 });
 

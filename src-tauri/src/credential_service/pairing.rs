@@ -12,6 +12,8 @@ use tokio::time::Instant;
 
 /// How long a request waits for the human.
 pub(crate) const APPROVAL: Duration = Duration::from_secs(120);
+/// Why a paired tool waits while the sign-in it was approved under lapsed.
+pub(crate) const SIGN_IN_AGAIN: &str = "Your Builderlab sign-in expired; sign in again in Buzz";
 /// A paired token unused this long is revoked.
 pub(crate) const DISUSE: u64 = 30 * 24 * 60 * 60;
 /// `last_used` reaches the keychain at most this often.
@@ -95,6 +97,8 @@ pub(crate) struct Pairings {
     /// The communities saved in Buzz, as the page last reported them; `None`
     /// until it has. A tool pairs only for one of these.
     pub(super) communities: Mutex<Option<Vec<String>>>,
+    /// The community open in Buzz, as a relay URL, for a tool that names none.
+    active: Mutex<Option<String>>,
 }
 #[derive(Default)]
 struct State {
@@ -150,6 +154,7 @@ impl Pairings {
             state: Mutex::default(),
             lease: Mutex::default(),
             communities: Mutex::default(),
+            active: Mutex::default(),
         }
     }
 
@@ -174,6 +179,26 @@ impl Pairings {
             *saved = Some(communities);
         }
         drop(self.write.lock().await);
+    }
+
+    /// Records the community open in Buzz, as a WebSocket or HTTP URL.
+    pub(crate) fn set_active(&self, active: Option<String>) {
+        *self.active.lock().unwrap_or_else(PoisonError::into_inner) =
+            active.as_deref().map(as_relay);
+    }
+
+    /// The relay of the community open in Buzz, for a tool that names none.
+    pub(crate) fn active(&self) -> Result<String, Failure> {
+        self.active
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .clone()
+            .ok_or_else(|| {
+                Failure::new(
+                    "unavailable",
+                    "Buzz has no community open; open one in Buzz, or pass --relay",
+                )
+            })
     }
 
     /// Whether `relay` is a saved community, compared as a whole URL.
@@ -303,12 +328,26 @@ impl Pairings {
             .find(|record| record.digest == key)
             .ok_or_else(Failure::revoked)?;
         let now = unix_now()?;
-        let acts = match &human {
-            Human::Pending(message) => return Err(Failure::new("unavailable", message)),
-            Human::Absent => false,
-            Human::Ready(approver) => *approver == record.approved_by,
-        };
-        if !acts || now.saturating_sub(record.last_used) > DISUSE {
+        // Expiry comes first, so a lapsed sign-in never waits on a dead pairing.
+        let acts = now.saturating_sub(record.last_used) <= DISUSE
+            && match &human {
+                Human::Pending(message) => return Err(Failure::new("unavailable", message)),
+                Human::Absent => false,
+                // Signed out with no sign-out recorded: the sign-in lapsed, as
+                // when it expired and Buzz restarted. A sign-out or a change of
+                // account revokes every pairing on its own, so this one waits.
+                Human::Ready(approver)
+                    if record.approved_by.fi_account.is_some()
+                        && Approver {
+                            fi_account: None,
+                            ..record.approved_by.clone()
+                        } == *approver =>
+                {
+                    return Err(Failure::new("unavailable", SIGN_IN_AGAIN));
+                }
+                Human::Ready(approver) => *approver == record.approved_by,
+            };
+        if !acts {
             self.mutate(|records| {
                 records.retain(|r| r.id != record.id);
                 Some(())

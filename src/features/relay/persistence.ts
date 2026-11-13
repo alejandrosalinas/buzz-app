@@ -7,6 +7,9 @@ export type SavedStartup = {
     relayAuthor: string;
     events: unknown[];
   };
+  /** The verified-profile authority last observed, `null` once disabled, so
+   * a cached session can show saved verified names before discovery. */
+  verifiedProfiles?: unknown;
   preferences?: { savedAt: number; data: SidebarPreferences };
 };
 /** Signed wire records only. The owner re-verifies before displaying cached history.
@@ -15,13 +18,15 @@ export type SavedHead = {
   channelId: string;
   savedAt: number;
   events: unknown[];
+  /** Membership notices among the events, read apart from them. */
+  notices?: unknown[];
   profiles: unknown[];
 };
 export interface HeadPersistence {
   read(): Promise<SavedHead[]>;
   readStartup?(): Promise<SavedStartup | undefined>;
   writeStartup?(patch: SavedStartup): Promise<void>;
-  /** Signed kind 0 events mirrored from the profile directory. */
+  /** Signed kind 0 and verified-profile (30382) events mirrored from the profile directory. */
   readProfiles?(): Promise<unknown[]>;
   writeProfiles?(events: readonly unknown[]): Promise<void>;
   write(head: SavedHead): Promise<void>;

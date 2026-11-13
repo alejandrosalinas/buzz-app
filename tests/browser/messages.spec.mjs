@@ -753,7 +753,7 @@ test("media review completions stay visible and preserve modal keyboard ownershi
         await expect(emoji).toContainText(":smile:");
         await expect.poll(() => topmost(emoji)).toBe(true);
         await input.press(key);
-        await expect(input).toHaveJSProperty("value", "😄");
+        await expect(input).toHaveJSProperty("value", "😄 ");
         await expect(input).toBeFocused();
         await expect(page.getByRole("listbox")).toHaveCount(0);
       }

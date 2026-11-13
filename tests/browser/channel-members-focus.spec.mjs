@@ -870,7 +870,7 @@ test("member identity filter sits inside search and preserves modal focus", asyn
     });
     const search = dialog.getByRole("searchbox");
     const filter = dialog.getByRole("button", {
-      name: /^Filter people and agents:/,
+      name: /^Filter members:/,
     });
     await expect(filter).toBeVisible();
     expect(
@@ -919,9 +919,7 @@ test("member identity filter sits inside search and preserves modal focus", asyn
     }
     await agents.click();
     await expect(filter).toBeFocused();
-    await expect(filter).toHaveAccessibleName(
-      "Filter people and agents: Agents",
-    );
+    await expect(filter).toHaveAccessibleName("Filter members: Agents");
     await expect(
       dialog.getByRole("region", { name: "People", exact: true }),
     ).toHaveCount(0);
@@ -936,7 +934,7 @@ test("member identity filter sits inside search and preserves modal focus", asyn
     await expect(search).toBeFocused();
     await search.fill("");
     await expect(filter).toBeVisible();
-    await expect(filter).toHaveAccessibleName("Filter people and agents: All");
+    await expect(filter).toHaveAccessibleName("Filter members: All");
     await expect(dialog.getByRole("listitem")).toHaveCount(51);
     await filter.click();
     await expect(all).toHaveAttribute("aria-checked", "true");

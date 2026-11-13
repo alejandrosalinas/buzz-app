@@ -269,7 +269,10 @@ test("interface zoom preserves an open emoji search and scales its controls", as
   await expect(emoji).toHaveCSS("width", "48px");
   await expect(selected).toHaveAttribute("aria-label", chosen);
   await search.press("Enter");
-  await expect(composer).toHaveJSProperty("value", `Keep this draft ${chosen}`);
+  await expect(composer).toHaveJSProperty(
+    "value",
+    `Keep this draft ${chosen} `,
+  );
   await expect(composer).toBeFocused();
   await button(page, "Emoji and GIFS").click();
   await search.fill("grinning");
@@ -294,7 +297,10 @@ test("interface zoom preserves an open emoji search and scales its controls", as
   await expect(search).toHaveValue("grinning");
   await expect.poll(range).toEqual([2, 2]);
   await search.press("Escape");
-  await expect(composer).toHaveJSProperty("value", `Keep this draft ${chosen}`);
+  await expect(composer).toHaveJSProperty(
+    "value",
+    `Keep this draft ${chosen} `,
+  );
 });
 
 test.describe("scaled history", () => {

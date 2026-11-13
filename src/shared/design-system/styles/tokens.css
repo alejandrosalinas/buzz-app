@@ -1109,6 +1109,10 @@
   --text-on-selection: var(--neutral-1);
   --surface-text-selection-own: var(--neutral-12);
   --text-on-selection-own: var(--neutral-1);
+  /* Find on screen paints matches like a browser's find bar, dark text in both modes. */
+  --surface-find-match: var(--amber-5);
+  --surface-find-match-active: var(--orange-7);
+  --text-on-find-match: var(--neutral-12);
   --surface-message: var(--bubble-received);
   --surface-message-own: var(--bubble-neutral);
   --surface-message-hover: var(--bubble-hover);
@@ -1289,6 +1293,9 @@
   --text-on-selection: var(--neutral-1);
   --surface-text-selection-own: var(--neutral-12);
   --text-on-selection-own: var(--neutral-1);
+  --surface-find-match: var(--amber-9);
+  --surface-find-match-active: var(--orange-11);
+  --text-on-find-match: var(--neutral-1);
   --text-navigation: var(--neutral-11);
   --text-navigation-unread: var(--neutral-12);
   --text-standard: var(--neutral-12);
@@ -2117,6 +2124,7 @@
   --text-color-on-selection: var(--text-on-selection);
   --color-surface-text-selection-own: var(--surface-text-selection-own);
   --text-color-on-selection-own: var(--text-on-selection-own);
+  --text-color-on-find-match: var(--text-on-find-match);
   --color-affordance-prominent: var(--affordance-prominent);
   --color-affordance-prominent-hover: var(--affordance-prominent-hover);
   --color-affordance-prominent-pressed: var(--affordance-prominent-pressed);

@@ -57,6 +57,9 @@ export function createNameProvider(
               string,
               ReturnType<ReturnType<NamingPolicy["resolve"]>["get"]>
             >;
+            // The scope's keys with a name: those without one cannot label
+            // or collide, so an outside lookup does not pay for them.
+            named?: readonly string[];
           }
         >;
       }
@@ -218,11 +221,23 @@ export function createNameProvider(
             outsiders.delete(outsiders.keys().next().value);
         }
         outsiders.set(id, scoped);
-        if (!scoped.labels.has(key))
+        if (!scoped.labels.has(key)) {
+          if (!scoped.named) {
+            const { identities } = current(source);
+            const shown = new Set(
+              displayFacts?.map((fact) => fact.pubkey.toLowerCase()),
+            );
+            scoped.named = [...selected].filter(
+              (member) => identities.has(member) || shown.has(member),
+            );
+          }
           scoped.labels.set(
             key,
-            resolveLabels(source, [...selected, key], displayFacts).get(key),
+            resolveLabels(source, [...scoped.named, key], displayFacts).get(
+              key,
+            ),
           );
+        }
         return scoped.labels.get(key);
       };
       return (pubkey) => {

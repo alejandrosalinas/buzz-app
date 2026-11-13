@@ -3392,6 +3392,55 @@ it.each([
   }
 });
 
+it("neither lists nor starts a DM with someone whose Delete started, without agent flags", async () => {
+  const relay = keypair(),
+    viewer = keypair(),
+    sam = keypair();
+  const owner = createRelaySession(
+    scriptedTransport(viewer.pubkey, relay.pubkey).transport,
+  );
+  const agents: { pubkey: string; name: string; managed: boolean }[] = [];
+  // Sam's profile carries neither auth nor is_agent.
+  const t = peopleSession(
+    owner.session,
+    [{ pubkey: sam.pubkey, name: "Sam Rivera" }],
+    agents,
+  );
+  const props = {
+    session: t.session,
+    onQueryChange: () => {},
+    input: createRef<HTMLInputElement>(),
+    pages: [],
+    openConversation: () => {},
+  };
+  try {
+    const view = render(<SearchResults {...props} query="Sam" />);
+    const group = await screen.findByRole("group", { name: "People" });
+    const option = within(group).getByRole("option", { name: /Sam Rivera/ });
+    // Listed before its Delete started; the action checks again.
+    agents.push({
+      pubkey: sam.pubkey,
+      name: "Sam Rivera",
+      managed: true,
+      deleting: true,
+    } as (typeof agents)[number]);
+    fireEvent.click(option);
+    expect(
+      await screen.findByText(
+        "This identity is archived or being deleted in this community.",
+      ),
+    ).toBeVisible();
+    expect(t.open).not.toHaveBeenCalled();
+    view.rerender(<SearchResults {...props} query="Sam R" />);
+    await waitFor(() =>
+      expect(screen.queryByRole("option", { name: /Sam Rivera/ })).toBeNull(),
+    );
+  } finally {
+    cleanup();
+    owner.dispose();
+  }
+});
+
 it("still looks up a one-character channel named by in:", async () => {
   const relay = keypair(),
     viewer = keypair();

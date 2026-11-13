@@ -18,7 +18,6 @@ import styles from "./WorkspaceComposition.module.css";
 
 /** The existing Solo inventory retains every row, menu, mutation and disclosure. */
 export type WorkspaceComposition = Readonly<{
-  leadDraft?: string;
   ordinary: ReactNode;
   chats: ReactNode;
   workspaces: readonly Readonly<{
@@ -71,11 +70,7 @@ export function RegionWorkspace(props: SoloWorkspaceProps) {
     <div className={styles.heading}>
       <NavigationItem
         label={title}
-        selected={
-          !!props.selected ||
-          (!!props.leadWorkspaceId &&
-            parts?.leadDraft === props.leadWorkspaceId)
-        }
+        selected={!!props.selected}
         data-solo-workspace-id={workspace.id}
         onClick={() => props.onSelect?.()}
       />

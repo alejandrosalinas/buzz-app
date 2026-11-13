@@ -111,7 +111,11 @@ it("publishes a description-only edit to an existing community profile", async (
   expect(api.publishProfile).toHaveBeenCalledWith(
     "https://relay.example",
     { name: "Fixture", picture: "", about: "After" },
-    { name: "Fixture", about: "Before" },
+    {
+      name: "Fixture",
+      about: "Before",
+      tz: new Intl.DateTimeFormat().resolvedOptions().timeZone,
+    },
   );
   await waitFor(() => expect(communities.joined).toHaveBeenCalledOnce());
 });
@@ -357,7 +361,11 @@ it("explains an inherited invalid avatar when editing at join and recovers on re
       picture: "https://images.example/new.png",
       about: "",
     },
-    { name: "Fixture", picture },
+    {
+      name: "Fixture",
+      picture,
+      tz: new Intl.DateTimeFormat().resolvedOptions().timeZone,
+    },
   );
   await waitFor(() => expect(communities.joined).toHaveBeenCalledOnce());
 });

@@ -12,7 +12,7 @@ Find and mention people, agents, and teams while you write.
 
 # Mention rules
 
-`version 3` · `client contract` · `uses existing tags`
+`version 4` · `client contract` · `uses existing tags`
 
 ## Abstract
 
@@ -214,7 +214,10 @@ set of choices when all of these are true:
   A literal name `Honey (agent)` still continues `honey`. A choice's own longer
   name does not continue the query when that same choice also has an alias or
   label equal to it: an agent known as both `Example` and `Example Agent` is one
-  identity, not a namesake of itself, so `example` selects it.
+  identity, not a namesake of itself, so `example` selects it. When a member
+  with aliases has an alias or label equal to the query, only members' names
+  count here: an outside choice's longer name never keeps a member's name from
+  selecting (`Honey Bee` outside the channel does not block a member `Honey`).
 
 An exact public key (Terms) is the exact name of the choice with that key, even
 one with no aliases, and of no other choice, and no name continues it: a key
@@ -236,27 +239,38 @@ the whole set, not only the shown rows.
 
 Local choices show before directory results (section 6), so a unique local name
 selects at once: directory results cannot make it ambiguous, whether or not the
-search has found them yet. A longer directory name still blocks Space once the
-search reports it, but not before. A member whose name is not known yet may be a
-namesake, so until it is, only step 2 applies. A member whose profile read
-completed without finding a profile has no name, so it cannot be a namesake and
-does not hold step 1 back; a failed read is not evidence. A name that only a
-directory result has could still gain a namesake from a pending search, so Space
-MUST NOT select it before the search finishes. Otherwise Space is a normal
+search has found them yet. A longer directory name never blocks a member's
+name; it blocks another local name once the search reports it, but not before.
+A member whose name is not known yet may be a namesake, so until it is, only
+step 2 applies. A member whose profile read completed without finding a profile
+has no name, so it cannot be a namesake and does not hold step 1 back; a failed
+read is not evidence. A name that only a directory result has could still gain
+a namesake from a pending search, so Space MUST NOT select it before the search
+finishes. Otherwise Space is a normal
 space. Tab, Enter, and a click select the highlighted row.
 
 Closing punctuation typed straight after the query (`,` `.` `!` `?` `;` `:` `)`
 or a closing quote `'` `’` `"` `”`) SHOULD select exactly as Space does, and the
 client keeps the character after the mention in place of the space, so
 `@Honey's` mentions Honey. Where Space would not select, the character is typed
-into the query instead. A longer known name that continues the query blocks
-every one of these characters, as it blocks Space, whichever character comes
-next in that name: `'` after `Pat O` while `Pat O'Brien` is known stays in the
-query, and so does `,` after `Wes` while `Wes Smith` is known. A saved team with
-the same or a longer name blocks them too. Where Space may hold a pending
-mention, so may this character, kept after the chip. A selected or pending
-mention ends at a name boundary: the next character that is not a letter, mark,
-digit or underscore.
+into the query instead. A longer known name that blocks Space blocks every one
+of these characters too, whichever character comes next in that name: `'`
+after `Pat O` while a member `Pat O'Brien` is known stays in the query, and so
+does `,` after `Wes` while a member `Wes Smith` is known. A saved team with
+the same or a longer name blocks them too. Since an outside choice's longer
+name never blocks a member's exact name, it cannot be typed out past one of
+these characters or Space: with a member `Wes`, `@Wes Smith` mentions Wes,
+followed by the text ` Smith`, even while `Wes Smith` outside the channel is
+listed, and a member `Pat O` takes `@Pat O'Brien` the same way. This holds
+for the agents the client offers outside the channel (section 1, items 2 and
+3, or a Solo chat's own agent list) as for directory results: with a member
+agent `Claude` and the viewer's offered `Claude Code`, `@Claude Code` mentions
+Claude. The user picks such a choice from the list instead. One that
+continues the member's name with another character, such as `Wes-Smith`, can
+still be typed in full. Where
+Space may hold a pending mention, so may this character, kept after the chip.
+A selected or pending mention ends at a name boundary: the next character that
+is not a letter, mark, digit or underscore.
 
 While the client cannot yet decide — the member list, member names or agent
 list is still loading, or a directory search for the query is waiting or
@@ -268,13 +282,16 @@ anything else, including a failed or truncated search or a bounded wait
 expiring (desktop: 8 s), returns the text to prose. A name the client has
 already declined is not pending: a trailing space or punctuation, a multi-word
 query that continues no name, a saved team with the same or a longer name, or
-a known choice whose name continues the query (a loaded member `Mira Example`
-for `mira`) keeps Space a normal space. Such a longer name blocks whatever
-else arrives, and the next word may complete it (`@mira Example ` selects the
-member), which a chip that ended the query could not. A pending name that,
-once the full choice set is known, only longer known names keep from selecting
-(`Mira Example`, found by the directory search for `mira` after the chip was
-held) MAY instead extend over the words typed after the chip when they spell
+a known choice whose name continues the query and blocks it whatever else
+arrives (a loaded member `Mira Example` for `mira`) keeps Space a normal
+space. The next word may complete the longer name (`@mira Example ` selects
+the member), which a chip that ended the query could not. An outside choice's
+longer name declines Space only once every member's name is known or known to
+be absent: until then a member may still have the exact name, which an outside
+name does not block. A pending name that, once the full choice set is known,
+only longer known names keep from selecting (`Mira Example`, found by the
+directory search for `mira` after the chip was held, while no member is named
+`mira`) MAY instead extend over the words typed after the chip when they spell
 one of those names up to a name boundary (`@mira Example hi` becomes a pending
 `@mira Example` with ` hi` outside it), taking the longest name the words
 complete, as Space would have needed all of it typed; this section then applies

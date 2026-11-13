@@ -39,6 +39,9 @@ export class AcpSession {
   /** Takes the first name the harness generates for it; a titled session gets
    * none. */
   named: ((title: string) => void) | undefined;
+  /** Run before each new turn is sent, one at a time: brings the session's
+   * system prompt up to date. */
+  beforeTurn: (() => Promise<void>) | undefined;
   /** The harness's id for the running turn, which a steer must name. */
   private runId: string | undefined;
   /** Steers waiting for the running turn's id, which the harness sends just
@@ -415,6 +418,7 @@ export class AcpSession {
         };
         let sent = false;
         try {
+          await this.beforeTurn?.();
           await this.select(model, effort);
           // A harness may ignore a level its model lacks, and keep one across
           // a model switch without its being set again.

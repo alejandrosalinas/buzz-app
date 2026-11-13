@@ -3753,6 +3753,8 @@ it("Join journals the join, proves admission with the signed profile read, and c
         pubkey: member.pubkey,
         tags: [],
         content: JSON.stringify({
+          // Local time is shared by default from the first publication.
+          tz: new Intl.DateTimeFormat().resolvedOptions().timeZone,
           name: "Ada",
           display_name: "Ada",
           picture: "",

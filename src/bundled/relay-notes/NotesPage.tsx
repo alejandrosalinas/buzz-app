@@ -10,12 +10,22 @@ import {
   type Ref,
 } from "react";
 import { useAgentChoices } from "../../features/agents/use-choices";
-import { SafeMarkdown } from "../../features/messages/SafeMarkdown";
-import { useIdentityNames } from "../../features/identity-names/react";
+import type {
+  CodeBlockRenderer,
+  ContributionReader,
+} from "../../features/conversation/contracts";
 import {
-  MAX_MARKDOWN_LENGTH,
-  scanMarkdown,
-} from "../../features/relay/message-content";
+  DOCUMENT_PROFILE,
+  DOCUMENT_RENDER_CELLS,
+} from "../../features/markdown/document-profile";
+import { guardDocument } from "../../features/markdown/guard";
+import {
+  MarkdownDocument,
+  MarkdownSource,
+  sharedComponents,
+} from "../../features/markdown/MarkdownDocument";
+import { useIdentityNames } from "../../features/identity-names/react";
+import { MAX_MARKDOWN_LENGTH } from "../../features/relay/message-content";
 import { PanelWorkspace } from "../../features/panels/PanelWorkspace";
 import { usePanelSplit } from "../../features/panels/usePanelSplit";
 import type { Profile } from "../../features/relay/contracts";
@@ -72,6 +82,8 @@ const emptyPanels = () => noPanels;
 type NotesNavigation = Pick<PageProps, "navigation"> & {
   navigator?: Navigation | undefined;
   panels?: Panels | undefined;
+  /** Plugin code-block renderers for note bodies. */
+  codeBlocks?: ContributionReader<CodeBlockRenderer> | undefined;
 };
 
 function NotesPanel({
@@ -161,6 +173,7 @@ export function NotesPage({
   navigation,
   navigator,
   panels,
+  codeBlocks,
 }: { relay: RelayData } & NotesNavigation) {
   const connection = useRelayConnection(relay);
   const request = useMemo(
@@ -199,6 +212,7 @@ export function NotesPage({
         navigation={request}
         navigator={navigator}
         panels={panels}
+        codeBlocks={codeBlocks}
       />
     );
   return (
@@ -224,6 +238,7 @@ export function NotesCommunity({
   navigation,
   navigator,
   panels,
+  codeBlocks,
 }: {
   session: RelaySession;
   scope?: NavigationScope | undefined;
@@ -257,6 +272,7 @@ export function NotesCommunity({
       navigation={navigation}
       navigator={navigator}
       panels={panels}
+      codeBlocks={codeBlocks}
       authors={authors}
       agents={agents}
       pending={choices.pending}
@@ -281,6 +297,7 @@ function NoteCollection({
   navigation,
   navigator,
   panels,
+  codeBlocks,
 }: NotesNavigation & {
   session: RelaySession;
   scope?: NavigationScope | undefined;
@@ -874,6 +891,7 @@ function NoteCollection({
                       note={note}
                       session={session}
                       openLink={openLink}
+                      codeBlocks={codeBlocks}
                       openProfile={
                         canProfile(note.pubkey)
                           ? () => openProfile(note.pubkey)
@@ -961,10 +979,11 @@ function NoteTime({ note }: { note: EventData }) {
   );
 }
 
-function NoteBody({
+export function NoteBody({
   note,
   session,
   openLink,
+  codeBlocks,
   author,
   picture,
   openProfile,
@@ -973,12 +992,14 @@ function NoteBody({
   note: EventData;
   session: RelaySession;
   openLink(url: string): boolean;
+  codeBlocks?: ContributionReader<CodeBlockRenderer> | undefined;
   author: string;
   picture?: string | undefined;
 }) {
-  const plain =
-    note.content.length > MAX_MARKDOWN_LENGTH ||
-    scanMarkdown(note.content).tooDeep;
+  const plain = !guardDocument(note.content, DOCUMENT_PROFILE, {
+    chars: MAX_MARKDOWN_LENGTH,
+    cells: DOCUMENT_RENDER_CELLS,
+  });
   return (
     <article className={styles.document}>
       <h2 className="text-heading">{noteTitle(note)}</h2>
@@ -987,17 +1008,18 @@ function NoteBody({
         Updated <NoteTime note={note} />
         <NoteIdentifier note={note} />
       </p>
-      <div className={styles.markdown}>
-        {plain ? (
-          <pre>{note.content}</pre>
-        ) : (
-          <SafeMarkdown
-            content={note.content}
-            openLink={openLink}
-            session={session}
-          />
-        )}
-      </div>
+      {plain ? (
+        <MarkdownSource content={note.content} className={styles.markdown} />
+      ) : (
+        <MarkdownDocument
+          content={note.content}
+          profile={DOCUMENT_PROFILE}
+          components={sharedComponents}
+          capabilities={{ openLink, session, codeBlocks, copy: true }}
+          scale="document"
+          className={styles.markdown}
+        />
+      )}
     </article>
   );
 }

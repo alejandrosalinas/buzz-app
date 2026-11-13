@@ -1,0 +1,189 @@
+## headings
+<div class="_text_7a7508">
+  <h1>
+    "One"
+  <h2>
+    "Two"
+  <h3>
+    "Three"
+  <h4>
+    "Four"
+  <h5>
+    "Five"
+  <h6>
+    "Six"
+
+## lists
+<div class="_text_7a7508">
+  <ul>
+    <li>
+      "a"
+      <ul>
+        <li>
+          "b"
+          <ul>
+            <li>
+              "c"
+    <li>
+      "d"
+  <ol>
+    <li>
+      "x"
+    <li>
+      "y"
+  <ul class="contains-task-list">
+    <li class="task-list-item">
+      <input disabled="" type="checkbox">
+      " "
+      "open"
+    <li class="task-list-item">
+      <input checked="" disabled="" type="checkbox">
+      " "
+      "done"
+
+## inline
+<div class="_text_7a7508">
+  <p>
+    <strong>
+      "bold"
+    " "
+    <em>
+      "em"
+    " "
+    <del>
+      "gone"
+    " "
+    <code>
+      "code"
+    " "
+    <a aria-label="link" data-link-label="link" href="https://example.com/" rel="noopener noreferrer" target="_blank" title="https://example.com/">
+      "link"
+    " "
+    <a aria-label="https://example.org" data-link-label="https://example.org" href="https://example.org/" rel="noopener noreferrer" target="_blank" title="https://example.org/">
+      "https://example.org"
+
+## blocks
+<div class="_text_7a7508">
+  <blockquote>
+    <p>
+      "quote"
+      <br>
+      "more"
+  <hr>
+  <table>
+    <thead>
+      <tr>
+        <th>
+          "a"
+        <th style="text-align: center;">
+          "b"
+    <tbody>
+      <tr>
+        <td>
+          "1"
+        <td style="text-align: center;">
+          "2"
+
+## code
+<div class="_text_7a7508">
+  <pre>
+    <code>
+      "plain\n"
+    <span class="_codeActions_7a7508">
+      <button aria-disabled="false" aria-label="Copy code block" class="buzz-button" data-base-ui-tooltip-trigger="" data-button-shape="capsule" data-buzz-ui="" data-icon-shape="control" data-icon-size="sm" data-icon-variant="ghost" data-size="sm" data-variant="ghost" id=<react id> tabindex="0" type="button">
+        <span class="buzz-button-label">
+          <svg aria-hidden="true" class="tabler-icon tabler-icon-copy " fill="none" height="1em" stroke-linecap="round" stroke-linejoin="round" stroke-width="2" stroke="currentColor" viewBox="0 0 24 24" width="1em" xmlns="http://www.w3.org/2000/svg">
+            <path d="M7 9.667a2.667 2.667 0 0 1 2.667 -2.667h8.666a2.667 2.667 0 0 1 2.667 2.667v8.666a2.667 2.667 0 0 1 -2.667 2.667h-8.666a2.667 2.667 0 0 1 -2.667 -2.667l0 -8.666">
+            <path d="M4.012 16.737a2.005 2.005 0 0 1 -1.012 -1.737v-10c0 -1.1 .9 -2 2 -2h10c.75 0 1.158 .385 1.5 1">
+  <pre>
+    <code class="language-ts">
+      "const x = 1\n"
+    <span class="_codeActions_7a7508">
+      <button aria-disabled="false" aria-label="Copy code block" class="buzz-button" data-base-ui-tooltip-trigger="" data-button-shape="capsule" data-buzz-ui="" data-icon-shape="control" data-icon-size="sm" data-icon-variant="ghost" data-size="sm" data-variant="ghost" id=<react id> tabindex="0" type="button">
+        <span class="buzz-button-label">
+          <svg aria-hidden="true" class="tabler-icon tabler-icon-copy " fill="none" height="1em" stroke-linecap="round" stroke-linejoin="round" stroke-width="2" stroke="currentColor" viewBox="0 0 24 24" width="1em" xmlns="http://www.w3.org/2000/svg">
+            <path d="M7 9.667a2.667 2.667 0 0 1 2.667 -2.667h8.666a2.667 2.667 0 0 1 2.667 2.667v8.666a2.667 2.667 0 0 1 -2.667 2.667h-8.666a2.667 2.667 0 0 1 -2.667 -2.667l0 -8.666">
+            <path d="M4.012 16.737a2.005 2.005 0 0 1 -1.012 -1.737v-10c0 -1.1 .9 -2 2 -2h10c.75 0 1.158 .385 1.5 1">
+
+## plugin
+<div class="_text_7a7508">
+  <div class="_codeBlock_7a7508" data-copy-code="flowchart LR" data-copy-language="Mermaid">
+    <figure>
+      "flowchart LR"
+    <span class="_codeActions_7a7508">
+      <button aria-disabled="false" aria-label="Copy code block" class="buzz-button" data-base-ui-tooltip-trigger="" data-button-shape="capsule" data-buzz-ui="" data-icon-shape="control" data-icon-size="sm" data-icon-variant="ghost" data-size="sm" data-variant="ghost" id=<react id> tabindex="0" type="button">
+        <span class="buzz-button-label">
+          <svg aria-hidden="true" class="tabler-icon tabler-icon-copy " fill="none" height="1em" stroke-linecap="round" stroke-linejoin="round" stroke-width="2" stroke="currentColor" viewBox="0 0 24 24" width="1em" xmlns="http://www.w3.org/2000/svg">
+            <path d="M7 9.667a2.667 2.667 0 0 1 2.667 -2.667h8.666a2.667 2.667 0 0 1 2.667 2.667v8.666a2.667 2.667 0 0 1 -2.667 2.667h-8.666a2.667 2.667 0 0 1 -2.667 -2.667l0 -8.666">
+            <path d="M4.012 16.737a2.005 2.005 0 0 1 -1.012 -1.737v-10c0 -1.1 .9 -2 2 -2h10c.75 0 1.158 .385 1.5 1">
+
+## throwing
+<div class="_text_7a7508">
+  <pre>
+    <code class="language-Broken">
+      "boom\n"
+    <span class="_codeActions_7a7508">
+      <button aria-disabled="false" aria-label="Copy code block" class="buzz-button" data-base-ui-tooltip-trigger="" data-button-shape="capsule" data-buzz-ui="" data-icon-shape="control" data-icon-size="sm" data-icon-variant="ghost" data-size="sm" data-variant="ghost" id=<react id> tabindex="0" type="button">
+        <span class="buzz-button-label">
+          <svg aria-hidden="true" class="tabler-icon tabler-icon-copy " fill="none" height="1em" stroke-linecap="round" stroke-linejoin="round" stroke-width="2" stroke="currentColor" viewBox="0 0 24 24" width="1em" xmlns="http://www.w3.org/2000/svg">
+            <path d="M7 9.667a2.667 2.667 0 0 1 2.667 -2.667h8.666a2.667 2.667 0 0 1 2.667 2.667v8.666a2.667 2.667 0 0 1 -2.667 2.667h-8.666a2.667 2.667 0 0 1 -2.667 -2.667l0 -8.666">
+            <path d="M4.012 16.737a2.005 2.005 0 0 1 -1.012 -1.737v-10c0 -1.1 .9 -2 2 -2h10c.75 0 1.158 .385 1.5 1">
+
+## html
+<div class="_text_7a7508">
+  <p>
+    "<mark>"
+    "x"
+    "</mark>"
+    " "
+    " "
+    "<script>"
+    "alert(1)"
+    "</script>"
+
+## spoiler
+<div class="_text_7a7508">
+  <p>
+    "Before "
+    <span class="_spoiler_7a7508" data-revealed="false" data-spoiler="">
+      <button aria-expanded="false" aria-label="Reveal spoiler" class="_spoilerMask_7a7508" type="button">
+      <span aria-hidden="true" class="_spoilerContent_7a7508" inert="">
+        <strong>
+          "secret"
+    " after"
+
+## breaks
+<div class="_text_7a7508">
+  <p>
+    "first"
+    <br>
+    "second"
+
+## image
+<div class="_text_7a7508">
+  <p>
+    <span class="_imageAlt_7a7508">
+      "alt text"
+
+## mention
+<div class="_text_7a7508">
+  <p>
+    "hi "
+    <button aria-label="View Mic profile" class="_link_594017" data-mention-kind="person" data-mention-name="Mic" data-profile-target="nostr:npub1hwamhwamhwamhwamhwamhwamhwamhwamhwamhwamhwamhwamhwasxw04hu" type="button">
+      <span class="_lead_594017">
+        <svg aria-hidden="true" class="tabler-icon tabler-icon-at _icon_594017" fill="none" height="1em" stroke-linecap="round" stroke-linejoin="round" stroke-width="2" stroke="currentColor" viewBox="0 0 24 24" width="1em" xmlns="http://www.w3.org/2000/svg">
+          <path d="M8 12a4 4 0 1 0 8 0a4 4 0 1 0 -8 0">
+          <path d="M16 12v1.5a2.5 2.5 0 0 0 5 0v-1.5a9 9 0 1 0 -5.5 8.28">
+        "M"
+      "ic"
+
+## edited
+<div class="_text_7a7508">
+  <p>
+    "changed"
+    <span class="_edited_7a7508 select-none">
+      " (edited)"
+
+## largeEmoji
+<p class="_text_7a7508" data-single-emoji="true">
+  "😀"

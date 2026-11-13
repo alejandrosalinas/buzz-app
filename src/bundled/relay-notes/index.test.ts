@@ -29,6 +29,9 @@ it("registers only the reader page and leaves built-in agent tools unchanged", a
   new PanelsService(ctx);
   provideNavigation(ctx, undefined);
   ctx.provide("relay", fakeRelay());
+  ctx.provide("conversation", {
+    codeBlocks: { snapshot: () => [], subscribe: () => () => {} },
+  });
   let scope: ReturnType<Context["plugin"]> | undefined;
   try {
     const before = addedKey(service.tools());

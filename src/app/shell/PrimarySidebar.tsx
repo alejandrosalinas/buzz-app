@@ -145,8 +145,10 @@ function ScopedSidebar({
   const soloTitle = useSyncExternalStore(
     soloNavigation?.subscribe ?? noSubscription,
     () =>
-      soloNavigation?.snapshot().regions.find((region) => region.source)
-        ?.title ?? "Solo",
+      soloNavigation
+        ?.snapshot()
+        .regions.find((region) => region.source && !region.hidden)?.title ??
+      "Solo",
   );
   const target = props.target;
   const local =

@@ -10,6 +10,7 @@ import type {
   TeamReadout,
   TeamUpdateInput,
 } from "../features/agents/service";
+import type { DefaultAgentControl } from "../features/solo/default-agent";
 import type { AgentPlugins } from "../plugins/requests";
 import type { SettingState } from "../shared/device-settings";
 
@@ -195,6 +196,8 @@ export interface BuzzClient {
     get(key: unknown): SettingState;
     set(key: unknown, value: unknown): SettingState;
   }>;
+  /** The owner's Bestie in the agent's community, in an agent's own run. */
+  bestie?: DefaultAgentControl;
 }
 
 /** Where the agent is working, so tools can default to it. `topLevel` keeps

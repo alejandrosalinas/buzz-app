@@ -1,6 +1,6 @@
 //! Paired tools: `pair`, and requests made with a paired token, which act as
 //! the human under the same operation policy as an agent's.
-use super::pairing::{Approver, Human, Record};
+use super::pairing::{Approver, Human, Record, SIGN_IN_AGAIN};
 use super::{digest, on_relay, permitted, unsupported};
 use super::{full_budgets, spend, CredentialService, Failure, Unsigned};
 use crate::identity::EventTemplate;
@@ -28,9 +28,7 @@ impl CredentialService {
                 store_account,
                 fi_account,
             }),
-            None if self.0.session.expired() => {
-                Human::Pending("Your Builderlab sign-in expired; sign in again in Buzz")
-            }
+            None if self.0.session.expired() => Human::Pending(SIGN_IN_AGAIN),
             None => Human::Pending(STARTING),
         }
     }
@@ -42,8 +40,11 @@ impl CredentialService {
         params: &[String],
         connection: Option<(SocketAddr, SocketAddr)>,
     ) -> Result<String, Failure> {
-        let [client, relay] = params else {
-            return Err(Failure::new("invalid_request", "Wrong parameters for pair"));
+        // A tool that names no relay pairs for the community open in Buzz.
+        let (client, relay) = match params {
+            [client] => (client, self.0.pairings.active()?),
+            [client, relay] => (client, relay.clone()),
+            _ => return Err(Failure::new("invalid_request", "Wrong parameters for pair")),
         };
         let process = || async move {
             let (peer, service) = connection?;
@@ -52,7 +53,7 @@ impl CredentialService {
         let (token, approver) = self
             .0
             .pairings
-            .pair(client, relay, process, || self.human())
+            .pair(client, &relay, process, || self.human())
             .await?;
         Ok(json!({
             "token": token,

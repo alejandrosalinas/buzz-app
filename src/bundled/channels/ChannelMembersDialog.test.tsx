@@ -106,6 +106,7 @@ async function setup(
   agents?: Agents,
   options: {
     archivedAgent?: boolean;
+    deletingAgent?: boolean;
     archivedMembers?: string[];
     pendingArchives?: Promise<void>;
     extraMembers?: number;
@@ -134,7 +135,9 @@ async function setup(
     relayUrl: "wss://relay.example.test",
     owner: viewer.pubkey,
   };
-  const control = localAgentsFixture([agent]);
+  const control = localAgentsFixture([
+    options.deletingAgent ? { ...agent, deleting: true as const } : agent,
+  ]);
   const id = "11111111-1111-4111-8111-111111111111";
   const target = localAgent ? agent.pubkey : person.pubkey;
   const members = [
@@ -1411,6 +1414,22 @@ it("keeps archived agents out of the default invitations", async () => {
   );
   expect(screen.queryByRole("region", { name: "Your agents" })).toBeNull();
   await t.user.type(screen.getByRole("searchbox"), "Fixture");
+  await vi.waitFor(() =>
+    expect(
+      screen.getByRole("button", { name: "Retry member data" }),
+    ).toHaveAttribute("aria-busy", "false"),
+  );
+  expect(
+    screen.queryByRole("button", { name: /^Add Fixture agent/ }),
+  ).toBeNull();
+});
+
+it("offers no agent whose Delete started, by default or by search", async () => {
+  await setup("stream", false, true, undefined, undefined, {
+    deletingAgent: true,
+  });
+  expect(screen.queryByRole("region", { name: "Your agents" })).toBeNull();
+  await userEvent.setup().type(screen.getByRole("searchbox"), "Fixture");
   await vi.waitFor(() =>
     expect(
       screen.getByRole("button", { name: "Retry member data" }),

@@ -3,7 +3,8 @@ import type { OutgoingEvent, OutboxStorage } from "./outbox";
 import type { ChannelStoreOptions } from "./store";
 import { createRelaySession } from "./session";
 import { ReadError } from "./errors";
-import type { RelayEvent } from "./events";
+import { eventDto, type RelayEvent } from "./events";
+import type { ReadTransport } from "./transport";
 import {
   type Key,
   bounds,
@@ -27,12 +28,14 @@ afterEach(() => {
 });
 function setup(
   options: ChannelStoreOptions & { outboxStorage?: OutboxStorage } = {},
+  verifyStored?: ReadTransport["verifyStored"],
 ) {
   const wire = scriptedTransport(viewer.pubkey, relay.pubkey);
   let incoming!: (events: readonly RelayEvent[]) => void;
   const owner = createRelaySession(
     {
       ...wire.transport,
+      ...(verifyStored ? { verifyStored } : {}),
       ...(options.outboxStorage
         ? {
             writer: {
@@ -510,48 +513,78 @@ it("revoking a reference-only edit's target removes it from an unrelated retaine
   ]);
 });
 
-it("late persisted heads/profiles cannot repopulate after revoke and regrant", async () => {
-  let release!: (records: import("./persistence").SavedHead[]) => void;
-  const disk = {
-    read: () =>
-      new Promise<import("./persistence").SavedHead[]>((resolve) => {
-        release = resolve;
-      }),
-    write: vi.fn(async () => {}),
-    remove: vi.fn(async () => {}),
-    retain: vi.fn(async () => {}),
-    clear: vi.fn(async () => {}),
-    close: vi.fn(),
-  };
-  const h = setup({ prepared: true, persistence: disk });
-  h.emit([roster(relay, "a", [viewer.pubkey], 10)]);
-  h.session.channels.ensure("a");
-  const stale = h.next();
-  const oldLoad = release;
-  h.emit([roster(relay, "a", [], 11)]);
-  h.emit([roster(relay, "a", [viewer.pubkey], 12)]);
-  oldLoad([
-    {
-      channelId: "a",
-      savedAt: Date.now(),
-      events: [
-        message(alice, "a", "private disk", 10),
-        bounds(relay, "a", "head", { has_more: false, next_cursor: null }),
-      ],
-      profiles: [profile(alice, { name: "Private disk identity" })],
-    },
-  ]);
-  stale.respond([
-    message(alice, "a", "private read", 10),
-    bounds(relay, "a", "head", { has_more: false, next_cursor: null }),
-  ]);
-  await flush();
-  expect(h.session.channels.window("a").rows).toEqual([]);
-  expect(h.session.profiles.snapshot().size).toBe(0);
-  expect(h.session.observe(filters).snapshot().events).toEqual([]);
-  expect(disk.retain).toHaveBeenCalledWith([]);
-  expect(disk.clear).not.toHaveBeenCalled();
-});
+it.each(["disk read", "history verification", "profile verification"])(
+  "late persisted heads/profiles cannot repopulate after revoke and regrant during %s",
+  async (stage) => {
+    let release!: (records: import("./persistence").SavedHead[]) => void;
+    let releaseVerification!: () => void;
+    const checking = new Promise<void>((resolve) => {
+      releaseVerification = resolve;
+    });
+    let verificationStarted = false;
+    const verifyStored =
+      stage === "disk read"
+        ? undefined
+        : async (values: readonly unknown[]) => {
+            const kind = stage === "history verification" ? 9 : 0;
+            if (
+              values.some((value) => (value as { kind: number }).kind === kind)
+            ) {
+              verificationStarted = true;
+              await checking;
+            }
+            return values.map(eventDto);
+          };
+    const disk = {
+      read: () =>
+        new Promise<import("./persistence").SavedHead[]>((resolve) => {
+          release = resolve;
+        }),
+      write: vi.fn(async () => {}),
+      remove: vi.fn(async () => {}),
+      retain: vi.fn(async () => {}),
+      clear: vi.fn(async () => {}),
+      close: vi.fn(),
+    };
+    const h = setup({ prepared: true, persistence: disk }, verifyStored);
+    h.emit([roster(relay, "a", [viewer.pubkey], 10)]);
+    h.session.channels.ensure("a");
+    const stale = h.next();
+    const oldLoad = release;
+    const records = [
+      {
+        channelId: "a",
+        savedAt: Date.now(),
+        events: [
+          message(alice, "a", "private disk", 10),
+          bounds(relay, "a", "head", { has_more: false, next_cursor: null }),
+        ],
+        profiles: [profile(alice, { name: "Private disk identity" })],
+      },
+    ];
+    try {
+      if (stage !== "disk read") {
+        oldLoad(records);
+        await vi.waitFor(() => expect(verificationStarted).toBe(true));
+      }
+      h.emit([roster(relay, "a", [], 11)]);
+      h.emit([roster(relay, "a", [viewer.pubkey], 12)]);
+    } finally {
+      if (stage === "disk read") oldLoad(records);
+      releaseVerification();
+    }
+    stale.respond([
+      message(alice, "a", "private read", 10),
+      bounds(relay, "a", "head", { has_more: false, next_cursor: null }),
+    ]);
+    await flush();
+    expect(h.session.channels.window("a").rows).toEqual([]);
+    expect(h.session.profiles.snapshot().size).toBe(0);
+    expect(h.session.observe(filters).snapshot().events).toEqual([]);
+    expect(disk.retain).toHaveBeenCalledWith([]);
+    expect(disk.clear).not.toHaveBeenCalled();
+  },
+);
 
 /** Opens `channelId` with one message from `author` and loads their profile. */
 async function openNamed(

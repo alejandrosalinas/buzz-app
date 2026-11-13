@@ -34,6 +34,109 @@ function memory() {
   };
 }
 
+function gate() {
+  let release!: () => void;
+  const promise = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  return { promise, release };
+}
+
+it.each(["live", "restored"])(
+  "keeps a verified echo received during recovery's storage read (%s)",
+  async (source) => {
+    const store = memory();
+    let event = signed(viewer, input);
+    if (source === "restored")
+      store.save([{ event, signed: event, delivery: "unknown" }]);
+    const publishing = gate();
+    const reading = gate();
+    const resume = gate();
+    const h = setup(
+      {
+        ...store,
+        async load(options) {
+          const records = store.load();
+          if (options?.readOnly) {
+            reading.release();
+            await resume.promise;
+          }
+          return records;
+        },
+      },
+      vi.fn(async () => publishing.promise),
+    );
+    const consume = vi.fn();
+    try {
+      await h.outbox.ready();
+      if (source === "live") {
+        h.outbox.send(input);
+        await vi.waitFor(() => expect(h.publish).toHaveBeenCalledOnce());
+        const published = h.publish.mock.calls[0]?.[0];
+        assert.exists(published);
+        event = published;
+      }
+      const recovering = h.outbox.recover(event.id, recovery, consume);
+      await reading.promise;
+      h.observe([event]);
+      expect(h.local.snapshot()[0]?.delivery).toBe("seen");
+      resume.release();
+      await recovering;
+      expect(h.outbox.snapshot()[0]).toMatchObject({
+        event: { id: event.id },
+        signed: event,
+        recovery,
+        delivery: "seen",
+      });
+      expect(store.load()[0]).toMatchObject({ recovery, delivery: "seen" });
+      expect(consume).toHaveBeenCalledOnce();
+    } finally {
+      resume.release();
+      publishing.release();
+    }
+  },
+);
+
+it.each(["dismiss", "dispose"])(
+  "does not adopt a receipt after %s during recovery's storage read",
+  async (action) => {
+    const store = memory();
+    const event = signed(viewer, input);
+    store.save([{ event, signed: event, delivery: "failed" }]);
+    const reading = gate();
+    const resume = gate();
+    const h = setup({
+      ...store,
+      async load(options) {
+        const records = store.load();
+        if (options?.readOnly) {
+          reading.release();
+          await resume.promise;
+        }
+        return records;
+      },
+    });
+    const consume = vi.fn();
+    try {
+      await h.outbox.ready();
+      const recovering = h.outbox.recover(event.id, recovery, consume);
+      const rejected = expect(recovering).rejects.toThrow(
+        action === "dismiss" ? "unavailable" : "Relay session closed",
+      );
+      await reading.promise;
+      if (action === "dismiss") await h.outbox.dismiss(event.id);
+      else h.dispose();
+      resume.release();
+      await rejected;
+      expect(store.load().some((item) => item.recovery)).toBe(false);
+      expect(consume).not.toHaveBeenCalled();
+      expect(h.publish).not.toHaveBeenCalled();
+    } finally {
+      resume.release();
+    }
+  },
+);
+
 it("stores recovery with intent before publication and blocks publication on storage failure", async () => {
   const store = memory();
   let release: () => void = () => {};

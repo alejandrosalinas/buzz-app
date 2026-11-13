@@ -1,7 +1,9 @@
 import { useState } from "react";
 import type { InboxReaction } from "../../features/relay/inbox-reactions";
 import { groupReactions } from "../../features/relay/fold";
+import { useReactionEmoji } from "../../features/messages/reaction-emoji";
 import { useReactionName } from "../../features/messages/use-reaction-name";
+import { isReactionShortcode } from "../../features/relay/emoji";
 import { relativeTimestamp } from "../../shared/relative-timestamp";
 import type { ComponentProps, ReactNode } from "react";
 import { channelText } from "../../features/channels/channel-icon";
@@ -12,7 +14,7 @@ import type { RelaySession } from "../../features/relay/session";
 import { workflowLabel } from "../../features/relay/workflow-attribution";
 import { messagePreview } from "../../features/notifications/content";
 import { avatarMedia } from "../../shared/avatar-source";
-import { LightningIcon } from "../../shared/design-system/icons";
+import { LightningIcon, SmileyIcon } from "../../shared/design-system/icons";
 import { Avatar } from "../../shared/design-system/ui/Avatar";
 import { NavigationItem } from "../../shared/design-system/ui/NavigationItem";
 import { formatPublicKey } from "../../shared/identity/public-key";
@@ -257,18 +259,25 @@ function ActivityReactionGlyph({
   reaction: ReturnType<typeof groupReactions>[number];
   session: RelaySession;
 }) {
-  const source = reaction.emoji ? session.media(reaction.emoji.url) : undefined;
+  const emoji = useReactionEmoji(reaction, session);
+  const source = emoji ? session.media(emoji.url) : undefined;
   const [failed, setFailed] = useState<string>();
-  return source && source !== failed ? (
-    <img
-      src={source}
-      className={styles.reactionEmoji}
-      alt=""
-      aria-hidden="true"
-      draggable={false}
-      onError={() => setFailed(source)}
-    />
-  ) : (
-    <span aria-hidden="true">{reaction.content} </span>
-  );
+  if (source && source !== failed)
+    return (
+      <img
+        src={source}
+        className={styles.reactionEmoji}
+        alt=""
+        aria-hidden="true"
+        draggable={false}
+        onError={() => setFailed(source)}
+      />
+    );
+  if (isReactionShortcode(reaction.content))
+    return (
+      <SmileyIcon
+        className={`${styles.reactionEmoji} ${styles.reactionPlaceholder}`}
+      />
+    );
+  return <span aria-hidden="true">{reaction.content} </span>;
 }

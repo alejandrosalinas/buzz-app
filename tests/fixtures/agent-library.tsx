@@ -173,7 +173,8 @@ if (thinkingHarness === "claude") {
   });
   const defaults = staticStore({ model: "", effort: "" });
   const tabs = createClaudeTabs({
-    setup: setup as never,
+    // The listed models stay current, so a picker's refresh finds nothing new.
+    setup: { ...setup, loadModels: async () => {} } as never,
     defaults: defaults as never,
     runtime: { isRemote: async () => false } as never,
   });

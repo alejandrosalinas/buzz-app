@@ -27,17 +27,26 @@ export const answerPairing = (id: string, approve: boolean) =>
   invoke<void>("credential_pair_answer", { id, approve });
 
 /** Tells native code the communities saved here, so a tool pairs only for
- * one of them. */
-export const setPairingCommunities = (communities: readonly string[]) =>
+ * one of them, and the one open, for a tool that names none. */
+export const setPairingCommunities = (
+  communities: readonly string[],
+  active: string | null,
+) =>
   invoke<void>("credential_pairing_communities", {
     communities: communities.flatMap((id) => {
-      try {
-        return [communityDestination(id).url];
-      } catch {
-        return [];
-      }
+      const url = destinationUrl(id);
+      return url ? [url] : [];
     }),
+    active: active && destinationUrl(active),
   });
+
+const destinationUrl = (id: string) => {
+  try {
+    return communityDestination(id).url;
+  } catch {
+    return null;
+  }
+};
 /** Tells native a prompt began or stopped listening; while none listens,
  * native refuses pairing at once instead of asking nobody. */
 export const setPairingPrompt = (mounted: boolean) =>

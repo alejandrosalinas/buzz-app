@@ -8,6 +8,7 @@ import {
 } from "nostr-tools";
 import type { ReadFilter, RelayEvent } from "./events";
 import { PublishRejected } from "./outbox";
+import { authTagOwner } from "../agents/owner-attestation";
 import type { ReadTransport, Signer } from "./transport";
 
 /** Test-only signing helpers. Real signatures so the transport's verification stays on. */
@@ -216,6 +217,8 @@ export function archiveRelay(
   roles: Readonly<Record<string, string>> = {},
   channels: Record<string, string[]> = {},
 ) {
+  /** Profiles as the relay holds them; `publishProfile` adds a newer one. */
+  const live = [...profiles];
   const archived = new Set<string>();
   /** Channel IDs whose metadata is archived; the relay refuses 9001 there. */
   const archivedChannels = new Set<string>();
@@ -271,9 +274,7 @@ export function archiveRelay(
             }),
           ];
         if (filter.kinds?.includes(0))
-          return profiles.filter((event) =>
-            filter.authors?.includes(event.pubkey),
-          );
+          return live.filter((event) => filter.authors?.includes(event.pubkey));
         if (filter.kinds?.includes(39000))
           return Object.keys(channels)
             .filter((id) => !filter["#d"] || filter["#d"].includes(id))
@@ -339,14 +340,40 @@ export function archiveRelay(
       async publish(event) {
         await script.hold;
         if (script.fail) throw script.fail;
+        const target = event.tags.find(([name]) => name === "p")?.[1] ?? "";
+        if (!(await consents(event, target)))
+          throw new PublishRejected("invalid: missing auth tag");
         published.push(event);
         if (!script.apply) return;
-        const target = event.tags.find(([name]) => name === "p")?.[1] ?? "";
         if (event.kind === 9035) archived.add(target);
         else archived.delete(target);
         time += 1;
       },
     },
+  };
+  /** The relay's owner-consent rule: an owner or admin role stands alone;
+   * otherwise the request and the target's latest profile both carry an
+   * owner proof naming the requester. */
+  async function consents(event: RelayEvent, target: string) {
+    const requester = event.pubkey;
+    if (requester === target) return true;
+    if (roles[requester] === "owner" || roles[requester] === "admin")
+      return true;
+    const names = async (tags: readonly string[][] | undefined) => {
+      const auth = tags?.find(([name]) => name === "auth");
+      return !!auth && (await authTagOwner(target, auth)) === requester;
+    };
+    const profile = live
+      .filter((item) => item.kind === 0 && item.pubkey === target)
+      .reduce<RelayEvent | undefined>(
+        (newest, item) =>
+          !newest || item.created_at > newest.created_at ? item : newest,
+        undefined,
+      );
+    return (await names(event.tags)) && (await names(profile?.tags));
+  }
+  const publishProfile = (event: RelayEvent) => {
+    live.push(event);
   };
   /** An out-of-band relay change publishes a newer snapshot, never a same-time fork. */
   const archiveExternally = (target: string) => {
@@ -360,6 +387,7 @@ export function archiveRelay(
   return {
     transport,
     archived,
+    publishProfile,
     archiveExternally,
     unarchiveExternally,
     published,

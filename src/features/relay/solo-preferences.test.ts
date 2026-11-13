@@ -2,6 +2,7 @@ import { createSoloPreferences } from "./solo-preferences";
 import { TEAM_MANIFEST_TAG } from "../channel-templates/team-payload";
 import { afterEach, expect, it, vi } from "vitest";
 import { createRelaySession } from "./session";
+import { createApiAdmission } from "./http-admission";
 import {
   coordinate,
   KIT_TAG,
@@ -31,7 +32,7 @@ const groups: Groups = {
   groups: [{ id: "work", name: "Solo work", defaultTemplateId: "template" }],
   assignments: { [other]: "work" },
 };
-function fixture() {
+function fixture(lane?: ReturnType<typeof createApiAdmission>) {
   const viewer = keypair(),
     relay = keypair();
   let time = 1_700_000_000;
@@ -88,6 +89,11 @@ function fixture() {
   const publish = vi.fn(async (event: RelayEvent) => {
     events.push(event);
   });
+  // `query` is the relay; an admission lane, when given, guards it.
+  const admitted = vi.fn(
+    (filters: readonly ReadFilter[], signal?: AbortSignal) =>
+      lane ? lane.run(() => query(filters), signal) : query(filters),
+  );
   const prepare = vi.fn(async (record: KitRecord, _signal: AbortSignal) =>
     JSON.stringify(record),
   );
@@ -97,7 +103,7 @@ function fixture() {
       relayAuthor: relay.pubkey,
       scope: community,
       media: () => undefined,
-      query,
+      query: admitted,
       decodeSidebarPreferences: async () => legacy,
       writeSidebarAssignment: assignment,
       removeSidebarSection: removal,
@@ -122,6 +128,7 @@ function fixture() {
   return {
     ...owner,
     query,
+    admitted,
     assignment,
     removal,
     sort,
@@ -188,6 +195,80 @@ it.each(["clearCache", "dispose"] as const)(
     }
   },
 );
+
+const catalog = (
+  calls: readonly (readonly [readonly ReadFilter[], ...unknown[]])[],
+) =>
+  calls.filter(([filters]) =>
+    filters.some((filter) => filter["#t"]?.includes(ME_KIT_TAG)),
+  ).length;
+
+it("reloads Solo workspaces by itself once a relay request pause ends", async () => {
+  vi.useFakeTimers();
+  const lane = createApiAdmission();
+  const f = fixture(lane);
+  const catalogReads = () => catalog(f.query.mock.calls);
+  try {
+    f.install(groups);
+    await f.session.soloPreferences.ensure();
+    expect(catalogReads()).toBe(1);
+    // Another read's quota 429 paused this account's relay requests while
+    // the catalog revalidated, and a Solo read then found it failed.
+    lane.pause(10_000);
+    await f.session.channelKit.refresh();
+    await f.session.soloPreferences.refresh();
+    expect(f.session.soloPreferences.snapshot()).toMatchObject({
+      status: "error",
+      error: "Relay requests paused; retry in 10s",
+      transient: true,
+    });
+    // Recovery's retries meet the pause locally; none reaches the relay.
+    const attempts = catalog(f.admitted.mock.calls);
+    await vi.advanceTimersByTimeAsync(9_999);
+    // One shared attempt per recovery delay (1, 2 and 4 s), not a loop.
+    expect(catalog(f.admitted.mock.calls)).toBe(attempts + 3);
+    expect(catalogReads()).toBe(1);
+    expect(f.session.soloPreferences.snapshot().status).toBe("error");
+    await vi.advanceTimersByTimeAsync(10_000);
+    expect(f.session.soloPreferences.snapshot()).toMatchObject({
+      status: "ready",
+      data: { sections: [{ id: "work", name: "Solo work", order: 0 }] },
+    });
+    expect(catalogReads()).toBe(2);
+  } finally {
+    f.dispose();
+    vi.useRealTimers();
+  }
+});
+
+it("leaves a Solo read of a catalog that cannot load for a manual retry", async () => {
+  vi.useFakeTimers();
+  const f = fixture();
+  const catalogReads = () => catalog(f.query.mock.calls);
+  try {
+    f.install(groups);
+    await f.session.soloPreferences.ensure();
+    // Rereading a catalog over the read limit cannot fix it.
+    f.events.push(...Array(500).fill(f.events.at(-1)));
+    await f.session.channelKit.refresh();
+    await f.session.soloPreferences.refresh();
+    expect(f.session.soloPreferences.snapshot().status).toBe("error");
+    expect(f.session.soloPreferences.snapshot().transient).toBeUndefined();
+    const reads = catalogReads();
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(catalogReads()).toBe(reads);
+    f.events.splice(1);
+    await f.session.soloPreferences.refresh();
+    expect(f.session.soloPreferences.snapshot()).toMatchObject({
+      status: "ready",
+      data: { sections: [{ id: "work", name: "Solo work", order: 0 }] },
+    });
+    expect(catalogReads()).toBe(reads + 1);
+  } finally {
+    f.dispose();
+    vi.useRealTimers();
+  }
+});
 
 it("starts Solo preferences empty and changes only the distinct Solo catalog coordinate", async () => {
   const f = fixture();

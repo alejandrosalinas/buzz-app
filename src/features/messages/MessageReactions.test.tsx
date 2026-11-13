@@ -722,44 +722,115 @@ it("loads names for people who only reacted after a preview opens", async () => 
   });
 });
 
-it("shows custom shortcodes in emojis and previews when media is refused or fails", async () => {
+const tagless = (key: typeof viewer, code: string) =>
+  signed(key, {
+    kind: 7,
+    content: `:${code}:`,
+    created_at: 2,
+    tags: [
+      ["h", "c"],
+      ["e", root.id],
+    ],
+  });
+const palette = (code: string, url: string) =>
+  signed(other, {
+    kind: 30030,
+    content: "",
+    created_at: 3,
+    tags: [
+      ["d", "buzz:custom-emoji"],
+      ["emoji", code, url],
+    ],
+  });
+const glyph = (pill: HTMLElement) => {
+  const slot = pill.querySelector("[data-reaction-glyph]");
+  if (!slot) throw new Error("Reaction glyph missing");
+  return slot;
+};
+const showsPlaceholder = (slot: Element, shortcode: string) => {
+  expect(slot.querySelector("svg")).not.toBeNull();
+  expect(slot.querySelector("img")).toBeNull();
+  expect(slot.textContent).not.toContain(shortcode);
+};
+
+it("draws a tagless shortcode from the community palette, once the palette arrives", async () => {
+  const url = "https://a.test/approve.png";
+  const h = harness([tagless(other, "approve")]);
+  render(<h.Controls />);
+  const pill = screen.getByRole("button", {
+    name: `:approve:: ${other.pubkey.slice(0, 10)}`,
+  });
+  showsPlaceholder(glyph(pill), ":approve:");
+  act(() => h.live.receive([palette("approve", url)]));
+  await waitFor(() =>
+    expect(pill.querySelector("img")?.getAttribute("src")).toBe(url),
+  );
+  expect(glyph(pill).textContent).toBe("");
+  fireEvent.mouseEnter(pill);
+  fireEvent.mouseMove(pill);
+  const preview = await screen.findByRole("tooltip", {}, { timeout: 2500 });
+  expect(preview.querySelector("img")?.getAttribute("src")).toBe(url);
+});
+
+it("shows a neutral glyph for an unknown shortcode, keeping it as the name", async () => {
+  const h = harness([tagless(other, "mystery")]);
+  render(<h.Controls />);
+  const pill = screen.getByRole("button", {
+    name: `:mystery:: ${other.pubkey.slice(0, 10)}`,
+  });
+  showsPlaceholder(glyph(pill), ":mystery:");
+  fireEvent.mouseEnter(pill);
+  fireEvent.mouseMove(pill);
+  const preview = await screen.findByRole("tooltip", {}, { timeout: 2500 });
+  expect(preview.querySelector("svg")).not.toBeNull();
+  expect(preview.querySelector("img")).toBeNull();
+});
+
+it("shows a neutral glyph in pills and previews when media is refused or fails", async () => {
   const h = harness(
     [
       customReaction(other, "denied", "https://a.test/denied.png"),
       customReaction(other, "broken", "https://a.test/broken.png"),
+      tagless(other, "refused"),
     ],
     undefined,
     tools,
-    (url) => (url.includes("denied") ? undefined : url),
+    (url) =>
+      url.includes("denied") || url.includes("refused") ? undefined : url,
   );
+  h.live.receive([palette("refused", "https://a.test/refused.png")]);
   render(<h.Controls />);
-  const denied = screen.getByRole("button", {
-    name: `:denied:: ${other.pubkey.slice(0, 10)}`,
-  });
-  const broken = screen.getByRole("button", {
-    name: `:broken:: ${other.pubkey.slice(0, 10)}`,
-  });
-  expect(denied.textContent).toContain(":denied:");
+  const pillFor = (code: string) =>
+    screen.getByRole("button", {
+      name: `:${code}:: ${other.pubkey.slice(0, 10)}`,
+    });
+  const denied = pillFor("denied");
+  const broken = pillFor("broken");
+  showsPlaceholder(glyph(denied), ":denied:");
+  showsPlaceholder(glyph(pillFor("refused")), ":refused:");
   const image = broken.querySelector("img");
   if (!image) throw new Error("Custom reaction image missing");
   fireEvent.error(image);
-  expect(broken.textContent).toContain(":broken:");
+  showsPlaceholder(glyph(broken), ":broken:");
   fireEvent.mouseEnter(denied);
   fireEvent.mouseMove(denied);
   const preview = await screen.findByRole("tooltip", {}, { timeout: 2500 });
-  expect(preview.textContent).toContain(":denied:");
+  expect(preview.querySelector("svg")).not.toBeNull();
   fireEvent.mouseLeave(denied, { relatedTarget: broken });
   fireEvent.mouseEnter(broken, { relatedTarget: denied });
   fireEvent.mouseMove(broken);
-  await waitFor(
-    () =>
-      expect(
-        screen
-          .queryAllByRole("tooltip")
-          .some((item) => item.textContent?.includes(":broken:")),
-      ).toBe(true),
-    { timeout: 2500 },
-  );
+  const brokenPreview = () =>
+    screen
+      .queryAllByRole("tooltip")
+      .find((item) => item.textContent?.includes(":broken:"));
+  await waitFor(() => expect(brokenPreview()).toBeDefined(), {
+    timeout: 2500,
+  });
+  const previewImage = brokenPreview()?.querySelector("img");
+  if (!previewImage) throw new Error("Preview image missing");
+  fireEvent.error(previewImage);
+  expect(brokenPreview()?.querySelector("svg")).not.toBeNull();
+  expect(brokenPreview()?.querySelector("img")).toBeNull();
 });
 
 it("forwards the contributed picker into true toggles and releases confirmed writes without an echo", async () => {

@@ -44,6 +44,7 @@ import {
 import { ToastProvider } from "../../shared/design-system/ui/Toast";
 import { ConversationPresentation } from "../conversation/ConversationPresentation";
 import { MessageRow } from "./MessageRow";
+import { MessageContextMenus } from "./MessageActionBar";
 import { ReplySummary } from "./ReplySummary";
 import { setClockPreference } from "../../shared/clock-preference";
 import { MessageManagement } from "./MessageManagement";
@@ -3055,6 +3056,81 @@ it.each(["menu", "toolbar", "coordination"] as const)(
     }
   },
 );
+
+it("lets a menu action in a list's shared menu open targets as its row", async () => {
+  const actions = [
+    {
+      id: "open",
+      title: "Open",
+      key: "test.plugin/open",
+      pluginId: "test.plugin",
+      revision: "one",
+      placement: "menu" as const,
+      matches: () => true,
+      component: ({
+        canOpen,
+        open,
+      }: {
+        canOpen(target: string): boolean;
+        open(target: string): boolean;
+      }) => (
+        <button type="button" onClick={() => open("buzz://target")}>
+          {canOpen("buzz://target") ? "Open target" : "Target unavailable"}
+        </button>
+      ),
+    },
+  ];
+  const none: never[] = [];
+  const empty = { snapshot: () => none, subscribe: () => () => {} };
+  const channelList = { channels: [], status: "ready" };
+  const session = {
+    viewer: "viewer",
+    presence: {
+      subscribe: () => () => {},
+      status: () => "unknown",
+      limited: () => false,
+    },
+    unread: {
+      subscribe: () => () => {},
+      subscribeSync: () => () => {},
+      snapshot: () => undefined,
+      following: () => false,
+    },
+    messages: { report: undefined },
+    channels: { subscribeList: () => () => {}, list: () => channelList },
+  } as unknown as RelaySession;
+  const onOpenLink = vi.fn(() => true);
+  try {
+    renderDom(
+      <MessageContextMenus>
+        <div>
+          <MessageRow
+            row={{ ...row, replyCount: 0, threadRootId: "thread" }}
+            session={session}
+            profile={undefined}
+            media={() => undefined}
+            onOpenLink={onOpenLink}
+            canOpenLink={(target) => target === "buzz://target"}
+            day={false}
+            retry={undefined}
+            extensions={{
+              tools: empty,
+              inline: empty,
+              actions: { snapshot: () => actions, subscribe: () => () => {} },
+            }}
+          />
+        </div>
+      </MessageContextMenus>,
+    );
+    fireEvent.contextMenu(screen.getByText("Root"));
+    fireEvent.click(await screen.findByRole("button", { name: "Open target" }));
+    expect(onOpenLink).toHaveBeenCalledWith("buzz://target", {
+      rootId: "thread",
+    });
+  } finally {
+    cleanup();
+  }
+});
 
 it.each(["timeline", "thread", "continuation"] as const)(
   "right-aligns own %s rows and keeps only the last grouped avatar",

@@ -371,10 +371,8 @@ test("Inbox opens the exact thread, shares read state, and fits the workspace", 
     row.getByRole("button", { name: /Mark as read|Mark unread/ }),
   ).toHaveCount(0);
   await row.getByRole("button", { name: /^Open / }).click({ button: "right" });
-  // Mark as read stays in place, unavailable while the row is read.
-  await expect(
-    page.getByRole("menuitem", { name: "Mark as read" }),
-  ).toBeDisabled();
+  // A read row offers only Mark unread.
+  await expect(page.getByRole("menuitem")).toHaveText(["Mark unread"]);
   await page.keyboard.press("Escape");
   await row.getByRole("button", { name: /^Open / }).focus();
   await page.keyboard.press("Shift+F10");
@@ -386,12 +384,9 @@ test("Inbox opens the exact thread, shares read state, and fits the workspace", 
   await action.click();
   await expect(row.getByRole("img", { name: "Unread" })).toBeVisible();
   await row.getByRole("button", { name: /^Open / }).click({ button: "right" });
-  await expect(
-    page.getByRole("menuitem", { name: "Mark unread" }),
-  ).toBeDisabled();
-  await expect(
-    page.getByRole("menuitem", { name: "Mark as read" }),
-  ).toBeEnabled();
+  // Marked unread, the row offers only Mark as read.
+  await expect(page.getByRole("menuitem")).toHaveText(["Mark as read"]);
+  await expect(page.getByRole("menuitem")).toBeEnabled();
   await page.keyboard.press("Escape");
   // A re-click does not undo the user's mark; a new visit after another
   // conversation does.

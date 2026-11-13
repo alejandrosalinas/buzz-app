@@ -51,6 +51,7 @@ import type { SyncState } from "../../features/agents/team-migration";
 import { localStore } from "../../features/agents/state";
 import {
   chooseDefaultAgent,
+  defaultAgentControl,
   setDefaultAgent,
 } from "../../features/solo/default-agent";
 import { readView, writeView } from "../../shared/view-state";
@@ -328,6 +329,9 @@ function setup(
     session: vi.fn(async () => {}),
     register: vi.fn(),
     addTool: vi.fn(),
+    createToolOperation: vi.fn(() => {
+      throw new Error("No operation provider in this fixture");
+    }),
     addInstructions: vi.fn(),
     tools: () => [],
     create: vi.fn(async () => {
@@ -384,6 +388,10 @@ function setup(
     interruptible: () => false,
     hostedInstructions: () => undefined,
     interrupt: vi.fn(async () => false),
+    assignConversationFolder: vi.fn(async () => "/folder"),
+    conversationFolder: () => undefined,
+    setConversationInstructions: vi.fn(async () => {}),
+    conversationInstructions: async () => undefined,
     note: () => false,
     classifier: () => "unavailable",
     saveTeam: vi.fn(async (change: TeamChange) => {
@@ -5408,6 +5416,128 @@ it("removes a Bestie on another device from its card, asking first", async () =>
   ).toBeNull();
 });
 
+it("asks to try again while an agent is still changing the Bestie, saving nothing", async () => {
+  const user = userEvent.setup();
+  const ada = agent("Ada", 1);
+  const bea = agent("Bea", 2);
+  const view = setup([ada, bea]);
+  const rows = [ada, bea].map((each) => ({
+    pubkey: each.pubkey,
+    name: each.name,
+    managed: true,
+  }));
+  const choices = {
+    status: "ready",
+    complete: true,
+    pending: false,
+    identities: rows,
+    selectable: rows,
+    archives: { status: "unavailable", archived: [] },
+  };
+  const mainAgent = {
+    read: async () => ada.pubkey,
+    write: vi.fn(async (_agent: string | null) => {}),
+  };
+  const scope = "agent-changing-bestie";
+  const connection = {
+    status: "ready",
+    scope,
+    session: {
+      mainAgent,
+      agentChoices: {
+        snapshot: () => choices,
+        subscribe: () => () => {},
+        retain: () => () => {},
+        ensure: () => {},
+        refresh: async () => {},
+      },
+    },
+  };
+  const relay = {
+    snapshot: () => connection,
+    subscribe: () => () => {},
+  } as unknown as RelayData;
+  view.rerender(<AgentsPage agents={view.agents} relay={relay} />);
+  await screen.findByRole("gridcell", { name: "Ada, Bestie" });
+  // The agent's change to Bea is still saving to the account.
+  let finish!: () => void;
+  mainAgent.write.mockImplementationOnce(
+    () =>
+      new Promise<void>((resolve) => {
+        finish = resolve;
+      }),
+  );
+  const setting = defaultAgentControl(
+    connection.session as unknown as RelaySession,
+    scope,
+  ).set(bea.pubkey);
+  await vi.waitFor(() => expect(mainAgent.write).toHaveBeenCalledOnce());
+  const busy = "An agent is still changing your Bestie. Try again.";
+  try {
+    await user.click(
+      within(screen.getByRole("gridcell", { name: /^Bea/ })).getByRole(
+        "button",
+        { name: "Actions for Bea" },
+      ),
+    );
+    await user.click(
+      await screen.findByRole("menuitem", { name: "Make my bestie" }),
+    );
+    await user.click(
+      within(
+        await screen.findByRole("alertdialog", {
+          name: "Make Bea your bestie?",
+        }),
+      ).getByRole("button", { name: "Switch to Bea" }),
+    );
+    expect(await screen.findByRole("alert")).toHaveTextContent(busy);
+    expect(screen.queryByRole("alertdialog")).toBeNull();
+    // Reopened and kept, it leaves the agent's change alone.
+    await user.click(
+      within(screen.getByRole("gridcell", { name: /^Bea/ })).getByRole(
+        "button",
+        { name: "Actions for Bea" },
+      ),
+    );
+    await user.click(
+      await screen.findByRole("menuitem", { name: "Make my bestie" }),
+    );
+    const reopened = await screen.findByRole("alertdialog", {
+      name: "Make Bea your bestie?",
+    });
+    expect(within(reopened).queryByRole("alert")).toBeNull();
+    await user.click(
+      within(reopened).getByRole("button", { name: "Keep Ada" }),
+    );
+    expect(readView(scope, "solo:default-agent", null)).toBe(bea.pubkey);
+    await user.click(
+      within(screen.getByRole("gridcell", { name: /^Ada/ })).getByRole(
+        "button",
+        { name: "Actions for Ada" },
+      ),
+    );
+    await user.click(
+      await screen.findByRole("menuitem", { name: "Remove as bestie" }),
+    );
+    const dialog = await screen.findByRole("alertdialog", {
+      name: "Remove Ada as your Bestie?",
+    });
+    await user.click(
+      within(dialog).getByRole("button", { name: "Remove as Bestie" }),
+    );
+    expect(await within(dialog).findByRole("alert")).toHaveTextContent(busy);
+    await user.click(within(dialog).getByRole("button", { name: "Cancel" }));
+  } finally {
+    finish();
+  }
+  await setting;
+  expect(mainAgent.write).toHaveBeenCalledExactlyOnceWith(bea.pubkey);
+  expect(readView(scope, "solo:default-agent", null)).toBe(bea.pubkey);
+  expect(
+    await screen.findByRole("gridcell", { name: "Bea, Bestie" }),
+  ).toBeVisible();
+});
+
 it("keeps a Bestie chosen elsewhere while its removal is being asked about", async () => {
   const user = userEvent.setup();
   const ada = agent("Ada", 1);
@@ -5606,6 +5736,84 @@ it("keeps a failed Bestie replacement visible and retries the account save", asy
     new Event("webkitAnimationEnd", { bubbles: true }),
   );
   expect(view.container.querySelector("[data-celebrating]")).toBeNull();
+});
+
+it("keeps the Bestie an agent saved when a failed replacement is kept", async () => {
+  const user = userEvent.setup();
+  const ada = agent("Ada", 1);
+  const bea = agent("Bea", 2);
+  const view = setup([ada, bea]);
+  const rows = [ada, bea].map((each) => ({
+    pubkey: each.pubkey,
+    name: each.name,
+    managed: true,
+  }));
+  const choices = {
+    status: "ready",
+    complete: true,
+    pending: false,
+    identities: rows,
+    selectable: rows,
+    archives: { status: "unavailable", archived: [] },
+  };
+  const mainAgent = {
+    read: async () => ada.pubkey,
+    write: vi
+      .fn(async (_agent: string | null) => {})
+      .mockRejectedValueOnce(new Error("offline")),
+  };
+  const scope = "agent-saved-replacement";
+  const connection = {
+    status: "ready",
+    scope,
+    session: {
+      mainAgent,
+      agentChoices: {
+        snapshot: () => choices,
+        subscribe: () => () => {},
+        retain: () => () => {},
+        ensure: () => {},
+        refresh: async () => {},
+      },
+    },
+  };
+  const relay = {
+    snapshot: () => connection,
+    subscribe: () => () => {},
+  } as unknown as RelayData;
+  view.rerender(<AgentsPage agents={view.agents} relay={relay} />);
+  await screen.findByRole("gridcell", { name: "Ada, Bestie" });
+  await user.click(
+    within(screen.getByRole("gridcell", { name: "Bea" })).getByRole("button", {
+      name: "Actions for Bea",
+    }),
+  );
+  await user.click(
+    await screen.findByRole("menuitem", { name: "Make my bestie" }),
+  );
+  const confirmation = await screen.findByRole("alertdialog", {
+    name: "Make Bea your bestie?",
+  });
+  await user.click(
+    within(confirmation).getByRole("button", { name: "Switch to Bea" }),
+  );
+  expect(await within(confirmation).findByRole("alert")).toHaveTextContent(
+    "Your bestie couldn't be saved to your account. Try again.",
+  );
+  // An agent saves Bea while the failure still shows.
+  await act(() =>
+    defaultAgentControl(
+      connection.session as unknown as RelaySession,
+      scope,
+    ).set(bea.pubkey),
+  );
+  await user.click(
+    within(confirmation).getByRole("button", { name: "Keep Ada" }),
+  );
+  expect(screen.queryByRole("alertdialog")).not.toBeInTheDocument();
+  expect(mainAgent.write).toHaveBeenLastCalledWith(bea.pubkey);
+  expect(readView(scope, "solo:default-agent", null)).toBe(bea.pubkey);
+  expect(screen.getByRole("gridcell", { name: "Bea, Bestie" })).toBeVisible();
 });
 
 it("retries a failed replacement in the same dialog after an earlier Bestie save", async () => {

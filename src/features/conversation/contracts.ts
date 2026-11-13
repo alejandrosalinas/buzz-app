@@ -47,7 +47,9 @@ export type ComposerToolProps = Readonly<{
         toggle(recipient: Readonly<{ pubkey: string; name: string }>): void;
       }>
     | undefined;
-  /** False after removal, destination change, read-only state or a rejected edit. */
+  /** Insert text at the caret. Emoji-only text is followed by a space unless a
+   * space or tab already follows, which the caret then moves past. False after
+   * removal, destination change, read-only state or a rejected edit. */
   insertText(text: string): boolean;
   /** Atomically insert display text and explicit notification intent at the caret.
    * Prose never resolves to identities. Membership is checked by session delivery.
@@ -458,6 +460,20 @@ export type PageTabTarget = {
   channelId: string;
   threadId?: string;
   messageId?: string;
+};
+/** A page-owned conversation with the host's reader, composer, and side pane. */
+export type ConversationWorkspaceProps = {
+  id: string;
+  session: RelaySession;
+  scope: string;
+  target: PageTabTarget;
+  label: string;
+  /** Content at the start of history. It scrolls with the messages. */
+  intro?: ReactNode;
+  /** Actions in the pane's menu and the main tab's context menu. */
+  actions?: readonly { label: string; run(): void }[];
+  /** Select this panel on entry. Closing it keeps the main conversation. */
+  detail?: { target: string; rootId?: string };
 };
 /** `keep` opens a tab beside the others instead of in place of the last.
  * `markRead: false` keeps a conversation tab from marking what it shows read,

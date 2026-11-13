@@ -77,7 +77,7 @@ export function WorkspaceControl({
       .finally(() => setBusy(false));
   };
   const name = project ? `Workspace: ${project.name}` : "Add workspace";
-  if (channelId && regions.excluded.has(channelId) && !filed) return null;
+  if (channelId && regions.managed.has(channelId) && !filed) return null;
   return (
     <span className={styles.control}>
       {/* Saving keeps the trigger focusable, so the choice returns focus to it. */}

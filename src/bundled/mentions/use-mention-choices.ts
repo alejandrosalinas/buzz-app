@@ -211,7 +211,10 @@ export function namedCandidates(
 export type SpaceEvidence = {
   /** Members or offered agents are still loading. */
   pending: boolean;
-  /** A member's name is neither known nor known to be absent. */
+  /**
+   * A member's name is neither known nor known to be absent, or the member
+   * list is still loading.
+   */
   missingNames: boolean | undefined;
   /** The directory search for this query settled with no more pages. */
   complete: boolean;
@@ -248,6 +251,8 @@ export function useMentionChoices(
   /** One chooser opening; see useMentionDirectory. */
   lifetime: string,
   open = true,
+  /** Toolbar audience at opening; toggles must not reorder installed rows. */
+  addressed?: ReadonlySet<string>,
 ) {
   const draft = useContext(DraftMentionRoster);
   const roster = draft?.recipients;
@@ -441,7 +446,7 @@ export function useMentionChoices(
   );
   const matches = matchingMentions(candidates, query);
   // Ranking needs only the rows that can show.
-  const rank = (choices: readonly MentionChoice[]) =>
+  const normalRank = (choices: readonly MentionChoice[]) =>
     rankMentions(
       choices,
       query,
@@ -449,6 +454,18 @@ export function useMentionChoices(
       (key) => session.presence?.status(key) ?? "unknown",
       MENTION_ROWS,
     );
+  // Browse addressed agents before the cap; typed searches keep match quality first.
+  const rank = (choices: readonly MentionChoice[]) =>
+    addressed?.size && !query.trim()
+      ? [
+          ...normalRank(
+            choices.filter((c) => addressed.has(c.recipient.pubkey)),
+          ),
+          ...normalRank(
+            choices.filter((c) => !addressed.has(c.recipient.pubkey)),
+          ),
+        ].slice(0, MENTION_ROWS)
+      : normalRank(choices);
   // Ranked only when read: a full set of installed rows never needs outside choices.
   let outsideRows: readonly MentionChoice[] | undefined;
   const outside = () =>
@@ -456,9 +473,13 @@ export function useMentionChoices(
       ? rank(matches.filter((c) => !local.has(c.recipient.pubkey)))
       : []);
   // A member a completed read found no profile for has no name to be a namesake.
+  // While the member list loads, no member's name is known.
   const missingNames =
     open &&
-    channel?.members?.some((key) => !profiles.has(key) && !unnamed?.has(key));
+    (membersPending ||
+      channel?.members?.some(
+        (key) => !profiles.has(key) && !unnamed?.has(key),
+      ));
   if (open && !rows && !membersPending) {
     const ranked = rank(matches.filter((c) => local.has(c.recipient.pubkey)));
     if (
@@ -534,6 +555,7 @@ export function useMentionChoices(
       roster,
       candidates,
       pending,
+      missingNames,
       archives,
       spaceId: spaceMention(candidates, local, query, evidence),
       canSelect: (pubkey: string, space = false) => {

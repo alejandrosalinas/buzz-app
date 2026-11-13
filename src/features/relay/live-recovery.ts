@@ -94,3 +94,16 @@ export function headRecovering(view: LiveRecoveryView, channelId: string) {
     }) !== "settled"
   );
 }
+/** True while the session owes this channel a catch-up head read that is
+ * queued or in flight. A cancelled, failed or settled read is not pending, so
+ * a caller that waits on this cannot wait for a read nobody will send. A
+ * session with no live view owes none. */
+export const headReadPending = (
+  live: { snapshot(): Pick<LiveRecoveryView, "heads"> } | undefined,
+  channelId: string,
+) =>
+  !!live
+    ?.snapshot()
+    .heads.some(
+      (head) => head.channelId === channelId && head.state === "pending",
+    );

@@ -1312,7 +1312,13 @@ describe("Mod+Shift+V pastes plain text verbatim", () => {
       fireEvent.keyDown(h.input, chord);
       fireEvent.paste(h.input, {
         clipboardData: {
-          items: [{ kind: "file" }],
+          items: [
+            {
+              kind: "file",
+              getAsFile: () =>
+                new File(["png"], "name.png", { type: "image/png" }),
+            },
+          ],
           getData: (type: string) => (type === "text/plain" ? "name.png" : ""),
         },
       });

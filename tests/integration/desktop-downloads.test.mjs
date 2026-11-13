@@ -222,7 +222,7 @@ test("wrong repository and invalid arguments fail before GitHub calls", (t) => {
   const run = fixture(t);
   for (const options of [
     { repo: "example-org/other" },
-    { args: ["1.0.1-preview.2.1", "--apply"] },
+    { args: ["1.0.1-preview.2", "--apply"] },
     { args: ["1.0.1-beta.1", "--apply"] },
     { args: [version, "--force"] },
   ]) {

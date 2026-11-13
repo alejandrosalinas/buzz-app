@@ -1862,7 +1862,10 @@ function attachmentFile(name = "notes.txt", bytes = "notes") {
 }
 function attachByPaste(target: HTMLElement, file = attachmentFile()) {
   fireEvent.paste(target, {
-    clipboardData: { items: [{ kind: "file", getAsFile: () => file }] },
+    clipboardData: {
+      items: [{ kind: "file", getAsFile: () => file }],
+      getData: () => "",
+    },
   });
 }
 function attachByDrop(target: HTMLElement, file = attachmentFile()) {
@@ -7692,8 +7695,27 @@ it("serializes tool commands in one React batch and rejects malformed recipients
   h.submit();
   expect(h.messages.send).toHaveBeenCalledExactlyOnceWith(
     "channel",
-    "Hi there @Honey and @Honey ",
+    `Hi there @Honey (${first.pubkey}) and @Honey (${second.pubkey}) `,
     [first.pubkey, second.pubkey],
+    [],
+  );
+});
+
+it("counts namesake qualifiers against the message limit", () => {
+  const h = mount();
+  // Room for a second bare chip, not for both qualifiers it adds.
+  const prose = "x".repeat(16000 - 30);
+  h.fill(prose);
+  act(() => {
+    const { insertMention } = h.commands();
+    expect(insertMention(first)).toBe(true);
+    expect(insertMention(second)).toBe(false);
+  });
+  h.submit();
+  expect(h.messages.send).toHaveBeenCalledExactlyOnceWith(
+    "channel",
+    `${prose}@Honey `,
+    [first.pubkey],
     [],
   );
 });
@@ -7733,17 +7755,17 @@ it("keeps custom emoji text readable and sends repeated shortcodes unchanged", (
   act(() => {
     expect(h.commands().insertText(":party:")).toBe(true);
   });
-  expect(h.input()).toHaveValue(":party:");
+  expect(h.input()).toHaveValue(":party: ");
   expect(h.input()).toHaveAttribute("data-single-emoji", "true");
   act(() => {
     expect(h.commands().insertText(":party:")).toBe(true);
   });
-  expect(h.input()).toHaveValue(":party::party:");
+  expect(h.input()).toHaveValue(":party: :party: ");
   expect(h.input().querySelectorAll("img[alt=':party:']")).toHaveLength(2);
   h.submit();
   expect(h.messages.send).toHaveBeenCalledExactlyOnceWith(
     "channel",
-    ":party::party:",
+    ":party: :party: ",
     [],
     [],
   );
@@ -7816,13 +7838,13 @@ const colon = (input: ComposerInputElement) =>
   fireEvent.keyDown(input, { key: ":", shiftKey: true });
 
 it.each([
-  ["hello :-1", "hello 👎"],
-  [":+1", "👍"],
-  ["say :SMILE", "say 😄"],
+  ["hello :-1", "hello 👎 "],
+  [":+1", "👍 "],
+  ["say :SMILE", "say 😄 "],
   // The second shortcode may follow a converted emoji with no space between them.
-  ["😄:wave", "😄👋"],
+  ["😄:wave", "😄👋 "],
 ])(
-  "replaces an exact shortcode with its emoji on the closing colon: %s",
+  "replaces an exact shortcode with its emoji and a space on the closing colon: %s",
   async (typed, expected) => {
     const h = mountEmojiTypeahead();
     h.fill(typed);
@@ -7860,7 +7882,7 @@ it.each([{ altKey: true }, { altKey: true, shiftKey: true }])(
     expect(fireEvent.keyDown(h.input(), { key: ":", ...keys })).toBe(true);
     expect(h.input()).toHaveValue("hello :-1");
     expect(colon(h.input())).toBe(false);
-    expect(h.input()).toHaveValue("hello 👎");
+    expect(h.input()).toHaveValue("hello 👎 ");
   },
 );
 
@@ -7905,7 +7927,7 @@ it("waits for the community catalog before authorizing a Unicode replacement", a
   h.setEmoji([]);
   await screen.findByRole("option", { name: ":smile:" });
   expect(colon(h.input())).toBe(false);
-  expect(h.input()).toHaveValue("😄");
+  expect(h.input()).toHaveValue("😄 ");
 });
 
 it("keeps Unicode suggestions and retry without replacement after a community failure", async () => {
@@ -7943,7 +7965,7 @@ it("keeps custom suggestions and retry without replacement after a Unicode failu
     ).toBeNull(),
   );
   expect(colon(h.input())).toBe(false);
-  expect(h.input()).toHaveValue(":party:");
+  expect(h.input()).toHaveValue(":party: ");
 });
 
 it.each([
@@ -7964,20 +7986,153 @@ it.each([
   },
 );
 
+it("types on after a custom shortcode as a separate word", async () => {
+  const h = mountEmojiTypeahead();
+  h.setEmoji([{ shortcode: "party", url: "https://emoji.test/party.png" }]);
+  h.fill("go :party");
+  await screen.findByRole("option", { name: ":party:" });
+  expect(colon(h.input())).toBe(false);
+  expect(h.input()).toHaveValue("go :party: ");
+  await h.user.keyboard("hi");
+  expect(h.input()).toHaveValue("go :party: hi");
+});
+
+it.each([
+  [
+    "Tab",
+    (h: ReturnType<typeof mountEmojiTypeahead>) =>
+      fireEvent.keyDown(h.input(), { key: "Tab" }),
+  ],
+  [
+    "Enter",
+    (h: ReturnType<typeof mountEmojiTypeahead>) =>
+      fireEvent.keyDown(h.input(), { key: "Enter" }),
+  ],
+  [
+    "click",
+    (h: ReturnType<typeof mountEmojiTypeahead>) =>
+      h.user.click(screen.getByRole("option", { name: ":smile:" })),
+  ],
+])("adds a space after an emoji chosen by %s", async (_, choose) => {
+  const h = mountEmojiTypeahead();
+  h.fill("say :smil");
+  await screen.findByRole("option", { name: ":smile:" });
+  await act(async () => {
+    await choose(h);
+  });
+  expect(h.input()).toHaveValue("say 😄 ");
+  await h.user.keyboard("hi");
+  expect(h.input()).toHaveValue("say 😄 hi");
+});
+
+it.each([
+  // Text after the caret keeps its place; the caret follows the new space.
+  ["a :-1b", 5, "a 👎 b", 5],
+  // An existing space or tab is reused; the caret moves past it.
+  ["a :-1 b", 5, "a 👎 b", 5],
+  ["a :-1\tb", 5, "a 👎\tb", 5],
+  // A line break is not a word separator on the same line.
+  ["a :-1\nb", 5, "a 👎 \nb", 5],
+])(
+  "spaces an emoji completed within text: %j",
+  async (text, caret, expected, after) => {
+    const h = mountEmojiTypeahead();
+    h.fill(text);
+    act(() => h.input().setSelectionRange(caret, caret));
+    fireEvent(document, new Event("selectionchange"));
+    await screen.findByRole("option", { name: ":-1:" });
+    expect(colon(h.input())).toBe(false);
+    expect(h.input()).toHaveValue(expected);
+    expect([h.input().selectionStart, h.input().selectionEnd]).toEqual([
+      after,
+      after,
+    ]);
+    await h.user.keyboard("hi");
+    expect(h.input()).toHaveValue(
+      `${expected.slice(0, after)}hi${expected.slice(after)}`,
+    );
+  },
+);
+
+it("keeps the caret after a typed colon whose conversion exceeds the limit", async () => {
+  const h = mountEmojiTypeahead();
+  // The flag is two units longer than its shortcode: the colon fits, the
+  // conversion does not.
+  const typed = `${"x".repeat(15999 - 14)} :flag-wales `;
+  h.fill(typed);
+  const caret = typed.length - 1;
+  act(() => h.input().setSelectionRange(caret, caret));
+  fireEvent(document, new Event("selectionchange"));
+  await screen.findByRole("option", { name: ":flag-wales:" });
+  expect(colon(h.input())).toBe(false);
+  expect(h.input()).toHaveValue(`${typed.slice(0, caret)}: `);
+  expect([h.input().selectionStart, h.input().selectionEnd]).toEqual([
+    caret + 1,
+    caret + 1,
+  ]);
+});
+
+it("undoes an emoji completed before an existing space in one step", async () => {
+  const h = mountEmojiTypeahead();
+  h.fill("a :-1 b");
+  act(() => h.input().setSelectionRange(5, 5));
+  fireEvent(document, new Event("selectionchange"));
+  await screen.findByRole("option", { name: ":-1:" });
+  expect(colon(h.input())).toBe(false);
+  expect(h.input()).toHaveValue("a 👎 b");
+  act(() => h.input().undo(false));
+  expect(h.input()).toHaveValue("a :-1: b");
+  expect([h.input().selectionStart, h.input().selectionEnd]).toEqual([6, 6]);
+  act(() => h.input().undo(true));
+  expect(h.input()).toHaveValue("a 👎 b");
+});
+
+it.each([
+  ["ab", 1, 1, "😀", "a😀 b", 4],
+  ["a b", 1, 1, "😀", "a😀 b", 4],
+  ["a\tb", 1, 1, "😀", "a😀\tb", 4],
+  // A replaced selection reuses the space after it.
+  ["ax b", 1, 2, "😀", "a😀 b", 4],
+  ["ab", 1, 1, ":party:", "a:party: b", 9],
+  // Other tool text is inserted exactly as given.
+  ["ab", 1, 1, "x", "axb", 2],
+])(
+  "spaces emoji a composer tool inserts: %j",
+  async (text, start, end, inserted, expected, after) => {
+    const h = mount();
+    h.setEmoji([{ shortcode: "party", url: "https://emoji.test/party.png" }]);
+    h.fill(text);
+    act(() => h.input().setSelectionRange(start, end));
+    act(() => {
+      expect(h.commands().insertText(inserted)).toBe(true);
+    });
+    expect(h.input()).toHaveValue(expected);
+    expect([h.input().selectionStart, h.input().selectionEnd]).toEqual([
+      after,
+      after,
+    ]);
+    await h.user.keyboard("hi");
+    expect(h.input()).toHaveValue(
+      `${expected.slice(0, after)}hi${expected.slice(after)}`,
+    );
+  },
+);
+
 it("restores the typed colon and collapsed caret with one undo, and isolates subsequent typing", async () => {
   const h = mountEmojiTypeahead();
   h.fill("hello :-1");
   await screen.findByRole("option", { name: ":-1:" });
   expect(colon(h.input())).toBe(false);
-  expect(h.input()).toHaveValue("hello 👎");
+  expect(h.input()).toHaveValue("hello 👎 ");
   act(() => h.input().undo(false));
   expect(h.input()).toHaveValue("hello :-1:");
   expect([h.input().selectionStart, h.input().selectionEnd]).toEqual([10, 10]);
   act(() => h.input().undo(true));
-  expect(h.input()).toHaveValue("hello 👎");
+  expect(h.input()).toHaveValue("hello 👎 ");
   await h.user.type(h.input(), "!");
+  expect(h.input()).toHaveValue("hello 👎 !");
   act(() => h.input().undo(false));
-  expect(h.input()).toHaveValue("hello 👎");
+  expect(h.input()).toHaveValue("hello 👎 ");
   act(() => h.input().undo(false));
   expect(h.input()).toHaveValue("hello :-1:");
 });
@@ -10974,7 +11129,31 @@ it("rejects a known archived recipient at send entry without clearing the draft"
   expect(h.input()).toHaveValue(`@${first.name} `);
   expect(
     screen.getByText(
-      "A selected recipient is archived. Remove it before sending.",
+      "A selected recipient is archived or being deleted. Remove it before sending.",
+    ),
+  ).toBeVisible();
+});
+
+it("refuses a recipient selected before its Delete started, at send", () => {
+  const viewer = localAgent.owner;
+  const control = localAgentsFixture();
+  const agent = { ...localAgent, ...first };
+  control.set({ agents: [agent] });
+  const h = mount(
+    { scope: `https://relay.example.test:${viewer}` },
+    control,
+    viewer,
+  );
+  act(() => {
+    expect(h.commands().insertMention(first)).toBe(true);
+  });
+  act(() => control.set({ agents: [{ ...agent, deleting: true }] }));
+  h.submit();
+  expect(h.messages.send).not.toHaveBeenCalled();
+  expect(h.input()).toHaveValue(`@${first.name} `);
+  expect(
+    screen.getByText(
+      "A selected recipient is archived or being deleted. Remove it before sending.",
     ),
   ).toBeVisible();
 });
@@ -10994,7 +11173,7 @@ it("sends a resource between mentions and keeps both after a failed send", () =>
   expect(h.input()).toHaveTextContent("Resource: Fix login");
   h.submit();
   expect(h.messages.send.mock.calls.at(-1)?.slice(1, 3)).toEqual([
-    `@Honey [Fix login](${resource.uri}) @Honey `,
+    `@Honey (${first.pubkey}) [Fix login](${resource.uri}) @Honey (${second.pubkey}) `,
     [first.pubkey, second.pubkey],
   ]);
 });
@@ -13374,7 +13553,7 @@ it("an archived agent in the pill blocks the send and asks for another agent", (
   expect(h.input()).toHaveValue("hello");
   expect(
     screen.getByText(
-      "An agent you're sending to is archived. Choose another agent to send.",
+      "An agent you're sending to is archived or being deleted. Choose another agent to send.",
     ),
   ).toBeVisible();
 });
@@ -14993,12 +15172,12 @@ it("keeps the separator typed after the words a pending chip extends over, so la
   expect(h.messages.send.mock.calls[0]?.at(-1)).toEqual([mira.pubkey]);
 });
 
-it("extends a chip held on punctuation over the rest of the longer directory name it starts", async () => {
+it("extends a chip held on punctuation over the rest of the longer member name it starts", async () => {
   // A member name still loading keeps `Pat O` from selecting, so `'` holds
-  // it. The search then finds `Pat O'Brien`; the words typed after the chip
-  // start with the `'` that held it and complete that name.
+  // it. The search then finds that member, `Pat O'Brien`; the words typed
+  // after the chip start with the `'` that held it and complete that name.
   const h = mountDirectoryMention();
-  const pat = { pubkey: "f".repeat(64), name: "Pat O'Brien" };
+  const pat = { pubkey: second.pubkey, name: "Pat O'Brien" };
   h.setProfiles(new Map([[first.pubkey, { name: "Pat O" }]]));
   await h.user.type(h.input(), "@Pat O");
   await screen.findByText("Searching community…");
@@ -15013,20 +15192,41 @@ it("extends a chip held on punctuation over the rest of the longer directory nam
   expect(h.chip("Pat O'Brien")).toBeNull();
   expect(h.recipients()).toHaveLength(1);
   h.submit();
-  expect(screen.getByRole("dialog")).toHaveTextContent(
-    "Pat O'Brien is not in this channel.",
-  );
-  fireEvent.click(
-    screen.getByRole("button", { name: /^(Do nothing|Send anyway)$/ }),
-  );
   await act(async () => {});
+  expect(screen.queryByRole("dialog")).toBeNull();
   expect(h.messages.send).toHaveBeenCalledOnce();
   expect(h.messages.send.mock.calls[0]?.slice(0, 3)).toEqual([
     "channel",
     "@Pat O'Brien",
-    [],
+    [pat.pubkey],
   ]);
-  expect(h.messages.send.mock.calls[0]?.at(-1)).toEqual([pat.pubkey]);
+});
+
+it("resolves a chip held on punctuation to the member's name when only a longer outside name continues it", async () => {
+  // As above, but `Pat O'Brien` is outside the channel: an outside name
+  // never makes a member's exact name ambiguous, so the chip mentions the
+  // member and the rest stays prose.
+  const h = mountDirectoryMention();
+  const outside = { pubkey: "f".repeat(64), name: "Pat O'Brien" };
+  h.setProfiles(new Map([[first.pubkey, { name: "Pat O" }]]));
+  await h.user.type(h.input(), "@Pat O");
+  await screen.findByText("Searching community…");
+  await h.user.keyboard("'s here");
+  expect(h.chip("Pat O")).toHaveAttribute("aria-busy", "true");
+  await waitFor(() => expect(h.people).toHaveBeenCalled());
+  await h.release({ people: [outside], hasMore: false });
+  await waitFor(() => expect(h.chip("Pat O")).toBeNull());
+  expect(h.input()).toHaveValue("@Pat O's here");
+  expect(h.recipients()).toHaveLength(1);
+  h.submit();
+  await act(async () => {});
+  expect(screen.queryByRole("dialog")).toBeNull();
+  expect(h.messages.send).toHaveBeenCalledOnce();
+  expect(h.messages.send.mock.calls[0]?.slice(0, 3)).toEqual([
+    "channel",
+    "@Pat O's here",
+    [first.pubkey],
+  ]);
 });
 
 it("selects a longer directory name on the Space that completes it when its page arrived before the first Space", async () => {
@@ -15098,6 +15298,204 @@ it.each([
     );
   },
 );
+
+it.each([
+  ["Wes", "Wes Smith"],
+  ["Pat O", "Pat O'Brien"],
+])(
+  "mentions the member %j when the listed outside %j is typed out in full",
+  async (member, outside) => {
+    // An outside longer name never blocks a member's exact name, so the Space
+    // or punctuation inside it selects the member and the rest stays text.
+    // Only the list can choose the outside name (README section 5).
+    const h = mountDirectoryMention();
+    h.setProfiles(
+      new Map([
+        [first.pubkey, { name: member }],
+        [second.pubkey, { name: "Another Member" }],
+      ]),
+    );
+    await h.user.type(h.input(), `@${member}`);
+    await waitFor(() => expect(h.people).toHaveBeenCalled());
+    await h.release({
+      people: [{ pubkey: "f".repeat(64), name: outside }],
+      hasMore: false,
+    });
+    await screen.findByRole("option", { name: new RegExp(outside) });
+    await h.user.keyboard(`${outside.slice(member.length)} hi`);
+    expect(h.input()).toHaveValue(`@${outside} hi`);
+    expect(h.recipients()).toHaveLength(1);
+    h.submit();
+    expect(h.messages.send).toHaveBeenCalledExactlyOnceWith(
+      "channel",
+      `@${outside} hi`,
+      [first.pubkey],
+      [],
+    );
+  },
+);
+
+/** A saved Solo chat as the app mounts it: the personal composer's roster
+ * over the real chooser. The chat's signed member list has the viewer and
+ * `Claude`; the viewer also owns `Claude Code`, which the roster offers from
+ * outside the chat. */
+function mountSavedSoloMention() {
+  const viewer = "e".repeat(64);
+  const claude = { pubkey: first.pubkey, name: "Claude" };
+  const code = { pubkey: second.pubkey, name: "Claude Code" };
+  const completions: readonly Contribution<ComposerCompletion>[] = [
+    {
+      id: "mentions",
+      key: "buzz.mentions/mentions",
+      pluginId: "buzz.mentions",
+      revision: "1",
+      title: "Mention",
+      match: ({ text, start }) => mentionQuery(text, start),
+      component: MentionCompletion,
+    },
+  ];
+  const empty: [] = [];
+  const none = { snapshot: () => empty, subscribe: () => () => {} };
+  const h = mount(
+    {
+      extensions: {
+        tools: none,
+        inline: none,
+        completions: {
+          snapshot: () => completions,
+          subscribe: () => () => {},
+        },
+      },
+      soloConversation: true,
+      ownSoloConversation: true,
+      requireMention: true,
+    },
+    undefined,
+    viewer,
+  );
+  const saved = {
+    id: "channel",
+    channelType: "solo" as const,
+    members: [viewer, claude.pubkey],
+  };
+  const list = { status: "ready" as const, channels: [saved] };
+  const addAgents = vi.fn(async () => {});
+  h.retarget({
+    session: {
+      ...h.session,
+      channels: {
+        ...h.session.channels,
+        list: () => list,
+        ensureList: () => {},
+      },
+      channelWrites: { refreshMembership: async () => saved, addAgents },
+    } as unknown as RelaySession,
+  });
+  h.setProfiles(
+    new Map([
+      [viewer, { name: "Viewer" }],
+      [claude.pubkey, { name: claude.name, isAgent: true }],
+      [code.pubkey, { name: code.name, isAgent: true }],
+    ]),
+  );
+  return {
+    ...h,
+    claude,
+    code,
+    addAgents,
+    /** The mention chips in the draft, by their text. */
+    chips: () =>
+      [...h.input().querySelectorAll("[data-source]")].map(
+        (chip) => chip.textContent,
+      ),
+  };
+}
+
+it("selects a saved Solo chat's member on Space beside the owner's longer-named agent outside it", async () => {
+  // The roster offers every available agent, but only the chat's own member
+  // list makes a name a member's (README section 5).
+  const h = mountSavedSoloMention();
+  h.setLibrary([h.claude, h.code]);
+  await h.user.type(h.input(), "@Claude");
+  // The agent outside the chat stays listed.
+  await screen.findByRole("option", { name: /^Claude Code/ });
+  await h.user.keyboard(" ");
+  expect(h.input()).toHaveValue("@Claude ");
+  expect(h.chips()).toEqual(["@Claude"]);
+  h.submit();
+  await waitFor(() => expect(h.messages.send).toHaveBeenCalledOnce());
+  expect(h.messages.send.mock.calls[0]?.slice(0, 3)).toEqual([
+    "channel",
+    "@Claude ",
+    [h.claude.pubkey],
+  ]);
+  expect(h.addAgents).not.toHaveBeenCalled();
+});
+
+it("mentions a saved Solo chat's member when the owner's longer-named agent outside it is typed out in full", async () => {
+  const h = mountSavedSoloMention();
+  h.setLibrary([h.claude, h.code]);
+  await h.user.type(h.input(), "@Claude");
+  await screen.findByRole("option", { name: /^Claude Code/ });
+  await h.user.keyboard(" Code hi");
+  expect(h.input()).toHaveValue("@Claude Code hi");
+  expect(h.chips()).toEqual(["@Claude"]);
+  h.submit();
+  await waitFor(() => expect(h.messages.send).toHaveBeenCalledOnce());
+  expect(h.messages.send.mock.calls[0]?.slice(0, 3)).toEqual([
+    "channel",
+    "@Claude Code hi",
+    [h.claude.pubkey],
+  ]);
+  expect(h.addAgents).not.toHaveBeenCalled();
+});
+
+it("resolves a saved Solo chat member's name held while the owner's agents load, beside the longer-named agent outside it", async () => {
+  // No agent is listed until the library loads, so Space holds the name. The
+  // resolver then applies the same rule over the settled roster.
+  const h = mountSavedSoloMention();
+  h.setLibrary([], "loading");
+  await h.user.type(h.input(), "@Claude");
+  await screen.findByText("Loading recipients…");
+  await h.user.keyboard(" ");
+  expect(h.input()).toHaveValue("@Claude ");
+  expect(
+    within(h.input()).getByRole("img", { name: "Resolving mention Claude" }),
+  ).toHaveAttribute("aria-busy", "true");
+  h.setLibrary([h.claude, h.code]);
+  await waitFor(() =>
+    expect(
+      within(h.input()).queryByRole("img", { name: /^Resolving mention / }),
+    ).toBeNull(),
+  );
+  expect(h.chips()).toEqual(["@Claude"]);
+  expect(h.input()).toHaveValue("@Claude ");
+});
+
+it("still picks the owner's agent outside a saved Solo chat from the list, and sending adds it", async () => {
+  const h = mountSavedSoloMention();
+  h.setLibrary([h.claude, h.code]);
+  await h.user.type(h.input(), "@Claude");
+  const outside = await screen.findByRole("option", { name: /^Claude Code/ });
+  // Listed as before: the roster's rows carry no "Adds to chat" detail.
+  expect(outside).not.toHaveTextContent("Adds to chat");
+  await h.user.keyboard("{ArrowDown}{Enter}");
+  expect(h.input()).toHaveValue("@Claude Code ");
+  expect(h.chips()).toEqual(["@Claude Code"]);
+  await h.user.keyboard("hi");
+  h.submit();
+  await waitFor(() => expect(h.messages.send).toHaveBeenCalledOnce());
+  expect(h.messages.send.mock.calls[0]?.slice(0, 3)).toEqual([
+    "channel",
+    "@Claude Code hi",
+    [h.code.pubkey],
+  ]);
+  expect(h.addAgents).toHaveBeenCalledOnce();
+  expect(h.addAgents.mock.calls[0]?.slice(0, 2)).toEqual([
+    "channel",
+    [h.code.pubkey],
+  ]);
+});
 
 it("extends a pending chip to the one longer name the typed words complete when several continue it", async () => {
   const h = mountDirectoryMention();

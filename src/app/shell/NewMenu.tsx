@@ -13,7 +13,6 @@ import { splitPartition } from "../../features/relay/partition";
 import { NewWorkspace } from "../../features/solo/NewWorkspace";
 import { resetNewChatProject } from "../../features/solo/SoloDraft";
 import { soloDraftTarget } from "../../features/channel-navigation/routes";
-import { useSoloNavigation } from "../../features/channel-navigation/solo-navigation-react";
 import { soloNavigationFor } from "../../features/channel-navigation/solo-navigation";
 import { IconButton } from "../../shared/design-system/ui/IconButton";
 import {
@@ -49,6 +48,8 @@ export function NewMenu(props: Props) {
   );
 }
 
+const noSubscription = () => () => {};
+
 function ReadyNewMenu({
   relay,
   navigator,
@@ -64,9 +65,17 @@ function ReadyNewMenu({
     session.soloPreferences.snapshot,
   );
   const preferences = useSidebarPreferences(session.sidebarPreferences);
-  const regions = useSoloNavigation(session);
-  const composing = !!regions.regions.find((region) => region.source)?.source
-    ?.composeWorkspaces;
+  // Solo navigation publishes on every channel-list change; the menu only
+  // needs to know whether a region source composes workspaces.
+  const navigation = soloNavigationFor(session);
+  const composing = useSyncExternalStore(
+    navigation?.subscribe ?? noSubscription,
+    () =>
+      !!navigation
+        ?.snapshot()
+        .regions.find((region) => region.source && !region.hidden)?.source
+        ?.composeWorkspaces,
+  );
   const [creatingChannel, setCreatingChannel] = useState(false);
   const [creatingSection, setCreatingSection] = useState(false);
   const [creatingProject, setCreatingProject] = useState(false);

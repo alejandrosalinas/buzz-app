@@ -21,6 +21,7 @@ import { usePresenceStatus } from "../presence/react";
 import type { RelaySession } from "../relay/session";
 import { UserStatusDisplay } from "../user-status/StatusDisplay";
 import { ProfileBackdrop } from "./ProfileBackdrop";
+import { ProfileLocalTime } from "./ProfileLocalTime";
 import styles from "./ProfilePeek.module.css";
 import {
   otherVerifiedName,
@@ -62,6 +63,26 @@ function OtherName({
   return otherName ? (
     <div className="text-caption text-secondary">{otherName}</div>
   ) : null;
+}
+
+/** Their shared local time, read only while the preview is open. */
+function LocalTime({
+  session,
+  pubkey,
+}: {
+  session: RelaySession;
+  pubkey: string;
+}) {
+  const timeZone = useSyncExternalStore(
+    session.profiles.subscribe,
+    () => session.profiles.snapshot().get(pubkey)?.tz,
+  );
+  return (
+    <ProfileLocalTime
+      timeZone={timeZone}
+      className="text-caption text-secondary"
+    />
+  );
 }
 
 /** A lightweight look at the same identity the avatar opens in the profile panel. */
@@ -242,6 +263,7 @@ export function ProfilePeek({
               {name}
             </div>
             {session && <OtherName session={session} pubkey={pubkey} />}
+            {session && <LocalTime session={session} pubkey={pubkey} />}
             {session && (
               <UserStatusDisplay
                 session={session}

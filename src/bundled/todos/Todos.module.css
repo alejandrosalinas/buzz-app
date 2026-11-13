@@ -119,9 +119,6 @@
   align-items: center;
   width: 1.5rem;
 }
-.label a {
-  color: var(--text-link);
-}
 
 .assigneeName {
   max-width: 6rem;

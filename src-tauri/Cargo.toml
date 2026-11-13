@@ -45,7 +45,7 @@ buzz-credential-store = { path = "../crates/credential-store" }
 buzz-agent-controller = { path = "../crates/agent-controller" }
 serde = { version = "1", features = ["derive"] }
 serde_json = { version = "1", features = ["raw_value"] }
-buzz-audio-client = { git = "https://github.com/block/buzz.git", rev = "0e6037c74d67930de36143ed4661f469039d8dc7" }
+buzz-audio-client = { git = "https://github.com/block/buzz.git", rev = "630922a9e1f891380a61f5b7d726d05ca948cc64" }
 rustls-native-certs = "0.8"
 tokio = { version = "1", features = ["sync", "time", "macros", "process", "io-util", "net", "signal"] }
 sha2 = "0.10"
@@ -104,8 +104,8 @@ tauri-plugin-mcp-bridge = { git = "https://github.com/hypothesi/mcp-server-tauri
 security-framework = "3.7"
 block2 = "=0.6.2"
 objc2 = "=0.6.4"
-objc2-app-kit = { version = "=0.3.2", default-features = false, features = ["NSSharingService", "NSImage", "NSView", "NSApplication", "NSResponder", "NSScreen", "NSWindow", "NSEvent", "NSWorkspace", "NSRunningApplication", "NSMenu", "NSMenuItem", "NSUserInterfaceItemIdentification", "block2"] }
-objc2-foundation = { version = "=0.3.2", default-features = false, features = ["std", "NSObject", "NSThread", "NSBundle", "NSString", "NSURL", "NSError", "NSUserDefaults", "NSFormatter", "NSDateFormatter", "NSLocale", "NSProcessInfo", "NSData", "NSProgress", "NSURLRequest", "NSURLResponse", "NSURLError", "NSNotification", "NSOperation", "block2", "NSArray", "NSDictionary", "NSIndexSet"] }
+objc2-app-kit = { version = "=0.3.2", default-features = false, features = ["NSSharingService", "NSImage", "NSView", "NSApplication", "NSResponder", "NSScreen", "NSWindow", "NSEvent", "NSWorkspace", "NSRunningApplication", "NSMenu", "NSMenuItem", "NSUserInterfaceItemIdentification", "NSAppearance", "NSColor", "NSColorList", "objc2-core-foundation", "block2"] }
+objc2-foundation = { version = "=0.3.2", default-features = false, features = ["std", "NSObject", "NSThread", "NSBundle", "NSString", "NSURL", "NSError", "NSUserDefaults", "NSFormatter", "NSDateFormatter", "NSLocale", "NSProcessInfo", "NSData", "NSProgress", "NSURLRequest", "NSURLResponse", "NSURLError", "NSNotification", "NSOperation", "NSDate", "NSTimer", "block2", "NSArray", "NSDictionary", "NSIndexSet"] }
 objc2-core-graphics = { version = "=0.3.2", default-features = false, features = ["std", "CGColorSpace"] }
 objc2-core-image = { version = "=0.3.2", default-features = false, features = ["std", "CIContext", "CIImage", "objc2-core-graphics", "objc2-core-video"] }
 objc2-core-video = { version = "=0.3.2", default-features = false, features = ["std", "CVBuffer", "CVImageBuffer", "CVPixelBuffer", "objc2"] }

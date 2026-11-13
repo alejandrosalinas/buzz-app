@@ -17,6 +17,8 @@ import { ClaudeDefaults } from "./defaults";
 import { ClaudeRuntime, type Config, config, DEFAULT_CONFIG } from "./runtime";
 import { ClaudeSetup, withScript } from "./setup";
 import { createTabs } from "./tabs";
+import { targetKey } from "../../features/navigation/targets";
+import type { ClaudeConnection } from "./ClaudeSettings";
 import { readUsage } from "./usage";
 
 export { TYPE_ID };
@@ -41,7 +43,11 @@ export const apply: PluginModule["apply"] = (ctx) => {
   const setup = new ClaudeSetup(spawn, (input) => host.request(input));
   // Older replacement auth implementations need not provide key management.
   const { Settings } = setup.auth as {
-    Settings?: ComponentType<{ setup: ClaudeSetup; active(): boolean }>;
+    Settings?: ComponentType<{
+      setup: ClaudeSetup;
+      active(): boolean;
+      connection?: ClaudeConnection | undefined;
+    }>;
   };
   if (Settings)
     ctx.settingsCards.register({
@@ -49,7 +55,32 @@ export const apply: PluginModule["apply"] = (ctx) => {
       title: "Claude",
       icon: ClaudeLogoIcon,
       group: "Plugins",
-      component: ({ active }) => createElement(Settings, { setup, active }),
+      component: ({ active, navigation }) => {
+        let connection: ClaudeConnection | undefined;
+        if (navigation?.target.kind === "settings") {
+          const { route, ...parent } = navigation.target;
+          const target = {
+            ...parent,
+            route: { version: 1, params: "connect" },
+          } as const;
+          connection = {
+            open: route?.version === 1 && route.params === "connect",
+            onOpenChange(open) {
+              if (!active()) return;
+              if (open) {
+                if (!navigation.signal.aborted)
+                  void ctx.navigation.open(target);
+              } else {
+                ctx.navigation.dismiss(
+                  (candidate) => targetKey(candidate) === targetKey(target),
+                  parent,
+                );
+              }
+            },
+          };
+        }
+        return createElement(Settings, { setup, active, connection });
+      },
     });
   ctx.agentProtection.registerModels({
     label: "Claude",
@@ -63,7 +94,12 @@ export const apply: PluginModule["apply"] = (ctx) => {
   const providerDefaults = new ClaudeDefaults(agents.storage);
   // No turn starts without credentials.
   const runtime = new ClaudeRuntime(
-    spawn ? { spawn: setup.auth.authorize(spawn, true) } : {},
+    {
+      ...(spawn ? { spawn: setup.auth.authorize(spawn, true) } : {}),
+      ...(host.resolveDirectory
+        ? { resolveDirectory: host.resolveDirectory.bind(host) }
+        : {}),
+    },
     (key) => ownerReads(agents.relay(key), pubkeyOf(key)),
     (key, signal) => agents.core(key, signal),
     agents.storage,
@@ -159,6 +195,7 @@ export const apply: PluginModule["apply"] = (ctx) => {
   agents.register<Config>({
     id: TYPE_ID,
     execution: true,
+    conversationFolders: true,
     hooks: { events: CLAUDE_HOOK_EVENTS },
     retire: (pubkey) => runtime.retire(pubkey),
     protection: true,
@@ -213,14 +250,22 @@ export const apply: PluginModule["apply"] = (ctx) => {
         usage: async (agent, { since, signal }) => {
           if (await agents.inspectExecution(agent.key))
             throw new Error("Usage is unavailable for remote Claude agents.");
-          return readUsage(
-            { spawn, readFile },
-            config(agent.config).workspace,
-            agent.key,
-            runtime.conversations(agent.key).map((saved) => saved.sessionId),
-            since,
-            signal,
+          // Its workspace's sessions, and those of each conversation folder.
+          const found = await Promise.all(
+            runtime
+              .sessionPlaces(agent.key, config(agent.config).workspace)
+              .map(({ place, saved }) =>
+                readUsage(
+                  { spawn, readFile },
+                  place,
+                  agent.key,
+                  saved,
+                  since,
+                  signal,
+                ),
+              ),
           );
+          return found.flat().sort((a, b) => b.lastAt - a.lastAt);
         },
       }),
     provider: {

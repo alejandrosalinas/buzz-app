@@ -6,7 +6,7 @@ decisions to check which events should wake an agent.
 ## Getting started
 
 1. Open **Settings > Decisions API** and select **TypeSafe**.
-2. Paste your TypeSafe API key and choose **Save**.
+2. In **Connect TypeSafe**, follow the [TypeSafe console](https://console.typesafe.ai/keys) link to create a key, then paste it and choose **Save**.
 
 Buzz keeps the key in this Mac's Keychain, or this device's credential store.
 It is never shown again, and it is never given to an agent or a plugin.

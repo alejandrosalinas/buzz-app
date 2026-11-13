@@ -7,6 +7,7 @@ import { startingChatTitle } from "./chat-title";
 import { ChatNotStarted } from "../relay/channel-writes";
 import { DraftSettings } from "./DraftSettings";
 import { SoloDraftView } from "./SoloPresentation";
+import type { SoloDraftStart } from "../channel-navigation/solo-navigation-contract";
 import { IconButton } from "../../shared/design-system/ui/IconButton";
 import { useToastNotification } from "../../shared/design-system/ui/Toast";
 import { GearIcon } from "../../shared/design-system/icons";
@@ -184,10 +185,9 @@ export function SoloDraft({
   source,
   visit,
   region,
-  lead,
+  draft: regionDraft,
 }: {
-  /** This region draft starts its workspace's lead. */
-  lead?: boolean | undefined;
+  draft?: SoloDraftStart["draft"];
   /** The Solo region whose source opened this draft; its chat gets that label. */
   region?: string | undefined;
   /** The visit presenting this draft, a Back stop only once drafted. */
@@ -211,7 +211,7 @@ export function SoloDraft({
   projectId?: string | undefined;
 }) {
   const draftKey = region
-    ? regionDraftKey(region, projectId)
+    ? regionDraftKey(region, projectId, regionDraft?.key)
     : linkedId
       ? linkedDraftKey(linkedId)
       : projectId
@@ -455,9 +455,8 @@ export function SoloDraft({
         startKey &&
         !writeView(scope, startKey, {
           region,
+          ...(regionDraft ? { draft: regionDraft } : {}),
           ...(project ? { workspace: project } : {}),
-          // Only while it still targets the workspace it leads.
-          ...(lead && project === projectId ? { lead: true } : {}),
         })
       )
         throw new Error(

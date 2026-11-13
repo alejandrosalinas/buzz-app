@@ -425,6 +425,45 @@ it("reuses one policy run per candidate scope across mixed case, outside keys, a
   expect(resolve).toHaveBeenCalledTimes(34);
 });
 
+it("labels an outside key against the scope's named members only", () => {
+  const [a, outside] = ["a", "c"].map((key) => key.repeat(64));
+  if (!a || !outside) throw new Error("Missing fixture keys");
+  const unnamed = Array.from({ length: 1000 }, (_, i) =>
+    i.toString(16).padStart(64, "0"),
+  );
+  const profiles = new Map([
+    [a, { name: "Alex" }],
+    [outside, { name: "Alex" }],
+  ]);
+  const source: NameSource = {
+    profiles: {
+      snapshot: () => profiles,
+      subscribe: () => () => {},
+      ensure: async () => {},
+    },
+    agentLibrary: {
+      snapshot: () => ({ status: "ready", definitions: [], identities: [] }),
+      subscribe: () => () => {},
+      refresh: async () => {},
+      retain: () => () => {},
+    },
+  };
+  const resolve = vi.fn(defaultNamingPolicy.resolve);
+  const names = bindNames(source, {
+    snapshot: () => [createNameProvider({ id: "spy", resolve })],
+    subscribe: () => () => {},
+  });
+  const scoped = names.scope([a, ...unnamed]);
+  // Still compared with its named namesake in the scope.
+  expect(scoped(outside)?.name).toBe(`Alex · ${npubEncode(outside).slice(-4)}`);
+  expect(resolve.mock.calls.at(-1)?.[2]).toEqual([a, outside]);
+  // A member named only by a display fact is a namesake too.
+  const [shown] = unnamed;
+  if (!shown) throw new Error("Missing fixture key");
+  const facts = names.scope(unnamed, [{ pubkey: shown, name: "Alex" }]);
+  expect(facts(outside)?.name).toBe(`Alex · ${npubEncode(outside).slice(-4)}`);
+});
+
 it("keeps every DM scope of a sidebar pass for the next pass", () => {
   const profiles = new Map();
   const library = {

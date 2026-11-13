@@ -354,7 +354,7 @@ test("adds custom emoji through the production broker, then uses, replaces, retr
     await expect(suggestion).toBeVisible();
     await expect(searching).toHaveCount(0);
     await suggestion.click();
-    await expect(draft).toHaveJSProperty("value", ":party_parrot:");
+    await expect(draft).toHaveJSProperty("value", ":party_parrot: ");
     await draft.press("Enter");
     const row = page.locator("[data-message-id]").first();
     await expect(row.locator('img[alt=":party_parrot:"]')).toBeVisible();
@@ -380,7 +380,7 @@ test("adds custom emoji through the production broker, then uses, replaces, retr
     await page
       .getByRole("button", { name: ":party_parrot:", exact: true })
       .click();
-    await expect(draft).toHaveJSProperty("value", ":party_parrot:");
+    await expect(draft).toHaveJSProperty("value", ":party_parrot: ");
     await draft.fill("");
 
     // Reaction with it.

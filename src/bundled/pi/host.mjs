@@ -912,9 +912,8 @@ export function serve({
         conversations,
         release,
         tools: "",
-        /** Each conversation's `core` memory as its latest turn read it,
-         * and the note that it has none: its section and the placeholder's.
-         * None when that read failed. */
+        /** Each conversation's `core` memory section as its latest turn read
+         * it. None when that read failed. */
         cores: new Map(),
         /** Each conversation's tool context, for runs resumed after a restart. */
         contexts: new Map(),
@@ -1005,21 +1004,16 @@ export function serve({
       name: "buzz",
       sections: [
         section("buzz-tools", () => text),
-        // The agent's `core` memory as its conversation was first shown it,
-        // so a memory edit sends nothing and its prompt stays as providers
-        // cached it, as a Claude session keeps the memory it started with. A
-        // compaction shows the memory as it is then, as does a conversation
-        // shown none yet or only the note that it has none. Always present,
-        // even empty, so it keeps its place before the instructions.
+        // The agent's `core` memory as its latest turn read it, so an edit
+        // made in any conversation reaches this one at its next turn. Its own
+        // section, so an edit re-sends only the memory, never the
+        // instructions. A failed read keeps what the conversation was shown.
+        // Always present, even empty, so it keeps its place before the
+        // instructions.
         section(
           CORE,
-          ({ conversationId, shown }) => {
-            const kept = shown[CORE];
-            const core = opened.cores.get(conversationId);
-            return kept && kept !== core?.placeholder
-              ? kept
-              : (core?.text ?? kept ?? "");
-          },
+          ({ conversationId, shown }) =>
+            opened.cores.get(conversationId) ?? shown[CORE] ?? "",
           { tag: false },
         ),
       ],
@@ -1322,7 +1316,7 @@ export function serve({
    * as in Claude. The agent's `core` memory read for it is the
    * conversation's latest; a failed read shows it none if not yet shown. */
   async function submit(opened, conversation, turn, busy, refresh) {
-    opened.cores.set(conversation.id, turn.core);
+    opened.cores.set(conversation.id, turn.core?.text);
     const steers = busy && turn.steer;
     const chosen = await choose(turn);
     const change = steers

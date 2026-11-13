@@ -40,11 +40,23 @@ function mount(session: RelaySession, channelId: string, messageId: string) {
   document.body.append(container);
   const root = createRoot(container);
   let view: ThreadView | undefined;
+  // A reopened thread is ready at once and reads in the background.
+  const reads = new Set<Promise<void>>();
+  const track = (read: Promise<void>) => {
+    reads.add(read);
+    void read.finally(() => reads.delete(read));
+    return read;
+  };
   // Forward every capability unchanged, intercepting allocation only to observe it.
   const observed: RelaySession = {
     ...session,
     thread(...args) {
-      view = session.thread(...args);
+      const allocated = session.thread(...args);
+      view = {
+        ...allocated,
+        refresh: () => track(allocated.refresh()),
+        loadMore: () => track(allocated.loadMore()),
+      };
       return view;
     },
   };
@@ -98,6 +110,9 @@ function mount(session: RelaySession, channelId: string, messageId: string) {
           characterData: true,
         });
       });
+    },
+    async settled() {
+      while (reads.size) await Promise.allSettled([...reads]);
     },
     dispose() {
       flushSync(() => root.unmount());

@@ -32,6 +32,7 @@
     "enabled": true,
     "rules": {
       "preset": "recommended",
+      "correctness": { "useExhaustiveDependencies": "error" },
       "suspicious": {
         "noUnknownAtRules": "off"
       },

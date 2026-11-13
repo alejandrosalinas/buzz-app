@@ -213,3 +213,16 @@ describe("navigation owner", () => {
     },
   );
 });
+
+test("unlisted conversation pages keep Messages without adding a navigation row", () => {
+  const taskPage = {
+    ...page("example.task/main", "Task"),
+    primary: false,
+    conversationNavigation: true,
+  };
+  expect(pagePlacement(taskPage)).toBeUndefined();
+  expect(
+    navigationOwner([{ ...messages, primary: true }, taskPage], taskPage.key),
+  ).toBe(messages.key);
+  expect(navigationOwner([taskPage], taskPage.key)).toBe(taskPage.key);
+});

@@ -208,6 +208,7 @@ function ClaudeSignIn({
       <Dialog
         open={open}
         title={missing || outdated ? "Claude integration" : "Set up Claude"}
+        headerGap={missing || outdated ? "default" : "compact"}
         onOpenChange={(next) => {
           setOpen(next);
           if (!next) void setup.cancel();
@@ -391,16 +392,12 @@ export function createTabs({
     useEffect(() => {
       if (enabled && !state.status && !state.checking) void setup.check();
     }, [enabled, state.status, state.checking]);
-    // Once per change of readiness: a failed load waits for Try again.
+    // On opening and each change of readiness, unless the list is fresh: a
+    // failed load waits for Try again until then.
     useEffect(() => {
-      if (
-        enabled &&
-        !state.checking &&
-        state.status?.state === "ready" &&
-        state.models.length === 0
-      )
+      if (enabled && !state.checking && state.status?.state === "ready")
         void setup.loadModels();
-    }, [enabled, state.status, state.checking, state.models.length]);
+    }, [enabled, state.status, state.checking]);
     return enabled
       ? state
       : { ...state, models: [], modelsChecking: false, modelsError: "" };
@@ -622,6 +619,7 @@ export function createTabs({
         <Dialog
           open={open && signedOut}
           title="Set up Claude"
+          headerGap="compact"
           actions={
             signingIn && (
               <Button variant="ghost" onClick={() => void setup.cancel()}>

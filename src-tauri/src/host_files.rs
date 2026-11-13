@@ -115,13 +115,19 @@ fn read(path: &str, cwd: Option<&str>) -> Result<Vec<u8>, String> {
 }
 
 /// `path`, absolute or `~/…`, as an absolute directory without symbolic
-/// links, created if missing.
-fn directory(path: &str) -> Result<String, String> {
+/// links, created if missing unless `create` is false.
+fn directory(path: &str, create: bool) -> Result<String, String> {
     let full = expand_home(path)?;
-    std::fs::create_dir_all(&full).map_err(|error| format!("Could not create {path}: {error}"))?;
+    if create {
+        std::fs::create_dir_all(&full)
+            .map_err(|error| format!("Could not create {path}: {error}"))?;
+    }
     // `dunce` keeps Windows paths in their ordinary `C:\…` form, which agents
     // and the programs they run expect, rather than `\\?\C:\…`.
     let resolved = dunce::canonicalize(&full).map_err(|_| format!("Could not find {path}"))?;
+    if !Path::new(&resolved).is_dir() {
+        return Err(format!("{path} is not a directory"));
+    }
     resolved
         .into_os_string()
         .into_string()
@@ -155,16 +161,20 @@ pub(crate) async fn plugin_host_read_file(
 }
 
 /// Resolves a directory for a plugin that declares `host.files`, creating it
-/// if missing, as a process's `cwd` is.
+/// if missing, as a process's `cwd` is, unless `create` is false.
 #[tauri::command]
 pub(crate) async fn plugin_host_resolve_directory(
     manager: tauri::State<'_, PluginManager>,
     id: String,
     revision: String,
     path: String,
+    create: Option<bool>,
 ) -> Result<String, String> {
     granted(manager, id, revision).await?;
-    bounded(&DIRECTORIES, move || directory(&path)).await
+    bounded(&DIRECTORIES, move || {
+        directory(&path, create.unwrap_or(true))
+    })
+    .await
 }
 
 /// Lists the repositories folder for a plugin that declares `host.files`,
@@ -735,14 +745,34 @@ mod tests {
     fn resolves_and_creates_directories() {
         let root = tempfile::tempdir().unwrap();
         let path = root.path().join("new").join("workspace");
-        let resolved = directory(path.to_str().unwrap()).unwrap();
+        let resolved = directory(path.to_str().unwrap(), true).unwrap();
         assert!(Path::new(&resolved).is_dir());
         assert!(Path::new(&resolved).is_absolute());
         assert_eq!(
             resolved,
             dunce::canonicalize(&path).unwrap().to_str().unwrap()
         );
-        assert!(directory("relative").is_err());
+        assert!(directory("relative", true).is_err());
+    }
+
+    #[test]
+    fn resolves_only_existing_directories_without_creating() {
+        let root = tempfile::tempdir().unwrap();
+        let missing = root.path().join("missing");
+        assert!(directory(missing.to_str().unwrap(), false)
+            .unwrap_err()
+            .contains("Could not find"));
+        assert!(!missing.exists());
+        let file = root.path().join("file");
+        std::fs::write(&file, b"").unwrap();
+        assert!(directory(file.to_str().unwrap(), false)
+            .unwrap_err()
+            .contains("not a directory"));
+        assert_eq!(
+            directory(root.path().to_str().unwrap(), false).unwrap(),
+            dunce::canonicalize(root.path()).unwrap().to_str().unwrap()
+        );
+        assert!(directory("relative", false).is_err());
     }
 
     #[test]

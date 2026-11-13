@@ -8,14 +8,23 @@ import {
   ATTENTION_OFF,
   ATTENTION_REVIEW,
 } from "../features/agent-harness/attention-prompt";
-import { pluginInstructions } from "../features/agent-harness/plugin-instructions";
+import {
+  ownerInstructions,
+  pluginInstructions,
+} from "../features/agent-harness/plugin-instructions";
 import type { AgentHandle } from "../features/agents/service";
 import {
   ATTENTION_TOOLS,
   callAttentionTool,
   isAttentionTool,
 } from "./attention";
+import { BESTIE_TOOLS, callBestieTool, isBestieTool } from "./bestie";
 import type { BuzzClient, Context } from "./client";
+import {
+  callToolOperation,
+  type AgentToolOperation,
+  type AgentToolProof,
+} from "../features/agents/tool-operation";
 import { callPluginTool, isPluginTool, PLUGIN_TOOLS } from "./plugins";
 import { callSettingsTool, isSettingsTool, SETTINGS_TOOLS } from "./settings";
 import {
@@ -38,12 +47,15 @@ export type AddedTool = Readonly<{
   name: string;
   description: string;
   inputSchema: Readonly<Record<string, unknown>>;
+  /** A provider operation checked with these exact tool arguments. */
+  operation?: AgentToolOperation;
   /** Runs as the agent in `context`. Use `client.signal` to cancel waits and
    * check it before external writes. A throw is a tool error for the agent. */
   call(
     client: BuzzClient,
     context: Context,
     args: Record<string, unknown>,
+    proof?: AgentToolProof,
   ): Promise<Reply>;
 }>;
 type Listed = Pick<AddedTool, "name" | "description" | "inputSchema">;
@@ -67,6 +79,7 @@ export const BUZZ_SESSION: BuzzSession = Object.freeze({
     ...SOLO_WORKER_TOOLS,
     ...PLUGIN_TOOLS,
     ...SETTINGS_TOOLS,
+    ...BESTIE_TOOLS,
   ],
 });
 
@@ -92,6 +105,7 @@ export const sessionTools = (
   ...SOLO_WORKER_TOOLS.map((tool) => ({ ...tool, load: "search" as const })),
   ...PLUGIN_TOOLS.map((tool) => ({ ...tool, load: "search" as const })),
   ...SETTINGS_TOOLS.map((tool) => ({ ...tool, load: "search" as const })),
+  ...BESTIE_TOOLS.map((tool) => ({ ...tool, load: "search" as const })),
   ...added.map((tool) => ({ ...listed(tool), load: "search" as const })),
 ];
 
@@ -122,11 +136,15 @@ export function addedKey(added: readonly AddedTool[]) {
 }
 
 /** Text for the end of a turn's prompt: the instructions plugins give the
- * agent now, then its attention as it is now. An agent with no Interests has
- * nothing to review, so it need not load the attention tools to find that
- * out. */
+ * agent now, then those for its conversation, which a harness names as it
+ * names its notes', then its attention as it is now. An agent with no
+ * Interests has nothing to review, so it need not load the attention tools to
+ * find that out. */
 export function turnNote(
-  client?: Pick<BuzzClient, "attention"> & Pick<AgentHandle, "instructions">,
+  client?: Pick<BuzzClient, "attention"> &
+    Pick<AgentHandle, "instructions" | "conversationInstructions">,
+  channelId?: string,
+  root?: string,
 ) {
   const attention = client?.attention;
   const review = !attention
@@ -136,9 +154,12 @@ export function turnNote(
       : attention.interests().length
         ? ATTENTION_REVIEW
         : ATTENTION_NONE;
-  const notes = [pluginInstructions(client?.instructions?.()), review].filter(
-    Boolean,
-  );
+  const notes = [
+    pluginInstructions(client?.instructions?.()),
+    channelId &&
+      ownerInstructions(client?.conversationInstructions?.(channelId, root)),
+    review,
+  ].filter(Boolean);
   return notes.length ? notes.join("\n\n") : undefined;
 }
 
@@ -153,6 +174,17 @@ export async function callSessionTool(
   added: readonly AddedTool[] = [],
 ): Promise<Reply> {
   if (!client) throw new Error("Buzz is not ready yet. Try again.");
+  const operation = added.find((tool) => tool.name === name && tool.operation);
+  if (operation) {
+    const session = JSON.stringify(context);
+    try {
+      const reply = await callToolOperation(client, context, args, operation);
+      await client.protect?.({ kind: "tool-result", session, content: reply });
+      return reply;
+    } catch (error) {
+      return checkedToolError(client, session, error);
+    }
+  }
   // Hold the reviewed destination and arguments while the checker waits.
   if (client.protect) {
     context = structuredClone(context);
@@ -206,13 +238,14 @@ async function dispatchSessionTool(
 ): Promise<Reply> {
   const tool = added.find((tool) => tool.name === name);
   if (tool) {
-    // A plugin's tool doesn't get the agent's device settings.
-    const { settings: _, ...plugin } = client;
+    // A plugin's tool doesn't get the agent's device settings or Bestie.
+    const { settings: _, bestie: __, ...plugin } = client;
     return tool.call(plugin, context, args);
   }
   if (isSoloWorkerTool(name)) return callSoloWorkerTool(client, name, args);
   if (isPluginTool(name)) return callPluginTool(client, context, name, args);
   if (isSettingsTool(name)) return callSettingsTool(client, name, args);
+  if (isBestieTool(name)) return callBestieTool(client, name, args);
   if (!isAttentionTool(name)) return callTool(client, context, name, args);
   const { attention } = client;
   if (!attention) throw new Error(`No tool ${name}`);

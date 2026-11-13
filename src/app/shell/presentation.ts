@@ -93,7 +93,7 @@ export function navigationOwner(
   const messages = "buzz.channels/channels";
   const page = pages.find((page) => page.key === selected);
   return page &&
-    pagePlacement(page) === "sidebar" &&
+    (page.conversationNavigation || pagePlacement(page) === "sidebar") &&
     pages.some((page) => page.key === messages)
     ? messages
     : selected;

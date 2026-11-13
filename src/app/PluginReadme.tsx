@@ -1,30 +1,33 @@
-import Markdown, { type Components } from "react-markdown";
+import type { Components } from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { motion, useReducedMotion } from "motion/react";
 import { useId, useLayoutEffect, useRef, useState } from "react";
 import { Button } from "../shared/design-system/ui/Button";
 import { safeLinkUrl } from "../features/relay/message-content";
+import {
+  MarkdownDocument,
+  sharedComponents,
+} from "../features/markdown/MarkdownDocument";
+import type { MarkdownProfile } from "../features/markdown/profiles";
 import styles from "./PluginReadme.module.css";
 
-const REMARK = [remarkGfm];
+// Relative and in-page links have nowhere to go outside the repository.
+const PROFILE: MarkdownProfile = {
+  syntax: [remarkGfm],
+  transforms: [],
+  html: "omit",
+  urlTransform: (url) => safeLinkUrl(url) ?? null,
+};
+const CAPABILITIES = { copy: true };
 // The pane already titles the plugin (h2); README sections nest beneath it.
 const MARKDOWN: Components = {
+  ...sharedComponents,
   h1: ({ children }) => <h3>{children}</h3>,
   h2: ({ children }) => <h3>{children}</h3>,
   h3: ({ children }) => <h4>{children}</h4>,
   h4: ({ children }) => <h5>{children}</h5>,
   h5: ({ children }) => <h6>{children}</h6>,
   h6: ({ children }) => <h6>{children}</h6>,
-  // Relative and in-page links have nowhere to go outside the repository.
-  a: ({ href, children }) =>
-    href ? (
-      <a href={href} target="_blank" rel="noreferrer">
-        {children}
-      </a>
-    ) : (
-      children
-    ),
-  img: ({ alt }) => alt ?? null,
 };
 
 export function PluginReadme({ text }: { text: string }) {
@@ -75,15 +78,15 @@ export function PluginReadme({ text }: { text: string }) {
           if (overflow) setExpanded(true);
         }}
       >
-        <div ref={content} className={styles.readme}>
-          <Markdown
-            remarkPlugins={REMARK}
+        <div ref={content}>
+          <MarkdownDocument
+            content={text.replace(/^# .*\n+/, "")}
+            profile={PROFILE}
             components={MARKDOWN}
-            skipHtml
-            urlTransform={(url) => safeLinkUrl(url) ?? null}
-          >
-            {text.replace(/^# .*\n+/, "")}
-          </Markdown>
+            capabilities={CAPABILITIES}
+            scale="inherit"
+            className={styles.readme}
+          />
         </div>
       </motion.div>
       {overflow && (

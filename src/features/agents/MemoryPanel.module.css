@@ -9,9 +9,6 @@
   min-width: 0;
   overflow-wrap: anywhere;
 }
-.markdown :where(p, ul, ol, pre, blockquote, table, hr) {
-  margin: var(--space-4) 0;
-}
 .markdown :where(h1, h2, h3, h4, h5, h6) {
   @apply text-label-sm;
   margin: var(--space-4) 0 var(--space-2);
@@ -25,90 +22,6 @@
 .markdown h3 {
   @apply text-label;
 }
-.markdown > :first-child {
-  margin-top: 0;
-}
-.markdown > :last-child {
-  margin-bottom: 0;
-}
-.markdown > p:has(+ :is(ul, ol)) {
-  margin-bottom: var(--space-2);
-}
-.markdown > p + :where(ul, ol) {
-  margin-top: var(--space-2);
-}
-.markdown :is(ul, ol) {
-  padding-left: var(--space-5);
-}
-.markdown ul {
-  list-style: disc;
-}
-.markdown ol {
-  list-style: decimal;
-}
-.markdown li + li {
-  margin-top: var(--space-1);
-}
-.markdown li > :where(p, ul, ol) {
-  margin-block: var(--space-1);
-}
-.markdown blockquote {
-  border-inline-start: 3px solid var(--border-prominent);
-  padding-inline-start: var(--space-3);
-}
-.markdown blockquote > :first-child {
-  margin-top: 0;
-}
-.markdown blockquote > :last-child {
-  margin-bottom: 0;
-}
-.markdown code {
-  @apply text-mono;
-  font-family: var(--font-mono);
-  border-radius: var(--radius-chip);
-  background: var(--affordance-subtle);
-  padding: var(--space-half) var(--space-1);
-}
-.markdown pre {
-  max-width: 100%;
-  overflow-x: auto;
-  border: 1px solid var(--border-standard);
-  border-radius: var(--radius-row);
-  background: var(--surface-panel);
-  padding: var(--space-3);
-}
-.markdown pre code {
-  background: transparent;
-  border-radius: 0;
-  padding: 0;
-  white-space: pre;
-  overflow-wrap: normal;
-}
-.markdown table {
-  display: block;
-  max-width: 100%;
-  overflow-x: auto;
-  border-collapse: collapse;
-}
-.markdown :is(th, td) {
-  border: 1px solid var(--border-standard);
-  padding: var(--space-1) var(--space-2);
-}
-.markdown th {
-  font-weight: var(--type-weight-medium);
-  background: var(--affordance-subtle);
-}
-.markdown hr {
-  border-color: var(--border-standard);
-}
-.markdown a {
-  color: var(--text-link);
-  text-decoration: underline;
-}
-.markdown a:hover {
-  color: var(--text-link-hover);
-}
-
 .sectionHeader [class~="buzz-content-header"] {
   margin-bottom: 0;
 }

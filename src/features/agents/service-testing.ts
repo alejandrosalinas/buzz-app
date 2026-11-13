@@ -1,3 +1,5 @@
+import type { IdentityAttest } from "../relay/identity-archives";
+import type { OwnerProof } from "./relay-removal";
 // The agents service's relay, communities and native fakes, shared by its
 // tests. `steps` records the order of cleanup steps the fakes take.
 import { vi } from "vitest";
@@ -72,7 +74,7 @@ export function fakeRelay(origin = "https://relay.example.test") {
     archived,
     /** The last read did not finish, as when its session closed. */
     unknown: false,
-    /** The community has no archives at all. */
+    /** The community advertises no archive authority. */
     unavailable: false,
     snapshot() {
       return { status: this.unavailable ? "unavailable" : "ready" };
@@ -91,11 +93,19 @@ export function fakeRelay(origin = "https://relay.example.test") {
       return archived.has(pubkey) ? "archived" : "not-archived";
     },
     writable: true,
-    request: vi.fn(async (action: string, pubkey: string) => {
-      steps.push(action);
-      if (action === "archive") archived.add(pubkey);
-      else archived.delete(pubkey);
-    }),
+    request: vi.fn(
+      async (
+        action: string,
+        pubkey: string,
+        _signal?: AbortSignal,
+        _issue?: OwnerProof,
+        _attest?: IdentityAttest,
+      ) => {
+        steps.push(action);
+        if (action === "archive") archived.add(pubkey);
+        else archived.delete(pubkey);
+      },
+    ),
   };
   let status = "connected";
   /** Channels the session does not know yet, attended or not. */
@@ -538,7 +548,7 @@ export function fakeNative(identities: AgentIdentity[] = []) {
           tags: (template.tags ?? []).map((tag) => [...tag]),
         }),
     ),
-    publishProfile: vi.fn(async (_: Membership) => {}),
+    publishProfile: vi.fn(async (_: Membership, _force?: boolean) => {}),
     query: vi.fn<AgentsNative["query"]>(async () => []),
     effectiveEdit: vi.fn<AgentsNative["effectiveEdit"]>(async () => {
       throw new Error("No effective edit fixture");

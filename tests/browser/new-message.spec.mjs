@@ -59,7 +59,8 @@ const test = base.extend({
     });
     const channel = "11111111-1111-4111-8111-111111111111";
     const events = [
-      sign(key, 0, [], JSON.stringify({ name: "Browser Fixture" })),
+      // The empty `tz` opt-out keeps launch from sharing the browser's zone.
+      sign(key, 0, [], JSON.stringify({ name: "Browser Fixture", tz: "" })),
       ...people,
     ];
     const commands = [],

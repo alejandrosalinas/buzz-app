@@ -13,7 +13,7 @@ import {
   useRef,
   useState,
 } from "react";
-import Markdown, { defaultUrlTransform, type Components } from "react-markdown";
+import { defaultUrlTransform, type Components } from "react-markdown";
 import remarkBreaks from "remark-breaks";
 import remarkGfm from "remark-gfm";
 import { formatFullTimestamp } from "../../shared/datetime";
@@ -50,6 +50,11 @@ import type { ConversationExtensions } from "../conversation/contracts";
 import { labelText } from "../messages/label-text";
 import { parseBuzzLink } from "../navigation/buzz-links";
 import { remarkMemoryLinks } from "./memory-markdown";
+import {
+  MarkdownDocument,
+  sharedComponents,
+} from "../markdown/MarkdownDocument";
+import type { MarkdownProfile } from "../markdown/profiles";
 
 export type AgentMemories = RelaySession["agentMemories"];
 export type MemoryLinks = {
@@ -69,14 +74,20 @@ const MESSAGES: Record<MemorySnapshot["status"], string> = {
   ready: "Memory isn't available here.",
 };
 
-const REMARK = [remarkGfm, remarkBreaks, remarkMemoryLinks];
+const PROFILE: MarkdownProfile = {
+  syntax: [remarkGfm],
+  transforms: [remarkBreaks, remarkMemoryLinks],
+  html: "literal",
+  urlTransform: (url) => (parseBuzzLink(url) ? url : defaultUrlTransform(url)),
+};
+const CAPABILITIES = { copy: true };
 const WEEK_SECONDS = 7 * 24 * 60 * 60;
 const MONTH_SECONDS = 30 * 24 * 60 * 60;
 const TWO_MONTHS_SECONDS = 2 * MONTH_SECONDS;
 const MemoryLinksContext = createContext<MemoryLinks | undefined>(undefined);
 const MARKDOWN: Components = {
-  // Memories are private context; don't fetch remote images when they open.
-  img: ({ alt }) => alt ?? null,
+  // Memories are private context; the shared image shows only its alt text.
+  ...sharedComponents,
   // Keep link instances mounted while parent views update their link services.
   a: ({ href, children }) => {
     const links = useContext(MemoryLinksContext);
@@ -443,18 +454,15 @@ function MemoryBody({
   if (body.length > MAX_MARKDOWN_LENGTH || scanMarkdown(body).tooDeep)
     return <div className={styles.plain}>{body}</div>;
   return (
-    <div className={styles.markdown}>
-      <MemoryLinksContext value={links}>
-        <Markdown
-          remarkPlugins={REMARK}
-          urlTransform={(url) =>
-            parseBuzzLink(url) ? url : defaultUrlTransform(url)
-          }
-          components={MARKDOWN}
-        >
-          {body}
-        </Markdown>
-      </MemoryLinksContext>
-    </div>
+    <MemoryLinksContext value={links}>
+      <MarkdownDocument
+        content={body}
+        profile={PROFILE}
+        components={MARKDOWN}
+        capabilities={CAPABILITIES}
+        scale="inherit"
+        className={styles.markdown}
+      />
+    </MemoryLinksContext>
   );
 }

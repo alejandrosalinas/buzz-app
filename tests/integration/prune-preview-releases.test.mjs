@@ -29,7 +29,7 @@ const feedArgs = [
   "--output",
   "-",
 ];
-const tag = (run) => `v0.0.0-preview.${run}.1`;
+const tag = (n) => `v0.0.0-preview.${n}`;
 const deleteArgs = (name) => [
   "release",
   "delete",
@@ -52,7 +52,7 @@ function fixture(t) {
     created_at: new Date(now - index * day).toISOString(),
   }));
   const manifest = {
-    version: "0.0.0-preview.1.1",
+    version: "0.0.0-preview.1",
     platforms: Object.fromEntries(
       Object.entries({
         "darwin-aarch64": "aarch64.app.tar.gz",
@@ -63,7 +63,7 @@ function fixture(t) {
       }).map(([target, asset]) => [
         target,
         {
-          url: `https://github.com/${repository}/releases/download/${tag(1)}/Buzz_0.0.0-preview.1.1_${asset}`,
+          url: `https://github.com/${repository}/releases/download/${tag(1)}/Buzz_0.0.0-preview.1_${asset}`,
         },
       ]),
     ),
@@ -135,8 +135,8 @@ test("dry run reads all pages and preserves the newest ten plus the feed target"
   const result = run();
   assert.equal(result.status, 0, result.stderr);
   assert.deepEqual(result.calls, [feedArgs, listArgs]);
-  assert.match(result.stdout, /Would delete v0\.0\.0-preview\.3\.1/);
-  assert.match(result.stdout, /Would delete v0\.0\.0-preview\.2\.1/);
+  assert.match(result.stdout, /Would delete v0\.0\.0-preview\.3$/m);
+  assert.match(result.stdout, /Would delete v0\.0\.0-preview\.2$/m);
   assert.match(result.stdout, /Dry run: 2/);
 });
 
@@ -147,7 +147,9 @@ test("apply deletes only eligible preview releases and their tags, leaving other
     ["v1.0.0-beta.1", true, false],
     [tag(30), false, false],
     [tag(40), true, true],
-    ["v0.0.0-preview.19.1-windows-linux", true, false],
+    ["v0.0.0-preview.19-windows-linux", true, false],
+    // Old run.attempt previews are left alone.
+    ["v0.7.0-preview.275.1", true, false],
     ["preview-feed", true, false],
     ["stable-feed", true, false],
   ]) {

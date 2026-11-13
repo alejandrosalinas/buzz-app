@@ -441,6 +441,61 @@ it("refuses plugin calls after the calling turn ends", async () => {
   ).toBeUndefined();
 });
 
+it("offers a run handle's Bestie, checking the turn and connection before each call and before a set saves", async () => {
+  const bestie = {
+    read: vi.fn(async () => ({ device: null, account: null, here: false })),
+    set: vi.fn(),
+    clear: vi.fn(),
+  };
+  const memories = async () => ({ entries: [], partial: false });
+  expect(
+    appClient({ pubkey: "agent" } as unknown as AgentHandle, {
+      read: vi.fn(),
+      memories,
+    }).bestie,
+  ).toBeUndefined();
+  let connected = true;
+  let ended = false;
+  const client = appClient(
+    {
+      pubkey: "agent",
+      bestie: () => (connected ? bestie : undefined),
+    } as unknown as AgentHandle,
+    {
+      read: vi.fn(),
+      memories,
+      check: () => {
+        if (ended) throw new Error("The turn has ended");
+      },
+    },
+  );
+  await client.bestie?.read();
+  expect(bestie.read).toHaveBeenCalledOnce();
+  connected = false;
+  expect(() => client.bestie?.set("b".repeat(64))).toThrow("not connected");
+  connected = true;
+  ended = true;
+  expect(() => client.bestie?.set("b".repeat(64))).toThrow("ended");
+  expect(() => client.bestie?.clear()).toThrow("ended");
+  expect(bestie.set).not.toHaveBeenCalled();
+  expect(bestie.clear).not.toHaveBeenCalled();
+  // A set checks the turn again once it has read the agents.
+  ended = false;
+  let read!: () => void;
+  bestie.set.mockImplementationOnce(
+    async (_pubkey: string, check: () => void) => {
+      await new Promise<void>((resolve) => {
+        read = resolve;
+      });
+      check();
+    },
+  );
+  const setting = client.bestie?.set("b".repeat(64));
+  ended = true;
+  read();
+  await expect(setting).rejects.toThrow("ended");
+});
+
 it("offers the handle's settings, checking the turn before each call", () => {
   const settings = {
     list: vi.fn(() => []),

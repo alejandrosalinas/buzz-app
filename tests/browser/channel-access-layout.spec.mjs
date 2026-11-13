@@ -100,6 +100,10 @@ test("general access starts the member list and footer actions stay reachable wi
       // Preserve the bounded whole-body fallback and prove keyboard reachability.
       await dialog.getByRole("searchbox").focus();
       await page.keyboard.press("Tab");
+      await expect(
+        dialog.getByRole("button", { name: /^Filter members:/ }),
+      ).toBeFocused();
+      await page.keyboard.press("Tab");
       await expect(audience).toBeFocused();
       await expect(audience).toBeInViewport({ ratio: 1 });
     } else {

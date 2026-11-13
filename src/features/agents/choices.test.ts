@@ -597,3 +597,24 @@ it("keeps a remotely executing native agent managed without labeling it local", 
   lifetime.abort();
   library.dispose();
 });
+
+it("leaves an agent whose Delete started out of template lineups and defaults", async () => {
+  const library = createAgentLibrary(async () => ({
+    definitions: [],
+    identities: [{ pubkey: agent.pubkey, name: agent.name }],
+  }));
+  const choices = createAgentChoices({
+    scope,
+    library: library.queries,
+    native: localAgentsFixture([{ ...agent, deleting: true }]),
+    archives: archiveFixture(),
+    signal: new AbortController().signal,
+  });
+  await choices.refresh("templates");
+  expect(
+    templateAgentChoices(choices.snapshot(), { status: "ready", channels: [] }),
+  ).toEqual([]);
+  expect(choices.snapshot().identities.map((a) => a.pubkey)).toEqual([
+    agent.pubkey,
+  ]);
+});

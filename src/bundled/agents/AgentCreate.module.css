@@ -417,6 +417,17 @@
 .emojiAvatarButton:disabled {
   cursor: default;
 }
+.avatarDock:not(:disabled),
+.avatarDock:not(:disabled) button {
+  cursor: grab;
+}
+.avatarDock[data-dragging],
+.avatarDock[data-dragging] button {
+  cursor: grabbing;
+}
+.avatarDock {
+  user-select: none;
+}
 @media (prefers-reduced-motion: reduce) {
   .dockItem {
     transition: none;

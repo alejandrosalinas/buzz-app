@@ -10,6 +10,7 @@ import {
   useState,
   useSyncExternalStore,
 } from "react";
+import { SmileyIcon } from "../../shared/design-system/icons";
 import { Button } from "../../shared/design-system/ui/Button";
 import { PreviewCard } from "../../shared/design-system/ui/PreviewCard";
 import { ReactionDelivery, ReactionTool } from "../conversation/ReactionTool";
@@ -23,12 +24,13 @@ import type {
   MessageReaction,
   Profile,
 } from "../relay/contracts";
-import type { CustomEmoji } from "../relay/emoji";
+import { isReactionShortcode, type CustomEmoji } from "../relay/emoji";
 import type { RelaySession } from "../relay/session";
 import type { OutgoingEvent } from "../relay/outbox";
 import { selectProfiles } from "../relay/profile-selection";
 import styles from "./Messages.module.css";
 import { isUnicodeEmojiOnly } from "./emoji-size";
+import { catalogEmoji, useReactionEmoji } from "./reaction-emoji";
 
 type Props = {
   row: ChannelMessage;
@@ -93,21 +95,6 @@ function useReactionAction({ row, session, disabled }: Props) {
   return { toggle, disabled: disabled || busy, busy, error };
 }
 
-const catalogIndexes = new WeakMap<
-  readonly CustomEmoji[],
-  ReadonlyMap<string, CustomEmoji>
->();
-/** Resolve picker selections against one index per custom-emoji catalog snapshot. */
-function catalogEmoji(entries: readonly CustomEmoji[], content: string) {
-  if (!content.startsWith(":")) return undefined;
-  let index = catalogIndexes.get(entries);
-  if (!index) {
-    index = new Map(entries.map((entry) => [`:${entry.shortcode}:`, entry]));
-    catalogIndexes.set(entries, index);
-  }
-  return index.get(content.toLowerCase());
-}
-
 /** The emoji contribution owns the single reaction-picker action. */
 export function MessageReactionControls(props: Props) {
   const { row, session, scope, tools } = props;
@@ -142,29 +129,30 @@ function ReactionGlyph({
   reaction: MessageReaction;
   session: RelaySession;
 }) {
-  const source = reaction.emoji ? session.media(reaction.emoji.url) : undefined;
+  const emoji = useReactionEmoji(reaction, session);
+  const source = emoji ? session.media(emoji.url) : undefined;
   const [failed, setFailed] = useState<string>();
-  return source && source !== failed ? (
-    <img
-      className={styles.reactionCustomEmoji}
-      src={source}
-      alt=""
-      draggable={false}
-      onError={() => setFailed(source)}
-    />
-  ) : (
+  if (source && source !== failed)
+    return (
+      <img
+        className={styles.reactionCustomEmoji}
+        src={source}
+        alt=""
+        draggable={false}
+        onError={() => setFailed(source)}
+      />
+    );
+  // A shortcode is never a reaction's visible content: refused, failed and
+  // unknown images get a neutral glyph, and the shortcode stays in the label.
+  if (isReactionShortcode(reaction.content))
+    return <SmileyIcon className={styles.reactionPlaceholder} />;
+  return (
     <span
-      className={
-        reaction.emoji
-          ? styles.reactionFallbackEmoji
-          : styles.reactionNativeEmoji
-      }
-      data-reaction-artwork={
-        (!reaction.emoji && isUnicodeEmojiOnly(reaction.content)) || undefined
-      }
+      className={styles.reactionNativeEmoji}
+      data-reaction-artwork={isUnicodeEmojiOnly(reaction.content) || undefined}
       aria-hidden="true"
     >
-      {reaction.emoji ? `:${reaction.emoji.shortcode}:` : reaction.content}
+      {reaction.content}
     </span>
   );
 }

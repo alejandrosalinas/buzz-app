@@ -7,6 +7,7 @@ import {
   type KitEntry,
 } from "../channel-templates/model";
 import { projectTemplateId, templateEntry } from "../solo/workspace";
+import { ReadError } from "./errors";
 import { createSidebarPreferencesStore } from "./sidebar-preferences-store";
 import type {
   SidebarAssignmentIntent,
@@ -76,8 +77,14 @@ export function createSoloPreferences(kit: ChannelKit, lifetime: AbortSignal) {
     if (fresh || kit.snapshot().status !== "ready") await kit.refresh();
     active.throwIfAborted();
     const state = kit.snapshot();
-    if (state.status !== "ready")
-      throw new Error(state.error ?? "Solo groups are unavailable");
+    if (state.status !== "ready") {
+      const message = state.error ?? "Solo groups are unavailable";
+      // Keep a retryable catalog failure retryable, so session recovery
+      // reloads the workspaces once the relay answers again.
+      throw state.transient
+        ? new ReadError("unavailable", message)
+        : new Error(message);
+    }
     const entry = soloGroups(state.entries);
     return {
       entry,

@@ -26,6 +26,12 @@ import { fromOwner, workflowOf } from "../../features/agents/owner-attestation";
 import type { TranscriptTurn } from "../../features/agents/activity-transcript";
 import type { AgentReads } from "../../features/agents/reads";
 import { localStore, type AgentStore } from "../../features/agents/store";
+import {
+  agentFolders,
+  conversationFolder,
+  conversationKey,
+  existingFolder,
+} from "../../features/agents/conversation-folders";
 import type {
   Agent,
   AgentHandle,
@@ -77,6 +83,7 @@ import {
   readSessionTitle,
   readTranscript,
   type Conversation,
+  type SessionsPlace,
 } from "./transcript";
 import { sessionPrompts } from "../../features/agents/session-prompts";
 
@@ -137,6 +144,9 @@ type Entry = {
   team: string;
   /** The agent's name, for its prompt; a rename restarts idle sessions. */
   name?: string;
+  /** Its `core` memory as its latest turn read it; a change restarts idle
+   * sessions, which resume with their history. */
+  memory?: string | null | undefined;
   /** The agent's handle from its latest delivery, for the tools to act with. */
   handle?: AgentHandle;
   /** Where each conversation's tools default to: its latest turn's thread. */
@@ -225,7 +235,7 @@ export class ClaudeRuntime {
   );
 
   constructor(
-    private readonly host: Pick<Host, "spawn">,
+    private readonly host: Pick<Host, "spawn" | "resolveDirectory">,
     /** What each agent's turns read of its community, while it can be read. */
     private readonly reads: (key: AgentKey) => AgentReads | undefined,
     /** The agent's `core` memory as the host keeps it (`Agents.core`). */
@@ -261,6 +271,43 @@ export class ClaudeRuntime {
     const scope = this.reads(agent)?.scope;
     if (!scope) throw new Error("Buzz is not connected");
     return `buzz.claude-code.sessions.execution.v1:${JSON.stringify([scope, agent, conversation])}`;
+  }
+  /** The folder a plugin gave the conversation, if any. Only the local
+   * runtime keeps them; an execution target's conversations refuse one. */
+  private folder(agent: AgentKey, key: string | undefined) {
+    if (!key || this.target) return undefined;
+    const reads = this.reads(agent);
+    if (!reads) throw new Error("Buzz is not connected");
+    return reads.scope
+      ? conversationFolder(this.storage, reads.scope, agent, key)
+      : undefined;
+  }
+  /** Where the conversation's sessions ran: its own folder, or else the
+   * agent's workspace. */
+  private place(
+    agent: AgentKey,
+    key: string,
+    workspace: string,
+  ): SessionsPlace {
+    const folder = this.reads(agent) && this.folder(agent, key);
+    return folder ? { folder } : workspace;
+  }
+  /** Where each of the agent's sessions ran, with the ids this app saved
+   * there, for its usage: its workspace and every folder its conversations
+   * were given. */
+  sessionPlaces(agent: AgentKey, workspace: string) {
+    const scope = this.reads(agent)?.scope;
+    const folders = scope
+      ? agentFolders(this.storage, scope, agent)
+      : new Map();
+    const places = new Map<string, { place: SessionsPlace; saved: string[] }>([
+      ["", { place: workspace, saved: [] }],
+    ]);
+    for (const folder of folders.values())
+      places.set(folder, { place: { folder }, saved: [] });
+    for (const saved of this.conversations(agent))
+      places.get(folders.get(saved.key) ?? "")?.saved.push(saved.sessionId);
+    return [...places.values()];
   }
   private savedSessions(agent: AgentKey) {
     return localSessions(
@@ -625,7 +672,11 @@ export class ClaudeRuntime {
     const prompts = this.prompts(conversation.agent);
     return readTranscript(
       this.spawn,
-      workspace,
+      this.place(
+        conversation.agent,
+        conversationKey(conversation.channelId, conversation.root),
+        workspace,
+      ),
       conversation,
       working,
       signal,
@@ -648,7 +699,11 @@ export class ClaudeRuntime {
     if (await this.inspect?.(conversation.agent)) return undefined;
     const read = await readLatestTurns(
       this.spawn,
-      workspace,
+      this.place(
+        conversation.agent,
+        conversationKey(conversation.channelId, conversation.root),
+        workspace,
+      ),
       conversation,
       working,
       signal,
@@ -688,7 +743,11 @@ export class ClaudeRuntime {
     if (await this.inspect?.(agent)) return undefined;
     const transcript = await readTranscript(
       this.spawn,
-      workspace,
+      this.place(
+        agent,
+        conversationKey(place.channelId, place.root),
+        workspace,
+      ),
       { agent, ...place },
       false,
       signal,
@@ -967,6 +1026,10 @@ export class ClaudeRuntime {
     let sessionContext = delivery.sessionContext;
     signal.throwIfAborted();
     if (this.execution && (await this.inspect?.(agent.key))) {
+      if (this.folder(agent.key, key))
+        throw new Error(
+          "Conversation folders are unavailable for agents on an execution target",
+        );
       const handoff = this.controls.deliver(
         `${agent.key}/${key}`,
         async (deferred) => {
@@ -1061,7 +1124,10 @@ export class ClaudeRuntime {
               ? undefined
               : (threadReference(event)?.rootId ?? event.id);
           const notes = agent.notes?.(channel, noteRoot) ?? [];
-          const text = [sessionContext, this.review(entry, prepared, notes)]
+          const text = [
+            sessionContext,
+            this.review(entry, prepared, notes, channel, noteRoot),
+          ]
             .filter(Boolean)
             .join("\n\n");
           // A conversation's tools default to its thread; a session shared by
@@ -1086,6 +1152,8 @@ export class ClaudeRuntime {
                       entry,
                       (await prompt(fresh)).text,
                       notes,
+                      channel,
+                      noteRoot,
                     );
                     return [sessionContext, text].filter(Boolean).join("\n\n");
                   },
@@ -1095,7 +1163,13 @@ export class ClaudeRuntime {
             fresh: async () =>
               [
                 sessionContext,
-                this.review(entry, (await prompt(true)).text, notes),
+                this.review(
+                  entry,
+                  (await prompt(true)).text,
+                  notes,
+                  channel,
+                  noteRoot,
+                ),
               ]
                 .filter(Boolean)
                 .join("\n\n"),
@@ -1193,7 +1267,7 @@ export class ClaudeRuntime {
       try {
         const title = await readSessionTitle(
           this.spawn,
-          workspace,
+          this.place(agent, key, workspace),
           session,
           signal,
         );
@@ -1235,6 +1309,8 @@ export class ClaudeRuntime {
     entry.team = team ?? "";
     const refused = await this.refusal(agent.key, delivery.synced?.effort);
     if (refused) return { ok: false, error: refused };
+    // Its new process launches on the core memory read now.
+    entry.memory = await this.core(agent.key);
     const done = entry.sessions.runOnce(key, prompt, signal);
     this.notify();
     return done.finally(() => this.notify());
@@ -1255,9 +1331,15 @@ export class ClaudeRuntime {
   }
 
   /** `text` with the notes plugins left for the turn and the Buzz tools'
-   * end-of-turn note, when there are any. */
-  private review(entry: Entry, text: string, notes: readonly string[] = []) {
-    return [text, ...notes, turnNote(entry.handle)]
+   * end-of-turn note for its conversation, when there are any. */
+  private review(
+    entry: Entry,
+    text: string,
+    notes: readonly string[],
+    channelId: string,
+    root: string | undefined,
+  ) {
+    return [text, ...notes, turnNote(entry.handle, channelId, root)]
       .filter(Boolean)
       .join("\n\n");
   }
@@ -1334,7 +1416,13 @@ export class ClaudeRuntime {
     solo = topLevel,
   ) {
     const reads = this.reads(agent.key);
-    const summary = await reads?.channel(channelId);
+    const [summary, memory] = await Promise.all([
+      reads?.channel(channelId),
+      this.core(agent.key),
+    ]);
+    // Read as each turn starts, so a change made in any conversation restarts
+    // this one's idle session on its next message.
+    entry.memory = memory;
     const dm = summary?.dm === true;
     const thread = threadReference(event);
     const rootId = thread?.rootId ?? event.id;
@@ -1466,12 +1554,13 @@ export class ClaudeRuntime {
     // it was given, until it is replaced.
     const tools =
       (cwd: string): ToolServer =>
-      async (conversation, message, signal) => {
+      async (conversation, message, signal, check) => {
         const handle = entry.handle;
         const client =
           handle &&
           appClient(handle, {
             // Its PreToolUse hook reviews every tool, Buzz's included.
+            ...(!this.target && check ? { nativeCall: check } : {}),
             nativeToolGate: true,
             captureProtectionContext: async () => {
               if (!conversation)
@@ -1536,6 +1625,7 @@ export class ClaudeRuntime {
       fingerprint: (key) =>
         JSON.stringify([
           key ? (entry.directories.get(key) ?? []) : [],
+          this.reads(agent) ? this.folder(agent, key) : undefined,
           entry.config.model,
           entry.config.effort,
           entry.config.workspace,
@@ -1543,6 +1633,7 @@ export class ClaudeRuntime {
           entry.config.scope,
           entry.team,
           entry.name,
+          entry.memory,
           addedKey(this.added()),
           this.credentials,
         ]),
@@ -1552,18 +1643,28 @@ export class ClaudeRuntime {
         if (entry.protected && !gate)
           throw new Error("The protected agent has no live policy binding");
         gate?.assertAvailable();
-        // Read once per process: a new note doesn't restart a session, and a
-        // slow read starts it without them.
+        // A conversation given its own folder starts there, never in the
+        // workspace, which stays within reach as an absolute path.
+        const assigned = this.folder(agent, key);
+        const resolve = this.host.resolveDirectory?.bind(this.host);
+        const folder = assigned && (await existingFolder(resolve, assigned));
+        const home = folder && (await resolve?.(workspace));
+        // Notes are read once per process: a new note doesn't restart a
+        // session, and a slow read starts it without them. Core memory is the
+        // copy the fingerprint holds, once a turn has read it.
         const [memory, notes] = await Promise.all([
-          this.core(agent),
+          "memory" in entry ? entry.memory : this.core(agent),
           recentNotesSection((slug) =>
             this.memories(agent, slug, AbortSignal.timeout(NOTES_WAIT_MS)),
           ),
         ]);
-        const directories = key ? entry.directories.get(key) : undefined;
+        const shared = key ? entry.directories.get(key) : undefined;
+        const directories = home ? [home, ...(shared ?? [])] : shared;
+        const cwd = folder || workspace;
         const handle = entry.handle;
         return {
           ...where(entry.config),
+          cwd,
           ...(gate
             ? {
                 protection: {
@@ -1585,10 +1686,11 @@ export class ClaudeRuntime {
             : {}),
           hook: (session, event, input) =>
             this.hook(agent, session, event, input),
-          tools: tools(workspace),
+          tools: tools(cwd),
           systemPrompt: systemPrompt({
             scope,
-            cwd: workspace,
+            cwd,
+            ...(home ? { workspace: home } : {}),
             repositories: this.repositories(this.reads(agent)?.scope),
             ...(entry.name
               ? { agent: { name: entry.name, pubkey: pubkeyOf(agent) } }

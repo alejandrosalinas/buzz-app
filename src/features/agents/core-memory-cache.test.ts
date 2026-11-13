@@ -20,6 +20,10 @@ function setup() {
   return {
     cache,
     memoryListing,
+    /** Loses the connection, with nothing to read through. */
+    disconnect() {
+      reads = undefined;
+    },
     /** Replaces the connection, which may read as someone else. */
     reconnect(read = memoryListing, scope = "wss://one.test") {
       reads = {
@@ -201,4 +205,69 @@ it("forgets a left community's copy, keeps it across a disconnect, and lets no h
   f.reconnect(rejoin, "wss://one.test");
   await expect(f.cache.core(agent)).resolves.toBe("fresh");
   expect(rejoin).toHaveBeenCalledOnce();
+});
+
+it("keeps core memory with no connection, but not once its community is left", async () => {
+  const f = setup();
+  await f.cache.core(agent);
+  f.disconnect();
+  await expect(f.cache.core(agent)).resolves.toBe("one");
+  forgetCoreMemory("wss://one.test");
+  await expect(f.cache.core(agent)).resolves.toBeUndefined();
+  // Rejoining, a first read that fails or misses it does not restore it.
+  f.reconnect(vi.fn(async () => listing(undefined, true)));
+  await expect(f.cache.core(agent)).resolves.toBeUndefined();
+  f.reconnect(vi.fn(async () => Promise.reject(new Error("offline"))));
+  await expect(f.cache.core(agent)).resolves.toBeUndefined();
+});
+
+it("clears core memory once a read finds none, even with no connection", async () => {
+  const f = setup();
+  await f.cache.core(agent);
+  const none = vi.fn(async () => listing());
+  f.reconnect(none);
+  await f.cache.refresh(agent);
+  f.disconnect();
+  await expect(f.cache.core(agent)).resolves.toBeNull();
+});
+
+it("gives a failed first read what was cached while it waited", async () => {
+  const f = setup();
+  let fail!: (error: Error) => void;
+  f.memoryListing.mockReturnValueOnce(
+    new Promise((_resolve, reject) => {
+      fail = reject;
+    }),
+  );
+  vi.spyOn(console, "warn").mockImplementation(() => {});
+  const start = f.cache.core(agent);
+  f.cache.wrote(agent, "core", "written");
+  await expect(f.cache.core(agent)).resolves.toBe("written");
+  fail(new Error("offline"));
+  await expect(start).resolves.toBe("written");
+});
+
+it("gives a read outlived by its connection what the new one cached", async () => {
+  const f = setup();
+  const first = held();
+  f.memoryListing.mockReturnValueOnce(first.promise);
+  const start = f.cache.core(agent);
+  f.reconnect(vi.fn(async () => listing("fresh")));
+  await expect(f.cache.core(agent)).resolves.toBe("fresh");
+  first.release(listing("stale"));
+  await expect(start).resolves.toBe("fresh");
+});
+
+it("falls back to the community it last answered from, cached or not", async () => {
+  const f = setup();
+  await f.cache.core(agent);
+  f.reconnect(
+    vi.fn(async () => listing("two")),
+    "wss://two.test",
+  );
+  await expect(f.cache.core(agent)).resolves.toBe("two");
+  f.reconnect(f.memoryListing, "wss://one.test");
+  await expect(f.cache.core(agent)).resolves.toBe("one");
+  f.disconnect();
+  await expect(f.cache.core(agent)).resolves.toBe("one");
 });

@@ -1,8 +1,7 @@
-import { readView, subscribeView, viewRevision } from "../../shared/view-state";
 import { useSoloRowActivation } from "./useSoloRowActivation";
 import type { ComposeWorkspaces } from "./WorkspaceComposition";
 import { useSoloNavigation } from "./solo-navigation-react";
-import { regionDraftKey, soloNavigationFor } from "./solo-navigation";
+import { soloNavigationFor } from "./solo-navigation";
 import {
   useCallback,
   useLayoutEffect,
@@ -124,22 +123,6 @@ export function SoloInventory({
     target.pluginId === "buzz.channels" &&
     target.pageId === "channels"
       ? soloDraft(target.route?.params)
-      : undefined;
-  // A lead draft leads only while it still targets the workspace it opened in.
-  const leadKey =
-    draft?.lead && draft.region && draft.project
-      ? `${regionDraftKey(draft.region, draft.project)}:new-project`
-      : undefined;
-  const subscribeDraft = useCallback(
-    (listener: () => void) => subscribeView(scope, listener),
-    [scope],
-  );
-  useSyncExternalStore(subscribeDraft, () =>
-    leadKey ? viewRevision(scope, leadKey) : null,
-  );
-  const leadDraft =
-    leadKey && readView(scope, leadKey, draft?.project) === draft?.project
-      ? draft?.project
       : undefined;
   const handoff = useChannelNavigation();
   const workingIds = useSyncExternalStore(
@@ -270,8 +253,9 @@ export function SoloInventory({
     session.unread,
     JSON.stringify(conversations.map((item) => item.id)),
   );
-  const composing = !!regions.regions.find((region) => region.source)?.source
-    ?.composeWorkspaces;
+  const composing = !!regions.regions.find(
+    (region) => region.source && !region.hidden && region.reason !== "disabled",
+  )?.source?.composeWorkspaces;
   const empty =
     list.status === "ready" &&
     preferences.status === "ready" &&
@@ -363,14 +347,8 @@ export function SoloInventory({
       )}
       <SoloWorkspaces
         sidebarRows={rowEntries}
-        compose={
-          compose &&
-          ((parts) =>
-            compose({
-              ...parts,
-              ...(leadDraft ? { leadDraft } : {}),
-            }))
-        }
+        dormantAssignments={regions.managed}
+        compose={compose}
         renderChatMenu={renderChatMenu}
         navigator={navigator}
         draft={
@@ -429,7 +407,7 @@ export function SoloInventory({
   return (
     <nav
       className={styles.sidebarContents}
-      aria-label={`${regions.regions.find((region) => region.source)?.title ?? "Solo"} conversations`}
+      aria-label={`${regions.regions.find((region) => region.source && !region.hidden)?.title ?? "Solo"} conversations`}
     >
       {renderContents ? (
         renderContents(content(), header, pendingClick, content)

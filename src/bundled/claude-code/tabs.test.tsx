@@ -1018,7 +1018,7 @@ it("asks for an API key and is ready once one is saved", async () => {
   // The key's form takes the dialog over, saying once is enough.
   expect(
     await screen.findByText(
-      "Claude requires an API key to connect to your account. Create one at console.anthropic.com and paste it below. You only have to set this up once, and Buzz keeps it securely on this computer.",
+      "Claude requires an API key to connect to your account. Create one at console.anthropic.com and paste it below. You only have to set this up once.",
     ),
   ).toBeVisible();
   expect(
@@ -1825,7 +1825,7 @@ it("offers Set up Claude beside Harness when Claude is picked, then its models",
   const dialog = await screen.findByRole("dialog", { name: "Set up Claude" });
   expect(
     within(dialog).getByText(
-      "Claude requires an API key to connect to your account. Create one at console.anthropic.com and paste it below. You only have to set this up once, and Buzz keeps it securely on this computer.",
+      "Claude requires an API key to connect to your account. Create one at console.anthropic.com and paste it below. You only have to set this up once.",
     ),
   ).toBeVisible();
   expect(within(dialog).queryByRole("button", { name: "Sign in" })).toBeNull();

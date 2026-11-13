@@ -1,12 +1,17 @@
 // @vitest-environment jsdom
 import "@testing-library/jest-dom/vitest";
+import { useSyncExternalStore } from "react";
 import { act, cleanup, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, expect, it, vi } from "vitest";
 import type { Agent, AgentChange, Agents } from "../../features/agents/service";
 import type { RelayData } from "../../features/relay/service";
+import type { RelaySession } from "../../features/relay/session";
 import { readView, writeView } from "../../shared/view-state";
-import { setDefaultAgent } from "../../features/solo/default-agent";
+import {
+  chooseDefaultAgent,
+  setDefaultAgent,
+} from "../../features/solo/default-agent";
 import { onBestieMade } from "../agents/BestieChoice";
 import { bestieTab, formerBestieTab } from "./BestieTab";
 import {
@@ -185,6 +190,32 @@ it("puts this device back on the account's Bestie when a failed Change is closed
   unmount();
   expect(deviceChoice()).toBe(ada.pubkey);
   stop?.();
+});
+
+it("keeps the Bestie an agent saved when its tab closes over a failed Change", async () => {
+  const user = userEvent.setup();
+  const { relay, mainAgent } = community(ada.pubkey);
+  mainAgent.write.mockRejectedValueOnce(new Error("offline"));
+  const tab = bestieTab(relay, host([]).agents);
+  const subscribe = tab.subscribe ?? (() => () => {});
+  const stop = subscribe(() => {});
+  await vi.waitFor(() => expect(tab.when?.(ada)).toBe(true));
+  const Tab = tab.component;
+  // As the side panel does, it drops the tab once Ada stops being Bestie.
+  function Panel() {
+    const shown = useSyncExternalStore(subscribe, () => !!tab.when?.(ada));
+    return shown ? <Tab agent={ada} /> : null;
+  }
+  render(<Panel />);
+  const confirmation = await switchToBea(user);
+  expect(await within(confirmation).findByRole("alert")).toBeVisible();
+  // An agent saves Bea, as bestie_set does, while the failure shows.
+  const { session } = relay.snapshot() as unknown as { session: RelaySession };
+  await act(() => chooseDefaultAgent(session, SCOPE, bea.pubkey));
+  expect(screen.queryByRole("alertdialog")).toBeNull();
+  expect(mainAgent.write).toHaveBeenLastCalledWith(bea.pubkey);
+  expect(deviceChoice()).toBe(bea.pubkey);
+  stop();
 });
 
 it("puts this device back when a Change still saving fails after the panel closes", async () => {

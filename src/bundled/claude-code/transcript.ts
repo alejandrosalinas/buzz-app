@@ -291,13 +291,19 @@ const indexedFor = (start: Start, conversation: Conversation) =>
 /** How long finding the agent's workspace may take. */
 const WORKSPACE_TIMEOUT_MS = 10_000;
 
+/** Where a conversation's sessions ran: the agent's workspace, found by
+ * starting there, or the folder a plugin gave the conversation, kept already
+ * resolved, so it is never visited: that would create a removed one again. */
+export type SessionsPlace = string | Readonly<{ folder: string }>;
+
 /** The Claude Code project directory name for the agent's workspace, or
  * undefined when it is too long to be one. */
 export async function workspaceProject(
   spawn: Spawn,
-  workspace: string,
+  workspace: SessionsPlace,
   signal: AbortSignal,
 ) {
+  if (typeof workspace !== "string") return limited(workspace.folder);
   let directory = "";
   const process = await spawn("workspace", {
     cwd: workspace,
@@ -315,9 +321,12 @@ export async function workspaceProject(
   });
   signal.throwIfAborted();
   if (code !== 0) throw new Error("Could not find the agent's workspace");
-  const project = projectName(directory.trim());
-  return project.length > PROJECT_NAME_LIMIT ? undefined : project;
+  return limited(directory.trim());
 }
+const limited = (directory: string) => {
+  const project = projectName(directory);
+  return project.length > PROJECT_NAME_LIMIT ? undefined : project;
+};
 
 /** MiB per page of a session too large to read whole, under its 50 MB. */
 const PAGE_MIB = 32;
@@ -366,15 +375,19 @@ const oversized = new Map<string, number>();
  * {@link OVERSIZED_READ_MS} to read it in full. */
 export async function readLatestTurns(
   spawn: Spawn,
-  workspace: string,
+  workspace: SessionsPlace,
   conversation: Conversation,
   working: boolean,
   signal: AbortSignal,
   nameOf?: Names,
 ): Promise<TranscriptTurn[] | undefined> {
-  if (!projects.has(workspace))
+  // A folder's project is known without a lookup to keep.
+  if (typeof workspace === "string" && !projects.has(workspace))
     projects.set(workspace, await workspaceProject(spawn, workspace, signal));
-  const project = projects.get(workspace);
+  const project =
+    typeof workspace === "string"
+      ? projects.get(workspace)
+      : await workspaceProject(spawn, workspace, signal);
   const { sessionId } = conversation;
   if (!project || !sessionId) return undefined;
   const path = `./${project}/${sessionId}.jsonl`;
@@ -474,7 +487,7 @@ async function readSession(
  * record), or undefined before it has one. */
 export async function readSessionTitle(
   spawn: Spawn,
-  workspace: string,
+  workspace: SessionsPlace,
   sessionId: string,
   signal: AbortSignal,
 ): Promise<string | undefined> {
@@ -513,7 +526,7 @@ export async function readSessionTitle(
  * no longer uses. */
 export async function readTranscript(
   spawn: Spawn,
-  workspace: string,
+  workspace: SessionsPlace,
   conversation: Conversation,
   working: boolean,
   signal: AbortSignal,

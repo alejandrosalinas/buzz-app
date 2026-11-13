@@ -53,3 +53,10 @@ it("shows a person as text where the host can't open them", () => {
   expect(container.textContent).toBe("Ask John first.");
   expect(screen.queryByRole("button")).toBeNull();
 });
+it("shows a sparse table that would expand past the cell limit as source", () => {
+  const header = `|${" a |".repeat(1000)}\n|${" - |".repeat(1000)}`;
+  const text = `${header}\n${"| x |\n".repeat(1000)}`;
+  const { container } = render(<InstructionsMarkdown text={text} />);
+  expect(container.querySelector("table")).toBeNull();
+  expect(container.querySelector("pre code")?.textContent).toBe(text);
+});

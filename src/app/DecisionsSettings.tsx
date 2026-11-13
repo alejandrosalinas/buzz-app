@@ -19,6 +19,7 @@ import {
   WarningCircleIcon,
 } from "../shared/design-system/icons";
 import { Dialog } from "../shared/design-system/ui/Dialog";
+import { Button } from "../shared/design-system/ui/Button";
 import { Field } from "../shared/design-system/ui/Field";
 import { Header, InlineHeader } from "../shared/design-system/ui/Header";
 import { Radio, RadioGroup } from "../shared/design-system/ui/RadioGroup";
@@ -105,6 +106,7 @@ export function DecisionsSettings({
   // focus is in this section, then hand it to the selected provider's radio,
   // or the section itself, if the update dropped it.
   const section = useRef<HTMLElement>(null);
+  const setupForm = useRef<HTMLDivElement>(null);
   const hadFocus = useRef(false);
   useEffect(
     () =>
@@ -358,34 +360,64 @@ export function DecisionsSettings({
               : "Set up Builderlab"
           }
           description={
-            selected.key === ownKey.key
-              ? undefined
-              : "Complete account setup to use Builderlab for decision requests."
+            selected.key === ownKey.key ? (
+              <>
+                Create an API key at{" "}
+                <Button
+                  variant="link"
+                  size="text"
+                  nativeButton={false}
+                  role="link"
+                  render={
+                    <a
+                      href="https://console.typesafe.ai/keys"
+                      target="_blank"
+                      rel="noreferrer"
+                    />
+                  }
+                >
+                  console.typesafe.ai
+                </Button>{" "}
+                and paste it below.
+              </>
+            ) : (
+              "Complete account setup to use Builderlab for decision requests."
+            )
           }
           dismissOnOutsideClick
           onOpenChange={(open) => !open && setPicked(undefined)}
+          initialFocus={
+            selected.key === ownKey.key
+              ? () =>
+                  setupForm.current?.querySelector<HTMLInputElement>(
+                    "input:not([readonly])",
+                  ) ?? null
+              : undefined
+          }
           finalFocus={() =>
             section.current?.querySelector<HTMLElement>('[role="combobox"]') ??
             section.current
           }
         >
-          <OwnedContribution
-            entry={selected}
-            registry={{ snapshot: decisions.providers }}
-            fallback={<p role="alert">TypeSafe settings are unavailable.</p>}
-          >
-            {(entry, owned) => {
-              const Settings = entry.Settings;
-              return (
-                Settings && (
-                  <Settings
-                    active={() => active() && owned()}
-                    grouped={false}
-                  />
-                )
-              );
-            }}
-          </OwnedContribution>
+          <div ref={setupForm}>
+            <OwnedContribution
+              entry={selected}
+              registry={{ snapshot: decisions.providers }}
+              fallback={<p role="alert">TypeSafe settings are unavailable.</p>}
+            >
+              {(entry, owned) => {
+                const Settings = entry.Settings;
+                return (
+                  Settings && (
+                    <Settings
+                      active={() => active() && owned()}
+                      grouped={false}
+                    />
+                  )
+                );
+              }}
+            </OwnedContribution>
+          </div>
         </Dialog>
       )}
     </section>

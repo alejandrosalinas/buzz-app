@@ -5852,12 +5852,10 @@ it.each([
       expect(incoming).toHaveBeenCalledTimes(order === "live-first" ? 1 : 0);
       if (order === "replay-finite-live") await finite();
       await h.first.receive(["EVENT", source[1], event]);
-      const count =
-        order === "known-history" || order === "finite-first" ? 0 : 1;
-      expect(incoming).toHaveBeenCalledTimes(count);
+      expect(incoming).toHaveBeenCalledOnce();
       await h.first.receive(["EVENT", replay[1], event]);
       await h.first.receive(["EVENT", source[1], event]);
-      expect(incoming).toHaveBeenCalledTimes(count);
+      expect(incoming).toHaveBeenCalledOnce();
     } finally {
       owner.dispose();
     }

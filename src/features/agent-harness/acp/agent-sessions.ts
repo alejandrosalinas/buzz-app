@@ -139,7 +139,9 @@ export type SessionsOptions = Readonly<{
   /** The agent's provider, model and thinking level now, which each new
    * turn runs on. */
   choice(): Choice;
-  /** Changes when a setting a session was opened with has changed. */
+  /** Changes when a setting only a new session runs on has changed. A
+   * changed system prompt alone is given to the session as its next turn starts, where
+   * the harness can take it. */
   fingerprint(): string;
   /** Where each conversation's last use is saved. */
   store?: SessionStore;
@@ -163,6 +165,8 @@ type Live = {
   session: AcpSession;
   process: AcpProcess;
   fingerprint: string;
+  /** The system prompt it runs on. */
+  systemPrompt: string;
   slot: Slot;
   /** When it last took in a message or ended a turn. */
   at: number;
@@ -308,6 +312,15 @@ export class AgentSessions {
       ) {
         this.drop(key, live);
         break;
+      }
+      // A harness that cannot take a new prompt in place needs a new session.
+      if (!live.session.busy && !live.process.repromptable) {
+        const { systemPrompt } = await this.options.launch();
+        if (this.live.get(key) !== live) continue;
+        if (systemPrompt !== live.systemPrompt) {
+          this.drop(key, live);
+          continue;
+        }
       }
       return this.answer(
         key,
@@ -609,6 +622,7 @@ export class AgentSessions {
           session: opened,
           process,
           fingerprint,
+          systemPrompt: launch.systemPrompt,
           slot,
           at: Date.now(),
         });
@@ -617,7 +631,28 @@ export class AgentSessions {
     const released = () => pool.release(slot);
     void (session.server?.closed ?? Promise.resolve()).then(released, released);
     session.conversation = key;
-    const live = { session, process, fingerprint, slot, at: Date.now() };
+    const live: Live = {
+      session,
+      process,
+      fingerprint,
+      systemPrompt: launch.systemPrompt,
+      slot,
+      at: Date.now(),
+    };
+    // Each turn runs on the current prompt. The session runs these one at a
+    // time, so an older prompt never lands after a newer one; a failure keeps
+    // the session and is tried again at the next turn.
+    if (process.repromptable)
+      session.beforeTurn = async () => {
+        const { systemPrompt } = await this.options.launch();
+        if (systemPrompt === live.systemPrompt) return;
+        try {
+          await process.reprompt(session, systemPrompt);
+          live.systemPrompt = systemPrompt;
+        } catch (error) {
+          console.warn(`${this.options.label} kept its old prompt`, error);
+        }
+      };
     if (fingerprint !== this.options.fingerprint() && !this.disposed) {
       // Settings saved while it opened: it would work with the old ones.
       void this.close(live);

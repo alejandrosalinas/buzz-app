@@ -1,11 +1,19 @@
-import { useContext, useSyncExternalStore, type ReactNode } from "react";
+import {
+  useContext,
+  useEffect,
+  useSyncExternalStore,
+  type ReactNode,
+} from "react";
 import { agentAvatars } from "../../features/agents/avatar-packs";
 import { bestieChat } from "../../bundled/bestie/chat";
 import { UnreadBadge } from "../../bundled/channels/UnreadBadge";
 import channelStyles from "../../bundled/channels/Channels.module.css";
 import { useAgentChoices } from "../../features/agents/use-choices";
 import type { RegisteredPage } from "../../features/pages/service";
-import { useRelayConnection } from "../../features/relay/react";
+import {
+  useProfileGeneration,
+  useRelayConnection,
+} from "../../features/relay/react";
 import type { RelayData } from "../../features/relay/service";
 import { useSavedAgentState } from "../../features/solo/default-agent";
 import { pagePresentation } from "./presentation";
@@ -56,9 +64,32 @@ export function BestieNavigationProvider({
     session.channels.list,
   );
   const channel = bestieChat(channels.channels, viewer, promoted);
-  const pack = agentAvatars.find((item) => item.url === agent?.avatar);
+  // The published profile wins, as in DM rows and message avatars, including a
+  // profile without a picture (initials). The agent definition's art covers
+  // only the wait for that profile, or an agent that never published one.
+  const bestie = agent?.pubkey;
+  const generation = useProfileGeneration(session.profiles);
+  // Evictions also count cancelled background reads, so a cache shrink while
+  // this read is pending asks again.
+  const readEvictions = () => session.profiles.evictions?.() ?? 0;
+  const evictions = useSyncExternalStore(
+    session.profiles.subscribe,
+    readEvictions,
+    readEvictions,
+  );
+  useEffect(() => {
+    void generation;
+    void evictions;
+    if (bestie)
+      void session.profiles.ensure([bestie], "background").catch(() => {});
+  }, [session, bestie, generation, evictions]);
+  const profile = useSyncExternalStore(session.profiles.subscribe, () =>
+    bestie ? session.profiles.snapshot().get(bestie) : undefined,
+  );
+  const picture = profile ? profile.picture : agent?.avatar;
+  const pack = agentAvatars.find((item) => item.url === picture);
   const preview = useAvatarPreview(
-    pack ? "" : (agent?.avatar ?? ""),
+    pack ? "" : (picture ?? ""),
     connection.origin,
     "small",
     session.media,

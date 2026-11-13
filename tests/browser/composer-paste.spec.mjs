@@ -313,6 +313,417 @@ test("external linked text stays linked in the composer and sent message", async
   );
 });
 
+// Browser integration: WebKit offers the picture office apps copy beside
+// text as an image file. The form's attachment capture and the editor must
+// both read it as the text's rendering on the prose, raw and code paths.
+// Keeping it when no plain text could replace it, and other file pastes, are
+// covered in composer-clipboard.test.ts and composer-attachments.spec.mjs.
+test("copied office text pastes as text, not its picture", async ({
+  page,
+  app,
+}) => {
+  await open(page, app);
+  const input = page.getByRole("textbox", {
+    name: "Message #Alpha",
+    exact: true,
+  });
+  const attachments = page.getByRole("region", {
+    name: "Attachments",
+    exact: true,
+  });
+  const cells = "Q3\t12\nQ4\t15";
+  const paste = (raw = false) =>
+    input.evaluate(
+      (element, { cells, raw }) => {
+        if (raw) element.dispatchEvent(new Event("buzz:paste-plain"));
+        const clipboardData = new DataTransfer();
+        clipboardData.setData("text/plain", cells);
+        clipboardData.setData(
+          "text/html",
+          "<table><tr><td>Q3</td><td>12</td></tr><tr><td>Q4</td><td>15</td></tr></table>",
+        );
+        clipboardData.items.add(
+          new File(["png"], "image.png", { type: "image/png" }),
+        );
+        element.dispatchEvent(
+          new ClipboardEvent("paste", {
+            bubbles: true,
+            cancelable: true,
+            clipboardData,
+          }),
+        );
+      },
+      { cells, raw },
+    );
+  await input.click();
+  await paste();
+  await expect(input).toHaveJSProperty("value", cells);
+  await input.fill("");
+  await paste(true);
+  await expect(input).toHaveJSProperty("value", cells);
+  await input.fill("");
+  await input.pressSequentially("```");
+  await expect(input.locator("pre code")).toHaveCount(1);
+  await paste();
+  await expect(input.locator("pre code")).toHaveText(cells);
+  await expect(attachments).toHaveCount(0);
+});
+
+// A long paste paints as text before its links become chips, then keeps
+// one undo step for the whole paste.
+test("a long pasted text with links shows before its chips", async ({
+  page,
+  app,
+}) => {
+  await open(page, app);
+  const input = page.getByRole("textbox", {
+    name: "Message #Alpha",
+    exact: true,
+  });
+  const text = Array.from(
+    { length: 40 },
+    (_, line) =>
+      `Line ${line} of the notes links https://example.com/notes/${line} for review.`,
+  ).join("\n");
+  await input.click();
+  await input.pressSequentially("Notes: ");
+  const pasted = await input.evaluate((element, text) => {
+    const clipboardData = new DataTransfer();
+    clipboardData.setData("text/plain", text);
+    element.dispatchEvent(
+      new ClipboardEvent("paste", {
+        bubbles: true,
+        cancelable: true,
+        clipboardData,
+      }),
+    );
+    return {
+      value: element.value,
+      chips: element.querySelectorAll("[data-source]").length,
+    };
+  }, text);
+  expect(pasted).toEqual({ value: `Notes: ${text}`, chips: 0 });
+  await expect(input.locator("[data-source]")).toHaveCount(40);
+  await expect(input).toHaveJSProperty("value", `Notes: ${text}`);
+  // The caret stays after the pasted text once its chips render.
+  expect(
+    await input.evaluate((element) => {
+      const caret = getSelection()?.getRangeAt(0);
+      const after = document.createRange();
+      after.setStart(caret.endContainer, caret.endOffset);
+      after.setEnd(element, element.childNodes.length);
+      return caret.collapsed && after.toString();
+    }),
+  ).toBe("");
+  await input.press("ControlOrMeta+z");
+  await expect(input).toHaveJSProperty("value", "Notes: ");
+  await input.press("ControlOrMeta+Shift+z");
+  await expect(input).toHaveJSProperty("value", `Notes: ${text}`);
+  await expect(input.locator("[data-source]")).toHaveCount(40);
+});
+
+// Pasted identity links become recipients in the paste's own transaction,
+// in a long paste and while an earlier long paste's chips are still pending.
+test("a long paste keeps identity links as recipients", async ({
+  page,
+  app,
+}) => {
+  await open(page, app);
+  const input = page.getByRole("textbox", {
+    name: "Message #Alpha",
+    exact: true,
+  });
+  const recipients = page.getByRole("region", { name: "Explicit mentions" });
+  const filler = Array.from(
+    { length: 20 },
+    (_, line) =>
+      `Line ${line} of the notes links https://example.com/notes/${line} for review.`,
+  ).join("\n");
+  const identity = `[@Fixture Reader](nostr:${npubEncode(app.viewer)}) `;
+  const paste = (texts) =>
+    input.evaluate((element, texts) => {
+      for (const text of texts) {
+        const clipboardData = new DataTransfer();
+        clipboardData.setData("text/plain", text);
+        element.dispatchEvent(
+          new ClipboardEvent("paste", {
+            bubbles: true,
+            cancelable: true,
+            clipboardData,
+          }),
+        );
+      }
+      // A promoted recipient's token carries the mention as its source.
+      return !!element.querySelector('[data-source="@Fixture Reader"]');
+    }, texts);
+  await input.click();
+  expect(await paste([`${filler}\n${identity}`])).toBe(true);
+  await expect(recipients).toBeVisible();
+  await input.press("ControlOrMeta+z");
+  await expect(input).toHaveJSProperty("value", "");
+  await expect(recipients).toBeHidden();
+
+  // The second paste lands before the first one's deferred chips.
+  expect(await paste([filler, identity])).toBe(true);
+  await expect(input.locator("[data-source]")).toHaveCount(21);
+  await expect(recipients).toBeVisible();
+  await input.press("ControlOrMeta+z");
+  await expect(input).toHaveJSProperty("value", filler);
+  await expect(recipients).toBeHidden();
+  await input.press("ControlOrMeta+z");
+  await expect(input).toHaveJSProperty("value", "");
+  await input.press("ControlOrMeta+Shift+z");
+  await expect(input).toHaveJSProperty("value", filler);
+  await input.press("ControlOrMeta+Shift+z");
+  await expect(input.locator(".inline-chip")).toHaveText("@Fixture Reader");
+  await expect(recipients).toBeVisible();
+  await input.press("Enter");
+  await expect.poll(() => app.report.publications.length).toBe(1);
+  expect(app.report.publications[0].event.tags).toContainEqual([
+    "p",
+    app.viewer,
+  ]);
+});
+
+// Chips still pending from a long paste stay out of the next edit's undo
+// step, so undo and redo walk both pastes in order.
+test("undo and redo walk pastes made before deferred chips render", async ({
+  page,
+  app,
+}) => {
+  await open(page, app);
+  const input = page.getByRole("textbox", {
+    name: "Message #Alpha",
+    exact: true,
+  });
+  const long = (name) =>
+    Array.from(
+      { length: 20 },
+      (_, line) =>
+        `${name} line ${line} links https://example.com/${name}/${line} for review.`,
+    ).join("\n");
+  const first = long("first");
+  await input.click();
+  for (const second of [`\n${long("second")}`, " https://example.com/short"]) {
+    await input.evaluate(
+      (element, texts) => {
+        for (const text of texts) {
+          const clipboardData = new DataTransfer();
+          clipboardData.setData("text/plain", text);
+          element.dispatchEvent(
+            new ClipboardEvent("paste", {
+              bubbles: true,
+              cancelable: true,
+              clipboardData,
+            }),
+          );
+        }
+      },
+      [first, second],
+    );
+    const chips = second.length > 100 ? 40 : 21;
+    await expect(input.locator("[data-source]")).toHaveCount(chips);
+    await input.press("ControlOrMeta+z");
+    await expect(input).toHaveJSProperty("value", first);
+    await input.press("ControlOrMeta+z");
+    await expect(input).toHaveJSProperty("value", "");
+    await input.press("ControlOrMeta+Shift+z");
+    await expect(input).toHaveJSProperty("value", first);
+    await input.press("ControlOrMeta+Shift+z");
+    await expect(input).toHaveJSProperty("value", `${first}${second}`);
+    await expect(input.locator("[data-source]")).toHaveCount(chips);
+    await input.fill("");
+  }
+});
+
+// Input before a long paste's chips render adopts them first, so editing,
+// pasting an identity inside the pasted text, and undo and redo behave as
+// they do once the chips have rendered.
+test("input before deferred chips render edits and undoes as usual", async ({
+  page,
+  app,
+}) => {
+  await open(page, app);
+  const input = page.getByRole("textbox", {
+    name: "Message #Alpha",
+    exact: true,
+  });
+  const recipients = page.getByRole("region", { name: "Explicit mentions" });
+  const long = Array.from(
+    { length: 20 },
+    (_, line) =>
+      `Line ${line} links https://example.com/review/${line} for notes.`,
+  ).join("\n");
+  const identity = `[@Fixture Reader](nostr:${npubEncode(app.viewer)}) `;
+  // Paste with the paint that renders the chips held until `release`.
+  const paste = (texts) =>
+    input.evaluate((element, texts) => {
+      if (!window.heldFrames) {
+        window.heldFrames = [];
+        window.paintFrame = window.requestAnimationFrame;
+        window.requestAnimationFrame = (callback) =>
+          window.heldFrames.push(callback);
+      }
+      for (const text of texts) {
+        const clipboardData = new DataTransfer();
+        clipboardData.setData("text/plain", text);
+        element.dispatchEvent(
+          new ClipboardEvent("paste", {
+            bubbles: true,
+            cancelable: true,
+            clipboardData,
+          }),
+        );
+      }
+    }, texts);
+  const release = () =>
+    page.evaluate(() => {
+      window.requestAnimationFrame = window.paintFrame;
+      for (const callback of window.heldFrames) callback(0);
+      window.heldFrames = undefined;
+    });
+  const pending = () => expect(input.locator("[data-source]")).toHaveCount(0);
+  await input.click();
+
+  // Replace the last link and the text after it.
+  await paste([long]);
+  await pending();
+  for (let key = 0; key < 12; key++) await input.press("Shift+ArrowLeft");
+  await page.keyboard.type("changed");
+  await release();
+  const changed = long.replace(
+    "https://example.com/review/19 for notes.",
+    "changed",
+  );
+  await expect(input).toHaveJSProperty("value", changed);
+  await expect(input.locator("[data-source]")).toHaveCount(19);
+  await input.press("ControlOrMeta+z");
+  await expect(input).toHaveJSProperty("value", long);
+  await input.press("ControlOrMeta+z");
+  await expect(input).toHaveJSProperty("value", "");
+  await input.press("ControlOrMeta+Shift+z");
+  await input.press("ControlOrMeta+Shift+z");
+  await expect(input).toHaveJSProperty("value", changed);
+  await input.fill("");
+
+  // Delete inside the pasted text.
+  await paste([long]);
+  await pending();
+  await input.press("ArrowUp");
+  await input.press("Backspace");
+  await release();
+  await input.press("ControlOrMeta+z");
+  await expect(input).toHaveJSProperty("value", long);
+  await input.press("ControlOrMeta+z");
+  await expect(input).toHaveJSProperty("value", "");
+  await input.fill("");
+
+  // Undo and redo both pastes before either renders its chips.
+  await paste([long, " https://example.com/short"]);
+  await input.press("ControlOrMeta+z");
+  await input.press("ControlOrMeta+z");
+  await expect(input).toHaveJSProperty("value", "");
+  await input.press("ControlOrMeta+Shift+z");
+  await input.press("ControlOrMeta+Shift+z");
+  await release();
+  await expect(input).toHaveJSProperty(
+    "value",
+    `${long} https://example.com/short`,
+  );
+  await expect(input.locator("[data-source]")).toHaveCount(21);
+  await input.press("ControlOrMeta+z");
+  await input.press("ControlOrMeta+z");
+  await expect(input).toHaveJSProperty("value", "");
+
+  // Complete a link before the pasted text; its chip shortens the document.
+  await input.fill(`[${"a".repeat(2000)}](`);
+  await input.press("End");
+  await paste([`https://example.com) ${"https://example.org/x ".repeat(60)}`]);
+  await expect(input.locator("[data-source]")).toHaveCount(1);
+  await release();
+  await expect(input.locator("[data-source]")).toHaveCount(61);
+  await input.fill("");
+
+  // Paste an identity inside the pasted text.
+  await paste([long]);
+  await pending();
+  await input.press("ArrowUp");
+  await paste([identity]);
+  await release();
+  await expect(
+    input.locator(".inline-chip", { hasText: "@Fixture Reader" }),
+  ).toHaveCount(1);
+  await expect(recipients).toBeVisible();
+  await input.press("Enter");
+  await expect.poll(() => app.report.publications.length).toBe(1);
+  expect(app.report.publications[0].event.tags).toContainEqual([
+    "p",
+    app.viewer,
+  ]);
+});
+
+// A long paste joined onto a link or a mention changes them in its own undo
+// step, even though its inner chips render after the next paint.
+test("undoing a long paste restores the link and mention it joined", async ({
+  page,
+  app,
+}) => {
+  await open(page, app);
+  const input = page.getByRole("textbox", {
+    name: "Message #Alpha",
+    exact: true,
+  });
+  const recipients = page.getByRole("region", { name: "Explicit mentions" });
+  const tail = ` and ${"more notes ".repeat(110)}`;
+  const paste = (text) =>
+    input.evaluate((element, text) => {
+      const clipboardData = new DataTransfer();
+      clipboardData.setData("text/plain", text);
+      element.dispatchEvent(
+        new ClipboardEvent("paste", {
+          bubbles: true,
+          cancelable: true,
+          clipboardData,
+        }),
+      );
+    }, text);
+  await input.click();
+  await input.pressSequentially("see https://exa");
+  await paste(`mple.com${tail}`);
+  await expect(input).toHaveJSProperty(
+    "value",
+    `see https://example.com${tail}`,
+  );
+  await expect(input.locator("[data-source]")).toHaveCount(1);
+  await input.press("ControlOrMeta+z");
+  await expect(input).toHaveJSProperty("value", "see https://exa");
+  await expect(input.locator("[data-source]")).toHaveCount(0);
+  await input.press("ControlOrMeta+Shift+z");
+  await expect(input).toHaveJSProperty(
+    "value",
+    `see https://example.com${tail}`,
+  );
+
+  await input.fill("");
+  await paste(`[@Fixture Reader](nostr:${npubEncode(app.viewer)})`);
+  await expect(recipients).toBeVisible();
+  // Text joined onto the name ends the mention.
+  await paste(`s${tail}`);
+  await expect(recipients).toBeHidden();
+  await input.press("ControlOrMeta+z");
+  await expect(input).toHaveJSProperty("value", "@Fixture Reader");
+  await expect(recipients).toBeVisible();
+  await input.press("ControlOrMeta+Shift+z");
+  await expect(recipients).toBeHidden();
+  await input.press("ControlOrMeta+z");
+  await input.press("Enter");
+  await expect.poll(() => app.report.publications.length).toBe(1);
+  expect(app.report.publications[0].event.tags).toContainEqual([
+    "p",
+    app.viewer,
+  ]);
+});
+
 // Browser integration: a native paste event over a selection reaches
 // the editor's link path, renders the anchor and publishes the linked label.
 test("pasting a URL over selected text links it in the composer and sent message", async ({

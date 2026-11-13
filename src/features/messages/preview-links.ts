@@ -1,5 +1,5 @@
 import { scanMarkdown } from "../relay/message-content";
-import { prepareMarkdown } from "./markdown-preparation";
+import { preparedMarkdown, recentResults } from "./markdown-preparation";
 import { messageLinkParts } from "./message-link-parts";
 
 type Node = {
@@ -38,9 +38,29 @@ export function previewLinks(
   content: string,
   exclude: readonly string[] = [],
 ): readonly string[] {
-  const prepared = prepareMarkdown(content);
-  if (prepared.kind === "plain" || !/https:\/\//i.test(content)) return [];
-  const scan = scanMarkdown(prepared.content);
+  if (!/https:\/\//i.test(content)) return [];
+  const key = JSON.stringify([content, exclude]);
+  return recentLinks(key, () => findPreviewLinks(content, exclude));
+}
+
+// Rows remount on every channel switch and scroll; a revisit reuses its links.
+const recentLinks = recentResults<readonly string[]>(
+  200_000,
+  (key, links) =>
+    100 + key.length + links.reduce((sum, url) => sum + url.length, 0),
+);
+
+function findPreviewLinks(
+  content: string,
+  exclude: readonly string[],
+): readonly string[] {
+  // A fresh preparation hands over its scan, so the body is parsed once.
+  let made: ReturnType<typeof scanMarkdown> | undefined;
+  const prepared = preparedMarkdown(content, (scan) => {
+    made = scan;
+  });
+  if (prepared.kind === "plain") return [];
+  const scan = made ?? scanMarkdown(prepared.content);
   if (scan.tooDeep) return [];
   const source = prepared.content;
   const delimiters = prepared.spoilerDelimiters;
@@ -94,5 +114,5 @@ export function previewLinks(
     for (const child of children) visit(child, own);
   };
   visit(scan.tree as Node, []);
-  return found;
+  return Object.freeze(found);
 }

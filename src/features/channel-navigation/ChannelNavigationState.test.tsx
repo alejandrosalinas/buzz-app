@@ -181,6 +181,25 @@ it("hands both entrances to one confirmation and preserves its origin until clos
   });
 });
 
+it("does not depart through a retired session's submission callback", () => {
+  const h = fixture();
+  const view = mount(h.relay);
+  const depart = vi.fn();
+  act(() =>
+    view.result.current.openLifecycle(
+      { id: "plans", name: "Plans", channelType: "solo" },
+      "delete",
+      undefined,
+      undefined,
+      { close: vi.fn(), depart },
+    ),
+  );
+  const retired = view.result.current;
+  act(() => h.replace());
+  act(() => retired.beginLifecycle());
+  expect(depart).not.toHaveBeenCalled();
+});
+
 it.each([true, false])(
   "says whether archiving starter channel (%s) resumes adding new members on Unarchive",
   async (autoJoin) => {

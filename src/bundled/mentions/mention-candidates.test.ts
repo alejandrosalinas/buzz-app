@@ -71,6 +71,38 @@ it("reads only the session stores its cache compares", () => {
   ]);
 });
 
+it("marks a roster's choices outside the saved chat's member list as offered", () => {
+  const roster = [
+    { pubkey: key(3), name: "Bot" },
+    { pubkey: key(6), name: "Helper" },
+  ];
+  const marks = (chat?: { members?: string[] }) => {
+    const session = fresh();
+    const channels = chat ? [{ id: "c", channelType: "solo", ...chat }] : [];
+    Object.assign(session, {
+      channels: { list: () => ({ status: "ready", channels }) },
+    });
+    return mentionCandidates(session, "c", true, roster).map((row) => [
+      row.recipient.pubkey,
+      row.member,
+      !!row.offered,
+    ]);
+  };
+  // Both stay members for listing; only the chat's own list keeps one a
+  // member for Space.
+  expect(marks({ members: [key(1), key(3)] })).toEqual([
+    [key(3), true, false],
+    [key(6), true, true],
+  ]);
+  // An unsaved draft, or a chat whose member list has not loaded, has only
+  // the roster.
+  for (const unknown of [undefined, {}, { members: [] }])
+    expect(marks(unknown)).toEqual([
+      [key(3), true, false],
+      [key(6), true, false],
+    ]);
+});
+
 it("carries known execution into recipient choices without classifying directory-only agents", () => {
   const session = fresh();
   const identities = [

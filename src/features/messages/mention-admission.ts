@@ -1,11 +1,12 @@
 import type { ChannelSummary } from "../relay/contracts";
 import type { ComposerSession } from "./composer-session";
 import type { MentionRecipient } from "./mention-draft";
-import { archiveHides } from "../relay/identity-archives";
+import { agentUnavailable } from "../agents/choices";
 
-/** The shared archive discovery rule applied to mention recipients. */
+/** The shared forward-looking rule applied to mention recipients: archived
+ * here or being deleted ({@link agentUnavailable}). */
 export function archivedMention(session: ComposerSession, pubkey: string) {
-  return archiveHides(session.archives, pubkey, session.viewer);
+  return agentUnavailable(session, pubkey);
 }
 
 /**
@@ -48,7 +49,9 @@ export function mentionAdmission(
   const outside = !roster && !inviteAgents && allowsOutsideMentions(channel);
   return (pubkey) =>
     /^[0-9a-f]{64}$/.test(pubkey) &&
-    (!archivedMention(session, pubkey) || bringable.has(pubkey)) &&
+    // Whatever route offers it: member, roster, directory or bring-back, which
+    // takes an agent out of its archive but never offers one being deleted.
+    !agentUnavailable(session, pubkey, bringable) &&
     (outside || allowed.has(pubkey));
 }
 

@@ -286,7 +286,7 @@ test("actual composer selects namesakes by exact key, publishes channel/reply ta
   );
   await search.fill("grinning");
   await page.getByRole("button", { name: "😀", exact: true }).click();
-  await expect(input).toHaveJSProperty("value", "@Honey @Honey 😀");
+  await expect(input).toHaveJSProperty("value", "@Honey @Honey 😀 ");
   await expect(page.getByRole("textbox").locator(".inline-chip")).toHaveCount(
     2,
   );
@@ -364,7 +364,7 @@ test("actual composer selects namesakes by exact key, publishes channel/reply ta
         emojiBox.x,
       );
       expect(Math.abs(recipientsBox.y - mentionBox.y)).toBeLessThanOrEqual(2);
-      await expect(input).toHaveJSProperty("value", "@Honey @Honey 😀");
+      await expect(input).toHaveJSProperty("value", "@Honey @Honey 😀 ");
     }
   }
   await chip.hover();
@@ -390,7 +390,10 @@ test("actual composer selects namesakes by exact key, publishes channel/reply ta
   const first = await page.evaluate(
     () => window.mentionFixture.publications[0],
   );
-  expect(first.content).toBe("@Honey @Honey 😀");
+  // The sent body qualifies each namesake so readers bind it to one key.
+  expect(first.content).toBe(
+    `@Honey (${keys.first}) @Honey (${keys.second}) 😀`,
+  );
   expect(first.tags.filter(([tag]) => tag === "p")).toEqual([
     ["p", keys.first],
     ["p", keys.second],

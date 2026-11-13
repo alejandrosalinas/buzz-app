@@ -565,16 +565,19 @@ function MessageRowContent({
       .map((action) =>
         action.placement === "menu" && session && extensions?.actions ? (
           <ContributionBoundary key={contributionKey(action)} fallback={null}>
-            <WithTargetOpener
-              component={action.component}
-              props={{
-                message: row,
-                session,
-                close: () => setOpenAction(undefined),
-              }}
-              registry={extensions.actions}
-              entry={action}
-            />
+            {/* A list's shared menu renders this outside the row's provider. */}
+            <TargetOpenerProvider canOpen={canOpenLink} open={openLink}>
+              <WithTargetOpener
+                component={action.component}
+                props={{
+                  message: row,
+                  session,
+                  close: () => setOpenAction(undefined),
+                }}
+                registry={extensions.actions}
+                entry={action}
+              />
+            </TargetOpenerProvider>
           </ContributionBoundary>
         ) : (
           <MenuItem key={action.key} onClick={() => activateAction(action)}>
@@ -783,8 +786,9 @@ function MessageRowContent({
       />
     </span>
   );
-  const messageActions = (target?: ReactElement) => (
+  const messageActions = (target?: ReactElement, withToolbar?: boolean) => (
     <MessageActionBar
+      withToolbar={withToolbar}
       rowRef={rowRef}
       menuTriggerRef={menuTrigger}
       messageId={row.id}
@@ -1685,8 +1689,10 @@ function MessageRowContent({
       {messageActions(renderMessage(message, menuTrigger))}
       {overlays}
     </>
-  ) : (
+  ) : row.membership || row.huddle ? (
     message
+  ) : (
+    messageActions(message, true)
   );
 }
 /** Coordination between agents reads as one quiet line in time order: who

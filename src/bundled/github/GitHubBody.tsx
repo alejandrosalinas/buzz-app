@@ -11,7 +11,12 @@ import {
   useState,
   type ReactNode,
 } from "react";
-import Markdown, { type Components, type ExtraProps } from "react-markdown";
+import type { Components, ExtraProps } from "react-markdown";
+import {
+  MarkdownDocument,
+  sharedComponents,
+} from "../../features/markdown/MarkdownDocument";
+import type { MarkdownProfile } from "../../features/markdown/profiles";
 import remarkGfm from "remark-gfm";
 import remarkBreaks from "remark-breaks";
 import type { PhrasingContent, Root, RootContent } from "mdast";
@@ -245,8 +250,15 @@ type Media = (
 ) => ReactNode;
 const MediaContext = createContext<Media>((source) => source);
 
+const PROFILE: MarkdownProfile = {
+  syntax: [remarkGfm],
+  transforms: [remarkBreaks, githubHtml],
+  html: "convert",
+};
+
 // Stable across renders, so a body read again keeps its media elements.
 const components: Components = {
+  ...sharedComponents,
   // Players are block elements, including when embedded in prose.
   p: ({ children }) => <div className={styles.paragraph}>{children}</div>,
   a: function MarkdownLink({ href, children, node }) {
@@ -423,16 +435,16 @@ export const GitHubBody = memo(function GitHubBody({
   };
 
   return (
-    <div className={styles.body}>
-      <MediaContext value={media}>
-        <Markdown
-          remarkPlugins={[remarkGfm, remarkBreaks, githubHtml]}
-          urlTransform={(value) => bodyUrl(value, url) ?? ""}
-          components={components}
-        >
-          {body}
-        </Markdown>
-      </MediaContext>
-    </div>
+    <MediaContext value={media}>
+      <MarkdownDocument
+        content={body}
+        profile={PROFILE}
+        // Relative links resolve against the current item.
+        urlTransform={(value) => bodyUrl(value, url) ?? ""}
+        components={components}
+        scale="document"
+        className={styles.body}
+      />
+    </MediaContext>
   );
 });

@@ -691,27 +691,37 @@ test("long native reactions and unavailable shortcode artwork stay inside the hi
     .locator("[data-message-id]")
     .first()
     .getByTestId("reaction-row");
-  for (const content of ["f".repeat(64), `:${"a".repeat(64)}:`]) {
+  const native = "f".repeat(64);
+  const shortcode = `:${"a".repeat(64)}:`;
+  for (const content of [native, shortcode]) {
     const pill = row.locator(`button[data-reaction="${content}"]`);
     await expect(pill).toHaveCount(1);
     await expect(pill).toHaveAttribute(
       "aria-label",
       `${content}: Fixture Member`,
     );
-    const bounds = await pill.evaluate((button) => {
-      const glyph = button.querySelector("[data-reaction-glyph] > span");
+    const bounds = await pill.evaluate((button, isShortcode) => {
+      const glyph = button.querySelector(
+        isShortcode
+          ? "[data-reaction-glyph] svg"
+          : "[data-reaction-glyph] > span",
+      );
+      const rect = glyph.getBoundingClientRect();
       const chip = button.getBoundingClientRect();
       return {
-        glyphWidth: glyph.getBoundingClientRect().width,
-        glyphLeft: glyph.getBoundingClientRect().left,
-        glyphRight: glyph.getBoundingClientRect().right,
+        glyphWidth: rect.width,
+        glyphLeft: rect.left,
+        glyphRight: rect.right,
         chipLeft: chip.left,
         chipRight: chip.right,
         truncated: glyph.scrollWidth > glyph.clientWidth,
+        text: button.querySelector("[data-reaction-glyph]").textContent,
       };
-    });
+    }, content === shortcode);
     expect(bounds.glyphWidth).toBeLessThanOrEqual(26);
-    expect(bounds.truncated).toBe(true);
+    if (content === native) expect(bounds.truncated).toBe(true);
+    // Unavailable shortcode artwork draws the placeholder icon, never its text.
+    else expect(bounds.text).toBe("");
     expect(bounds.glyphLeft).toBeGreaterThanOrEqual(bounds.chipLeft);
     expect(bounds.glyphRight).toBeLessThanOrEqual(bounds.chipRight);
   }

@@ -29,6 +29,18 @@ function Held({ navigation }: PageProps) {
   }, [navigation]);
   return <p>Held content</p>;
 }
+// Counts renders of the app shell, which a page's request does not need.
+const shell = vi.hoisted(() => ({ renders: 0 }));
+vi.mock("./shell/AppShell", async (original) => {
+  const actual = await original<typeof import("./shell/AppShell")>();
+  return {
+    ...actual,
+    AppShell(props: Parameters<typeof actual.AppShell>[0]) {
+      shell.renders++;
+      return <actual.AppShell {...props} />;
+    },
+  };
+});
 vi.mock("../bundled", () => ({
   bundledPlugins: [
     {
@@ -436,4 +448,34 @@ it("keeps a loading state, not the card, when loading starts after a kept timeou
   expect(
     frames().some((text) => text.includes("This page isn’t available")),
   ).toBe(false);
+});
+
+it("hands a page its request without rendering the shell again", async () => {
+  const current = start({
+    version: 1,
+    kind: "page",
+    pluginId: "test.held",
+    pageId: "other",
+  });
+  expect(await screen.findByText("Other content")).toBeVisible();
+  await waitFor(() =>
+    expect(current.navigation.snapshot().status).toBe("opened"),
+  );
+  shell.renders = 0;
+  act(
+    () =>
+      void current.navigation.open({
+        version: 1,
+        kind: "page",
+        pluginId: "test.held",
+        pageId: "held",
+      }),
+  );
+  expect(await screen.findByText("Held content")).toBeVisible();
+  await waitFor(() =>
+    expect(current.navigation.snapshot().status).toBe("opened"),
+  );
+  expect(page.navigation?.entryId).toBe(current.navigation.snapshot().entry.id);
+  // The shell renders once for the visit; the request reaches only the page.
+  expect(shell.renders).toBe(1);
 });

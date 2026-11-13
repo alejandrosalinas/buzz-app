@@ -10,6 +10,10 @@ import type { ChannelCanvas } from "../../features/channel-templates/capability"
 import type { ProfileQueries } from "../../features/relay/profile-directory";
 import { Tabs } from "../../shared/design-system/ui/Tabs";
 import { CanvasHistory } from "./CanvasHistory";
+import type {
+  CodeBlockRenderer,
+  ContributionReader,
+} from "../../features/conversation/contracts";
 import { CanvasView } from "./CanvasView";
 import type { RelayEvent } from "../../features/relay/events";
 import {
@@ -34,6 +38,7 @@ export function CanvasEditor({
   channelId,
   readOnly = false,
   openLink = () => false,
+  codeBlocks,
 }: {
   canvas: ChannelCanvas;
   profiles: ProfileQueries;
@@ -42,6 +47,8 @@ export function CanvasEditor({
   readOnly?: boolean;
   /** Opens a Buzz link in the app; false lets the link open externally. */
   openLink?: (url: string) => boolean;
+  /** Plugin code-block renderers for the View tab. */
+  codeBlocks?: ContributionReader<CodeBlockRenderer> | undefined;
 }) {
   const panelId = useId();
   // A stable callback keeps the retained View from re-rendering its Markdown.
@@ -305,7 +312,7 @@ export function CanvasEditor({
     ) : undefined;
   const body = (
     <>
-      <div className={styles.stack}>
+      <div className={`${styles.stack} ${panelStyles.views}`}>
         {readOnly && <p role="status">Canvas is read-only.</p>}
         <Tabs
           variant="panel"
@@ -340,6 +347,7 @@ export function CanvasEditor({
             busy={busy}
             retry={() => recover(false, viewRetry.current)}
             openLink={openViewLink}
+            codeBlocks={codeBlocks}
             focusRef={view}
             retryRef={viewRetry}
             active={tab === "view"}

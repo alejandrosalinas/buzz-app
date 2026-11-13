@@ -62,30 +62,73 @@ export function resolveCategorySound(
   );
 }
 
-const cache = new Map<SoundName, HTMLAudioElement>();
+export type NotificationSoundPlayback = {
+  stop(): void;
+  finished: Promise<void>;
+};
 
-function getAudio(name: SoundName): HTMLAudioElement {
-  let audio = cache.get(name);
-  if (!audio) {
-    audio = new Audio(`/sounds/${name}.mp3`);
-    cache.set(name, audio);
-  }
-  return audio;
-}
+const playing = new Map<SoundName, NotificationSoundPlayback>();
 
 export function playNotificationSound(
   name: SoundName,
-): HTMLAudioElement | null {
+): NotificationSoundPlayback | null {
+  const playback = createNotificationSoundPlayback(name);
+  if (!playback) return null;
+  playing.get(name)?.stop();
+  playing.set(name, playback);
+  void playback.finished.then(() => {
+    if (playing.get(name) === playback) playing.delete(name);
+  });
+  return playback;
+}
+
+export function createNotificationSoundPlayback(
+  name: SoundName,
+): NotificationSoundPlayback | null {
   if (name === "silent") return null;
+  let context: AudioContext;
   try {
-    const audio = getAudio(name);
-    audio.currentTime = 0;
-    audio.play().catch(() => {
-      // Best-effort — user may not have interacted with the page yet.
-    });
-    return audio;
+    // Alerts must not become resumable media players for the system's media keys.
+    context = new AudioContext();
   } catch {
-    // Best-effort only.
     return null;
   }
+  const controller = new AbortController();
+  let source: AudioBufferSourceNode | undefined;
+  let started = false;
+  let finish!: () => void;
+  const playback: NotificationSoundPlayback = {
+    finished: new Promise<void>((resolve) => {
+      finish = resolve;
+    }),
+    stop() {
+      if (controller.signal.aborted) return;
+      controller.abort();
+      clearTimeout(startupTimeout);
+      if (source) {
+        source.onended = null;
+        if (started) source.stop();
+        source.disconnect();
+      }
+      void context.close().catch(() => {});
+      finish();
+    },
+  };
+  const startupTimeout = setTimeout(playback.stop, 1_000);
+  void (async () => {
+    const [, response] = await Promise.all([
+      context.resume().then(() => clearTimeout(startupTimeout)),
+      fetch(`/sounds/${name}.mp3`, { signal: controller.signal }),
+    ]);
+    if (!response.ok) throw new Error("Could not load notification sound");
+    const buffer = await context.decodeAudioData(await response.arrayBuffer());
+    if (controller.signal.aborted) return;
+    source = context.createBufferSource();
+    source.buffer = buffer;
+    source.onended = playback.stop;
+    source.connect(context.destination);
+    source.start();
+    started = true;
+  })().catch(playback.stop);
+  return playback;
 }

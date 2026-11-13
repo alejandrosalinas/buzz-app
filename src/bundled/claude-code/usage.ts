@@ -11,7 +11,7 @@ import { limited, withRevision } from "../../features/agents/session-usage";
 import type { Host } from "../../features/host/service";
 import type { Spawn } from "./claude";
 import { readProject } from "./history";
-import { workspaceProject } from "./transcript";
+import { type SessionsPlace, workspaceProject } from "./transcript";
 
 type Json = Record<string, unknown>;
 /** Files read at once, by every agent's read together: the app refuses more
@@ -245,7 +245,7 @@ const reader = limited(READERS);
  * since `since`. `saved` are the session ids this app saved for it. */
 export async function readUsage(
   host: UsageHost,
-  workspace: string,
+  workspace: SessionsPlace,
   agent: string,
   saved: readonly string[],
   since: number,

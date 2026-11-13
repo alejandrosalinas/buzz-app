@@ -37,6 +37,8 @@ const known = new WeakSet<Account>();
 // here. A read that found no record leaves an account out.
 const recorded = new WeakSet<Account>();
 const saving = new WeakMap<Account, number>();
+// Accounts with an agent's Bestie change in progress.
+const changing = new WeakSet<Account>();
 const listeners = new Set<() => void>();
 function notifySaved() {
   for (const listener of listeners) listener();
@@ -169,6 +171,89 @@ export async function clearDefaultAgent(session: RelaySession, scope: string) {
     );
   }
   if (revision(account) === attempt) remember(account, undefined);
+}
+
+/** The viewer's Bestie as their agents read and change it: what this device
+ * and the account saved (null for none), and whether the device's choice is an
+ * agent the viewer can tag here, by the choices Make my bestie offers. */
+export function defaultAgentControl(session: RelaySession, scope: string) {
+  const tagged = async (pubkey: string | undefined) => {
+    if (!pubkey) return false;
+    session.agentChoices.ensure(false, true);
+    await session.agentChoices.refresh();
+    const choices = session.agentChoices.snapshot();
+    const here = choices.selectable.some((agent) => agent.pubkey === pubkey);
+    // An inventory that couldn't be read can't say an agent isn't here.
+    if (!here && choices.error) throw new Error(choices.error);
+    return here;
+  };
+  const account = session.mainAgent;
+  const pending = () => !!account && !!saving.get(account);
+  // A change holds a choice it hasn't confirmed until its save and rollback
+  // finish, which a change started meanwhile could restore as if it had been.
+  const exclusive = async <T>(change: () => Promise<T>) => {
+    if (pending() || (account && changing.has(account)))
+      throw new Error(
+        "Another change to your owner's Bestie is still saving. Try again.",
+      );
+    if (!account) return change();
+    changing.add(account);
+    try {
+      return await change();
+    } finally {
+      changing.delete(account);
+    }
+  };
+  return Object.freeze({
+    read: async () => {
+      const device = chosenAgent(scope);
+      const choice = (await account?.read()) ?? null;
+      return {
+        device: device ?? null,
+        account: choice,
+        here: await tagged(device),
+      };
+    },
+    /** `check` runs after the inventory read, before anything is saved. */
+    async set(pubkey: string, check?: () => void) {
+      const here = await tagged(pubkey);
+      check?.();
+      if (!here)
+        throw new Error(
+          "Only an agent your owner owns and can tag in this community can be their Bestie.",
+        );
+      return exclusive(async () => {
+        const previous = chosenAgent(scope);
+        try {
+          await chooseDefaultAgent(session, scope, pubkey);
+        } catch (cause) {
+          // Keep the previous choice unless a newer one replaced this attempt
+          // or is still saving.
+          if (chosenAgent(scope) === pubkey && !pending())
+            cache(scope, previous ?? null);
+          throw cause;
+        }
+        return {
+          device: pubkey,
+          account: account ? pubkey : null,
+          here: true,
+        };
+      });
+    },
+    async clear() {
+      return exclusive(async () => {
+        await clearDefaultAgent(session, scope);
+        return { device: null, account: null, here: false };
+      });
+    },
+  });
+}
+export type DefaultAgentControl = ReturnType<typeof defaultAgentControl>;
+
+/** Whether one of the viewer's agents is changing their Bestie, which a change
+ * started now could undo. */
+export function agentChangingBestie(session: RelaySession) {
+  return !!session.mainAgent && changing.has(session.mainAgent);
 }
 
 /** Clears a deleted agent from the account only when it is still the saved

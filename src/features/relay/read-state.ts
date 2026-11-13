@@ -57,10 +57,13 @@ export type ReadMutationResult = Readonly<{
   operationId: string;
   durability: "saved";
   sync: "pending" | "local-only";
-  /** Local-only restore of saved unread journal markers only; forced-message
-   * overlays are not restored. Any later journal revision, even unrelated, or
-   * lost operation validity makes the handle stale. */
+  /** Conditional device-local inverse; coverage depends on `undoScope`.
+   * Untagged handles may restore saved reminders only. Later intent or lost
+   * operation validity can expire the handle. */
   undo?: () => Promise<ReadMutationResult>;
+  /** With `undo`, identifies exact captured-action receipt, reminder and
+   * visit-overlay restoration. Absent on legacy saved-marker-only handles. */
+  undoScope?: "captured-action";
 }>;
 export type ReadPublisherLock = (
   signal: AbortSignal,
@@ -258,6 +261,13 @@ export function createReadState({
     keys: ReadonlySet<string>;
     valid: () => boolean;
   };
+  type CapturedReadUndo = {
+    token: string;
+    before: Pick<
+      ReadJournal,
+      "state" | "recent" | "reserve" | "homes" | "floor"
+    >;
+  };
   type LocalUnreadAttempt = {
     key: string;
     saved?: { revision: number; previous: number };
@@ -373,7 +383,18 @@ export function createReadState({
     if (closed) throw new Error("Read-state session closed");
     const saved = await storage.update((current) => {
       if (closed) throw new Error("Read-state session closed");
-      return change(current ?? newReadJournal());
+      const before = current ?? newReadJournal();
+      const next = change(before);
+      // Ingest and publication bookkeeping need not advance revision. Even an
+      // equal-valued later save must prevent rolling back a newer receipt.
+      if (
+        before.capturedReadUndo &&
+        next.capturedReadUndo === before.capturedReadUndo
+      ) {
+        const { capturedReadUndo, ...retired } = next;
+        return retired;
+      }
+      return next;
     });
     if (closed) return saved;
     journal = saved;
@@ -424,16 +445,17 @@ export function createReadState({
       });
     }
   });
-  function undoLocalUnread(
+  function undoLocalRead(
     actionSlot: string,
     actionRevision: number,
     cleared: readonly string[],
     valid: Validity,
     options?: LocalUnreadUndo,
+    captured?: CapturedReadUndo,
   ): (() => Promise<ReadMutationResult>) | undefined {
     if (
       !options ||
-      !cleared.length ||
+      (!cleared.length && !captured) ||
       !cleared.every((key) => options.keys.has(key))
     )
       return;
@@ -453,6 +475,8 @@ export function createReadState({
               !options.valid() ||
               current.slot !== actionSlot ||
               current.revision !== actionRevision ||
+              (captured !== undefined &&
+                current.capturedReadUndo !== captured.token) ||
               cleared.some((key) => current.localUnread[key] !== undefined)
             )
               throw new ObservationExpired();
@@ -461,6 +485,9 @@ export function createReadState({
             for (const key of cleared) localUnread[key] = revision;
             return {
               ...current,
+              // Only device-local receipt/retention effects are reverted. The
+              // action never advances synced prefixes; own/publication state stays.
+              ...(captured?.before ?? {}),
               revision,
               localUnread,
               acceptedRevision:
@@ -1139,7 +1166,7 @@ export function createReadState({
           error: undefined,
         });
         if (timestamp !== undefined) schedule();
-        const undo = undoLocalUnread(
+        const undo = undoLocalRead(
           saved.slot,
           saved.revision,
           clearedLocalUnread,
@@ -1549,6 +1576,11 @@ export function createReadState({
             ? await capturedValidity(valid, fence)
             : valid;
           const clearedLocalUnread = new Set<string>();
+          const token =
+            options.preserveCapturedSet && options.undo
+              ? newSlotId()
+              : undefined;
+          let captured: CapturedReadUndo | undefined;
           const saved = await save((current) => {
             if (!currentValid(current)) throw new ObservationExpired();
             if (
@@ -1557,6 +1589,25 @@ export function createReadState({
               )
             )
               throw new Error("Invalid read frontier");
+            if (token) {
+              if (
+                messages.some(({ key }) => !key.startsWith("msg:")) ||
+                clearForce
+              )
+                throw new Error(
+                  "Captured Undo requires exact message receipts",
+                );
+              captured = {
+                token,
+                before: {
+                  state: current.state,
+                  recent: current.recent ?? {},
+                  reserve: current.reserve ?? {},
+                  homes: current.homes ?? {},
+                  floor: current.floor ?? 0,
+                },
+              };
+            }
             const currentState = localState(current);
             if (
               capability !== "frontier-sync" &&
@@ -1646,37 +1697,39 @@ export function createReadState({
               floor: kept.floor,
               own: advanceOwn(current.own, frontiers),
               localUnread,
+              ...(token && { capturedReadUndo: token }),
               ...(quiet && { quiet: (current.quiet ?? 0) + 1 }),
-              acceptedRevision: Object.keys(frontiers).length
-                ? current.acceptedRevision
-                : current.acceptedRevision === current.revision
-                  ? revision
-                  : current.acceptedRevision,
+              acceptedRevision:
+                Object.keys(frontiers).length && !token
+                  ? current.acceptedRevision
+                  : current.acceptedRevision === current.revision
+                    ? revision
+                    : current.acceptedRevision,
             };
           });
+          const publishable =
+            capability === "frontier-sync" && messages.length > 0 && !token;
           health({
             status:
-              capability === "frontier-sync" && messages.length
+              saved.pending || saved.revision > saved.acceptedRevision
                 ? "pending"
                 : "local",
             error: undefined,
           });
-          if (capability === "frontier-sync" && messages.length) schedule();
+          if (publishable) schedule();
           const clearedKeys = [...clearedLocalUnread];
-          const undo = undoLocalUnread(
+          const undo = undoLocalRead(
             saved.slot,
             saved.revision,
             clearedKeys,
             currentValid,
             options.undo,
+            captured,
           );
           return {
             operationId: `${saved.slot}:${saved.revision}`,
             durability: "saved" as const,
-            sync:
-              capability === "frontier-sync" && messages.length
-                ? ("pending" as const)
-                : ("local-only" as const),
+            sync: publishable ? ("pending" as const) : ("local-only" as const),
             ...(undo && { undo }),
           };
         } catch (error) {

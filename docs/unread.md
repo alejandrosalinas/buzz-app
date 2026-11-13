@@ -157,13 +157,33 @@ viewport):
   would otherwise read the loaded rows and erase the evidence it waits for. Once
   `sampled` is set the divider is placed and reading starts at once; if
   `sampling` clears first, the visit settles with no divider and reading resumes
-  without waiting for a retry. A batch that filled its limit can still stop
+  without waiting for a retry. The timeline holds its reading in the same way
+  while the rows on screen wait for the head read that verifies them (a revisit
+  refresh, rows restored from disk, a queued catch-up), since dwell is shorter
+  than a slow read and the divider cannot settle before that page. The hold
+  follows the read itself (the window's `refreshing` flag, or a pending head
+  job in the session's live view), not the page's freshness: when the read
+  fails or is cancelled, reading resumes while the visit stays unsettled, and
+  unverified rows that nothing is reading are never held. A batch that filled its limit can still stop
   short of the true oldest unread message. `prefixRead` rules that out for
   ordinary rows, but not for mentions, broadcasts, broadcast replies or messages
   marked unread, which catch-up's `activity:` mark never reads: a short sample
   can hide an unread one of those above the window, and the divider then lands
   below it. Rows above read only by their own `msg:` or `thread:` marks, as
   dwell short of the bottom leaves them, place no divider.
+  A visit that settled with no divider can place one later, once: rows that
+  arrive while the window is blurred or hidden stay unread, so when attention
+  returns the divider goes above the first unread row that is newer than every
+  row the reader had when attention left (the entry rows while entry was still
+  settling or the visit began away, else the loaded rows; an older page or a
+  backdated delivery is history, not an arrival). That row must be
+  `oldestUnreadId`, with `sampled` when entry history was incomplete, and sit
+  below a row a channel-wide read reaches. Once entry settles, the timeline
+  holds its reading from blur until it decides, waiting only while the head
+  read the window is owed is in flight or queued. Unread history, unresolved row attention (`unknown` or
+  `pending`), a read revision changed since attention left, or evidence that is
+  not observed and complete settles it with no divider and reading resumes at
+  once. A placed divider never moves.
 - Both keys use verified event timestamps, never wall time. Neither enters generic
   channel/thread inheritance or remote override baselines. Channel catch-up ends
   a local manual unread on the channel itself; message and thread manual-unread
@@ -480,8 +500,11 @@ per-message reads in that set: it does not expand to replies or descendants,
 advance a channel/thread prefix, or include later arrivals. After the saved
 action succeeds, only those IDs' visit-local forced-unread overlays are cleared;
 the shared message-force hint and independent channel, root, and thread marks
-remain. If local read-state retention would need to raise its device-wide floor
-for these marks, or cannot retain a selected message's receipt under the durable
+remain. The input is deduplicated, and if any ID is no longer verified,
+accessible, or retained as a readable message, the whole operation rejects
+before saving rather than returning partial results. If local read-state
+retention would need to raise its device-wide floor for these marks, or cannot
+retain a selected message's receipt under the durable
 coverage rules, the save rejects unchanged with `CapturedReadWouldWidenError` or
 `CapturedReadNotRetainedError`. The selected local unread overlays remain in
 place on either rejection. A full journal and reserve can make an exact read
@@ -492,6 +515,41 @@ offers a broader read as an alternative, it must be a separate explicit user
 choice. A newer shared message-force hint can also fence a save, so retry the
 same explicit set only after preserving that newer intent. Older hosts may omit
 this capability, so callers must check it before invoking it.
+
+A successful captured read returns one `ReadMutationResult` for the entire
+set. Offer full-action Undo only when both `result.undoScope === "captured-action"`
+and `result.undo` are present. Older hosts may return no handle or an untagged
+saved-marker-only handle: the presence of `undo` alone does not promise receipt
+or visit-overlay restoration. No host-version check is needed. The scope tag is
+omitted whenever the full-action handle is withheld and from the inverse's saved
+result; it does not promise that a returned handle will remain valid.
+
+The tagged `undo` reverses that action's exact device-local receipt and
+retention changes, restores saved `msg:<id>` reminders it cleared, and restores
+only the visit-local forced overlays it actually removed. Already-read and own
+messages stay read unless the action cleared their existing reminder or forced
+overlay. It never rewinds a synced channel/thread prefix, creates a new manual
+reminder for ordinary unread, or changes the shared `message-force:` hint.
+Ordinary unread restored by Undo remains eligible for normal automatic reading.
+These exact receipts are local-only and do not schedule publication or an empty
+flush. Earlier pending publication still proceeds and can expire the handle.
+
+This inverse is deliberately conservative: **any later durable journal write**,
+including an unrelated read, equal-valued peer ingest, publication bookkeeping,
+or another window's startup, expires it. An opaque journal token fences writes
+that do not advance the revision. The bounded before-action receipt snapshot
+lives only in the returned handle; there is no persistent undo history or relay
+protocol change. A failed transaction leaves both receipts and visit overlays
+unchanged and can be retried; duplicate or stale attempts reject. Invalidation
+of the selected messages, access, session, or visit evidence also expires Undo.
+A queued force-unread intent for any captured ID suppresses the handle if it is
+pending when the result is returned, and rejects an existing handle if it starts
+before the inverse transaction. Overlays are restored only after that transaction
+succeeds and while the original visit still exists. If a visit ends while the
+transaction commits, the durable inverse can succeed without resurrecting the
+ended visit's overlays. Changes during commit return suppress only the affected
+IDs' overlay restoration, not overlays in unaffected captured visits. Consumers
+must tolerate omitted or expired handles.
 
 `prepareChannelRead(channelId, rootId?)` captures the channel's existing
 prefix/time cut and owned local-mark keys once. Invoke its returned function to
@@ -535,13 +593,15 @@ or session disposal invalidate captured intent; leaving the channel invalidates
 only Undo, not the saved read. The thread operation additionally requires its
 captured message evidence to remain valid.
 
-An individual saved explicit-read result may expose an optional `undo` only when
-that action cleared saved local-unread journal markers and cleared no
-forced-message marker or covered overlay. The handle is also withheld if a force
-mark for covered messages is queued while the read saves. Undo restores only the
-local-unread journal markers that exact saved action removed, in a new storage
-transaction; it does not restore overlays or rewind or publish a read frontier.
-The handle is conditional on the exact saved journal revision and the
+Prepared channel/thread read results may expose an optional `undo` only when
+that action cleared saved local-unread journal markers without clearing a
+covered forced overlay. The handle is also withheld if a force mark for covered
+messages is queued while the read saves. These prefix-read handles restore
+saved reminders only, unlike the exact captured-message inverse above. A direct
+`markMessageRead()` call does not provide an inverse. Undo runs in a new storage
+transaction and never rewinds or publishes a synced frontier. These conditional
+results do not make every read operation undoable.
+A prefix-read handle is conditional on the exact saved journal revision and the
 operation's access/lifecycle evidence. Its revision guard covers the whole
 journal: any later save that advances the revision, including an unrelated
 marker or quiet read-state save, makes the handle stale; bookkeeping saves that
