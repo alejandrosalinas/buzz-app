@@ -24,3 +24,18 @@ export function writeClipboardSecret(text: string): Promise<void> {
       })
     : navigator.clipboard.writeText(text);
 }
+
+/** Rich copies retain a plain-text representation for other applications. */
+export function writeClipboardRichText(
+  text: string,
+  html: string,
+): Promise<void> {
+  return isTauri()
+    ? invoke("clipboard_write_text", { text, html })
+    : navigator.clipboard.write([
+        new ClipboardItem({
+          "text/plain": new Blob([text], { type: "text/plain" }),
+          "text/html": new Blob([html], { type: "text/html" }),
+        }),
+      ]);
+}

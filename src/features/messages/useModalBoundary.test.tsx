@@ -5,6 +5,7 @@ import {
   fireEvent,
   render,
   screen,
+  waitFor,
 } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
@@ -14,9 +15,15 @@ import {
   useRef,
   useState,
   type RefObject,
+  type ReactNode,
 } from "react";
 import { createPortal } from "react-dom";
 import { useModalBoundary } from "./useModalBoundary";
+import {
+  MenuRoot,
+  MenuPopup,
+  MenuItem,
+} from "../../shared/design-system/ui/Menu";
 
 afterEach(() => {
   cleanup();
@@ -25,9 +32,11 @@ afterEach(() => {
 function Viewer({
   close,
   restoreFocus,
+  children,
 }: {
   close(): void;
   restoreFocus?: RefObject<HTMLElement | null> | undefined;
+  children?: ReactNode;
 }) {
   const backdrop = useRef<HTMLDivElement>(null);
   const button = useRef<HTMLButtonElement>(null);
@@ -37,10 +46,32 @@ function Viewer({
       <button ref={button} type="button">
         Close viewer
       </button>
+      {children}
     </div>,
     document.body,
   );
 }
+it("leaves Escape to an open menu before focus has moved into it", async () => {
+  const close = vi.fn();
+  const view = render(<Viewer close={close} />);
+  const button = screen.getByRole("button", { name: "Close viewer" });
+  view.rerender(
+    <Viewer close={close}>
+      <MenuRoot defaultOpen>
+        <MenuPopup>
+          <MenuItem>Copy image</MenuItem>
+        </MenuPopup>
+      </MenuRoot>
+    </Viewer>,
+  );
+  await screen.findByRole("menu");
+  button.focus();
+  fireEvent.keyDown(button, { key: "Escape" });
+  expect(close).not.toHaveBeenCalled();
+  await waitFor(() => expect(screen.queryByRole("menu")).toBeNull());
+  fireEvent.keyDown(button, { key: "Escape" });
+  expect(close).toHaveBeenCalledOnce();
+});
 describe.each([false, true])("explicit return: %s", (explicit) => {
   describe.each(["cleanup", "queued frame"] as const)(
     "%s restoration guard",

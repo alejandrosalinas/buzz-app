@@ -1,3 +1,4 @@
+import { isAdminAddition } from "../channel-members/administration-protocol.ts";
 import type { ArtifactIncrementalReader } from "./artifact-incremental-reader.ts";
 import {
   networkContext,
@@ -41,6 +42,7 @@ import {
   type SidebarAssignmentMutator,
   type SidebarSectionOrderMutator,
   type SidebarSectionRenameMutator,
+  type SidebarSectionEdit,
   type SidebarSectionRemovalMutator,
   type SidebarStarMutator,
   type SidebarSortMutator,
@@ -76,6 +78,7 @@ import { PublishNotSent, PublishRejected } from "./outbox";
 import { httpReadError, ReadError } from "./errors";
 import { ARTIFACT_KIND } from "../agents/agent-config-artifacts";
 import type { EventTemplate, VerifiedEvent } from "nostr-tools";
+import { directMessageRefusal } from "./direct-message-policy";
 import {
   createEventVerifier,
   eventDto,
@@ -97,6 +100,19 @@ export interface RelayWriter {
     signal: AbortSignal,
   ): Promise<string> | Promise<void>;
 }
+/** Whether a DM command may share an existing DM's history. With
+ * `channelId`, it adds to that DM: they join it with its history only when
+ * `includeHistory`, and otherwise start a new DM of its people plus them,
+ * its agents left behind. `"ask"` lets
+ * the relay decide: agents join, and people joining a DM of two or more
+ * people are refused with `NEEDS_HISTORY_CHOICE` so the adder chooses.
+ * Without `channelId`, it opens a DM: with `includeHistory`, the DM of these
+ * people, adding any named agents to it; otherwise the DM of exactly these
+ * members. */
+export type DirectMessageHistory =
+  | { readonly channelId?: string; readonly includeHistory: boolean }
+  | { readonly channelId: string; readonly includeHistory: "ask" };
+
 export interface ReadTransport {
   /** Hear the relay refuse this account for the whole community, on any
    * request after connecting: its sign-in ended, or it has no access. One
@@ -118,10 +134,13 @@ export interface ReadTransport {
     repository: string,
   ) => Promise<{ repository: string; token: string } | null>;
   readonly uploadAttachment?: AttachmentUpload;
-  /** Host-owned idempotent DM opening. The session verifies membership before use. */
+  /** Host-owned idempotent DM opening, or with `history.channelId`, adding
+   * `pubkeys` to that DM. Returns the DM the relay settled on; the session
+   * verifies membership before use. */
   readonly openDirectMessage?: (
     pubkeys: readonly string[],
     signal: AbortSignal,
+    history?: DirectMessageHistory,
   ) => Promise<string>;
   readonly workflows?: WorkflowHost;
   /** Narrow lifecycle signer/publisher; never supplied to the message outbox. */
@@ -586,6 +605,7 @@ export async function connectBrokerTransport(
       "invalid-response",
       "Relay broker session is malformed",
     );
+  const viewer = session.viewer;
   let traffic: LiveSubscription | undefined;
   const presence = presenceObservation();
   const relayHttpUrl = relayHttpBase(session.relayHttpUrl, session.relayUrl);
@@ -595,6 +615,8 @@ export async function connectBrokerTransport(
     "X-Buzz-Live-ID": traffic?.identity?.() ?? "",
   });
   const publish = async (event: RelayEvent, signal: AbortSignal) => {
+    if (session.memberAdministration === true && isAdminAddition(event, viewer))
+      return routeWriter("member-administration").publish(event, signal);
     const result = await fetch(`${endpoint}/publish`, {
       method: "POST",
       credentials: "same-origin",
@@ -606,6 +628,11 @@ export async function connectBrokerTransport(
     return acceptPublish(result, event.id);
   };
   const sign = async (template: EventTemplate, signal: AbortSignal) => {
+    if (
+      session.memberAdministration === true &&
+      isAdminAddition(template, viewer)
+    )
+      return routeWriter("member-administration").sign(template, signal);
     const result = await fetch(`${endpoint}/sign`, {
       method: "POST",
       credentials: "same-origin",
@@ -619,7 +646,7 @@ export async function connectBrokerTransport(
     return event;
   };
   /** Dedicated shape-limited host sign/publish routes, separate from the outbox writer. */
-  const routeWriter = (route: string): RelayWriter => ({
+  const routeWriter = (route: string) => ({
     async sign(template: EventTemplate, signal: AbortSignal) {
       const response = await fetch(`${endpoint}/${route}-sign`, {
         method: "POST",
@@ -713,16 +740,33 @@ export async function connectBrokerTransport(
           async openDirectMessage(
             pubkeys: readonly string[],
             signal: AbortSignal,
+            history?: DirectMessageHistory,
           ) {
             const result = await fetch(`${endpoint}/direct-message`, {
               method: "POST",
               credentials: "same-origin",
               headers: { "Content-Type": "application/json" },
-              body: JSON.stringify({ pubkeys }),
+              body: JSON.stringify(
+                history
+                  ? {
+                      pubkeys,
+                      channel: history.channelId,
+                      includeHistory: history.includeHistory,
+                    }
+                  : { pubkeys },
+              ),
               signal: AbortSignal.any([signal, AbortSignal.timeout(10000)]),
             });
-            if (!result.ok)
-              throw new Error("Could not open the direct message. Try again.");
+            if (!result.ok) {
+              // The broker shows the relay's refusal as `directMessageRefusal`
+              // words it.
+              const body = await result.json().catch(() => undefined);
+              throw new Error(
+                typeof body?.error === "string"
+                  ? body.error
+                  : directMessageRefusal(!!history?.channelId, undefined),
+              );
+            }
             const value = await result.json();
             if (
               typeof value?.channelId !== "string" ||
@@ -1163,7 +1207,7 @@ export async function connectBrokerTransport(
     ...(session.sidebarSectionRename
       ? {
           async renameSidebarSection(
-            intent: { sectionId: string; name: string },
+            intent: SidebarSectionEdit & Readonly<{ sectionId: string }>,
             signal: AbortSignal,
           ) {
             const response = await fetch(`${endpoint}/sidebar-section-rename`, {

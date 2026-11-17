@@ -211,6 +211,8 @@ function ReadyNewMenu({
       />
       {creatingSection && (
         <CreateSidebarSection
+          session={session}
+          scope={session.scope}
           writable={preferences.sectionCreationWritable}
           refreshing={preferences.status === "loading"}
           retry={preferences.reload}

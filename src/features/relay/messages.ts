@@ -469,6 +469,7 @@ export function createMessages(
       options?: {
         rootId?: string;
         parentId?: string;
+        mediaTargetUrl?: string;
         mentions?: readonly string[];
         references?: readonly string[];
         attachments?: readonly UploadedAttachment[];
@@ -484,6 +485,11 @@ export function createMessages(
           (parent && !/^[0-9a-f]{64}$/.test(parent))
         )
           throw new Error("A valid thread is required");
+        const mediaTarget = options.mediaTargetUrl
+          ? safeMessageUrl(options.mediaTargetUrl)
+          : undefined;
+        if (options.mediaTargetUrl && !mediaTarget)
+          throw new Error("A valid media target is required");
         const caption = attachmentMessage(
           note,
           options.attachments ?? [],
@@ -509,6 +515,7 @@ export function createMessages(
           ),
           ...referenceTags(options.references ?? []),
           ...pickTags(channelId, options.mentions ?? [], options.picks ?? {}),
+          ...(mediaTarget ? [[MEDIA_TARGET_TAG, mediaTarget]] : []),
           ...emojiTags(note),
           ...caption.tags,
         ];

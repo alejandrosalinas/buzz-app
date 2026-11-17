@@ -1,5 +1,7 @@
 // @vitest-environment jsdom
 import { act, cleanup, renderHook } from "@testing-library/react";
+import { useLayoutEffect } from "react";
+import { useForwardSource } from "../messages/use-forward-source";
 import { afterEach, expect, it, vi } from "vitest";
 import { useChannelReference } from "../conversation/channel-reference";
 import type { RelayEvent } from "./events";
@@ -429,3 +431,93 @@ it("keeps a cancelled lookup from the old cache out of the new one's backoff", a
   await h.lookup([SECRET], []);
   expect(h.channels.describe?.(SECRET)).toEqual({ state: "withheld" });
 });
+
+it.each([false, true])(
+  "keeps a cold forward loading until an answered denial (initial failure=%s)",
+  async (failFirst) => {
+    const h = await setup();
+    h.emit([roster(relay, MINE, [], 1_700_000_001)]);
+    await vi.waitFor(() => expect(h.channels.get?.(MINE)).toBeUndefined());
+    expect(h.channels.describe?.(MINE)).not.toHaveProperty("looking");
+    const committed: boolean[] = [];
+    const link = renderHook(() => {
+      const source = useForwardSource(h.owner.session, MINE, "a".repeat(64));
+      useLayoutEffect(() => {
+        committed.push(Boolean(source.unavailable));
+      });
+      return source;
+    });
+    // Capture the first committed render before the reference effect demands a lookup.
+    expect(committed[0]).toBe(false);
+    await flush();
+    expect(link.result.current.reference).toMatchObject({
+      readable: false,
+      looking: true,
+    });
+    expect(committed).not.toContain(true);
+    if (failFirst) {
+      await h.lookup([MINE], new Error("503"));
+      expect(link.result.current.reference).not.toHaveProperty("answered");
+      expect(link.result.current.unavailable).toBe(false);
+      h.tick(30_000);
+      h.channels.refer?.(MINE);
+      await flush();
+      expect(link.result.current.reference).toMatchObject({ looking: true });
+      expect(link.result.current.unavailable).toBe(false);
+    }
+    await h.lookup([MINE], []);
+    expect(link.result.current.reference).toMatchObject({ answered: true });
+    expect(link.result.current.unavailable).toBe(true);
+    expect(link.result.current.row).toBeUndefined();
+  },
+);
+
+it.each([false, true])(
+  "retains a settled forward denial during a mixed background recheck (failure=%s)",
+  async (failRecheck) => {
+    const h = await setup();
+    h.emit([roster(relay, MINE, [], 1_700_000_001)]);
+    await vi.waitFor(() => expect(h.channels.get?.(MINE)).toBeUndefined());
+    const committed: boolean[] = [];
+    const settled = renderHook(() => {
+      const source = useForwardSource(h.owner.session, MINE, "a".repeat(64));
+      useLayoutEffect(() => {
+        committed.push(Boolean(source.unavailable));
+      });
+      return source;
+    });
+    await h.lookup([MINE], []);
+    expect(settled.result.current.unavailable).toBe(true);
+    committed.length = 0;
+    // Expire the retained answer, then queue its recheck and a fresh mounted
+    // reference before the store's coalescing microtask runs.
+    h.tick(5 * 60_000);
+    h.channels.refer?.(MINE);
+    const fresh = renderHook(() =>
+      useForwardSource(h.owner.session, OPEN, "b".repeat(64)),
+    );
+    const request = await h.next(39000);
+    expect(request.filters.map((filter) => filter["#d"])).toEqual([
+      [MINE, OPEN],
+      [MINE, OPEN],
+    ]);
+    await flush();
+    expect(settled.result.current.reference).toMatchObject({
+      readable: false,
+      answered: true,
+      looking: true,
+    });
+    expect(settled.result.current.unavailable).toBe(true);
+    expect(fresh.result.current.reference).toEqual({ state: "looking" });
+    expect(fresh.result.current.unavailable).toBe(false);
+    await act(async () => {
+      if (failRecheck) request.fail(new Error("503"));
+      else request.respond([]);
+      await flush();
+    });
+    expect(settled.result.current.unavailable).toBe(true);
+    expect(settled.result.current.reference).not.toHaveProperty("looking");
+    expect(committed).not.toContain(false);
+    expect(fresh.result.current.unavailable).toBe(!failRecheck);
+  },
+);

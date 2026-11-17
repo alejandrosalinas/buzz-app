@@ -154,7 +154,7 @@ export function ForwardedMessage({
           </button>
         </span>
       )}
-      {known && source.unavailable && (
+      {reference.state === "found" && source.unavailable && (
         <span className="text-body-sm text-subtle">Original unavailable</span>
       )}
     </section>

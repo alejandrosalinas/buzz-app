@@ -2,6 +2,7 @@ import { useConversationPresentation } from "../conversation/ConversationPresent
 import { prepareReviewEntrance } from "./use-review-entrance";
 import { useMediaCorners } from "./use-media-corners";
 import { MediaViewer } from "./MediaAttachment";
+import { MediaContextMenu } from "./MediaContextMenu";
 import {
   useCallback,
   useEffect,
@@ -112,6 +113,10 @@ export function AttachmentImage({
             : `${dimensions.width} / ${dimensions.height}`,
         }
       : undefined;
+  const viewImage = () => {
+    if (onOpenReview) onOpenReview(attachment, 0);
+    else if (!onOpenLink?.(attachment.url)) setViewerOpen(true);
+  };
   if (!source && !overlayCount)
     return cached ? (
       <span
@@ -132,53 +137,60 @@ export function AttachmentImage({
     );
   return (
     <>
-      <a
-        ref={corners}
-        className={styles.attachmentImage}
-        style={style}
-        href={source ?? attachment.url}
-        target="_blank"
-        rel="noreferrer"
-        aria-label={label}
-        data-media-preview=""
-        data-image-ready={decodedDimensions ? true : undefined}
-        onClick={(event) => {
-          // Every activation stays in-app, modifiers included: the desktop
-          // opener treats an unprevented Ctrl/Shift or `_blank` click as browser
-          // intent, and no browser tab holds the app's credentials.
-          event.preventDefault();
-          prepareReviewEntrance(event);
-          if (onOpenReview) onOpenReview(attachment, 0);
-          else if (!onOpenLink?.(attachment.url)) setViewerOpen(true);
-        }}
+      <MediaContextMenu
+        kind="image"
+        url={attachment.url}
+        source={source}
+        name={attachment.name}
+        onView={viewImage}
       >
-        {/* Retargeting retires both the DOM pixels and all pending callbacks before
-            the new source can paint. Session switches also remount the workspace. */}
-        <span className={styles.attachmentImagePixels}>
-          {source && (
-            <ImagePixels
-              key={JSON.stringify([source, attachment.blurhash])}
-              session={session}
-              source={source}
-              thumbnail={thumbnail}
-              blurhash={attachment.blurhash}
-              onDecoded={onDecoded}
-            />
-          )}
-          {overlayCount > 0 && (
-            <span className={styles.imageOverflow} aria-hidden="true">
-              +{overlayCount}
-            </span>
-          )}
-        </span>
-        <svg
-          className={styles.imageOutline}
-          data-image-outline=""
-          aria-hidden="true"
+        <a
+          ref={corners}
+          className={styles.attachmentImage}
+          style={style}
+          href={source ?? attachment.url}
+          target="_blank"
+          rel="noreferrer"
+          aria-label={label}
+          data-media-preview=""
+          data-image-ready={decodedDimensions ? true : undefined}
+          onClick={(event) => {
+            // Every activation stays in-app, modifiers included: the desktop
+            // opener treats an unprevented Ctrl/Shift or `_blank` click as browser
+            // intent, and no browser tab holds the app's credentials.
+            event.preventDefault();
+            prepareReviewEntrance(event);
+            viewImage();
+          }}
         >
-          <path />
-        </svg>
-      </a>
+          {/* Retargeting retires both the DOM pixels and all pending callbacks before
+            the new source can paint. Session switches also remount the workspace. */}
+          <span className={styles.attachmentImagePixels}>
+            {source && (
+              <ImagePixels
+                key={JSON.stringify([source, attachment.blurhash])}
+                session={session}
+                source={source}
+                thumbnail={thumbnail}
+                blurhash={attachment.blurhash}
+                onDecoded={onDecoded}
+              />
+            )}
+            {overlayCount > 0 && (
+              <span className={styles.imageOverflow} aria-hidden="true">
+                +{overlayCount}
+              </span>
+            )}
+          </span>
+          <svg
+            className={styles.imageOutline}
+            data-image-outline=""
+            aria-hidden="true"
+          >
+            <path />
+          </svg>
+        </a>
+      </MediaContextMenu>
       {active &&
         viewerOpen &&
         createPortal(
@@ -186,11 +198,18 @@ export function AttachmentImage({
             title="Image attachment"
             close={() => setViewerOpen(false)}
           >
-            <img
-              className={styles.mediaViewerImage}
-              src={source}
-              alt="Attachment preview"
-            />
+            <MediaContextMenu
+              kind="image"
+              url={attachment.url}
+              source={source}
+              name={attachment.name}
+            >
+              <img
+                className={styles.mediaViewerImage}
+                src={source}
+                alt="Attachment preview"
+              />
+            </MediaContextMenu>
           </MediaViewer>,
           document.body,
         )}

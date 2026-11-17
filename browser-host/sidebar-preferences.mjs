@@ -85,8 +85,10 @@ function validAssignmentIntent(intent) {
         !Array.isArray(intent.createSection) &&
         typeof intent.createSection.id === "string" &&
         typeof intent.createSection.name === "string" &&
+        (intent.createSection.icon === undefined ||
+          typeof intent.createSection.icon === "string") &&
         Object.keys(intent.createSection).every((key) =>
-          ["id", "name", "position"].includes(key),
+          ["id", "name", "icon", "position"].includes(key),
         ))) &&
     validSidebarAssignment(intent) &&
     Object.keys(intent).every((key) =>
@@ -184,9 +186,14 @@ export function assertSidebarSectionRenameIntent(intent) {
     typeof intent !== "object" ||
     Array.isArray(intent) ||
     typeof intent.sectionId !== "string" ||
-    typeof intent.name !== "string" ||
-    !validSidebarSectionRename(intent.sectionId, intent.name) ||
-    Object.keys(intent).some((key) => key !== "sectionId" && key !== "name")
+    (intent.name !== undefined && typeof intent.name !== "string") ||
+    (intent.icon !== undefined &&
+      intent.icon !== null &&
+      typeof intent.icon !== "string") ||
+    !validSidebarSectionRename(intent.sectionId, intent.name, intent.icon) ||
+    Object.keys(intent).some(
+      (key) => key !== "sectionId" && key !== "name" && key !== "icon",
+    )
   )
     throw new Error("Invalid sidebar section rename intent");
 }
@@ -202,7 +209,7 @@ export function prepareSidebarSectionRename(
       current.blob,
       current.createdAt,
       intent.sectionId,
-      intent.name,
+      { name: intent.name, icon: intent.icon },
       now,
     ),
   );

@@ -1,3 +1,5 @@
+import { navigationOwner } from "./shell/presentation";
+import { resolveSidebarContext } from "../features/sidebar/contracts";
 // FOUNDATION: Startup, navigation, contributed pages, and built-in Settings.
 import { AgentAvatarArtworkProvider } from "../features/agents/AgentAvatarArtworkProvider";
 import { Welcome } from "../features/identity/Welcome";
@@ -24,6 +26,7 @@ import { isTauri } from "@tauri-apps/api/core";
 import { PairingPrompt } from "../features/credential-pairing/PairingPrompt";
 import { Dialog } from "../shared/design-system/ui/Dialog";
 import { UpdateNotice } from "../features/updates/UpdateNotice";
+import { UpdateAction } from "../features/updates/UpdateAction";
 import { PluginUpdates } from "./PluginUpdates";
 import { RejectedLinkNotice } from "../features/navigation/RejectedLinkNotice";
 import { ExternalAuthorizationDialog } from "../features/agents/ExternalAuthorizationDialog";
@@ -50,9 +53,6 @@ import { SettingsSidebar } from "./SettingsSidebar";
 import { pendingManaged } from "../plugins/managed";
 import { RecoveryScreen } from "./RecoveryScreen";
 import { PageView } from "../features/pages/PageView";
-import { OwnedContribution } from "../plugins/OwnedContribution";
-import { SidebarFrame } from "../features/channel-navigation/SidebarFrame";
-import { SidebarList } from "../features/channel-navigation/SidebarList";
 import { useAppNavigation, type PendingSettingsDeparture } from "./navigation";
 import { NavigationControls } from "./shell/NavigationControls";
 import { registerNavigationShortcuts } from "./shortcuts";
@@ -445,69 +445,56 @@ function ConnectedAppContent({ services }: { services: AppServices }) {
     () => sidebarTarget(workspace.target),
     [conversationKey],
   );
+  const sidebarContexts = useSyncExternalStore(
+    services.sidebarSections.contextSubscribe,
+    services.sidebarSections.contextSnapshot,
+  );
+  const sidebarOwner = navigationOwner(route.pages, workspace.selected);
+  const sidebarAvailable =
+    !!workspace.page?.sidebar ||
+    !!resolveSidebarContext(sidebarContexts, conversationTarget, sidebarOwner);
   const sidebar = useCallback(
-    (pageNavigation: ReactNode, creationAction: ReactNode) =>
-      ownSidebar ? (
+    (pageNavigation: ReactNode, creationAction: ReactNode) => {
+      const common = {
+        registry: services.sidebarSections,
+        owner: sidebarOwner,
+        scope: connection.scope ?? "disconnected",
+        children: pageNavigation,
+        creationAction,
+      };
+      return ownSidebar ? (
         <Presented store={route.presented} resolve={ownSidebar.resolve}>
-          {(request) =>
-            workspace.page && (
-              <OwnedContribution
-                entry={workspace.page}
-                registry={services.pages}
-                resetIdentity={request}
-                fallback={
-                  <div className="shell-sidebar-default">
-                    <SidebarFrame label={`${workspace.page.title} sidebar`}>
-                      <SidebarList>
-                        <p role="alert">This page’s sidebar is unavailable.</p>
-                        {pageNavigation}
-                      </SidebarList>
-                    </SidebarFrame>
-                  </div>
-                }
-              >
-                {(entry) => {
-                  const Sidebar = entry.sidebar;
-                  return Sidebar ? (
-                    <Sidebar target={ownSidebar.target}>
-                      {pageNavigation}
-                    </Sidebar>
-                  ) : null;
-                }}
-              </OwnedContribution>
-            )
-          }
+          {(request) => (
+            <PrimarySidebar
+              {...common}
+              target={ownSidebar.target}
+              replacement={
+                workspace.page
+                  ? {
+                      page: workspace.page,
+                      registry: services.pages,
+                      resetIdentity: request,
+                    }
+                  : undefined
+              }
+            />
+          )}
         </Presented>
-      ) : workspace.page?.sidebar ? (
-        <div className="shell-sidebar-default">
-          <SidebarFrame label="Page navigation">
-            <SidebarList>{pageNavigation}</SidebarList>
-          </SidebarFrame>
-        </div>
       ) : (
         <PrimarySidebar
-          creationAction={creationAction}
-          federatedIdentity={services.federatedIdentity}
-          memberships={client.memberships}
-          relay={services.relay}
-          navigator={services.navigation}
-          agents={services.agents}
-          chatIcons={services.conversation.chatIcons}
-          chatMenus={services.conversation.chatMenus}
-          sidebarSections={services.sidebarSections}
-          sidebarScope={services.sidebarScope}
-          sidebarRows={services.sidebarRows}
+          {...common}
           target={conversationTarget}
-        >
-          {pageNavigation}
-        </PrimarySidebar>
-      ),
+          pendingReplacement={!!workspace.page?.sidebar}
+        />
+      );
+    },
     [
       ownSidebar,
       workspace.page,
       route.presented,
       conversationTarget,
-      client.memberships,
+      sidebarOwner,
+      connection.scope,
       services,
     ],
   );
@@ -779,6 +766,7 @@ function ConnectedAppContent({ services }: { services: AppServices }) {
       )}
       <ChannelNavigationProvider relay={services.relay}>
         <AppShell
+          sidebarAvailable={sidebarAvailable}
           creationInSidebar={!workspace.page?.sidebar}
           creationAction={(open, onOpenChange, triggerContainer) => (
             <NewMenu
@@ -812,11 +800,14 @@ function ConnectedAppContent({ services }: { services: AppServices }) {
           pluginRecommendations={pluginRecommendations}
           searchServices={services}
           launchers={
-            <PanelLaunchers
-              panels={launcher.available}
-              selected={selectedPanel}
-              launch={launcher.launch}
-            />
+            <>
+              <UpdateAction updates={services.updates} />
+              <PanelLaunchers
+                panels={launcher.available}
+                selected={selectedPanel}
+                launch={launcher.launch}
+              />
+            </>
           }
           backdrop={<ShellBackdrops backdrops={services.backdrops} />}
           companion={pageOwnsCompanion ? undefined : companion}

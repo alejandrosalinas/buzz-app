@@ -71,6 +71,24 @@ vi.mock("virtua", async () => {
   };
 });
 
+/** The navigation Bestie hands its Members dialog. */
+const membersDialog = vi.hoisted(() => ({
+  onOpenConversation: undefined as ((id: string) => boolean) | undefined,
+}));
+vi.mock("../channels/ChannelMembersDialog", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("../channels/ChannelMembersDialog")>();
+  return {
+    ...actual,
+    ChannelMembersDialog(
+      props: Parameters<typeof actual.ChannelMembersDialog>[0],
+    ) {
+      membersDialog.onOpenConversation = props.onOpenConversation;
+      return <actual.ChannelMembersDialog {...props} />;
+    },
+  };
+});
+
 composerDOMFixture();
 const disposals: (() => void)[] = [];
 afterEach(() => {
@@ -423,7 +441,11 @@ it("opens the actual verified DM and sends plain text without a seeded removable
   const user = userEvent.setup();
   const view = f.mount();
   const input = await screen.findByRole("textbox", { name: "Message Pollen" });
-  expect(f.open).toHaveBeenCalledWith([pollen], expect.any(AbortSignal));
+  expect(f.open).toHaveBeenCalledWith(
+    [pollen],
+    expect.any(AbortSignal),
+    undefined,
+  );
   expect(
     f.session.channels.list().channels.find((c) => c.id === pollenDM),
   ).toMatchObject({
@@ -905,7 +927,11 @@ it("replaces a missing saved Bestie from the chooser in place", async () => {
   expect(
     await screen.findByRole("textbox", { name: "Message Fizz" }),
   ).toBeVisible();
-  expect(f.open).toHaveBeenCalledWith([fizz], expect.any(AbortSignal));
+  expect(f.open).toHaveBeenCalledWith(
+    [fizz],
+    expect.any(AbortSignal),
+    undefined,
+  );
 });
 
 it("does not use a known-archived identity's DM during partial discovery", async () => {
@@ -1092,4 +1118,29 @@ it("opens eligible plugin menu items in the Bestie workspace", async () => {
   expect(
     screen.getByRole("textbox", { name: "Message Pollen" }),
   ).toBeInTheDocument();
+});
+
+it("opens the DM an addition lands in, when Bestie's Members starts or finds another", async () => {
+  const f = await fixture();
+  f.choose(pollen);
+  const user = userEvent.setup();
+  f.mount();
+  await screen.findByRole("textbox", { name: "Message Pollen" });
+  await user.click(screen.getByRole("button", { name: "Channel actions" }));
+  await user.click(
+    await screen.findByRole("menuitem", { name: "View channel details" }),
+  );
+  await user.click(await screen.findByRole("button", { name: "View members" }));
+  await waitFor(() => expect(membersDialog.onOpenConversation).toBeDefined());
+  let opened: boolean | undefined;
+  act(() => {
+    opened = membersDialog.onOpenConversation?.(fizzDM);
+  });
+  expect(opened).toBe(true);
+  await waitFor(() =>
+    expect(f.navigator.snapshot().entry.target).toMatchObject({
+      kind: "conversation",
+      channelId: fizzDM,
+    }),
+  );
 });

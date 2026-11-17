@@ -9,6 +9,60 @@ const entered = async (dialog) => {
   await expect(dialog).not.toHaveAttribute("data-starting-style");
   await animationsSettled(dialog, { subtree: true });
 };
+test("a focused result-group filter keeps its whole focus ring inside the workspace", async ({
+  page,
+  app,
+}) => {
+  await page.goto(app.origin);
+  await button(page, "Search Buzz").click();
+  const dialog = page.getByRole("dialog", { name: "Search Buzz" });
+  await entered(dialog);
+  const input = dialog.getByRole("combobox", { name: "Search Buzz" });
+  await input.fill("re");
+  const filters = dialog
+    .getByRole("group", { name: "Result groups" })
+    .getByRole("button");
+  await expect(filters.nth(2)).toBeVisible();
+  const count = await filters.count();
+  // In the field, Tab steps through groups before leaving for the clear
+  // button and then the filters. Each filter is a native Tab stop.
+  const first = filters.first();
+  for (
+    let step = 0;
+    step < count + 2 &&
+    !(await first.evaluate((filter) => filter === document.activeElement));
+    step++
+  )
+    await page.keyboard.press("Tab");
+  await expect(first).toBeFocused();
+  for (let index = 0; index < count; index++) {
+    if (index > 0) await page.keyboard.press("Tab");
+    await expect(filters.nth(index)).toBeFocused();
+    // The workspace clips overflow, so the entire outline and its offset
+    // must fit inside that boundary, including filters on a wrapped row.
+    const overflow = await filters.nth(index).evaluate((filter) => {
+      const style = getComputedStyle(filter);
+      const ring =
+        Number.parseFloat(style.outlineWidth) +
+        Number.parseFloat(style.outlineOffset);
+      const workspace = filter
+        .closest(".search-peek-workspace")
+        .getBoundingClientRect();
+      const box = filter.getBoundingClientRect();
+      return {
+        drawn: style.outlineStyle !== "none" && ring > 0,
+        clipped: [
+          workspace.top - (box.top - ring),
+          box.bottom + ring - workspace.bottom,
+          workspace.left - (box.left - ring),
+          box.right + ring - workspace.right,
+        ].some((past) => past > 0.5),
+      };
+    });
+    expect(overflow).toEqual({ drawn: true, clipped: false });
+  }
+});
+
 test("search arrows traverse the conversation action and recent activity, Enter opens and Escape restores focus", async ({
   page,
   app,

@@ -35,7 +35,7 @@ for (const entry of ["sidebar", "search"]) {
       created_at: 1699999900,
     });
     app.histories.set(`primary/${id}`, [post]);
-    await open(page, app);
+    await open(page, app, { cold: true });
     const channel = page.getByRole("button", { name: /^Lifecycle channel/ });
     await expect(channel.locator("[data-channel-unread]")).toHaveCount(1);
     let release;
@@ -44,13 +44,16 @@ for (const entry of ["sidebar", "search"]) {
     });
     let requested = false;
     await page.route("**/query", async (route) => {
-      if (
-        route
-          .request()
-          .postDataJSON()
-          .some((filter) => filter.top_level && filter["#h"]?.includes(id))
-      ) {
-        requested = true;
+      const filters = route.request().postDataJSON();
+      // Search's preview of the highlighted channel reads it too; hold that
+      // read so the channel still opens on its own pending read.
+      if (filters.some((filter) => filter["#h"]?.includes(id))) {
+        if (
+          filters.some(
+            (filter) => filter.top_level && filter["#h"]?.includes(id),
+          )
+        )
+          requested = true;
         await gate;
       }
       await route.continue();

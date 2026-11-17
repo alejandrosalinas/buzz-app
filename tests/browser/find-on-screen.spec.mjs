@@ -44,6 +44,10 @@ test.afterAll(async () => {
 
 const bar = (page) => page.locator("search");
 const field = (page) => page.getByRole("searchbox", { name: "Find on screen" });
+const openFind = async (page) => {
+  await page.waitForFunction(() => typeof window.openFind === "function");
+  await page.evaluate(() => window.openFind());
+};
 const box = (locator) =>
   locator.evaluate((element) => {
     const { x, y, width, height } = element.getBoundingClientRect();
@@ -78,7 +82,7 @@ test("the bar keeps the window's top-right corner inside a dialog", async ({
   const errors = watchPageErrors(page);
   await page.setViewportSize({ width: 1200, height: 800 });
   await page.goto(url);
-  await page.evaluate(() => window.openFind());
+  await openFind(page);
   await expect(field(page)).toBeFocused();
   const outside = await box(bar(page));
   await field(page).press("Escape");
@@ -86,7 +90,7 @@ test("the bar keeps the window's top-right corner inside a dialog", async ({
   await page.evaluate(() => window.setModal(true));
   const dialog = page.getByRole("dialog", { name: "Members" });
   await expect(dialog).toBeVisible();
-  await page.evaluate(() => window.openFind());
+  await openFind(page);
   await expect(dialog.locator("search")).toHaveCount(1);
   await expect(field(page)).toBeFocused();
   expect(await box(bar(page))).toEqual(outside);
@@ -105,7 +109,7 @@ test("stepping reveals each match in a long code block", async ({ page }) => {
   const errors = watchPageErrors(page);
   await page.setViewportSize({ width: 900, height: 700 });
   await page.goto(url);
-  await page.evaluate(() => window.openFind());
+  await openFind(page);
   await field(page).fill("needle");
   const status = page.locator("search [role=status]");
   await expect(status).toHaveText("1 of 2");

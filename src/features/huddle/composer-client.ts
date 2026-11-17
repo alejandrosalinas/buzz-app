@@ -220,6 +220,22 @@ export function createHuddleComposerClient(token: string) {
             },
           }
         : undefined,
+      forwarding: {
+        resolve: (reference, signal) =>
+          request("forwardSource", reference, signal),
+        send: (reference, text, mentions, attachments, references, picks) =>
+          request("send", {
+            forward: reference,
+            text,
+            mentions,
+            attachments,
+            references,
+            picks,
+            draft: JSON.stringify(
+              readView(initial.scope, `draft:${initial.room}`, null),
+            ),
+          }),
+      },
       messages: {
         send: (
           room,

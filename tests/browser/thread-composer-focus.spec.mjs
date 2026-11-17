@@ -90,7 +90,7 @@ for (const owner of [undefined, "page draft", "menu", "dialog"]) {
     page,
     app,
   }) => {
-    await open(page, app);
+    await open(page, app, { cold: true });
     const root = app.histories.get("primary/beta")[0];
     let release;
     let started;

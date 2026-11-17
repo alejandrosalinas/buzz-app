@@ -28,6 +28,7 @@ import { keypair, message, nativeSignatureChecks, signed } from "./testing";
 import { createOutbox, type OutgoingEvent, PublishRejected } from "./outbox";
 import { createMessages } from "./messages";
 import { createRelaySession } from "./session";
+import { NeedsHistoryChoice } from "./direct-messages";
 
 const progressChannels = new Map<string, (message: unknown) => void>();
 vi.mock("@tauri-apps/api/core", () => ({
@@ -1342,6 +1343,49 @@ it("opens direct messages through a purpose-bound command and validates the resu
   await expect(
     transport.openDirectMessage([relay.pubkey], new AbortController().signal),
   ).rejects.toThrow("invalid direct message");
+});
+
+it("hands the command's refusal words to every caller as an Error, so an addition can ask", async () => {
+  const transport = await connectNativeTransport(community);
+  assert.exists(transport.openDirectMessage);
+  const channel = "11111111-1111-4111-8111-111111111111";
+  // The Tauri command rejects with a plain string.
+  vi.mocked(invoke).mockRejectedValueOnce("needs-choice: history");
+  const refusal = await transport
+    .openDirectMessage([relay.pubkey], new AbortController().signal, {
+      channelId: channel,
+      includeHistory: "ask",
+    })
+    .catch((error: unknown) => error);
+  expect(refusal).toBeInstanceOf(Error);
+  expect((refusal as Error).message).toBe("needs-choice: history");
+  const owner = createRelaySession(transport, {
+    outboxStorage: { load: () => [], save: () => {} },
+  });
+  try {
+    const { directMessages } = owner.session;
+    // The command words an old relay's refusal of "ask" as this question too.
+    vi.mocked(invoke).mockRejectedValueOnce("needs-choice: history");
+    await expect(
+      directMessages.add(
+        channel,
+        [relay.pubkey],
+        "ask",
+        new AbortController().signal,
+      ),
+    ).rejects.toBeInstanceOf(NeedsHistoryChoice);
+    vi.mocked(invoke).mockRejectedValueOnce("Couldn’t add them. Try again.");
+    await expect(
+      directMessages.add(
+        channel,
+        [relay.pubkey],
+        "ask",
+        new AbortController().signal,
+      ),
+    ).rejects.toThrow("Couldn’t add them. Try again.");
+  } finally {
+    owner.dispose();
+  }
 });
 
 it("discards a pending observer decode after disconnect and reconnect", async () => {

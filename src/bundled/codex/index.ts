@@ -13,11 +13,7 @@ import { CodexSetup, explainTurn, reviewHome, withScript } from "./setup";
 import { CodexProvider, createTabs } from "./tabs";
 import { readUsage } from "./usage";
 import { reviewModel } from "./security-review";
-import {
-  followRecommended,
-  onRecommended,
-} from "../../features/agents/recommended";
-import { readModelSettings } from "../../features/agents/model-settings";
+import { followRecommended } from "../../features/agents/recommended";
 import { AppServer, listModels } from "./rpc";
 /** How often Buzz's copy of Codex looks for a new release. */
 const UPDATE_MS = 6 * 60 * 60_000;
@@ -185,8 +181,8 @@ export const apply: PluginModule["apply"] = (ctx) => {
     description:
       "Codex on this computer, using its native coding tools and your account.",
     defaults: () => ({ config: { ...defaults } }),
-    readModelSettings: (saved) =>
-      readModelSettings(config(saved), { recommended: onRecommended(saved) }),
+    readModelSettings: (saved, context) =>
+      providerController.readModelSettings(saved, context),
     Create,
     CreateModel,
     createModelReportsReadiness: true,

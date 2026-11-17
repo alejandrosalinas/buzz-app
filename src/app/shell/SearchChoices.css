@@ -33,14 +33,49 @@
     cursor: pointer;
   }
 
-  .search-palette-author-chip:hover {
-    background: var(--affordance-subtle-hover);
+  @media (hover: hover) and (pointer: fine) {
+    .search-palette-author-chip:hover {
+      background: var(--affordance-subtle-hover);
+    }
+  }
+
+  /* Each filter keeps the hue of what it names: people, conversations and
+     agents as their results show them, dates orange. A chosen filter is
+     tinted; Ask keeps its icon in the same hue. */
+  .search-palette [data-operator="from"] {
+    --filter-fill: var(--surface-categorical-green);
+    --filter-fill-hover: var(--surface-categorical-green-hover);
+    --filter-ink: var(--text-categorical-green);
+    --filter-dot: var(--icon-categorical-green);
+  }
+  .search-palette [data-operator="in"] {
+    --filter-fill: var(--surface-categorical-blue);
+    --filter-fill-hover: var(--surface-categorical-blue-hover);
+    --filter-ink: var(--text-categorical-blue);
+    --filter-dot: var(--icon-categorical-blue);
+  }
+  .search-palette [data-operator="during"] {
+    --filter-dot: var(--icon-categorical-orange);
+  }
+  .search-palette [data-operator="ask"] {
+    --filter-dot: var(--icon-categorical-amber);
+  }
+  .search-palette-author-chip[data-operator] {
+    background: var(--filter-fill, var(--affordance-subtle));
+    color: var(--filter-ink, var(--text-link));
+  }
+  @media (hover: hover) and (pointer: fine) {
+    .search-palette-author-chip[data-operator]:hover {
+      background: var(--filter-fill-hover, var(--affordance-subtle-hover));
+    }
+  }
+  .search-peek-filter-icon {
+    color: var(--filter-dot);
   }
 
   .search-palette-scope-row {
     display: flex;
     align-items: center;
-    justify-content: space-between;
     gap: var(--space-2);
     margin-bottom: var(--space-2);
   }
@@ -148,12 +183,6 @@
     color: var(--text-secondary);
   }
 
-  .search-palette-views {
-    margin-top: var(--space-2);
-    /* The tab list adds its own inset; this lines labels up with headings. */
-    padding-inline: var(--space-2);
-  }
-
   .search-palette-height {
     position: relative;
     overflow: clip;
@@ -167,7 +196,8 @@
     background: linear-gradient(to bottom, var(--surface-panel), transparent);
     pointer-events: none;
   }
-  .search-palette[data-search-footer] .search-palette-height::before {
+  .search-palette:is([data-search-footer], [data-search-peek])
+    .search-palette-height::before {
     content: "";
     position: absolute;
     inset: auto 0 0;
@@ -181,18 +211,6 @@
   }
   .search-palette-height > .search-palette-scroll {
     margin-block: 0;
-  }
-  /* With views to switch between, the results keep one height, so a short,
-     loading or empty view doesn't shrink the palette under the tabs. */
-  .search-palette[data-search-views] .search-palette-scroll {
-    display: flex;
-    flex-direction: column;
-    min-height: var(--search-palette-results-max);
-  }
-  .search-palette[data-search-views] .search-palette-status {
-    display: flex;
-    flex: 1;
-    flex-direction: column;
   }
   @media (prefers-reduced-motion: reduce) {
     .search-palette-height[data-measured] {
@@ -232,5 +250,370 @@
     gap: var(--space-1);
     min-inline-size: 8ch;
     font-variant-numeric: tabular-nums;
+  }
+}
+
+@layer components {
+  /* Peek: results beside a preview of the highlighted row and a rail of
+     their groups. Narrow palettes keep the single column. The results fill
+     what the field, hints, footer and key line leave of the dialog. */
+  .search-palette[data-search-peek] {
+    display: flex;
+    flex: 1;
+    flex-direction: column;
+    min-height: 0;
+  }
+  /* Each kind of result keeps one hue, from the palette's soft fill and its
+     readable ink, so a group reads at a glance. Pages and messages stay
+     neutral. */
+  .search-palette[data-search-peek] [data-tone] {
+    --peek-fill: var(--affordance-subtle);
+    --peek-ink: var(--text-secondary);
+  }
+  .search-palette[data-search-peek] [data-tone="channel"] {
+    --peek-fill: var(--surface-categorical-blue);
+    --peek-ink: var(--icon-categorical-blue);
+  }
+  .search-palette[data-search-peek] [data-tone="person"] {
+    --peek-fill: var(--surface-categorical-green);
+    --peek-ink: var(--icon-categorical-green);
+  }
+  .search-palette[data-search-peek] [data-tone="chat"] {
+    --peek-fill: var(--surface-categorical-purple);
+    --peek-ink: var(--icon-categorical-purple);
+  }
+  .search-palette[data-search-peek] [data-tone="agent"] {
+    --peek-fill: var(--surface-categorical-amber);
+    --peek-ink: var(--icon-categorical-amber);
+  }
+  .search-palette[data-search-peek] [data-tone="plugin"] {
+    --peek-fill: var(--surface-categorical-orange);
+    --peek-ink: var(--icon-categorical-orange);
+  }
+  .search-peek-tile {
+    display: inline-grid;
+    flex: none;
+    place-items: center;
+    width: var(--space-6);
+    height: var(--space-6);
+    border-radius: calc(var(--radius-chip) - var(--space-1));
+    background: var(--peek-fill, var(--affordance-subtle));
+    color: var(--peek-ink, var(--text-secondary));
+  }
+  .search-peek-tile[data-size="large"] {
+    width: var(--size-control);
+    height: var(--size-control);
+    border-radius: var(--radius-chip);
+  }
+  /* Rows with their own controls draw their icon in the preference row's
+     slot; it takes the same tile, so the icon column reads as one set. */
+  .search-palette[data-search-peek]
+    .search-palette-group[data-tone]
+    .buzz-preference-row-icon {
+    justify-content: center;
+    border-radius: calc(var(--radius-chip) - var(--space-1));
+    background: var(--peek-fill);
+    color: var(--peek-ink);
+  }
+  .search-palette[data-search-peek]
+    .search-palette-group[data-tone]
+    .buzz-preference-row-icon
+    > svg {
+    width: 0.9375rem;
+    height: 0.9375rem;
+  }
+  .search-palette[data-search-peek]
+    .search-palette-group[data-tone]
+    .buzz-preference-row[data-disabled]
+    .buzz-preference-row-icon {
+    color: var(--text-unavailable);
+  }
+  .search-palette[data-search-peek]
+    :is(
+      .search-palette-group[data-tone] .search-row-icon,
+      .search-row-icon[data-tone]
+    )[data-tile] {
+    border-radius: calc(var(--radius-chip) - var(--space-1));
+    background: var(--peek-fill);
+    color: var(--peek-ink);
+  }
+
+  /* Group headings: name, count and why it ranks there, on one line,
+     so a reason that changes as results land never pushes the rows down.
+     The reason gives way first. */
+  .search-palette[data-search-peek] .navigation-section-label {
+    display: flex;
+    align-items: center;
+    gap: var(--space-2);
+    min-width: 0;
+    overflow: hidden;
+    white-space: nowrap;
+  }
+  .search-peek-group-label,
+  .search-peek-why {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .search-peek-why {
+    flex: 0 100 auto;
+  }
+  .search-peek-group-label {
+    color: var(--text-standard);
+  }
+  .search-peek-count {
+    color: var(--text-subtle);
+    font-variant-numeric: tabular-nums;
+  }
+  .search-peek-why {
+    color: var(--text-subtle);
+    font-size: var(--text-caption);
+  }
+  .search-palette-group .navigation-section-heading[data-search-action] {
+    padding-inline: var(--space-2);
+  }
+  .navigation-section-heading[data-search-action] .buzz-button {
+    width: 100%;
+    justify-content: flex-start;
+  }
+
+  /* virtua places each drawn row itself, outside the rows' flex gap, so
+     each keeps that gap below it, inside the content box virtua measures. */
+  .search-palette-virtual > * > *::after {
+    content: "";
+    display: block;
+    block-size: 1px;
+  }
+
+  /* Full-width dividers frame the inset results and preview. */
+  .search-peek-workspace {
+    display: grid;
+    flex: 1;
+    min-width: 0;
+    min-height: 0;
+    grid-template-columns: minmax(0, 64fr) minmax(0, 40fr);
+    column-gap: var(--space-3);
+    grid-template-rows: auto minmax(0, 1fr);
+    overflow: clip;
+    margin-inline: calc(-1 * var(--dialog-padding));
+    border-block: 1px solid var(--border-standard);
+    padding-inline: var(--dialog-padding);
+  }
+  .search-peek-body {
+    display: flex;
+    grid-column: 1;
+    grid-row: 2;
+    min-width: 0;
+  }
+  .search-peek-workspace .search-palette-height {
+    margin-top: 0;
+  }
+  .search-peek-workspace .search-palette-scroll {
+    margin-inline: 0;
+  }
+  .search-peek-body,
+  .search-palette[data-search-peek] .search-palette-height,
+  .search-palette[data-search-peek] .search-palette-scroll {
+    flex: 1;
+    min-width: 0;
+    min-height: 0;
+    max-height: none;
+  }
+  .search-palette[data-search-peek] .search-palette-height {
+    display: flex;
+    flex-direction: column;
+  }
+  .search-peek-side {
+    display: flex;
+    grid-column: 2;
+    grid-row: 2;
+    flex-direction: column;
+    min-width: 0;
+    min-height: 0;
+    margin-block: var(--space-3);
+    overflow: clip;
+    border-radius: var(--radius-control);
+    background: var(--surface-inset-subtle);
+  }
+  .search-peek-preview {
+    flex: 1;
+    min-height: 0;
+    overflow-y: auto;
+    padding: var(--space-4);
+  }
+  .search-peek-card {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-4);
+  }
+  .search-peek-summary {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-4);
+    border-bottom: 1px solid var(--border-standard);
+    padding-bottom: var(--space-4);
+  }
+  .search-peek-head {
+    display: flex;
+    align-items: center;
+    gap: var(--space-3);
+    min-width: 0;
+  }
+  .search-peek-title {
+    color: var(--text-standard);
+  }
+  .search-peek-about {
+    margin: 0;
+    color: var(--text-secondary);
+  }
+  .search-peek-lines {
+    display: flex;
+    flex-direction: column;
+    margin: 0;
+    padding: 0;
+    list-style: none;
+  }
+  .search-peek-line {
+    min-width: 0;
+    border-radius: var(--radius-row);
+  }
+  .search-peek-line[data-hit] {
+    /* A hit scrolled into view keeps the last line of the one before it:
+       the gap, that line's padding and one line of its text. */
+    scroll-margin-top: var(--space-8);
+    background: var(--affordance-message-highlight);
+  }
+  .search-peek-text {
+    display: -webkit-box;
+    -webkit-box-orient: vertical;
+    -webkit-line-clamp: 14;
+    overflow: hidden;
+    overflow-wrap: anywhere;
+  }
+  /* Neighbours keep to one line, so the room held for them while they load
+     is the room they take. */
+  .search-peek-line[data-context] .search-peek-text {
+    -webkit-line-clamp: 1;
+  }
+  .search-peek-line[data-slot] {
+    visibility: hidden;
+  }
+  .search-peek-empty {
+    margin: 0;
+    color: var(--text-subtle);
+    font-size: var(--text-body-sm);
+  }
+
+  /* Keep search controls separate from the results workspace. */
+  .search-palette[data-search-peek] .search-palette-controls {
+    flex: none;
+    padding-bottom: var(--space-3);
+  }
+  /* Group filters span the results and the preview below them. */
+  .search-peek-rail {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: var(--space-2);
+    grid-column: 1 / -1;
+    grid-row: 1;
+    flex: none;
+    min-width: 0;
+    margin: 0;
+    border: 0;
+    padding: var(--space-2) var(--space-3);
+    padding-top: calc(var(--dialog-padding) + var(--space-3));
+  }
+  .search-peek-filter-dot {
+    flex: none;
+    width: var(--space-2);
+    height: var(--space-2);
+    border-radius: var(--radius-pill);
+    background: var(--peek-ink);
+  }
+  .search-peek-hints {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: var(--space-2);
+    min-height: calc(var(--space-6) + var(--space-1));
+    margin-top: var(--space-2);
+    /* Chip edges line up with the typed text and the rows' icons. */
+    padding-inline: var(--space-3);
+  }
+  .search-peek-start {
+    display: inline-flex;
+    align-items: center;
+    gap: var(--space-1);
+    white-space: nowrap;
+  }
+  .search-peek-note {
+    display: flex;
+    align-items: center;
+    gap: var(--space-2);
+    margin: var(--space-2) 0 0;
+    border-radius: var(--radius-row);
+    padding: var(--space-2) var(--space-3);
+    background: var(--surface-inset);
+  }
+  .search-peek-note code {
+    font-family: var(--font-mono);
+  }
+
+  .search-peek-keys {
+    display: flex;
+    flex-wrap: wrap;
+    gap: var(--space-4);
+    margin-inline: calc(-1 * var(--dialog-padding));
+    padding: var(--space-3) calc(var(--dialog-padding) + var(--space-3));
+    background: var(--surface-inset-subtle);
+  }
+  .search-peek-keys kbd,
+  .search-peek-start kbd {
+    display: inline-block;
+    min-width: 1.4em;
+    margin-inline-end: var(--space-1);
+    border: 1px solid var(--border-standard);
+    border-radius: 0.3125rem;
+    padding: 0 var(--space-1);
+    font: inherit;
+    font-size: var(--text-caption);
+    text-align: center;
+  }
+  /* SearchChoices drops the preview at this width too. */
+  @media (max-width: 760px) {
+    .search-peek-workspace {
+      grid-template-columns: minmax(0, 1fr);
+    }
+    .search-peek-body {
+      display: flex;
+      flex-direction: column;
+    }
+    .search-peek-keys {
+      display: none;
+    }
+  }
+}
+
+/* Over MatchedLabel's underline and the row's one-line truncation, both
+   utilities, inside Peek only. */
+@layer utilities {
+  .search-palette[data-search-peek] .search-match {
+    border-radius: 0.1875rem;
+    background: var(--surface-search-match);
+    box-shadow: 0 0 0 1px var(--surface-search-match);
+    color: var(--text-search-match);
+    text-decoration: none;
+    -webkit-box-decoration-break: clone;
+    box-decoration-break: clone;
+  }
+  .search-palette[data-search-peek]
+    .search-palette-group[data-tone="message"]
+    .navigation-item-label
+    > span:first-child {
+    display: -webkit-box;
+    -webkit-box-orient: vertical;
+    -webkit-line-clamp: 2;
+    white-space: normal;
   }
 }

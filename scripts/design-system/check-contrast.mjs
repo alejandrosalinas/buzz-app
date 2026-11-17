@@ -156,6 +156,10 @@ const TEXT_ROLES = [
  * every fill it can actually sit on, and hover is one of them.
  */
 const PAIRS = [
+  ...["--text-standard", "--text-subtle", "--text-metadata"].map((role) => [
+    role,
+    "--surface-inset-subtle",
+  ]),
   ["--text-control-selected", "--surface-control-selected"],
   ...[
     "affordance-call-join",
@@ -281,6 +285,11 @@ const BOUNDARY_ROLES = [
   "--chart-series-2",
   "--chart-series-3",
   "--chart-series-4",
+  // Categorical glyphs and dots stand on the palette's surfaces.
+  "--icon-categorical-blue",
+  "--icon-categorical-green",
+  "--icon-categorical-amber",
+  "--icon-categorical-orange",
   ...MESSAGE_ICON_ROLES,
 ];
 
@@ -299,6 +308,13 @@ const TINT_PAIRS = [
   ["--green-12", "--green-3"],
   ["--purple-12", "--purple-3"],
   ["--purple-12", "--purple-4"],
+  ["--text-categorical-blue", "--surface-categorical-blue"],
+  ["--text-categorical-blue", "--surface-categorical-blue-hover"],
+  ["--text-categorical-green", "--surface-categorical-green"],
+  ["--text-categorical-green", "--surface-categorical-green-hover"],
+  ["--text-categorical-amber", "--surface-categorical-amber"],
+  ["--text-categorical-amber", "--surface-categorical-amber-hover"],
+  ["--text-search-match", "--surface-search-match"],
 ];
 
 const css = readFileSync(TOKENS, "utf8");

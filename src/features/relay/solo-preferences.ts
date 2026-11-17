@@ -259,7 +259,7 @@ export function createSoloPreferences(
       }),
     renameSection: ({ sectionId, name, expectedName }, signal) =>
       serialize(async () => {
-        const next = name.trim();
+        const next = name?.trim();
         if (!next || next.length > 120)
           throw new Error("Use a workspace name of 1–120 characters.");
         const { value, entry, active } = await current(signal);

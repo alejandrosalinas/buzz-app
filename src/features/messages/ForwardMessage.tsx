@@ -1,7 +1,9 @@
+import { isPrivateForwardSource } from "./is-private-forward-source";
 import { snapshotAttachments } from "../relay/forwarded-message";
+import { copyAsForward } from "./forward-clipboard";
 import { snapshotMessage } from "../relay/forwarded-message";
 import { writeClipboardText } from "../../shared/clipboard";
-import { LockIcon } from "../../shared/design-system/icons";
+import { ForwardDisclosure } from "./ForwardDisclosure";
 import { projectMarkdownAttachments } from "../relay/message-content";
 import {
   createContext,
@@ -397,11 +399,7 @@ function ForwardMessageDialog({
     : named.length > 2
       ? `${named.length} people`
       : named.map((person) => person.name).join(" and ");
-  const privateSource =
-    sourceRead.reference.state !== "found" ||
-    sourceRead.reference.private ||
-    sourceRead.reference.hidden ||
-    ["dm", "solo"].includes(sourceRead.reference.channelType ?? "");
+  const privateSource = isPrivateForwardSource(sourceRead.reference);
   const privacy = privateSource && channel?.id !== source.channelId;
 
   const forwardRow = row
@@ -601,6 +599,26 @@ function ForwardMessageDialog({
         }
         actions={
           <>
+            <Button
+              disabled={pending || !forwardRow || !!forwardProblem}
+              onClick={() => {
+                if (!forwardRow) return;
+                void copyAsForward(session, forwardRow, authorName, note).then(
+                  () =>
+                    setNotice({
+                      text: "Copied. Paste it in any message box to forward it.",
+                      error: false,
+                    }),
+                  () =>
+                    setNotice({
+                      text: "Couldn't copy. Try again, or use Forward.",
+                      error: true,
+                    }),
+                );
+              }}
+            >
+              Copy as forward
+            </Button>
             {forwardProblem && (
               <Button onClick={() => void copyLink()}>Copy link</Button>
             )}
@@ -713,16 +731,14 @@ function ForwardMessageDialog({
             </p>
           )}
           {privacy && (
-            <p id={privacyId} className={`text-body-sm ${styles.privacy}`}>
-              <LockIcon size={14} aria-hidden="true" />
-              <span>
-                {channel
+            <ForwardDisclosure
+              id={privacyId}
+              audience={
+                channel
                   ? `Everyone in #${channel.name}`
-                  : destinationName || "The recipients"}{" "}
-                will be able to read this message, even if they can’t see where
-                it came from.
-              </span>
-            </p>
+                  : destinationName || "The recipients"
+              }
+            />
           )}
           {error && (
             <p role="alert" className="text-body-sm text-subtle">

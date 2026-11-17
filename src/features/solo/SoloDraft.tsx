@@ -19,6 +19,7 @@ import {
 } from "./workspace";
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { RelaySession } from "../relay/session";
+import { ownedSoloAgents } from "../relay/solo-admins";
 import {
   readView,
   writeView,
@@ -474,6 +475,10 @@ export function SoloDraft({
             "Solo chats can only use your available agents. Check mentions and workspace defaults.",
           );
       }
+      const admins = [
+        ...(await ownedSoloAgents(session.profiles, session.viewer, members)),
+      ];
+      if (!mounted.current) return;
       // Read at Send: the region's source may have stopped since.
       const regionOwner = () => {
         const current = region
@@ -574,7 +579,7 @@ export function SoloDraft({
               }
             : undefined,
           // Unguarded, so a restart can retry it like any New chat.
-          ...(region ? [{ labels: [region] }] : []),
+          { admins, ...(region ? { labels: [region] } : {}) },
         );
       } catch (reason) {
         if (startKey) writeView(scope, startKey, null);

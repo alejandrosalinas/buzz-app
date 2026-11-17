@@ -144,7 +144,7 @@ export function CustomModelDialog({
   );
 }
 
-/** `value` is a model ID, or "" for the type's default, `defaultLabel`. */
+/** `value` is a model ID, or "" to follow the type's default. */
 export function ModelPicker({
   label = "Model",
   groupByFamily = false,
@@ -187,6 +187,7 @@ export function ModelPicker({
   includeDefault?: boolean;
   value: string;
   defaultLabel: string;
+  /** A known inherited model ID, not a catalog recommendation or placeholder. */
   defaultModel?: string | undefined;
   defaultDescription?: string;
   onChange(value: string): void;
@@ -204,12 +205,10 @@ export function ModelPicker({
   )?.efforts;
   const fallback: ModelChoice = {
     id: "",
-    label: defaultChoice?.label ?? defaultLabel,
-    description: defaultChoice?.description ?? defaultDescription,
+    label: defaultModel ? (defaultChoice?.label ?? defaultLabel) : "Default",
   };
-  const listed: ModelChoice[] = includeDefault
-    ? models.filter((model) => model.id !== defaultModel || model.id === value)
-    : [...models];
+  // A named model is always a pin, even when it currently matches Default.
+  const listed: ModelChoice[] = [...models];
   if (value && !listed.some((model) => model.id === value))
     listed.push({
       id: value,
@@ -218,17 +217,21 @@ export function ModelPicker({
       unlisted: true,
     });
   // The default takes part in telling names apart, even when it is not a row.
-  const [shownDefault = fallback, ...shownListed] = formatModelChoices(
+  const [formattedDefault = fallback, ...shownListed] = formatModelChoices(
     [fallback, ...listed],
     modelLabelPrefixes,
   );
+  const shownDefault = {
+    ...formattedDefault,
+    description:
+      defaultDescription ??
+      (defaultModel ? `Currently ${formattedDefault.label}` : undefined),
+  };
   const shown = includeDefault ? [shownDefault, ...shownListed] : shownListed;
-  const selected =
-    shown.find((model) => model.id === (value || defaultModel)) ?? shownDefault;
+  const selected = shown.find((model) => model.id === value) ?? shownDefault;
   const inherited = value === "";
-  const selectedLabel = inherited
-    ? `${selected.label} · Default`
-    : selected.label;
+  const valueSuffix = inherited && defaultModel ? " · Default" : undefined;
+  const selectedLabel = `${selected.label}${valueSuffix ?? (inherited && selected.description ? ` · ${selected.description}` : "")}`;
   const discovering = loading && !pending;
   const choices =
     allowCustomModel && !compact ? [...shown, CUSTOM_MODEL_ACTION] : shown;
@@ -257,16 +260,9 @@ export function ModelPicker({
             resetLabel={resetLabel}
             effort={effort}
             effortLabel={effortLabel}
-            onEffortChange={
-              onEffortChange
-                ? (model, level) =>
-                    onEffortChange(
-                      inherited && model === defaultModel ? "" : model,
-                      level,
-                    )
-                : undefined
-            }
+            onEffortChange={onEffortChange}
             inherited={!discovering && inherited}
+            valueSuffix={discovering ? undefined : valueSuffix}
             label={label}
             compact={compact}
             onConfigure={onConfigure}
@@ -286,7 +282,7 @@ export function ModelPicker({
             label={label}
             value={selected.id}
             valueLabel={discovering ? "Loading models…" : selected.label}
-            valueSuffix={!discovering && inherited ? " · Default" : undefined}
+            valueSuffix={discovering ? undefined : valueSuffix}
             valueTitle={discovering ? "Loading models…" : selectedLabel}
             leading={modelLogo(`${selected.id} ${selected.label}`)}
             variant={compact ? "compact" : "preference"}
@@ -299,9 +295,7 @@ export function ModelPicker({
                 options: choices.map((model, index) => ({
                   value: model.id,
                   label:
-                    includeDefault && model.id === ""
-                      ? `${model.label} · Default`
-                      : model.label,
+                    includeDefault && model.id === "" ? "Default" : model.label,
                   description: model.description,
                   // The empty fragment reserves Select's icon column only in mixed lists.
                   leading: hasOptionLogos

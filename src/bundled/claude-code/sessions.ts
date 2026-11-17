@@ -266,6 +266,7 @@ export class AgentSessions {
       admit,
       step,
       acknowledged,
+      accepted,
       superseded,
       activityScope,
     }: DeliveryOptions,
@@ -336,6 +337,7 @@ export class AgentSessions {
         ...(activityScope ? { activityScope } : {}),
         ...(step ? { step } : {}),
         ...(acknowledged ? { acknowledged } : {}),
+        ...(accepted ? { accepted } : {}),
         ...(superseded ? { superseded } : {}),
       };
       const answering = this.answer(

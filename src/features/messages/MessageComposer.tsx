@@ -1,3 +1,7 @@
+import { createPortal } from "react-dom";
+import { ForwardDisclosure } from "./ForwardDisclosure";
+import { pastedForward } from "./forward-clipboard";
+import { ComposerForward, useComposerForward } from "./ComposerForward";
 import { draftEditorId, traceDraft } from "../../shared/draft-diagnostics";
 import {
   soloModelPicksKey,
@@ -315,6 +319,7 @@ export type MessageComposerProps = {
   session: ComposerSession | RelaySession;
   channelId: string;
   channelName: string;
+  forwardAudience?: string;
   label?: string | undefined;
   placeholder?: string | undefined;
   soloConversation?: boolean | undefined;
@@ -499,7 +504,8 @@ function untouchedDraft(draft: MentionDraft) {
     !draft.text &&
     !draft.recipients.length &&
     !draft.chatCards?.length &&
-    !draft.gifs?.length
+    !draft.gifs?.length &&
+    !draft.forward
   );
 }
 
@@ -526,6 +532,7 @@ function Composer({
   scope,
   channelId,
   channelName,
+  forwardAudience,
   label: customLabel,
   placeholder,
   onSend,
@@ -586,6 +593,7 @@ function Composer({
     [replyParentId, mediaTargetUrl],
   );
   const inputId = useId();
+  const forwardDisclosureId = useId();
   const draftKey =
     submission?.draftKey ??
     (threadRootId
@@ -736,6 +744,12 @@ function Composer({
     return caption;
   }, [value]);
   const draft = value.text;
+  const forwarded = useComposerForward(
+    session,
+    value.forward,
+    channelId,
+    draft,
+  );
   const recipientKey = JSON.stringify(
     value.recipients.map(({ pubkey, name }) => ({ pubkey, name })),
   );
@@ -1118,6 +1132,16 @@ function Composer({
               chatCards: next.chatCards ?? valueRef.current.chatCards ?? [],
             }
           : {}),
+        ...((next.forward !== undefined
+          ? next.forward
+          : valueRef.current.forward) !== undefined
+          ? {
+              forward:
+                next.forward !== undefined
+                  ? next.forward
+                  : valueRef.current.forward,
+            }
+          : {}),
         ...((next.gifs ?? valueRef.current.gifs)
           ? { gifs: next.gifs ?? valueRef.current.gifs ?? [] }
           : {}),
@@ -1361,6 +1385,17 @@ function Composer({
     { ids: readonly string[]; owner: Element | null } | undefined
   >(undefined);
   const form = useRef<HTMLFormElement>(null);
+  const [announcementHost, setAnnouncementHost] = useState<Element | null>(
+    null,
+  );
+  useLayoutEffect(() => {
+    const node = form.current;
+    if (node)
+      setAnnouncementHost(
+        node.closest('[role="dialog"][aria-modal="true"]') ??
+          node.ownerDocument.body,
+      );
+  }, []);
   // Notices float above the composer, not over Send.
   useToastClearance(form);
   const notify = useToastNotification();
@@ -2618,7 +2653,7 @@ function Composer({
     return { recipients, references };
   }
   async function send() {
-    if (!permitted.current || voice.isCapturing()) return;
+    if (!permitted.current || voice.isCapturing() || forwarded.blocked) return;
     if (editing.target) {
       if (editDisabled || editing.locked) return;
       if ("saveDraft" in editing.target) {
@@ -2737,6 +2772,7 @@ function Composer({
     // Named conversations require text unless their owner explicitly permits files alone.
     if (
       !draft.trim() &&
+      !value.forward &&
       !chatCards?.length &&
       ((!!submission && !submission.allowAttachmentOnly) ||
         (!attachments.items.length && !gifs?.length))
@@ -2806,6 +2842,7 @@ function Composer({
       onCommand &&
       !captured.recipients.length &&
       !captured.pending?.length &&
+      !captured.forward &&
       !captured.chatCards?.length &&
       !captured.gifs?.length &&
       !capturedAttachments.length &&
@@ -3067,6 +3104,38 @@ function Composer({
         uploaded: readonly UploadedAttachment[],
         sender: ComposerSession,
       ) {
+        if (captured.forward) {
+          const main = fullSession(sender);
+          if (!main && sender.forwarding)
+            return sender.forwarding.send(
+              captured.forward,
+              content,
+              recipients,
+              uploaded,
+              references,
+              sentPicks,
+            );
+          if (!main || !forwarded.row || forwarded.blocked)
+            throw new Error(
+              "Couldn't load this message. Remove it or try pasting again.",
+            );
+          return main.messages.forward(
+            channelId,
+            forwarded.row,
+            forwarded.name,
+            content,
+            undefined,
+            {
+              ...(threadRootId ? { rootId: threadRootId } : {}),
+              ...(replyParentId ? { parentId: replyParentId } : {}),
+              ...(mediaTargetUrl ? { mediaTargetUrl } : {}),
+              mentions: recipients,
+              references,
+              attachments: uploaded,
+              picks: sentPicks,
+            },
+          );
+        }
         return threadRootId
           ? sender.messages.reply(
               channelId,
@@ -3121,6 +3190,7 @@ function Composer({
           return publishNow(uploaded, session);
         const message = {
           channelId,
+          ...(captured.forward ? { forward: captured.forward } : {}),
           text: content,
           recipients,
           attachments: uploaded,
@@ -3128,7 +3198,13 @@ function Composer({
           picks: sentPicks,
           ...(tokens.length ? { tokens } : {}),
         };
-        const send = followUpMessage(host, message);
+        const send = followUpMessage(
+          host,
+          message,
+          captured.forward && forwarded.row
+            ? { row: forwarded.row, name: forwarded.name }
+            : undefined,
+        );
         return followUpQueue(host).submit(
           {
             ...message,
@@ -3191,6 +3267,7 @@ function Composer({
                 return (
                   !draft.text.trim() &&
                   !draft.recipients.length &&
+                  !draft.forward &&
                   !composerMarkdown(draft).trim()
                 );
               } catch {
@@ -3205,6 +3282,8 @@ function Composer({
                   JSON.stringify(next.recipients) ||
                 JSON.stringify(valueRef.current.chatCards ?? []) !==
                   JSON.stringify(next.chatCards ?? []) ||
+                JSON.stringify(valueRef.current.forward) !==
+                  JSON.stringify(next.forward) ||
                 JSON.stringify(valueRef.current.gifs ?? []) !==
                   JSON.stringify(next.gifs ?? [])) &&
               JSON.stringify(valueRef.current) !== capturedRevision
@@ -3226,6 +3305,8 @@ function Composer({
                   JSON.stringify(next.recipients) &&
                 JSON.stringify(valueRef.current.chatCards ?? []) ===
                   JSON.stringify(next.chatCards ?? []) &&
+                JSON.stringify(valueRef.current.forward) ===
+                  JSON.stringify(next.forward) &&
                 JSON.stringify(valueRef.current.gifs ?? []) ===
                   JSON.stringify(next.gifs ?? [])
               )
@@ -3424,6 +3505,17 @@ function Composer({
       )}
     </>
   );
+  const disclosure =
+    !editing.target && forwarded.disclosure ? (
+      <ForwardDisclosure
+        audience={
+          forwardAudience ??
+          (channelType === "dm" || channelType === "solo" || solo
+            ? "The recipients"
+            : `Everyone in #${channelName}`)
+        }
+      />
+    ) : null;
   if (readingOnly)
     return (
       <>
@@ -3449,6 +3541,19 @@ function Composer({
           focusComposer={() => input.current?.focus()}
         />
       )}
+      {/* Stay inside a modal host, but outside workspace modal-isolation boundaries. */}
+      {announcementHost &&
+        createPortal(
+          <div
+            id={`${inputId}-forward-announcement`}
+            aria-live="polite"
+            aria-atomic="true"
+            className="sr-only"
+          >
+            {presented ? disclosure : null}
+          </div>,
+          announcementHost,
+        )}
       <form
         ref={form}
         className={styles.composer}
@@ -3584,6 +3689,18 @@ function Composer({
           )}
         </ComposerContext>
         <div className={styles.composerContent}>
+          {!editing.target && value.forward && (
+            <ComposerForward
+              session={host}
+              state={forwarded}
+              scope={scope}
+              onRemove={() => {
+                saveDraft({ ...valueRef.current, forward: null });
+                setError(undefined);
+                input.current?.focus();
+              }}
+            />
+          )}
           {!editing.target && (
             <ComposerAttachments
               media={session.media}
@@ -3655,6 +3772,28 @@ function Composer({
               channelId={channelId}
               extensions={extensions}
               emoji={emojiCatalog.entries}
+              onSemanticPaste={(data) => {
+                const reference = pastedForward(data);
+                if (reference) {
+                  if (editing.target || submission) {
+                    setError(
+                      "Finish this edit before pasting a forwarded message.",
+                    );
+                    return true;
+                  }
+                  if (valueRef.current.forward) {
+                    setError(
+                      "Only one forwarded message can be attached. Remove it before pasting another.",
+                    );
+                    return true;
+                  }
+                  const { note, ...source } = reference;
+                  if (note && !insert(note)) return true;
+                  saveDraft({ ...valueRef.current, forward: source });
+                  return true;
+                }
+                return false;
+              }}
               onPasteTooLong={() => setPasteTooLong(true)}
               aria-describedby={
                 pasteTooLong ? `${inputId}-paste-error` : undefined
@@ -3766,6 +3905,7 @@ function Composer({
                     automaticTag.current ===
                       JSON.stringify(valueRef.current)) &&
                   !valueRef.current.chatCards?.length &&
+                  !valueRef.current.forward &&
                   !valueRef.current.gifs?.length &&
                   !attachments.items.length
                 ) {
@@ -3850,6 +3990,11 @@ function Composer({
               />
             </div>
           )}
+        {disclosure && (
+          <div id={forwardDisclosureId} className="text-subtle">
+            {disclosure}
+          </div>
+        )}
         {voice.element}
         <div className={styles.composerActions} hidden={voice.capturing}>
           <div className={styles.composerToolRow}>
@@ -3927,6 +4072,7 @@ function Composer({
             <IconButton
               variant={
                 draft.trim() ||
+                value.forward ||
                 chatCards?.length ||
                 gifs?.length ||
                 attachments.items.length
@@ -3937,6 +4083,11 @@ function Composer({
               type="submit"
               style={editing.target ? undefined : accentButtonStyle}
               aria-label={editing.target ? "Save changes" : "Send message"}
+              aria-describedby={
+                !editing.target && forwarded.disclosure
+                  ? forwardDisclosureId
+                  : undefined
+              }
               title={
                 editing.target
                   ? "Save changes"
@@ -3961,8 +4112,10 @@ function Composer({
                 admitting ||
                 sending ||
                 submission?.disabled ||
+                (!editing.target && forwarded.blocked) ||
                 (!editing.target && attachments.blocked) ||
                 (!draft.trim() &&
+                  !value.forward &&
                   !chatCards?.length &&
                   ((!!submission && !submission.allowAttachmentOnly) ||
                     (!attachments.items.length && !gifs?.length)) &&

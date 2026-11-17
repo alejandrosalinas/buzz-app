@@ -454,8 +454,6 @@ pub fn bundled_manifests() -> Vec<Manifest> {
         builderlab,
         serde_json::from_str(include_str!("../../../src/bundled/pairing/manifest.json"))
             .expect("valid pairing manifest"),
-        serde_json::from_str(include_str!("../../../src/bundled/todos/manifest.json"))
-            .expect("todos manifest"),
         serde_json::from_str(include_str!("../../../src/bundled/diffs/manifest.json"))
             .expect("bundled diffs manifest"),
         serde_json::from_str(include_str!("../../../src/bundled/mermaid/manifest.json"))
@@ -2913,7 +2911,7 @@ mod tests {
 
     #[test]
     fn optional_plugins_default_off_and_preserve_explicit_overrides() {
-        let id = "buzz.todos";
+        let id = "buzz.usage";
         let temp = tempfile::tempdir().unwrap();
         let manager = Manager::open(Some(temp.path().into()), "optional-test", false).unwrap();
         let enabled = |manager: &Manager| {
@@ -3002,7 +3000,7 @@ mod tests {
             let registry = serde_json::json!({
                 "version": 1,
                 "bundledEnabled": true,
-                "bundledOverrides": { "buzz.todos": true },
+                "bundledOverrides": { "buzz.usage": true },
                 "installed": installed,
             });
             fs::write(profile.join("registry.json"), registry.to_string()).unwrap();
@@ -3027,7 +3025,7 @@ mod tests {
                 let (_temp, manager) =
                     open(serde_json::json!({ (*id): installed(id, was_enabled) }));
                 assert_eq!(enabled(&manager, id), was_enabled);
-                assert!(enabled(&manager, "buzz.todos"), "other overrides survive");
+                assert!(enabled(&manager, "buzz.usage"), "other overrides survive");
                 manager.change("enable", id).unwrap();
                 assert!(enabled(&manager, id));
                 manager.change("disable", id).unwrap();

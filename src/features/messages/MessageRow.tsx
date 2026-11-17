@@ -131,6 +131,10 @@ import { useThreadDraft } from "./draft-places";
 export type MessageLinkOrigin = Readonly<{ rootId: string }>;
 export type MessageRowProps = {
   row: ChannelMessage;
+  /** Read-only presentations can retain their own prose highlighting. */
+  bodyContent?: ReactNode;
+  /** Narrow previews use the available width without opposite-avatar clearance. */
+  fullWidth?: boolean;
   recordedActivity?: ActivityRowPresentation | undefined;
   representedAgents?: readonly string[] | undefined;
   repliedAgents?: readonly string[] | undefined;
@@ -238,6 +242,8 @@ const FullMessageRow = memo(function MessageRow(props: MessageContentProps) {
 });
 function MessageRowContent({
   row,
+  bodyContent,
+  fullWidth = false,
   shownRow,
   renderMessage,
   getThreadRoot,
@@ -496,13 +502,20 @@ function MessageRowContent({
       : undefined;
   const presenceId = useId();
   const shown = shownRow ?? row;
-  const timeReply = shown.diff ? undefined : parseMediaTimeReply(shown.content);
-  const sourceRow = timeReply
-    ? { ...shown, content: timeReply.content }
-    : shown;
+  const timeReply =
+    shown.diff || bodyContent != null
+      ? undefined
+      : parseMediaTimeReply(row.forward?.note ?? shown.content);
+  const sourceRow =
+    timeReply && !row.forward
+      ? { ...shown, content: timeReply.content }
+      : shown;
   const { caption: displayRow, cards: chatCards } = useMemo(
-    () => separateChatCards(sourceRow, directory.channels),
-    [sourceRow, directory.channels],
+    () =>
+      bodyContent != null
+        ? { caption: sourceRow, cards: [] }
+        : separateChatCards(sourceRow, directory.channels),
+    [sourceRow, directory.channels, bodyContent],
   );
   const cardsOnly =
     chatCards.length > 0 && !displayRow.content.trim() && !timeReply;
@@ -986,88 +999,92 @@ function MessageRowContent({
     [row.forward, row.attachments],
   );
   const { edited: _forwardEdited, ...forwardDisplayRow } = displayRow;
-  const body = row.forward ? (
-    <>
-      {row.forward.note && (
-        <MessageMarkdown
-          directory={directory}
-          session={references}
-          scope={scope}
-          row={{
-            ...displayRow,
-            content: projectMarkdownAttachments(
-              row.forward.note,
-              new Set(row.attachments.map(({ url }) => url)),
-            ).content,
-            attachmentSeams: [],
-          }}
-          media={media}
+  const forwardNote = timeReply?.content ?? row.forward?.note;
+  const body =
+    bodyContent ??
+    (row.forward ? (
+      <>
+        {forwardNote && (
+          <MessageMarkdown
+            directory={directory}
+            session={references}
+            scope={scope}
+            row={{
+              ...displayRow,
+              content: projectMarkdownAttachments(
+                forwardNote,
+                new Set(row.attachments.map(({ url }) => url)),
+              ).content,
+              attachmentSeams: [],
+            }}
+            media={media}
+            onOpenLink={openLink}
+          />
+        )}
+        <ForwardedMessage
+          snapshot={row.forward.snapshot}
+          session={session}
           onOpenLink={openLink}
-        />
-      )}
-      <ForwardedMessage
-        snapshot={row.forward.snapshot}
-        session={session}
+          attachments={attachmentContent(true)}
+        >
+          <MessageMarkdown
+            directory={directory}
+            session={references}
+            scope={scope}
+            row={{
+              ...forwardDisplayRow,
+              content:
+                forwardProjection?.content ?? row.forward.snapshot.content,
+              mentions: [],
+              mentionReferences:
+                row.forward.snapshot.mentionLabels?.map(({ id }) => id) ?? [],
+              mentionLabels: row.forward.snapshot.mentionLabels ?? [],
+              emoji: row.forward.snapshot.emoji ?? [],
+              attachmentSeams: forwardProjection?.seams ?? [],
+            }}
+            media={media}
+            onOpenLink={openLink}
+            canOpenLink={canOpenLink}
+          />
+        </ForwardedMessage>
+      </>
+    ) : row.diff ? (
+      <div>
+        <p className="text-label-sm">{row.diff.filePath || "Diff"}</p>
+        {row.diff.description && (
+          <p className="text-body-sm">{row.diff.description}</p>
+        )}
+        {/* biome-ignore lint/a11y/useSemanticElements: The raw scroll region preserves preformatted text and needs keyboard access. */}
+        <pre
+          className={styles.rawDiff}
+          // biome-ignore lint/a11y/noNoninteractiveTabindex: The raw scroll owner must support keyboard scrolling.
+          tabIndex={0}
+          role="region"
+          aria-label="Raw diff"
+        >
+          {row.content || "No diff content"}
+        </pre>
+        {row.diff.truncated && (
+          <p className="text-body-sm">
+            Diff truncated. View the full diff at the source repository.
+          </p>
+        )}
+      </div>
+    ) : (
+      <MessageMarkdown
+        directory={directory}
+        session={references}
+        scope={scope}
+        row={displayRow}
+        extensions={extensions}
+        media={media}
         onOpenLink={openLink}
-        attachments={attachmentContent(true)}
-      >
-        <MessageMarkdown
-          directory={directory}
-          session={references}
-          scope={scope}
-          row={{
-            ...forwardDisplayRow,
-            content: forwardProjection?.content ?? row.forward.snapshot.content,
-            mentions: [],
-            mentionReferences:
-              row.forward.snapshot.mentionLabels?.map(({ id }) => id) ?? [],
-            mentionLabels: row.forward.snapshot.mentionLabels ?? [],
-            emoji: row.forward.snapshot.emoji ?? [],
-            attachmentSeams: forwardProjection?.seams ?? [],
-          }}
-          media={media}
-          onOpenLink={openLink}
-          canOpenLink={canOpenLink}
-        />
-      </ForwardedMessage>
-    </>
-  ) : row.diff ? (
-    <div>
-      <p className="text-label-sm">{row.diff.filePath || "Diff"}</p>
-      {row.diff.description && (
-        <p className="text-body-sm">{row.diff.description}</p>
-      )}
-      {/* biome-ignore lint/a11y/useSemanticElements: The raw scroll region preserves preformatted text and needs keyboard access. */}
-      <pre
-        className={styles.rawDiff}
-        // biome-ignore lint/a11y/noNoninteractiveTabindex: The raw scroll owner must support keyboard scrolling.
-        tabIndex={0}
-        role="region"
-        aria-label="Raw diff"
-      >
-        {row.content || "No diff content"}
-      </pre>
-      {row.diff.truncated && (
-        <p className="text-body-sm">
-          Diff truncated. View the full diff at the source repository.
-        </p>
-      )}
-    </div>
-  ) : (
-    <MessageMarkdown
-      directory={directory}
-      session={references}
-      scope={scope}
-      row={displayRow}
-      extensions={extensions}
-      media={media}
-      onOpenLink={openLink}
-      canOpenLink={canOpenLink}
-      participantProfiles={participantProfiles}
-      largeEmoji={emojiOnly}
-      edited={editedInBody && displayRow.edited}
-    />
-  );
+        canOpenLink={canOpenLink}
+        participantProfiles={participantProfiles}
+        largeEmoji={emojiOnly}
+        edited={editedInBody && displayRow.edited}
+      />
+    ));
   const avatarSize = compactAvatar && !flat ? "small" : "default";
   const authorName = (
     <>
@@ -1475,6 +1492,7 @@ function MessageRowContent({
         data-highlight-surface=""
         data-thread-open={threadOpen || undefined}
         data-layout={layout}
+        data-full-width={fullWidth || undefined}
         data-stack-previous={stackPrevious || undefined}
         data-stack-next={stackNext || undefined}
         data-viewer-message={

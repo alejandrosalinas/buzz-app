@@ -47,7 +47,7 @@ semantic tokens, UI authoring rules and the local component reference.
   activation/re-enable order. Primary pages choose `sidebar` (default, a row in
   the Messages sidebar) or `dock` (an app in the left dock) placement for
   contributed pages. `topbar` and `toolbar` are accepted aliases for `dock`.
-  `PrimarySidebar` is the conversation sidebar: a capsule All / Solo / Team
+  The bundled `MessagesSidebar` supplies the conversation sidebar: a capsule All / Solo / Team
   filter above one shared scrollport, Solo projects and chats above Team's channel
   sections, one relay-recovery notice, and the connection fallback. The filter
   never opens a destination or changes the open conversation; a new destination
@@ -105,12 +105,20 @@ semantic tokens, UI authoring rules and the local component reference.
   workspace navigation request retries it independently of the page body.
   Messages uses the conversation sidebar. Other pages show a sidebar only when
   they contribute `Page.sidebar`; apps without one hide the retained navigation.
-  `App.tsx` composes `PrimarySidebar` around `features/channel-navigation/ChannelInventory`. The inventory supplies channel rows,
-  notices, dialogs and scroll bindings through a render prop; PrimarySidebar owns
-  the common frame, Solo/Team arrangement and error fallback. The fallback retains
-  page navigation without remounting a failed inventory. There is no portal.
-  Sidebar session state resets on scope/connection generation without remounting
-  unrelated pages. Its own error boundary keeps page navigation and Settings usable.
+  `App.tsx` mounts a global `PrimarySidebar` host. Bundled preview contexts supply
+  its contents; Messages registers its context for the conversation navigation
+  owner, and the host adapts `Page.sidebar` into the same ordered, isolated slots.
+  The host has no Channels or Solo dependencies. Shared frame/list/slot primitives
+  remain in `features/channel-navigation` with their own stylesheet.
+  `bundled/channels/MessagesSidebar` owns the All/Solo/Team arrangement and mounts
+  `ChannelInventory`, the single preferences, actions and view owner. Solo and Team
+  sources portal their content into stable containers under their existing drag
+  owners. The Messages context owns its connection-generation readiness and error
+  fallback; replacing it mounts no Messages inventory. Returning restores saved
+  view state through the existing owner. Standalone pages hide a retained context;
+  a cold standalone launch mounts only neutral navigation until a context matches.
+  No required launch marker depends on that absent context. Settings retains its
+  existing modal presentation; migrating it to a replacement context is deferred.
   Page buttons use shared navigation rows and focus the main region on selection.
   At short heights page rows scroll with the channel list rather than in their own list.
   At widths up to 650px, Messages and pages with a sidebar contribution collapse
@@ -463,7 +471,7 @@ Right-click any channel tab and choose **Close all tabs** to close this channel'
 thread, plugin and settings tabs across both panes, including hidden side-pane
 tabs. The permanent channel conversation stays; focus returns there if its previous
 target closed, while typing in surviving content remains uninterrupted. A
-launcher's side panel, such as Todos, is not a tab, so it stays as it was:
+launcher's side panel, such as a huddle, is not a tab, so it stays as it was:
 shown in an open pane, or hidden in a closed one. Other channels and saved
 message drafts are untouched. **Close other tabs** in the
 same menu does the same, except that the right-clicked tab stays open, selected
@@ -486,8 +494,8 @@ The main-header split control toggles existing pane content without closing its
 tabs or resetting their contents. With no content it is disabled but remains
 focusable, so closing the last tab has a stable focus-return target. There is no
 blank-tab creation action or channel/DM/tool picker. Tabs open from content such
-as threads, profiles, channel settings and linked sessions. Todos and native
-desktop Terminal remain available through their existing channel launchers;
+as threads, profiles, channel settings and linked sessions. Native desktop
+Terminal remains available through its existing channel launcher;
 closing a terminal presentation does not stop its plugin-owned shell.
 Conversation tabs reuse the timeline, composer, draft and message-management owners;
 selecting an already-open conversation selects its existing tab. Each main channel
@@ -550,4 +558,3 @@ Harness logs remain owned and authorized by the profile. `PanelSubview` presents
 the log as a sibling tab in the channel pane, with standalone Back navigation
 elsewhere. Closing the log or losing authorization unmounts it and stops its
 polling; switching tabs retains it and the profile state.
-Todos uses the standard 2.5rem header to align with other side panels.

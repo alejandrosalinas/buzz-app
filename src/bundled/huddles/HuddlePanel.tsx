@@ -65,6 +65,7 @@ export function HuddlePanel({
           scope={connection.scope ?? ""}
           channelId={room}
           channelName="Huddle"
+          forwardAudience="Everyone in this Huddle"
           label="Message this Huddle"
           placeholder="Message this Huddle"
           disabled={!discussion.writable}

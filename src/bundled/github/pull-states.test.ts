@@ -11,6 +11,7 @@ import {
   PULL_REFRESH_MS,
   PULL_RETAIN_MS,
   PULL_SLOW_REFRESH_MS,
+  PULLS_PER_READ,
 } from "./pull-states";
 
 const pull = "https://github.com/block/buzz-app/pull/7";
@@ -90,6 +91,53 @@ it("reads every watched pull request together, once, then again each minute whil
   for (const unwatch of stop) unwatch();
   await vi.advanceTimersByTimeAsync(PULL_REFRESH_MS * 3);
   expect(gh).toHaveBeenCalledTimes(2);
+});
+
+it("reads many pull requests in requests of a few, keeping what one GitHub failed from the rest", async () => {
+  vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
+  // Public reads would hold no checks; GitHub failing is not gh being
+  // unavailable, so none is made.
+  const fetch = vi.fn();
+  vi.stubGlobal("fetch", fetch);
+  const urls = Array.from(
+    { length: PULLS_PER_READ + 2 },
+    (_, i) => `https://github.com/block/buzz-app/pull/${i + 1}`,
+  );
+  const [first = "", last = ""] = [urls[0], urls.at(-1)];
+  let failing = false;
+  const gh = mockGh(async (_query: string, variables: Variables) => {
+    if (failing && variables.p0 === PULLS_PER_READ + 1)
+      throw new GitHubError("HTTP 502");
+    return Object.fromEntries(
+      Object.keys(variables)
+        .filter((key) => key.startsWith("p"))
+        .map((key) => [`r${key.slice(1)}`, rollup("OPEN", {}, "FAILURE")]),
+    );
+  });
+  const states = createPullStates(gh);
+  const stop = urls.map((url) => states.watch(url, () => {}));
+  try {
+    await vi.waitFor(() => expect(states.get(last)).toBeDefined());
+    expect(
+      gh.mock.calls.map(
+        ([, variables]) => Object.keys(variables as Variables).length,
+      ),
+    ).toEqual([PULLS_PER_READ * 3, 2 * 3]);
+    for (const url of urls)
+      expect(states.get(url)).toMatchObject({ checks: "failure" });
+
+    failing = true;
+    await vi.advanceTimersByTimeAsync(PULL_REFRESH_MS);
+    expect(gh).toHaveBeenCalledTimes(4);
+    // The page GitHub failed keeps what was read before, checks and all.
+    for (const url of urls)
+      expect(states.get(url)).toMatchObject({ checks: "failure" });
+    expect(states.readAt(last)?.error).toEqual(new GitHubError("HTTP 502"));
+    expect(states.readAt(first)?.error).toBeUndefined();
+    expect(fetch).not.toHaveBeenCalled();
+  } finally {
+    for (const unwatch of stop) unwatch();
+  }
 });
 
 it("keeps the state object, and tells no one, when a poll reads the same state", async () => {

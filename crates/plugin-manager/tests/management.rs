@@ -1374,7 +1374,6 @@ fn bundled_defaults_preserve_saved_choices_and_only_channels_is_required() {
         let default = !matches!(
             id,
             "buzz.pi"
-                | "buzz.todos"
                 | "buzz.usage"
                 | "buzz.relay-notes"
                 | "buzz.reminders"

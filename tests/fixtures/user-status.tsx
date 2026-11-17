@@ -3,7 +3,7 @@ import { ToastProvider } from "../../src/shared/design-system/ui/Toast";
 import { createRoot } from "react-dom/client";
 import { ProfileButton } from "../../src/app/shell/ProfileButton";
 import { ChannelSidebarItem } from "../../src/bundled/channels/ChannelSidebarItem";
-import channelStyles from "../../src/bundled/channels/Channels.module.css";
+import sidebarStyles from "../../src/features/channel-navigation/SidebarFrame.module.css";
 import { MessageRow } from "../../src/features/messages/MessageRow";
 import { UserStatusDisplay } from "../../src/features/user-status/StatusDisplay";
 import { createRelaySession } from "../../src/features/relay/session";
@@ -167,7 +167,7 @@ createRoot(root).render(
         >
           <h2>Navigation</h2>
           {/* The real sidebar's row metrics, including its emoji size. */}
-          <div className={channelStyles.sidebar}>
+          <div className={sidebarStyles.sidebar}>
             <ChannelSidebarItem
               channel={{
                 id: "status-dm",

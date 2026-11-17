@@ -71,6 +71,31 @@ function period(year: number, month: number, day?: number) {
  */
 function parseDateValue(value: string, periods: boolean, now: Date) {
   const lower = value.toLowerCase();
+  // A rolling period, `during:7d`, `2w`, `3m` or `1y`: from that many local
+  // days, weeks, months or years before today, through today.
+  const rolling = periods ? /^(\d{1,3})([dwmy])$/.exec(lower) : null;
+  if (rolling) {
+    const count = Number(rolling[1]);
+    if (!count) return null;
+    const unit = rolling[2];
+    const [year, today] = [now.getFullYear(), now.getDate()];
+    const days = unit === "d" ? count : unit === "w" ? count * 7 : 0;
+    const month =
+      now.getMonth() - (unit === "m" ? count : unit === "y" ? count * 12 : 0);
+    // A month or year back keeps today's day, or the target month's last day
+    // when it is shorter: a month before March 31 is February 28.
+    const start = days
+      ? new Date(year, month, today - days)
+      : new Date(
+          year,
+          month,
+          Math.min(today, new Date(year, month + 1, 0).getDate()),
+        );
+    return {
+      start: Math.floor(start.getTime() / 1000),
+      end: period(now.getFullYear(), now.getMonth(), now.getDate()).end,
+    };
+  }
   if (lower === "today" || lower === "yesterday")
     return period(
       now.getFullYear(),

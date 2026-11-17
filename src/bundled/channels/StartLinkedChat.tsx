@@ -1,9 +1,6 @@
 import { ChatCircleIcon } from "../../shared/design-system/icons";
 import { useState } from "react";
-import type {
-  ChannelMessage,
-  ChannelSummary,
-} from "../../features/relay/contracts";
+import type { ChannelMessage } from "../../features/relay/contracts";
 import type { RelaySession } from "../../features/relay/session";
 import type { Navigation } from "../../features/navigation/controller";
 import { messageCopyLink } from "../../features/messages/message-copy";
@@ -17,23 +14,21 @@ import { MenuItem, MenuIcon } from "../../shared/design-system/ui/Menu";
 import { useToastNotification } from "../../shared/design-system/ui/Toast";
 import { soloDraftTarget } from "../../features/channel-navigation/routes";
 
-export function canStartLinkedChat(
+/** Any message or conversation can start one: the source link is ordinary
+ * draft text, so nothing is written to the source and its type, membership,
+ * archive state and write access don't matter. */
+export function canStartLinkedChat(session: RelaySession) {
+  return !!(session.viewer && session.channelWrites.available);
+}
+
+/** The message action's match: any message the relay has accepted. */
+export function canStartLinkedChatFrom(
+  message: ChannelMessage,
   session: RelaySession,
-  source: string | ChannelSummary,
 ) {
-  const channel =
-    typeof source === "string"
-      ? session.channels.list().channels.find((item) => item.id === source)
-      : source;
-  return !!(
-    session.viewer &&
-    channel &&
-    !channel.cached &&
-    !channel.archived &&
-    !channel.readOnly &&
-    ["stream", "forum"].includes(channel.channelType ?? "") &&
-    channel.members?.includes(session.viewer) &&
-    session.channelWrites.available
+  return (
+    canStartLinkedChat(session) &&
+    (!message.delivery || ["accepted", "seen"].includes(message.delivery))
   );
 }
 
@@ -52,7 +47,7 @@ export function StartLinkedChat({
   const [busy, setBusy] = useState(false);
   const notify = useToastNotification();
   async function start() {
-    if (busy || !canStartLinkedChat(session, channelId)) return;
+    if (busy || !canStartLinkedChat(session)) return;
     setBusy(true);
     // The digest is async. If another navigation wins meanwhile, this visit is
     // over: don't save its draft, open it, or report its errors.
@@ -89,7 +84,7 @@ export function StartLinkedChat({
   }
   return (
     <MenuItem
-      disabled={busy || !canStartLinkedChat(session, channelId)}
+      disabled={busy || !canStartLinkedChat(session)}
       onClick={() => void start()}
     >
       <MenuIcon>

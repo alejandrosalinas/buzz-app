@@ -1,3 +1,6 @@
+import { AcpProcess } from "../agent-harness/acp/process";
+import { GOOSE } from "../../bundled/goose/goose";
+import { fakeSpawn } from "../../bundled/goose/goose-testing";
 import { UnattestedProfile } from "../relay/identity-archives";
 import { createSoloPreferences } from "../relay/solo-preferences";
 import type { ChannelKit } from "../channel-templates/capability";
@@ -14,6 +17,9 @@ import { canMessageAgent, createAgentChoices, deletingAgent } from "./choices";
 import { createAgentLibrary } from "./library";
 import type { AttentionSource } from "./attention-sources";
 import { appClient } from "../../buzz-mcp/app-client";
+import { ClaudeDefaults } from "../../bundled/claude-code/defaults";
+import { CodexProvider } from "../../bundled/codex/tabs";
+import type { AgentModelSettingsContext } from "./model-settings";
 import type { AgentToolAuthority, AgentToolProof } from "./tool-operation";
 import { callAttentionTool } from "../../buzz-mcp/attention";
 import { callSessionTool } from "../../buzz-mcp/session-tools";
@@ -63,6 +69,7 @@ import { huddleDescription } from "../huddle/lifecycle";
 import type { AgentIdentity } from "./native";
 import {
   type Agent,
+  type Agents,
   type AgentHandle,
   type AgentSession,
   AgentsService,
@@ -83,7 +90,7 @@ import {
 } from "../decisions/service";
 import { TypeSafeKey } from "../../bundled/typesafe/key";
 import { typesafeProvider } from "../../bundled/typesafe";
-import { CATCH_UP_PREFIX, readCheckpoints } from "./catch-up";
+import { CATCH_UP_PREFIX, MENTIONS, readCheckpoints } from "./catch-up";
 import { CHANNEL_KINDS } from "../relay/live";
 import { fileStore, loadAgentStorage, type AgentStore } from "./state";
 import { readInterrupted, writeInterrupted } from "./interrupted";
@@ -214,6 +221,7 @@ async function setup({
     | Pick<NonNullable<AgentType<Config>["sessionControls"]>, "state" | "run">
     | undefined,
   resumes = false,
+  supportsGuardedWake = undefined as AgentType<Config>["supportsGuardedWake"],
   /** Settings the type syncs across devices. */
   syncedSettings = undefined as AgentType<Config>["syncedSettings"],
   protection = undefined as true | undefined,
@@ -285,6 +293,7 @@ async function setup({
   const run =
     vi.fn<(delivery: Delivery<Config>) => void | Promise<void>>(answer);
   const type: AgentType<Config> = {
+    ...(supportsGuardedWake ? { supportsGuardedWake } : {}),
     id: typeId,
     title: "Echo",
     timeoutMs,
@@ -2233,27 +2242,40 @@ describe("a plugin's wake", () => {
       ]);
   });
 
-  it("throws outside a plugin, without text or a well-formed root, or for an agent this copy does not run", async () => {
-    const { service, plugin, native } = await setup();
-    await service.create({ type: "example/echo", name: "Echo" });
-    await held(native);
-    expect(() => service.wake(bot, { channel, text: "hi" })).toThrow(
-      /Only a plugin/,
-    );
-    expect(() => plugin.agents.wake(bot, { channel, text: " " })).toThrow(
-      /needs a channel and text/,
-    );
-    for (const bad of ["", "note1abc", "r".repeat(63), ` ${"a".repeat(64)}`])
+  it.each([false, true])(
+    "throws synchronously on invalid wake arguments (guarded: %s)",
+    async (guarded) => {
+      const { service, plugin, native } = await setup();
+      await service.create({ type: "example/echo", name: "Echo" });
+      await held(native);
+      const send = (
+        key: Parameters<Agents["wake"]>[0],
+        wake: Parameters<Agents["wake"]>[1],
+      ) =>
+        guarded
+          ? plugin.agents.wake(key, wake, { current: () => true })
+          : plugin.agents.wake(key, wake);
       expect(() =>
-        plugin.agents.wake(bot, { channel, root: bad, text: "hi" }),
-      ).toThrow(/64-hex event id/);
-    expect(() =>
-      plugin.agents.wake(bot, { channel, root, topLevel: true, text: "hi" }),
-    ).toThrow(/not both/);
-    expect(() => plugin.agents.wake(sibling, { channel, text: "hi" })).toThrow(
-      /does not run that agent/,
-    );
-  });
+        guarded
+          ? service.wake(bot, { channel, text: "hi" }, { current: () => true })
+          : service.wake(bot, { channel, text: "hi" }),
+      ).toThrow(/Only a plugin/);
+      expect(() => send(bot, { channel, text: " " })).toThrow(
+        /needs a channel and text/,
+      );
+      for (const bad of ["", "note1abc", "r".repeat(63), ` ${"a".repeat(64)}`])
+        expect(() => send(bot, { channel, root: bad, text: "hi" })).toThrow(
+          /64-hex event id/,
+        );
+      expect(() =>
+        send(bot, { channel, root, topLevel: true, text: "hi" }),
+      ).toThrow(/not both/);
+      if (!guarded)
+        expect(() => send(sibling, { channel, text: "hi" })).toThrow(
+          /does not run that agent/,
+        );
+    },
+  );
 
   it("comes from the agent itself through its run's handle, marked from where", async () => {
     const { service, run, plugin, native } = await setup();
@@ -2297,6 +2319,333 @@ describe("a plugin's wake", () => {
     await service.remove(bot);
     await settle();
     expect(run).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("guarded plugin wakes", () => {
+  const wake = { channel, root: "e".repeat(64), text: "Check current work" };
+  it("refuses unsupported guarded wakes before run and preserves ordinary wakes", async () => {
+    const f = await setup();
+    try {
+      await f.service.create({ type: "example/echo", name: "Echo" });
+      await expect(
+        f.plugin.agents.wake(bot, wake, { current: () => true }),
+      ).resolves.toEqual({ status: "dropped", reason: "refused" });
+      expect(f.run).not.toHaveBeenCalled();
+      const entered = runnerGate();
+      f.run.mockImplementationOnce(() => entered.resolve());
+      expect(f.plugin.agents.wake(bot, wake)).toBeUndefined();
+      await entered.promise;
+      expect(f.run).toHaveBeenCalledOnce();
+    } finally {
+      await f.ctx.fiber.dispose();
+    }
+  });
+
+  it("uses guarded delivery only after strict capability detection, without probe wakes", async () => {
+    const f = await setup({ supportsGuardedWake: true });
+    const oldWake = vi.fn();
+    const sendIfSupported = (agents: {
+      supportsGuardedWake?: unknown;
+      wake: Agents["wake"];
+    }) => {
+      if (agents.supportsGuardedWake === true)
+        return agents.wake(bot, wake, { current: () => false });
+      return undefined;
+    };
+    try {
+      await f.service.create({ type: "example/echo", name: "Echo" });
+      for (const flag of [undefined, false, "true", 1])
+        expect(
+          sendIfSupported({ supportsGuardedWake: flag, wake: oldWake }),
+        ).toBeUndefined();
+      expect(oldWake).not.toHaveBeenCalled();
+      await expect(sendIfSupported(f.plugin.agents)).resolves.toEqual({
+        status: "dropped",
+        reason: "stale",
+      });
+      expect(f.run).not.toHaveBeenCalled();
+      // @ts-expect-error malformed JavaScript callers still get a synchronous error
+      expect(() => f.plugin.agents.wake(bot, wake, {})).toThrow(
+        "current predicate",
+      );
+      expect(() =>
+        f.plugin.agents.wake(bot, wake, {
+          current: () => true,
+          // @ts-expect-error invalid caller signal
+          signal: {},
+        }),
+      ).toThrow();
+    } finally {
+      await f.ctx.fiber.dispose();
+    }
+  });
+
+  it("preserves void calls and synchronous queue errors while guarded calls return refused", async () => {
+    const f = await setup({ supportsGuardedWake: true });
+    const gate = runnerGate();
+    const started = runnerGate();
+    try {
+      await f.service.create({ type: "example/echo", name: "Echo" });
+      f.run.mockImplementationOnce(async () => {
+        started.resolve();
+        await gate.promise;
+      });
+      expect(f.plugin.agents.wake(bot, wake)).toBeUndefined();
+      await started.promise;
+      for (let i = 0; i < 32; i++)
+        expect(f.plugin.agents.wake(bot, wake)).toBeUndefined();
+      expect(() => f.plugin.agents.wake(bot, wake)).toThrow("busy");
+      await expect(
+        f.plugin.agents.wake(bot, wake, { current: () => true }),
+      ).resolves.toEqual({ status: "dropped", reason: "refused" });
+      expect(f.run).toHaveBeenCalledOnce();
+    } finally {
+      gate.resolve();
+      await f.ctx.fiber.dispose();
+    }
+  });
+
+  it.each(["aborted", "stale", "guard-error"] as const)(
+    "drops %s before queue admission",
+    async (reason) => {
+      const f = await setup({ supportsGuardedWake: true });
+      try {
+        await f.service.create({ type: "example/echo", name: "Echo" });
+        const signal = reason === "aborted" ? AbortSignal.abort() : undefined;
+        const current = () => {
+          if (reason === "guard-error")
+            throw new Error("Cannot read current state");
+          return reason !== "stale";
+        };
+        await expect(
+          f.plugin.agents.wake(bot, wake, {
+            ...(signal ? { signal } : {}),
+            current,
+          }),
+        ).resolves.toEqual({ status: "dropped", reason });
+        expect(f.run).not.toHaveBeenCalled();
+      } finally {
+        await f.ctx.fiber.dispose();
+      }
+    },
+  );
+
+  it.each([
+    "stale",
+    "aborted",
+    "guard-error",
+    "removed",
+    "disposed",
+    "membership",
+    "access",
+    "session",
+  ] as const)("drops a wake invalidated by %s while queued", async (change) => {
+    const f = await setup({ supportsGuardedWake: true });
+    const gate = runnerGate();
+    const started = runnerGate();
+    let caller!: Context;
+    const scope = f.plugin.plugin((ctx) => {
+      caller = ctx;
+    });
+    await scope.await();
+    try {
+      await f.service.create({ type: "example/echo", name: "Echo" });
+      f.run.mockImplementationOnce(async () => {
+        started.resolve();
+        await gate.promise;
+      });
+      f.plugin.agents.wake(bot, { ...wake, text: "Hold the lane" });
+      await started.promise;
+      let valid = true;
+      const abort = new AbortController();
+      const result = caller.agents.wake(bot, wake, {
+        signal: abort.signal,
+        current: () => {
+          if (!valid && change === "guard-error")
+            throw new Error("State unavailable");
+          return valid;
+        },
+      });
+      if (change === "aborted") abort.abort();
+      else if (change === "removed") await f.service.remove(bot);
+      else if (change === "disposed") await scope.dispose();
+      else if (change === "session") {
+        f.reconnecting();
+        f.recover();
+      } else if (change === "membership" || change === "access") {
+        const list = f.session.channels.list();
+        vi.spyOn(f.session.channels, "list").mockReturnValue({
+          ...list,
+          channels: list.channels.map((row) =>
+            row.id === channel
+              ? {
+                  ...row,
+                  visibility: "private",
+                  members: (row.members ?? []).filter(
+                    (key) => key !== (change === "membership" ? bot : viewer),
+                  ),
+                }
+              : row,
+          ),
+        });
+      } else valid = false;
+      gate.resolve();
+      await expect(result).resolves.toEqual({
+        status: "dropped",
+        reason:
+          change === "stale" || change === "aborted" || change === "guard-error"
+            ? change
+            : "unavailable",
+      });
+      expect(f.run).toHaveBeenCalledOnce();
+    } finally {
+      gate.resolve();
+      await f.ctx.fiber.dispose();
+    }
+  });
+
+  it("checks again after harness queue waits and resolves at handoff, before completion", async () => {
+    const f = await setup({ supportsGuardedWake: true });
+    const gate = runnerGate();
+    const entered = runnerGate<Delivery<Config>>();
+    let valid = true;
+    try {
+      await f.service.create({ type: "example/echo", name: "Echo" });
+      f.run.mockImplementationOnce((delivery) => {
+        entered.resolve(delivery);
+        delivery.workingUntil(gate.promise);
+        return gate.promise;
+      });
+      const dropped = f.plugin.agents.wake(bot, wake, {
+        current: () => valid,
+      });
+      const delivery = await entered.promise;
+      valid = false;
+      expect(delivery.current()).toBe(false);
+      await expect(dropped).resolves.toEqual({
+        status: "dropped",
+        reason: "stale",
+      });
+      gate.resolve();
+      const completed = runnerGate();
+      const abort = new AbortController();
+      f.run.mockImplementationOnce((next) => {
+        expect(next.current()).toBe(true);
+        next.accepted?.();
+        next.workingUntil(completed.promise);
+      });
+      const delivered = f.plugin.agents.wake(bot, wake, {
+        signal: abort.signal,
+        current: () => true,
+      });
+      try {
+        await expect(delivered).resolves.toEqual({ status: "delivered" });
+        abort.abort();
+        const accepted = f.run.mock.calls[1]?.[0];
+        expect(accepted?.current()).toBe(false);
+        expect(accepted?.trigger).toMatchObject({
+          type: "plugin",
+          plugin: "example",
+          text: wake.text,
+        });
+        accepted?.accepted?.();
+        await expect(delivered).resolves.toEqual({ status: "delivered" });
+      } finally {
+        completed.resolve();
+      }
+    } finally {
+      gate.resolve();
+      await f.ctx.fiber.dispose();
+    }
+  });
+
+  it.each(["stale", "stop", "delivered"] as const)(
+    "settles %s through the public API, host queue and real ACP delivery queue",
+    async (change) => {
+      const f = await setup({ supportsGuardedWake: true });
+      const transport = fakeSpawn({ hold: true });
+      const acp = await AcpProcess.start(transport.spawn, GOOSE, {
+        cwd: "/work",
+        serve: transport.serve,
+      });
+      const session = await acp.open({
+        cwd: "/work",
+        systemPrompt: "",
+        choice: () => ({ provider: "", model: "" }),
+      });
+      const gate = runnerGate();
+      const waiting = runnerGate();
+      session.beforeTurn = async () => {
+        waiting.resolve();
+        await gate.promise;
+      };
+      let valid = true;
+      try {
+        await f.service.create({ type: "example/echo", name: "Echo" });
+        f.run.mockImplementation((delivery) => {
+          delivery.workingUntil(
+            session.send(wake.text, {
+              current: delivery.current,
+              ...(delivery.accepted ? { accepted: delivery.accepted } : {}),
+              ...(delivery.acknowledged
+                ? { acknowledged: delivery.acknowledged }
+                : {}),
+              ...(delivery.step ? { step: delivery.step } : {}),
+            }),
+          );
+        });
+        const result = f.plugin.agents.wake(bot, wake, {
+          current: () => valid,
+        });
+        let settled = false;
+        void result?.then(() => {
+          settled = true;
+        });
+        await waiting.promise;
+        expect(settled).toBe(false);
+        expect(transport.geese[0]?.turns).toEqual([]);
+        if (change === "stale") valid = false;
+        if (change === "stop") await session.interrupt();
+        gate.resolve();
+        await expect(result).resolves.toEqual(
+          change === "delivered"
+            ? { status: "delivered" }
+            : {
+                status: "dropped",
+                reason: change === "stale" ? "stale" : "refused",
+              },
+        );
+        expect(transport.geese[0]?.turns).toHaveLength(
+          change === "delivered" ? 1 : 0,
+        );
+        transport.geese[0]?.turns[0]?.finish();
+        await session.idle();
+      } finally {
+        gate.resolve();
+        await acp.kill();
+        await f.ctx.fiber.dispose();
+      }
+    },
+  );
+
+  it("returns refused when a harness ignores a wake without accepting it", async () => {
+    const f = await setup({ supportsGuardedWake: true });
+    try {
+      await f.service.create({ type: "example/echo", name: "Echo" });
+      expect(() => f.service.wake(bot, wake, { current: () => true })).toThrow(
+        "Only a plugin",
+      );
+      await expect(
+        f.plugin.agents.wake(sibling, wake, { current: () => true }),
+      ).resolves.toEqual({ status: "dropped", reason: "unavailable" });
+      f.run.mockImplementationOnce(({ ignored }) => ignored?.());
+      await expect(
+        f.plugin.agents.wake(bot, wake, { current: () => true }),
+      ).resolves.toEqual({ status: "dropped", reason: "refused" });
+    } finally {
+      await f.ctx.fiber.dispose();
+    }
   });
 });
 
@@ -4904,6 +5253,30 @@ describe("an agent in several communities", () => {
       await f.service.remove(away);
       expect(f.service.memberships(bot)).toEqual([]);
     });
+  });
+
+  it("catches up its mentions in each community by its pubkey, kept under that community's key", async () => {
+    vi.useFakeTimers({ now: 1_000_000_000 });
+    try {
+      const { second, run } = await joined();
+      // Past the second its mention checkpoint starts at.
+      await vi.advanceTimersByTimeAsync(2_000);
+      // Lost by the live subscription in the community it was added to.
+      second.history.push(
+        eventDto(
+          message(author, channel, "lost there", nowSeconds(), [["p", bot]]),
+        ),
+      );
+      await vi.advanceTimersByTimeAsync(5 * 60_000);
+      await vi.waitFor(() => expect(run).toHaveBeenCalledOnce());
+      expect(run.mock.calls[0]?.[0].agent.key).toBe(away);
+      expect(heard(run)).toEqual(["lost there"]);
+      expect(mentionReads(second.session).at(-1)).toMatchObject({
+        "#p": [bot],
+      });
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("leaves one community and stays in its others, never its last, and comes back with its key", async () => {
@@ -8400,12 +8773,23 @@ const turns = (run: { mock: { calls: readonly (readonly unknown[])[] } }) =>
       ? `catch-up ${trigger.slug} ${trigger.events.length}${trigger.skipped ? " skipped" : ""}`
       : trigger.type;
   });
+/** Watch catch-up's reads; `mentionReads` are the mention stream's. */
 const catchUpReads = (session: RelaySession) =>
   vi
-    .mocked(session.read)
+    .mocked(session.readRemote)
     .mock.calls.map(([filters]) => filters[0] as ReadFilter)
-    .filter((filter) => filter.kinds?.includes(9));
+    .filter((filter) => filter.kinds?.includes(9) && !filter["#p"]);
+const mentionReads = (session: RelaySession) =>
+  vi
+    .mocked(session.readRemote)
+    .mock.calls.map(([filters]) => filters[0] as ReadFilter)
+    .filter((filter) => filter["#p"]);
 const nowSeconds = () => Math.floor(Date.now() / 1000);
+/** The saved checkpoints of watch streams, without the mention streams'. */
+const watchCheckpoints = (storage: Parameters<typeof readCheckpoints>[0]) =>
+  Object.entries(readCheckpoints(storage))
+    .filter(([key]) => (JSON.parse(key) as unknown[])[1] !== MENTIONS)
+    .map(([, checkpoint]) => checkpoint);
 
 it.each([false, true])(
   "flushes earlier catch-up events before a later event with a held destination (at capacity: %s)",
@@ -9101,14 +9485,15 @@ it("takes the next page's cursor from the relay's events, not a local one older 
     // Missed while the socket was down.
     vi.setSystemTime((now + 200) * 1000);
     for (let i = 0; i < 20; i++) history.push(posted(`m${i}`, now + 100 + i));
-    const read = vi.mocked(session.read);
+    const read = vi.mocked(session.readRemote);
     const original = read.getMockImplementation() as NonNullable<
       ReturnType<typeof read.getMockImplementation>
     >;
     let first = true;
     read.mockImplementation(async (filters, options) => {
       const events = await original(filters, options);
-      if (!filters[0]?.kinds?.includes(9) || !first) return events;
+      if (!filters[0]?.kinds?.includes(9) || filters[0]["#p"] || !first)
+        return events;
       first = false;
       // The owner's message not yet sent, from before the relay's oldest.
       return [...events, { ...posted("unsent", now + 50) }];
@@ -9141,13 +9526,13 @@ it("holds a watch's live events while it catches up, then hears them oldest firs
       unblock = resolve;
     });
     run.mockImplementation(() => blocked);
-    const read = vi.mocked(session.read);
+    const read = vi.mocked(session.readRemote);
     const original = read.getMockImplementation() as NonNullable<
       ReturnType<typeof read.getMockImplementation>
     >;
     let first = true;
     read.mockImplementation(async (filters, options) => {
-      if (filters[0]?.kinds?.includes(9) && first) {
+      if (filters[0]?.kinds?.includes(9) && !filters[0]["#p"] && first) {
         first = false;
         // Live traffic arrives while the page is on its way, newest first.
         emit({
@@ -9198,7 +9583,7 @@ it("starts catch-up again when its watch is edited while a page is being read", 
       eventDto(message(other, channel, "before", now + 10)),
       posted("deploy", now + 20),
     );
-    const read = vi.mocked(session.read);
+    const read = vi.mocked(session.readRemote);
     const original = read.getMockImplementation() as NonNullable<
       ReturnType<typeof read.getMockImplementation>
     >;
@@ -9208,7 +9593,7 @@ it("starts catch-up again when its watch is edited while a page is being read", 
     });
     let first = true;
     read.mockImplementation(async (filters, options) => {
-      if (filters[0]?.kinds?.includes(9) && first) {
+      if (filters[0]?.kinds?.includes(9) && !filters[0]["#p"] && first) {
         first = false;
         await held;
       }
@@ -9353,6 +9738,95 @@ it("does not catch up after a restart on a message it already heard live", async
   }
 });
 
+it.each([
+  { label: "every message matches", rate: 5, matching: 5, only: false },
+  { label: "one in ten matches", rate: 10, matching: 1, only: true },
+])(
+  "does not give a busy watch's messages again after a restart: $label",
+  async ({ rate, matching, only }) => {
+    vi.useFakeTimers({ now: 1_000_000_000 });
+    try {
+      const storage = memoryStorage();
+      const stranger = keypair();
+      const first = await setup({ storage, identities: [echo] });
+      await first.service.save(bot, {
+        attentionEnabled: true,
+        attention: {
+          "watch/chat": {
+            ...chat["watch/chat"],
+            ...(only && { authors: [author.pubkey] }),
+          },
+          "watch/channel": null,
+        },
+      });
+      await vi.advanceTimersByTimeAsync(0);
+      // A minute of traffic: more than the last read's lag holds at once.
+      const sent: ReturnType<typeof posted>[] = [];
+      for (let index = 0; index < 60 * rate; index++) {
+        const busy = eventDto(
+          message(
+            index % rate < matching ? author : stranger,
+            channel,
+            `message ${index}`,
+            nowSeconds(),
+          ),
+        );
+        first.history.push(busy);
+        sent.push(busy);
+        first.emit({ events: [busy] });
+        await vi.advanceTimersByTimeAsync(1_000 / rate);
+      }
+      // Past its lane's rate, the rest are dropped, but heard all the same.
+      expect(heard(first.run)).toHaveLength(60);
+      first.connect(false);
+      const second = await setup({
+        storage,
+        identities: [echo],
+        history: sent,
+      });
+      await vi.advanceTimersByTimeAsync(10_000);
+      expect(heard(second.run)).toEqual([]);
+    } finally {
+      vi.useRealTimers();
+    }
+  },
+);
+
+it("does not wake a watch widened since for a message it heard before a restart", async () => {
+  vi.useFakeTimers({ now: 1_000_000_000 });
+  try {
+    const storage = memoryStorage();
+    const stranger = keypair();
+    const first = await setup({ storage, identities: [echo] });
+    const watch = (authors: string[]) => ({
+      attentionEnabled: true,
+      attention: {
+        "watch/chat": { ...chat["watch/chat"], authors },
+        "watch/channel": null,
+      },
+    });
+    await first.service.save(bot, watch([author.pubkey]));
+    // Past the second the watch's checkpoint starts at.
+    await vi.advanceTimersByTimeAsync(2_000);
+    const sent = [
+      posted("foo live", nowSeconds()),
+      eventDto(message(stranger, channel, "bar live", nowSeconds())),
+    ];
+    first.history.push(...sent);
+    first.emit({ events: sent });
+    await vi.waitFor(() => expect(heard(first.run)).toEqual(["foo live"]));
+    await first.service.save(bot, watch([author.pubkey, stranger.pubkey]));
+    await vi.advanceTimersByTimeAsync(0);
+    // Restarted before a read moves the checkpoint past them.
+    first.connect(false);
+    const second = await setup({ storage, identities: [echo], history: sent });
+    await vi.advanceTimersByTimeAsync(10_000);
+    expect(heard(second.run)).toEqual([]);
+  } finally {
+    vi.useRealTimers();
+  }
+});
+
 it("wakes a watch added since for nothing older, though an overlapping watch catches up on it", async () => {
   vi.useFakeTimers({ toFake: ["Date"] });
   try {
@@ -9438,7 +9912,7 @@ it("catches up a watch of other kinds, or of every kind, on what it missed", asy
     // Each reads its watch's own kinds; one of every kind, those live hears,
     // as a read must name its kinds.
     const reads = vi
-      .mocked(session.read)
+      .mocked(session.readRemote)
       .mock.calls.map(([filters]) => filters[0] as ReadFilter)
       .filter((filter) => filter.until !== undefined);
     expect(reads.map((filter) => filter.kinds)).toEqual(
@@ -9491,9 +9965,7 @@ it.each([
       await settle();
       // Ticks do not pass over it: it is read up to the connect, no further.
       expect(
-        Object.values(readCheckpoints(storage)).map(
-          ({ read, through }) => read ?? through,
-        ),
+        watchCheckpoints(storage).map(({ read, through }) => read ?? through),
       ).toEqual([now + 1]);
       expect(heard(run)).toEqual([]);
       // A read a little behind now gives it, with no reconnect.
@@ -9607,7 +10079,7 @@ it("finds an event the relay stores late with an older time, after a read passed
     await settle();
     expect(
       vi
-        .mocked(second.session.read)
+        .mocked(second.session.readRemote)
         .mock.calls.some(([filters]) => filters[0]?.kinds?.includes(40007)),
     ).toBe(true);
     expect(heard(second.run)).toEqual([]);
@@ -9784,7 +10256,7 @@ it("reads what a route missed while it was down, though it comes back between re
     vi.setSystemTime(now * 1000);
     // When each read of a kind live does not hear reads up to, and when.
     const notes: { until?: number | undefined; at: number }[] = [];
-    const read = vi.mocked(session.read);
+    const read = vi.mocked(session.readRemote);
     const original = read.getMockImplementation();
     read.mockImplementation((filters, options) => {
       if (filters[0]?.kinds?.includes(30023))
@@ -9867,7 +10339,7 @@ describe("catch-up lane capacity", () => {
       recover();
       // Nine turns are handed on, the last at the end of its 576th event.
       const progress = () =>
-        Object.values(readCheckpoints(storage)).map(
+        watchCheckpoints(storage).map(
           ({ through, after }) => after?.created_at ?? through,
         )[0] ?? 0;
       await vi.waitFor(() =>
@@ -10119,6 +10591,242 @@ it("answers a mention catch-up reads from while it listened, not one from before
     expect(run.mock.calls[0]?.[0]).toMatchObject({
       trigger: { type: "mention" },
     });
+  } finally {
+    vi.useRealTimers();
+  }
+});
+
+it("finds mentions the live subscription lost while it stayed connected", async () => {
+  vi.useFakeTimers({ now: 1_000_000_000 });
+  try {
+    const { service, run, history, emit, session } = await setup({
+      identities: [echo],
+    });
+    const start = nowSeconds();
+    const mention = (content: string, created_at: number) =>
+      eventDto(message(author, "other", content, created_at, [["p", bot]]));
+    // Mentions need no attention; the watch reads its channel.
+    await service.save(bot, { attentionEnabled: true, attention: chat });
+    await vi.advanceTimersByTimeAsync(0);
+    const heardLive = mention("heard live", start + 10);
+    history.push(heardLive, mention("lost mention", start + 20));
+    emit({ events: [heardLive], channelId: "other" });
+    await vi.waitFor(() => expect(heard(run)).toEqual(["heard live"]));
+    // Connected throughout: nothing but time says these were lost.
+    await vi.advanceTimersByTimeAsync(3 * 60_000);
+    await vi.waitFor(() => expect(run).toHaveBeenCalledTimes(2));
+    expect(heard(run)).toEqual(["heard live", "lost mention"]);
+    expect(turns(run)).toEqual(["mention", "mention"]);
+    expect(mentionReads(session)[0]).toMatchObject({
+      kinds: [9, 40003, 40007, 46010],
+      "#p": [bot],
+    });
+    // With attention off, mentions are still found.
+    await service.save(bot, { attentionEnabled: false });
+    await vi.advanceTimersByTimeAsync(0);
+    history.push(mention("lost while off", nowSeconds()));
+    await vi.advanceTimersByTimeAsync(3 * 60_000);
+    await vi.waitFor(() => expect(run).toHaveBeenCalledTimes(3));
+    expect(heard(run).at(-1)).toBe("lost while off");
+    // One sent late, stamped before the last read, is still found.
+    history.push(mention("sent late", nowSeconds() - 240));
+    await vi.advanceTimersByTimeAsync(3 * 60_000);
+    await vi.waitFor(() => expect(run).toHaveBeenCalledTimes(4));
+    expect(heard(run).at(-1)).toBe("sent late");
+    // Later reads cover the same minutes again, and wake nothing.
+    await vi.advanceTimersByTimeAsync(10 * 60_000);
+    expect(run).toHaveBeenCalledTimes(4);
+  } finally {
+    vi.useRealTimers();
+  }
+});
+
+it("keeps finding lost mentions while its watches are edited more often than it polls", async () => {
+  vi.useFakeTimers({ now: 1_000_000_000 });
+  try {
+    const { service, run, history, session } = await setup({
+      identities: [echo],
+    });
+    await service.save(bot, { attentionEnabled: true, attention: chat });
+    await vi.advanceTimersByTimeAsync(60_000);
+    history.push(
+      eventDto(
+        message(author, "other", "lost mention", nowSeconds(), [["p", bot]]),
+      ),
+    );
+    // Each edit restarts the watches' catch-up, more often than it polls;
+    // the mention poll goes on.
+    for (let edit = 0; edit < 30; edit++) {
+      await service.save(bot, {
+        attention: {
+          "watch/chat": {
+            ...chat["watch/chat"],
+            exclude_authors: [keypair().pubkey],
+          },
+        },
+      });
+      await vi.advanceTimersByTimeAsync(20_000);
+    }
+    expect(heard(run)).toEqual(["lost mention"]);
+    // An edit does not read mentions again: only the poll does.
+    const reads = mentionReads(session).length;
+    for (let edit = 0; edit < 10; edit++) {
+      await service.save(bot, {
+        attention: {
+          "watch/chat": {
+            ...chat["watch/chat"],
+            exclude_authors: [keypair().pubkey],
+          },
+        },
+      });
+      await vi.advanceTimersByTimeAsync(1_000);
+    }
+    expect(mentionReads(session).length - reads).toBeLessThanOrEqual(1);
+  } finally {
+    vi.useRealTimers();
+  }
+});
+
+it("does not answer a mention again after other traffic pushed it out of what it saw", async () => {
+  vi.useFakeTimers({ now: 1_000_000_000 });
+  try {
+    const { run, history, emit, session } = await setup({
+      identities: [echo],
+    });
+    await vi.advanceTimersByTimeAsync(0);
+    const mention = eventDto(
+      message(author, "other", "answered once", nowSeconds(), [["p", bot]]),
+    );
+    history.push(mention);
+    emit({ events: [mention], channelId: "other" });
+    await vi.waitFor(() => expect(heard(run)).toEqual(["answered once"]));
+    // More traffic, in its channel too, than the agent keeps as seen.
+    const noise = (round: number) =>
+      emit({
+        events: Array.from({ length: 2100 }, (_, index) =>
+          event(`${round}noise${String(index).padStart(4, "0")}`, {
+            created_at: nowSeconds(),
+            tags: [["h", "other"]],
+          }),
+        ),
+        channelId: "other",
+      });
+    noise(1);
+    await vi.advanceTimersByTimeAsync(0);
+    // Neither a live copy sent again nor a catch-up read covering it again
+    // answers it.
+    emit({ events: [mention], channelId: "other" });
+    await vi.advanceTimersByTimeAsync(0);
+    let reads = mentionReads(session).length;
+    await vi.advanceTimersByTimeAsync(6 * 60_000);
+    expect(mentionReads(session).length).toBeGreaterThan(reads);
+    expect(heard(run)).toEqual(["answered once"]);
+    // One that only catch-up found is remembered the same way.
+    history.push(
+      eventDto(
+        message(author, "other", "found once", nowSeconds(), [["p", bot]]),
+      ),
+    );
+    await vi.advanceTimersByTimeAsync(3 * 60_000);
+    await vi.waitFor(() =>
+      expect(heard(run)).toEqual(["answered once", "found once"]),
+    );
+    noise(2);
+    await vi.advanceTimersByTimeAsync(0);
+    reads = mentionReads(session).length;
+    await vi.advanceTimersByTimeAsync(6 * 60_000);
+    expect(mentionReads(session).length).toBeGreaterThan(reads);
+    expect(heard(run)).toEqual(["answered once", "found once"]);
+  } finally {
+    vi.useRealTimers();
+  }
+});
+
+it("does not answer a mention again that a waiting catch-up read before live gave it", async () => {
+  vi.useFakeTimers({ now: 1_000_000_000 });
+  try {
+    const { run, history, emit, session } = await setup({
+      identities: [echo],
+      timeoutMs: 30 * 60_000,
+    });
+    await vi.advanceTimersByTimeAsync(0);
+    // Each turn waits until it is let go, so the mention queue stays full.
+    const turnsWaiting: (() => void)[] = [];
+    run.mockImplementation(
+      () => new Promise<void>((resolve) => turnsWaiting.push(resolve)),
+    );
+    const mention = (content: string) =>
+      eventDto(message(author, "other", content, nowSeconds(), [["p", bot]]));
+    const fill = (round: number) =>
+      emit({
+        events: Array.from({ length: 33 }, (_, index) =>
+          mention(`queued ${round}.${index}`),
+        ),
+        channelId: "other",
+      });
+    fill(1);
+    await vi.advanceTimersByTimeAsync(0);
+    // The first turn starting freed a place.
+    fill(2);
+    await vi.advanceTimersByTimeAsync(0);
+    // Catch-up reads one the live subscription lost, and waits for room.
+    const late = mention("late");
+    history.push(late);
+    const reads = mentionReads(session).length;
+    await vi.advanceTimersByTimeAsync(3 * 60_000);
+    expect(mentionReads(session).length).toBeGreaterThan(reads);
+    // Live gives it the room one finished turn frees, then other traffic
+    // pushes it out of what the agent saw.
+    turnsWaiting.shift()?.();
+    await vi.advanceTimersByTimeAsync(0);
+    emit({ events: [late], channelId: "other" });
+    await vi.advanceTimersByTimeAsync(0);
+    emit({
+      events: Array.from({ length: 2100 }, (_, index) =>
+        event(`noise${String(index).padStart(4, "0")}`, {
+          created_at: nowSeconds(),
+          tags: [["h", "other"]],
+        }),
+      ),
+      channelId: "other",
+    });
+    await vi.advanceTimersByTimeAsync(0);
+    // Every turn finishes; catch-up goes on with what it read.
+    run.mockImplementation(async () => {});
+    for (const finish of turnsWaiting.splice(0)) finish();
+    await vi.advanceTimersByTimeAsync(3 * 60_000);
+    expect(heard(run).filter((content) => content === "late")).toEqual([
+      "late",
+    ]);
+  } finally {
+    vi.useRealTimers();
+  }
+});
+
+it("keeps reading mentions while a watch's catch-up is stuck", async () => {
+  vi.useFakeTimers({ now: 1_000_000_000 });
+  try {
+    const { service, run, history, session } = await setup({
+      identities: [echo],
+    });
+    await service.save(bot, { attentionEnabled: true, attention: chat });
+    await vi.advanceTimersByTimeAsync(0);
+    // Every watch read from here on never comes back.
+    const read = vi.mocked(session.readRemote);
+    const original = read.getMockImplementation() as NonNullable<
+      ReturnType<typeof read.getMockImplementation>
+    >;
+    read.mockImplementation((filters, options) =>
+      filters[0]?.["#h"] ? new Promise(() => {}) : original(filters, options),
+    );
+    await vi.advanceTimersByTimeAsync(3 * 60_000);
+    history.push(
+      eventDto(
+        message(author, "other", "still heard", nowSeconds(), [["p", bot]]),
+      ),
+    );
+    await vi.advanceTimersByTimeAsync(3 * 60_000);
+    await vi.waitFor(() => expect(heard(run)).toEqual(["still heard"]));
   } finally {
     vi.useRealTimers();
   }
@@ -10426,11 +11134,23 @@ it.each([
         identities: [echo],
       });
       if (learnedSince) {
-        // The owner's own lookup finds it right after the read asks.
+        // The owner's own lookup finds it right after the watch's read asks;
+        // the mention read before it leaves it to the watches.
+        let read = false;
+        const readRemote = vi.mocked(session.readRemote);
+        const original = readRemote.getMockImplementation() as NonNullable<
+          ReturnType<typeof readRemote.getMockImplementation>
+        >;
+        readRemote.mockImplementation(async (filters, options) => {
+          const events = await original(filters, options);
+          // The read of every channel, which finds it for the watch.
+          if (!filters[0]?.["#p"] && !filters[0]?.["#h"]) read = true;
+          return events;
+        });
         const unattended = session.unattended.bind(session);
         vi.spyOn(session, "unattended").mockImplementation((id, live) => {
           const result = unattended(id, live);
-          if (id === plaza && !live) learned.delete(plaza);
+          if (read && id === plaza && !live) learned.delete(plaza);
           return result;
         });
       }
@@ -10456,6 +11176,77 @@ it.each([
     }
   },
 );
+
+it("keeps reading mentions while a full Interest waits for a mention only its watches hear", async () => {
+  vi.useFakeTimers({ now: 1_000_000_000 });
+  try {
+    let release!: () => void;
+    const blocked = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const watched: string[] = [];
+    const { service, run, history, emit, learned } = await setup({
+      identities: [echo],
+      runOnce: async ({ delivery }) => {
+        const { trigger } = delivery;
+        if (trigger.type === "watch" || trigger.type === "catch-up") {
+          watched.push(
+            ...(trigger.type === "watch"
+              ? [trigger.event.content]
+              : trigger.events.map(({ event }) => event.content)),
+          );
+          if (watched.length === 1) await blocked;
+        }
+        return { ok: true };
+      },
+    });
+    const mentions = () =>
+      run.mock.calls.flatMap(([input]) =>
+        input.trigger.type === "mention" ? [input.trigger.event.content] : [],
+      );
+    // Ten watches of one Interest, of every channel.
+    await service.save(bot, {
+      attentionEnabled: true,
+      attention: Object.fromEntries(
+        Array.from({ length: 10 }, (_, i) => [
+          `watch/all${i}`,
+          { ...chat["watch/chat"], channels: "all" },
+        ]),
+      ),
+    });
+    await vi.advanceTimersByTimeAsync(60_000);
+    // One of them runs and holds its lane; the rest fill the Interest.
+    emit({ events: [message(author, channel, "fills", nowSeconds())] });
+    await vi.waitFor(() => expect(watched).toEqual(["fills"]));
+    await vi.advanceTimersByTimeAsync(60_000);
+    // Live loses one that names the agent in a public channel only agents'
+    // lookups know, which only the watches hear, and then an ordinary
+    // mention.
+    learned.add(plaza);
+    history.push(
+      eventDto(message(author, plaza, "watched", nowSeconds(), [["p", bot]])),
+    );
+    await vi.advanceTimersByTimeAsync(3 * 60_000);
+    history.push(
+      eventDto(
+        message(author, "other", "lost mention", nowSeconds(), [["p", bot]]),
+      ),
+    );
+    await vi.advanceTimersByTimeAsync(3 * 60_000);
+    // The mention is answered while the Interest is still full.
+    await vi.waitFor(() => expect(mentions()).toEqual(["lost mention"]));
+    expect(watched).toEqual(["fills"]);
+    // Room opens, and the watches' own pass gives them the one only they hear.
+    release();
+    await vi.advanceTimersByTimeAsync(3 * 60_000);
+    await vi.waitFor(() =>
+      expect([...watched, ...heard(run)]).toContain("watched"),
+    );
+    expect(mentions()).toEqual(["lost mention"]);
+  } finally {
+    vi.useRealTimers();
+  }
+});
 
 it("wakes nothing from the time no plugin showed its attention", async () => {
   vi.useFakeTimers({ toFake: ["Date"] });
@@ -10702,9 +11493,9 @@ it("holds a public channel's catch-up until its metadata is known, and hears it 
     await vi.advanceTimersByTimeAsync(10_000);
     await settle();
     expect(heard(run)).toEqual([]);
-    expect(
-      Object.values(readCheckpoints(storage)).map(({ through }) => through),
-    ).toEqual([now]);
+    expect(watchCheckpoints(storage).map(({ through }) => through)).toEqual([
+      now,
+    ]);
     pending.delete(plaza);
     await vi.advanceTimersByTimeAsync(5_000);
     await settle();
@@ -10728,7 +11519,7 @@ it("holds a public channel's catch-up until its metadata is known, and hears it 
     // Its read asks the session to resolve the channels it finds.
     expect(
       vi
-        .mocked(session.read)
+        .mocked(session.readRemote)
         .mock.calls.filter(([filters]) => filters[0]?.until !== undefined)
         .map(([filters, options]) => [
           !!filters[0]?.["#h"],
@@ -15047,13 +15838,12 @@ it("changes instructions in place and discards a dismissed change draft", async 
 
 it("reads model selections through MCP by name and in lists without exposing config", async () => {
   const f = await setup();
+  const defaults = new ClaudeDefaults(memoryStorage());
   f.plugin.agents.register({
     ...f.type,
     id: "models",
-    readModelSettings: () => ({
-      model: { source: "configured", value: "model-a" },
-      effort: { source: "default" },
-    }),
+    readModelSettings: (config, context) =>
+      defaults.readModelSettings(config, context),
   });
   await f.service.create({ type: "example/echo", name: "Reader" });
   await f.service.create({ type: "example/models", name: "Model" });
@@ -15068,24 +15858,83 @@ it("reads model selections through MCP by name and in lists without exposing con
   const read = async (agent?: string) =>
     JSON.parse((await callTool(client, {}, "agent_read", { agent })) as string);
   try {
-    const expected = {
-      pubkey: sibling,
-      name: "Model",
-      type: "example/models",
-      instructions: "secret config",
-      synced: false,
-      modelSettings: {
-        model: { source: "configured", value: "model-a" },
-        effort: { source: "default" },
-      },
-    };
-    expect(await read("Model")).toEqual(expected);
-    expect(await read(sibling)).toEqual(expected);
-    expect(await read()).toContainEqual(expected);
+    for (const model of ["model-a", "model-b"]) {
+      await defaults.save({ model, effort: "high" });
+      const expected = {
+        pubkey: sibling,
+        name: "Model",
+        type: "example/models",
+        instructions: "secret config",
+        synced: false,
+        modelSettings: {
+          model: {
+            source: "default",
+            resolved: { value: model, source: "device" },
+          },
+          effort: {
+            source: "default",
+            resolved: { value: "high", source: "device" },
+          },
+        },
+      };
+      expect(await read("Model")).toEqual(expected);
+      expect(await read(sibling)).toEqual(expected);
+      expect(await read()).toContainEqual(expected);
+      const membership = f.service.find(sibling);
+      if (!membership) throw new Error("Missing local agent");
+      expect(await f.plugin.agents.readModelSettings?.(membership.key)).toEqual(
+        expected.modelSettings,
+      );
+    }
     expect(await read("Reader")).toMatchObject({
       modelSettings: { unavailable: expect.any(String) },
     });
   } finally {
+    await f.ctx.fiber.dispose();
+  }
+});
+
+it("reads execution placement from saved state before projecting native defaults", async () => {
+  const storage = memoryStorage();
+  const f = await setup({ storage });
+  const defaults = new ClaudeDefaults(memoryStorage());
+  await defaults.save({ model: "local-model", effort: "high" });
+  f.plugin.agents.register({
+    ...f.type,
+    id: "models",
+    execution: true,
+    readModelSettings: (config, context) =>
+      defaults.readModelSettings(config, context),
+  });
+  await f.service.create({ type: "example/models", name: "Model" });
+  const agent = f.service.find(bot);
+  if (!agent) throw new Error("Missing local agent");
+  const key = `buzz.agent.execution.v1:${agent.key}`;
+  // The synchronous copy can lag another writer; inspect the saved binding.
+  const get = storage.get;
+  const cached = vi
+    .spyOn(storage, "get")
+    .mockImplementation((entry) => (entry === key ? null : get(entry)));
+  try {
+    await storage.set(key, JSON.stringify({ provider: "example/remote" }));
+    expect(await f.service.readModelSettings(agent.key)).toEqual({
+      model: { source: "default", resolved: { unavailable: "remote" } },
+      effort: { source: "default", resolved: { unavailable: "remote" } },
+    });
+    await storage.set(key, "invalid");
+    expect(await f.service.readModelSettings(agent.key)).toEqual({
+      model: {
+        source: "default",
+        resolved: { unavailable: "execution-unavailable" },
+      },
+      effort: {
+        source: "default",
+        resolved: { unavailable: "execution-unavailable" },
+      },
+    });
+  } finally {
+    cached.mockRestore();
+    await storage.set(key, null);
     await f.ctx.fiber.dispose();
   }
 });
@@ -15116,7 +15965,7 @@ it("does not infer another device's model settings from its local type", async (
   }
 });
 
-it("reads confirmed synced model settings and refuses stale local choices", async () => {
+it("reads confirmed synced model settings and preserves execution's effort refusal", async () => {
   const subject: Subject = {
     owner: viewer,
     community: "https://relay.example.test",
@@ -15128,19 +15977,59 @@ it("reads confirmed synced model settings and refuses stale local choices", asyn
     binding: (agent) =>
       agent.pubkey === sibling ? { settings: { mode: "synced", subject } } : {},
   });
-  const project = vi.fn(({ reply }: Config) => ({
-    model: { source: "configured" as const, value: reply },
-    effort: { source: "default" as const },
-  }));
+  const provider = new CodexProvider(async (_id, options) => {
+    let exit!: (code: number | null) => void;
+    const exited = new Promise<number | null>((resolve) => {
+      exit = resolve;
+    });
+    return {
+      exited,
+      end: async () => {
+        exit(0);
+      },
+      kill: async () => {
+        exit(null);
+      },
+      write: async (line) => {
+        const wire = JSON.parse(line);
+        if (wire.id === undefined) return;
+        const result =
+          wire.method === "account/read"
+            ? { requiresOpenaiAuth: false }
+            : wire.method === "model/list"
+              ? {
+                  data: [
+                    {
+                      model: "synced-model",
+                      displayName: "Synced model",
+                      description: "",
+                      isDefault: true,
+                      defaultReasoningEffort: "medium",
+                      supportedReasoningEfforts: [
+                        { reasoningEffort: "medium", description: "" },
+                      ],
+                    },
+                  ],
+                  nextCursor: null,
+                }
+              : {};
+        options?.onStdout?.(`${JSON.stringify({ id: wire.id, result })}\n`);
+      },
+    };
+  }, memoryStorage());
+  await provider.check();
+  const project = vi.fn((config: Config, context?: AgentModelSettingsContext) =>
+    provider.readModelSettings(config, context),
+  );
   f.plugin.agents.register({
     ...f.type,
     id: "models",
     readModelSettings: project,
     syncedSettings: {
-      schema: { model: "string" },
+      schema: { model: "string", effort: "string" },
       withSynced: (config, settings) => ({
         ...config,
-        reply: settings.model ?? "",
+        ...settings,
       }),
     },
   });
@@ -15149,8 +16038,14 @@ it("reads confirmed synced model settings and refuses stale local choices", asyn
   await vi.waitFor(() => expect(f.plugin.agents.handle(bot)).toBeDefined());
   const handle = f.plugin.agents.handle(bot);
   if (!handle?.readAgents) throw new Error("Missing read handle");
+  const client = appClient(handle, {
+    read: vi.fn(),
+    memories: async () => ({ entries: [], partial: false }),
+  });
+  const read = async (agent?: string) =>
+    JSON.parse((await callTool(client, {}, "agent_read", { agent })) as string);
   try {
-    expect(await handle.readAgents(sibling)).toMatchObject({
+    expect(await read(sibling)).toMatchObject({
       modelSettings: { unavailable: "Its synced config could not be read" },
     });
     expect(project).not.toHaveBeenCalled();
@@ -15172,20 +16067,128 @@ it("reads confirmed synced model settings and refuses stale local choices", asyn
           generateSecretKey(),
         ) as RelayEvent,
       });
-    revise({ model: "synced-model" });
-    expect(await handle.readAgents(sibling)).toMatchObject({
-      modelSettings: {
-        model: { source: "configured", value: "synced-model" },
-      },
-    });
+    for (const effort of ["xhigh", "medium"]) {
+      revise({ model: "synced-model", effort });
+      const expected = {
+        model: {
+          source: "configured",
+          value: "synced-model",
+          resolved: { value: "synced-model", source: "configured" },
+        },
+        effort: {
+          source: "configured",
+          value: effort,
+          resolved:
+            effort === "xhigh"
+              ? { unavailable: "unsupported" }
+              : { value: "medium", source: "configured" },
+        },
+      };
+      expect(await read("Model")).toMatchObject({ modelSettings: expected });
+      expect(await read()).toContainEqual(
+        expect.objectContaining({ pubkey: sibling, modelSettings: expected }),
+      );
+      const agent = f.service.find(sibling);
+      if (!agent) throw new Error("Missing local agent");
+      expect(await f.plugin.agents.readModelSettings?.(agent.key)).toEqual(
+        expected,
+      );
+    }
     revise({ model: { secret: "invalid config" } });
-    expect(await handle.readAgents(sibling)).toMatchObject({
+    expect(await read(sibling)).toMatchObject({
       modelSettings: { unavailable: "Its synced config could not be read" },
     });
   } finally {
+    provider.dispose();
     await f.ctx.fiber.dispose();
   }
 });
+
+it.each(["edit", "delete"])(
+  "keeps instruction text and revision together when %s arrives during placement inspection",
+  async (change) => {
+    const subject: Subject = {
+      owner: viewer,
+      community: "https://relay.example.test",
+      subject: sibling,
+      channel: "9b353519-f4fe-4757-aef4-bec6cc0ae54c",
+      type: "buzz.agent.instructions",
+    };
+    const storage = memoryStorage();
+    const f = await setup({
+      storage,
+      binding: (agent) =>
+        agent.pubkey === sibling
+          ? { instructions: { mode: "synced", subject } }
+          : {},
+    });
+    f.plugin.agents.register<Config & { instructions?: string }>({
+      ...f.type,
+      id: "placed",
+      execution: true,
+      carry: ({ instructions }) => ({ instructions: instructions ?? "" }),
+    });
+    await f.service.create({ type: "example/echo", name: "Reader" });
+    await f.service.create({ type: "example/placed", name: "Placed" });
+    await vi.waitFor(() => expect(f.plugin.agents.handle(bot)).toBeDefined());
+    const handle = f.plugin.agents.handle(bot);
+    const agent = f.service.find(sibling);
+    if (!handle?.readAgents || !agent) throw new Error("Missing read agent");
+    const store = internals(f.service).configStore;
+    const revise = (text: string, op = "create") => {
+      const event = finalizeEvent(
+        {
+          kind: 45010,
+          created_at: 1,
+          content: JSON.stringify({ version: 1, text }),
+          tags: [["op", op]],
+        },
+        generateSecretKey(),
+      ) as RelayEvent;
+      store.applyRead(subject, store.capture(subject), { kind: "head", event });
+      return event.id;
+    };
+    const revision = revise("Before");
+    const entered = runnerGate();
+    const release = runnerGate();
+    const read = storage.read;
+    const held = vi.spyOn(storage, "read").mockImplementation(async (key) => {
+      if (key === `buzz.agent.execution.v1:${agent.key}`) {
+        entered.resolve();
+        await release.promise;
+      }
+      return read(key);
+    });
+    const pending = handle.readAgents("Placed");
+    try {
+      await entered.promise;
+      const next = revise("After", change === "delete" ? "delete" : "edit");
+      release.resolve();
+      const result = await pending;
+      expect(result).toMatchObject({
+        instructions: "Before",
+        synced: true,
+      });
+      expect(
+        result,
+        "Instruction revision must match captured text",
+      ).toMatchObject({ revision });
+      const current = (await handle.readAgents()) as unknown[];
+      expect(current).toContainEqual(
+        expect.objectContaining(
+          change === "delete"
+            ? { pubkey: sibling, unavailable: expect.any(String) }
+            : { pubkey: sibling, instructions: "After", revision: next },
+        ),
+      );
+    } finally {
+      release.resolve();
+      await pending;
+      held.mockRestore();
+      await f.ctx.fiber.dispose();
+    }
+  },
+);
 
 it("reads synced instructions it can't use as unavailable, not empty", async () => {
   const subject: Subject = {

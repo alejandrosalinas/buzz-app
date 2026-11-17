@@ -10,6 +10,7 @@ import {
   render,
   screen,
   waitFor,
+  within,
 } from "@testing-library/react";
 import { createElement } from "react";
 import { attachmentDraft } from "../messages/attachment-draft";
@@ -747,3 +748,159 @@ it("carries the owner's profile purge generation so the companion rereads shown 
   await remote.profiles.ensure(["cd".repeat(32)], "background");
   await vi.waitFor(() => expect(ensure).toHaveBeenCalledTimes(2));
 });
+
+it.each(["private", "dm", "solo", "public"] as const)(
+  "resolves and discloses a detached %s forward in the owning session",
+  async (privacy) => {
+    const h = harness();
+    const reference = {
+      version: 1 as const,
+      origin: "https://example.test",
+      channelId: "source",
+      id: "c".repeat(64),
+    };
+    const agent = "de".repeat(32);
+    Object.assign(h.session, {
+      agentLibrary: {
+        snapshot: () => ({
+          identities: [{ pubkey: agent, name: "Local Agent" }],
+        }),
+      },
+    });
+    let content = "Authorized source @Local Agent";
+    const row = () => ({
+      id: reference.id,
+      channelId: "source",
+      authorId: h.session.viewer,
+      createdAt: 1,
+      content,
+      mentions: [agent],
+      participants: [],
+      attachments: [],
+      reactions: [],
+      replyCount: 0,
+    });
+    const dispose = vi.fn();
+    vi.spyOn(h.session, "thread").mockImplementation(
+      () =>
+        ({
+          snapshot: () => ({
+            status: "ready",
+            targetStatus: "ready",
+            target: row(),
+            replies: [],
+            canLoadMore: false,
+          }),
+          subscribe: () => () => {},
+          refresh: async () => {},
+          dispose,
+        }) as unknown as ReturnType<typeof h.session.thread>,
+    );
+    vi.spyOn(h.session.messages, "forwardProblem").mockReturnValue(undefined);
+    const forward = vi
+      .spyOn(h.session.messages, "forward")
+      .mockReturnValue("forwarded-id");
+    Object.assign(h.session.channels, {
+      resolve: async () => {},
+      describe: () => ({
+        state: "found",
+        name: "Source",
+        private: privacy === "private",
+        hidden: false,
+        archived: false,
+        joined: true,
+        channelType:
+          privacy === "dm" || privacy === "solo" ? privacy : "stream",
+      }),
+    });
+    let { remote } = await h.connect();
+    expect(
+      (
+        await remote.forwarding?.resolve(
+          reference,
+          new AbortController().signal,
+        )
+      )?.row.content,
+    ).toBe("Authorized source @Local Agent");
+    expect(
+      (
+        await remote.forwarding?.resolve(
+          reference,
+          new AbortController().signal,
+        )
+      )?.privateSource,
+    ).toBe(privacy !== "public");
+    vi.stubGlobal(
+      "ResizeObserver",
+      class {
+        observe() {}
+        disconnect() {}
+      },
+    );
+    function Companion() {
+      return useHuddleComposer(h.owner.token);
+    }
+    const view = render(createElement(Companion));
+    await screen.findByRole("textbox", { name: "Message this Huddle" });
+    const { forwardClipboard } = await import("../messages/forward-clipboard");
+    const payload = forwardClipboard(reference, "Untrusted clipboard text");
+    fireEvent.paste(
+      screen.getByRole("textbox", { name: "Message this Huddle" }),
+      {
+        clipboardData: {
+          getData: (type: string) =>
+            type === "text/html" ? payload.html : payload.text,
+          items: [],
+        },
+      },
+    );
+    await waitFor(() =>
+      expect(
+        screen.getByRole("button", { name: "Send message" }),
+      ).toBeEnabled(),
+    );
+    expect(
+      Boolean(
+        within(screen.getByRole("form")).queryByText(
+          /will be able to read this message/,
+        ),
+      ),
+    ).toBe(privacy !== "public");
+    if (privacy !== "public")
+      expect(
+        within(screen.getByRole("form")).getByText(
+          /will be able to read this message/,
+        ),
+      ).toHaveTextContent("Everyone in this Huddle");
+    view.unmount();
+    // A detached host owns one bridge client at a time. Reconnect after closing it.
+    ({ remote } = await h.connect());
+    content = "Current authorized source @Local Agent";
+    expect(
+      await remote.forwarding?.send(reference, "Note", [], [], [], {}),
+    ).toBe("forwarded-id");
+    expect(forward).toHaveBeenCalledWith(
+      "room",
+      expect.objectContaining({
+        content,
+        mentionLabels: [{ id: agent, names: ["Local Agent"] }],
+      }),
+      expect.any(String),
+      "Note",
+      undefined,
+      { mentions: [], attachments: [], references: [], picks: {} },
+    );
+    expect(dispose).toHaveBeenCalledTimes(4);
+    await expect(
+      remote.forwarding?.resolve(
+        { ...reference, origin: "https://other.example" },
+        new AbortController().signal,
+      ),
+    ).rejects.toThrow(/another community/);
+    h.revoke();
+    await expect(
+      remote.forwarding?.send(reference, "", [], [], [], {}),
+    ).rejects.toThrow();
+    expect(forward).toHaveBeenCalledOnce();
+  },
+);

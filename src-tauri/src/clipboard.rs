@@ -82,7 +82,19 @@ pub(crate) async fn clipboard_write_text<R: tauri::Runtime>(
     app: tauri::AppHandle<R>,
     text: String,
     clear_after_secs: Option<u64>,
+    html: Option<String>,
 ) -> Result<(), String> {
+    if let Some(html) = html {
+        if clear_after_secs.is_some() {
+            return Err("Rich secret copies are not supported".to_owned());
+        }
+        return write(&app, move |clipboard, _| {
+            clipboard
+                .set_html(html, Some(text))
+                .map_err(|_| "Could not copy message".to_owned())
+        })
+        .await;
+    }
     let Some(secs) = clear_after_secs else {
         return write(&app, move |clipboard, _| {
             clipboard

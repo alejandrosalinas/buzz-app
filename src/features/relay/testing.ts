@@ -1,5 +1,5 @@
 import { schnorr } from "@noble/curves/secp256k1.js";
-import { hexToBytes } from "nostr-tools/utils";
+import { bytesToHex, hexToBytes } from "nostr-tools/utils";
 import {
   finalizeEvent,
   generateSecretKey,
@@ -22,6 +22,30 @@ export function signed(
   template: Omit<EventTemplate, "created_at"> & { created_at?: number },
 ): RelayEvent {
   return finalizeEvent({ created_at: 1_700_000_000, ...template }, key.secret);
+}
+/** A real NIP-OA delegation on an agent's signed profile. */
+export async function ownedProfile(
+  agent: Key,
+  owner: Key,
+  name?: string,
+): Promise<RelayEvent> {
+  const conditions = "kind=0";
+  const digest = await crypto.subtle.digest(
+    "SHA-256",
+    new TextEncoder().encode(`nostr:agent-auth:${agent.pubkey}:${conditions}`),
+  );
+  return signed(agent, {
+    kind: 0,
+    content: JSON.stringify(name ? { name } : {}),
+    tags: [
+      [
+        "auth",
+        owner.pubkey,
+        conditions,
+        bytesToHex(schnorr.sign(new Uint8Array(digest), owner.secret)),
+      ],
+    ],
+  });
 }
 /** The native `relay_verify_signatures` command, with real BIP-340 checks. */
 export const nativeSignatureChecks = (args: unknown) =>

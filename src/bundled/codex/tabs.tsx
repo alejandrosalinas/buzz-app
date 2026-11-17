@@ -1,4 +1,9 @@
 import type { AgentExecutionBinding } from "../../features/agents/execution";
+import {
+  readModelSettings,
+  type AgentModelResolution,
+  type AgentModelSettingsContext,
+} from "../../features/agents/model-settings";
 import type { AgentKey } from "../../features/agents/membership";
 import activityStyles from "../../features/agents/ActivityLayout.module.css";
 import { formatItemTimestamp } from "../../shared/datetime";
@@ -57,6 +62,7 @@ import {
   config as readConfig,
   defaults,
   resolveModel,
+  resolveEffort,
   effortName,
   validWorkspace,
   type Config,
@@ -278,6 +284,70 @@ export class CodexProvider {
           ? preferred
           : (selected?.defaultReasoningEffort ?? "");
     return { ...explicit, model, effort };
+  }
+  /** Read the same next-turn selection without refreshing the catalog. */
+  readModelSettings(
+    raw: unknown,
+    { execution = "local", synced }: Partial<AgentModelSettingsContext> = {},
+  ) {
+    const saved = readConfig(raw);
+    const recommended = onRecommended(raw);
+    const settings = this.resolve(raw, execution !== "local");
+    const candidate = recommended ? this.recommended() : null;
+    const source = (field: "model" | "effort") =>
+      saved[field]
+        ? ("configured" as const)
+        : candidate
+          ? ("recommended" as const)
+          : field === "effort" && settings.effort !== this.state.defaults.effort
+            ? ("provider" as const)
+            : ("device" as const);
+    const unavailable =
+      execution === "unavailable"
+        ? "execution-unavailable"
+        : execution === "remote"
+          ? "remote"
+          : recommended && candidate === undefined
+            ? "not-loaded"
+            : undefined;
+    const data = this.state.data;
+    const model = resolveModel(settings.model, data?.models ?? []);
+    const selected = data?.models.find((row) => row.model === model);
+    const missing = data
+      ? "unknown"
+      : this.state.readiness === "attention"
+        ? "unknown"
+        : "not-loaded";
+    const modelResolution: AgentModelResolution = unavailable
+      ? { unavailable }
+      : data && !selected
+        ? { unavailable: "unknown" }
+        : model
+          ? {
+              value: model,
+              source: settings.model ? source("model") : "provider",
+            }
+          : { unavailable: missing };
+    const effort = selected
+      ? resolveEffort(selected, settings.effort)
+      : candidate?.effort;
+    return readModelSettings(saved, {
+      recommended,
+      resolved: {
+        model: modelResolution,
+        effort: unavailable
+          ? { unavailable }
+          : synced?.effort && effort && effort !== synced.effort
+            ? { unavailable: "unsupported" }
+            : effort
+              ? {
+                  value: effort,
+                  source:
+                    effort === settings.effort ? source("effort") : "provider",
+                }
+              : { unavailable: missing },
+      },
+    });
   }
   dispose() {
     this.offSetup?.();
@@ -701,7 +771,6 @@ export function createTabs(
           value={current.model}
           defaultModel={catalogModel(providerDefaults.model, data)?.model ?? ""}
           defaultLabel={providerDefaultLabel(providerDefaults.model, data)}
-          defaultDescription="Following the provider's model default"
           loading={checking}
           error={error}
           retry={retry}
@@ -1331,17 +1400,19 @@ export function createTabs(
           allowCustomModel={!!bound}
           models={choices(data)}
           value={draft.model}
-          defaultModel={catalogModel(providerDefaults.model, data)?.model ?? ""}
+          defaultModel={
+            bound
+              ? undefined
+              : catalogModel(providerDefaults.model, data)?.model
+          }
           defaultLabel={
             bound
               ? "Codex default"
               : providerDefaultLabel(providerDefaults.model, data)
           }
-          defaultDescription={
-            bound
-              ? "Use the model default on the target computer"
-              : "Following the provider's model default"
-          }
+          {...(bound && {
+            defaultDescription: "Follows the target computer's settings",
+          })}
           loading={checking}
           disabled={saving}
           // A manual choice, even of the default, is never Recommended.

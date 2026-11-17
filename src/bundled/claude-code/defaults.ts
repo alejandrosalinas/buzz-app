@@ -1,5 +1,10 @@
 import { localStore, type AgentStore } from "../../features/agents/store";
 import {
+  readModelSettings,
+  type AgentModelResolution,
+  type AgentModelSettingsContext,
+} from "../../features/agents/model-settings";
+import {
   followRecommended,
   onRecommended,
   type RecommendedRun,
@@ -62,6 +67,47 @@ export class ClaudeDefaults {
           ? (this.state.effort ?? "")
           : ""),
     };
+  }
+  /** Native Claude settings may depend on the workspace; a catalog is not
+   * proof of that default. Only resolve choices this owner supplies. */
+  readModelSettings(
+    raw: unknown,
+    { execution = "local" }: Partial<AgentModelSettingsContext> = {},
+  ) {
+    const saved = config(raw);
+    const recommended = onRecommended(raw);
+    if (typeof saved.model !== "string" || typeof saved.effort !== "string")
+      return readModelSettings(saved, { recommended });
+    const candidate = recommended ? this.recommended?.current() : null;
+    const unavailable =
+      execution === "unavailable"
+        ? "execution-unavailable"
+        : execution === "remote"
+          ? "remote"
+          : recommended && candidate === undefined
+            ? "not-loaded"
+            : undefined;
+    const settings = this.resolve(raw);
+    const resolve = (field: "model" | "effort"): AgentModelResolution => {
+      const value = field === "model" ? settings.model.trim() : settings.effort;
+      const explicit = field === "model" ? saved.model.trim() : saved.effort;
+      return unavailable
+        ? { unavailable }
+        : value
+          ? {
+              value,
+              source: explicit
+                ? "configured"
+                : candidate
+                  ? "recommended"
+                  : "device",
+            }
+          : { unavailable: "unknown" };
+    };
+    return readModelSettings(saved, {
+      recommended,
+      resolved: { model: resolve("model"), effort: resolve("effort") },
+    });
   }
   /** Settles once the defaults are saved, and only then uses them; rejects,
    * keeping the saved ones, when they could not be saved. */

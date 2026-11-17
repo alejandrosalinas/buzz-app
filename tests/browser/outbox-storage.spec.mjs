@@ -51,6 +51,115 @@ test("forgetting a stale receipt relinquishes its journal deletion ownership", a
   expect(ids).toEqual(["next", "old"]);
 });
 
+for (const journal of ["indexeddb", "legacy"])
+  test(`a late creation echo respects durable setup removal (${journal})`, async ({
+    page,
+    context,
+    sourceOrigin,
+  }) => {
+    await context.route(`${sourceOrigin}/outbox-storage-test`, (route) =>
+      route.fulfill({ contentType: "text/html", body: "<!doctype html>" }),
+    );
+    await page.goto(`${sourceOrigin}/outbox-storage-test`);
+    const { finalizeEvent } = await import("nostr-tools");
+    const member = "a".repeat(64);
+    const creation = finalizeEvent(
+      {
+        kind: 9007,
+        created_at: 1,
+        content: "",
+        tags: [
+          ["h", "chat"],
+          ["p", member],
+        ],
+      },
+      new Uint8Array(32).fill(7),
+    );
+    const result = await page.evaluate(
+      async ({ creation, member, journal }) => {
+        const { browserOutboxStorage, purgeOutboxStorage } = await import(
+          "/src/features/relay/outbox-storage.ts"
+        );
+        const { createOutbox } = await import("/src/features/relay/outbox.ts");
+        const { soloAdminRecovery } = await import(
+          "/src/features/relay/solo-admins.ts"
+        );
+        const recovery = soloAdminRecovery("chat", [member], [member]);
+        const scope = `setup-removal-${crypto.randomUUID()}`;
+        const aStore = browserOutboxStorage(scope);
+        const bStore = browserOutboxStorage(scope);
+        const operation = {
+          event: creation,
+          signed: creation,
+          recovery,
+          delivery: "accepted",
+        };
+        if (journal === "legacy")
+          localStorage.setItem(
+            `buzz-outbox-v1:${scope}`,
+            JSON.stringify([operation]),
+          );
+        else await aStore.save([operation]);
+        const unexpected = async () => {
+          throw new Error("Unexpected delivery");
+        };
+        const writer = { sign: unexpected, publish: unexpected };
+        const a = createOutbox(creation.pubkey, writer, aStore);
+        const b = createOutbox(creation.pubkey, writer, bStore);
+        try {
+          await Promise.all([a.ready, b.ready]);
+          if (
+            !a.outbox.snapshot()[0]?.recovery ||
+            !b.outbox.snapshot()[0]?.recovery
+          )
+            throw new Error("Both windows must hold the saved setup");
+          b.observe([creation]);
+          await b.outbox.dismiss(creation.id, recovery);
+          const afterDismiss = (await bStore.load({ readOnly: true })).length;
+          a.observe([creation]);
+          let ran = false;
+          const publication = await a.outbox
+            .withRecovery(creation.id, recovery, async () => {
+              ran = true;
+            })
+            .then(
+              () => "completed",
+              (error) => error.message,
+            );
+          const completion = await a.outbox
+            .finishRecovery(creation.id, recovery)
+            .then(
+              () => "completed",
+              (error) => error.message,
+            );
+          return {
+            afterDismiss,
+            ran,
+            publication,
+            completion,
+            remaining: (await bStore.load({ readOnly: true })).length,
+          };
+        } finally {
+          a.dispose();
+          b.dispose();
+          await purgeOutboxStorage(scope);
+        }
+      },
+      { creation, member, journal },
+    );
+    expect(result).toEqual({
+      afterDismiss: 0,
+      ran: false,
+      publication: expect.stringContaining(
+        "removed or changed in another window",
+      ),
+      completion: expect.stringContaining(
+        "removed or changed in another window",
+      ),
+      remaining: 0,
+    });
+  });
+
 for (const mode of ["dismiss-first", "adopt-first", "peer-accepted"])
   test(`receipt adoption serializes queue consumption with dismissal (${mode})`, async ({
     page,

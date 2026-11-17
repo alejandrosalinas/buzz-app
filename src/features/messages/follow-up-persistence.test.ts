@@ -2174,3 +2174,104 @@ it("holds automatic release while editing, then sends the saved text", async () 
   await vi.waitFor(() => expect(h.send).toHaveBeenCalledOnce());
   expect(h.send.mock.calls[0]?.[1]).toBe("Saved before release");
 });
+
+it("resolves queued agent mentions before publishing its snapshot with recovery", async () => {
+  const h = fixture();
+  const reference = {
+    version: 1 as const,
+    origin: "https://relay.example",
+    channelId: "source",
+    id: "c".repeat(64),
+  };
+  const saved = {
+    ...message,
+    forward: reference,
+    id: "queued-forward",
+    createdAt: 1,
+  };
+  followUpStorage(scope).save(saved);
+  expect(followUpStorage(scope).load()[0]?.forward).toEqual(reference);
+  const forward = vi
+    .spyOn(h.session.messages, "forward")
+    .mockReturnValue("forward-id");
+  const row = {
+    id: reference.id,
+    channelId: "source",
+    authorId: viewer,
+    createdAt: 1,
+    content: "Hello @Local Agent",
+    mentions: [agent],
+    participants: [],
+    attachments: [],
+    reactions: [],
+    replyCount: 0,
+  };
+  Object.assign(h.session, {
+    profiles: { snapshot: () => new Map() },
+    agentLibrary: {
+      snapshot: () => ({
+        identities: [{ pubkey: agent, name: "Local Agent" }],
+      }),
+    },
+    thread: () => ({
+      snapshot: () => ({
+        status: "ready",
+        targetStatus: "ready",
+        target: row,
+        replies: [],
+        canLoadMore: false,
+      }),
+      subscribe: () => () => {},
+      refresh: async () => {},
+      dispose() {},
+    }),
+  });
+  vi.spyOn(h.session.messages, "forwardProblem").mockReturnValue(undefined);
+  const entry = followUpMessage(h.session, saved);
+  await entry.beforeRelease();
+  const recovery = followUpRecovery(saved.id);
+  expect(entry.publish(recovery)).toBe("forward-id");
+  expect(forward).toHaveBeenCalledWith(
+    "chat",
+    { ...row, mentionLabels: [{ id: agent, names: ["Local Agent"] }] },
+    viewer.slice(0, 10),
+    message.text,
+    recovery,
+    {
+      mentions: message.recipients,
+      attachments: [],
+      references: [],
+      picks: message.picks,
+    },
+  );
+  expect(h.send).not.toHaveBeenCalled();
+});
+
+it("allows clearing a queued forward note and labels the remaining content", async () => {
+  vi.stubGlobal(
+    "ResizeObserver",
+    class {
+      observe() {}
+      disconnect() {}
+    },
+  );
+  const h = fixture();
+  const forward = {
+    version: 1 as const,
+    origin: "https://relay.example",
+    channelId: "source",
+    id: "c".repeat(64),
+  };
+  const id = h.enqueue({ ...structuredClone(message), forward });
+  await h.queue.edit(id).save("");
+  expect(followUpStorage(scope).load()[0]).toMatchObject({ text: "", forward });
+  render(
+    createElement(QueuedFollowUps, {
+      session: h.session,
+      channelId: "chat",
+      disabled: false,
+      focusComposer() {},
+    }),
+  );
+  expect(screen.getAllByText("Forwarded message").length).toBeGreaterThan(0);
+});

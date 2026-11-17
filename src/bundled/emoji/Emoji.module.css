@@ -37,7 +37,9 @@
   flex-shrink: 0;
   margin: 0 var(--space-3);
 }
-.emojiContent > :first-child,
+/* Tabs are the first child, or follow the optional Remove row. */
+.emojiContent > :first-child:not(.emojiRemove),
+.emojiRemove + *,
 .emojiContent [role="tabpanel"] {
   display: flex;
   flex-direction: column;
@@ -47,11 +49,19 @@
 .emojiContent [role="tabpanel"][data-ending-style] {
   display: none;
 }
-.emojiContent:not([data-tabs]) > :first-child {
+.emojiContent:not([data-tabs]) > :first-child:not(.emojiRemove),
+.emojiContent:not([data-tabs]) > .emojiRemove + * {
   gap: 0;
 }
 .emojiContent:not([data-tabs]) [role="tablist"] {
   display: none;
+}
+/* A grid stretches the row-sized Button to the full width. */
+.emojiRemove {
+  display: grid;
+  flex-shrink: 0;
+  padding: var(--space-1);
+  border-bottom: 1px solid var(--border-standard);
 }
 .emojiMart {
   position: relative;

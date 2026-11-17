@@ -1,7 +1,7 @@
 // Use the production sidebar/page ownership with real navigation in standalone fixtures.
 import { useLayoutEffect, useState, useSyncExternalStore } from "react";
 import { ChannelNavigationProvider } from "../../src/features/channel-navigation/ChannelNavigationState";
-import { PrimarySidebar } from "../../src/app/shell/PrimarySidebar";
+import { PrimarySidebar } from "../../src/app/shell/sidebar-section-testing";
 import { ChannelsPage } from "../../src/bundled/channels/ChannelsPage";
 import type { RelayData } from "../../src/features/relay/service";
 import type { Panels } from "../../src/features/panels/service";

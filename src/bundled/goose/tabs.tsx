@@ -555,6 +555,7 @@ export function createTabs({
             models={models.value ?? []}
             loading={models.status === "loading"}
             value={value.model}
+            defaultModel={modelDefault}
             defaultLabel={modelDefault || "Provider model"}
             {...(!provider.configured
               ? { description: `Available once ${provider.name} is set up.` }

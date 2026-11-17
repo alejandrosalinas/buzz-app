@@ -18,8 +18,8 @@ import {
   useRef,
   useState,
 } from "react";
-import { SoloRegions } from "./SoloRegions";
-import { SoloInventory } from "./SoloInventory";
+import { SoloRegions } from "../../bundled/channels/SoloRegions";
+import { SoloInventory } from "../../bundled/channels/SoloInventory";
 import {
   ChannelNavigationProvider,
   useChannelNavigation,

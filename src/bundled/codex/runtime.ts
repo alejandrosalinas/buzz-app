@@ -73,6 +73,7 @@ import {
 import {
   config,
   resolveModel,
+  resolveEffort,
   defaults,
   absoluteWorkspace,
   effortName,
@@ -135,6 +136,7 @@ type Request = {
   finalDelivery?: Error | true;
   step?: (tool: string, target?: string) => void;
   acknowledged?: (input?: Readonly<{ steering?: true }>) => void;
+  accepted?: () => void;
   superseded?: () => void;
   /** Takes a title for a new Solo chat; see `Delivery.named`. */
   named?: (title: string) => void;
@@ -813,9 +815,7 @@ export class CodexRuntime {
           ({ reasoningEffort: id }) => ({ id, label: effortName(id) }),
         );
         // As a run picks it: the configured effort if the model has it.
-        const effort = efforts.some((level) => level.id === settings.effort)
-          ? settings.effort
-          : row.defaultReasoningEffort;
+        const effort = resolveEffort(row, settings.effort);
         return {
           id: row.model,
           label: row.displayName || row.model,
@@ -1833,6 +1833,7 @@ export class CodexRuntime {
       ...(project ? { project: `${project}\n` } : {}),
       answered,
       failActivity,
+      ...(delivery.accepted ? { accepted: delivery.accepted } : {}),
       ...(delivery.step ? { step: delivery.step } : {}),
       ...(delivery.acknowledged ? { acknowledged: delivery.acknowledged } : {}),
       ...(delivery.superseded ? { superseded: delivery.superseded } : {}),
@@ -1928,6 +1929,7 @@ export class CodexRuntime {
                 request.answered();
                 return;
               }
+              request.accepted?.();
               await active.rpc.request("turn/steer", {
                 threadId: active.threadId,
                 expectedTurnId: active.turnId,
@@ -2669,14 +2671,8 @@ export class CodexRuntime {
         "The selected Codex model is unavailable. Choose an available model in Settings.",
       );
     const model = selected.model;
-    const supported = selected.supportedReasoningEfforts.map(
-      (level) => level.reasoningEffort,
-    );
     // A picked model may not support the configured effort.
-    const effort =
-      [pick.effort, settings.effort].find(
-        (level) => level && supported.includes(level),
-      ) ?? selected.defaultReasoningEffort;
+    const effort = resolveEffort(selected, pick.effort, settings.effort);
     // A synced effort is the agent's on every device: never run another.
     const kept = synced?.effort;
     if (kept && !pick.model && !pick.effort && effort !== kept)
@@ -3019,6 +3015,23 @@ export class CodexRuntime {
             at: Date.now(),
             ...(tools ? { tools } : {}),
           });
+        if (signal.aborted || (request.current && !request.current())) {
+          if (this.target && !resuming) {
+            // An empty remote thread has no rollout to resume on the next request.
+            const { [key]: _, ...kept } = entry.saved;
+            await this.storage.set(entry.storageKey, JSON.stringify(kept));
+            entry.saved = kept;
+          }
+          signal.throwIfAborted();
+          restoreNotes(request);
+          request.answered();
+          this.status(agent.key, key, "Idle");
+          active.finished = true;
+          ready();
+          return;
+        }
+        signal.throwIfAborted();
+        request.accepted?.();
         const turn = await rpc
           .request<{ turn: { id: string } }>("turn/start", {
             threadId: active.threadId,

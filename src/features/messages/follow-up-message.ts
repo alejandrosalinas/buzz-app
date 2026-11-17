@@ -1,3 +1,4 @@
+import { resolveForward, type ResolvedForward } from "./resolve-forward";
 import type { RelaySession } from "../relay/session";
 import type { OutboxRecovery } from "../relay/outbox";
 import { ownSolo } from "../solo/labels";
@@ -9,6 +10,7 @@ import { signMessageTokens } from "./message-tokens";
 export function followUpMessage(
   session: RelaySession,
   message: FollowUpMessage,
+  source?: Pick<ResolvedForward, "row" | "name">,
 ) {
   return {
     ready() {
@@ -21,6 +23,12 @@ export function followUpMessage(
       );
     },
     async beforeRelease() {
+      if (message.forward)
+        source = await resolveForward(
+          session,
+          message.forward,
+          new AbortController().signal,
+        );
       const channel = await session.channelWrites.refreshMembership(
         message.channelId,
       );
@@ -48,6 +56,28 @@ export function followUpMessage(
         throw new Error(
           "This Solo chat or its recipients are no longer available.",
         );
+      if (message.forward) {
+        if (!source)
+          throw new Error("Reload this forwarded message before sending it.");
+        const resolved = source;
+        const send = () =>
+          session.messages.forward(
+            message.channelId,
+            resolved.row,
+            resolved.name,
+            message.text,
+            recovery,
+            {
+              mentions: message.recipients,
+              attachments: message.attachments,
+              references: message.references,
+              picks: message.picks,
+            },
+          );
+        return message.tokens?.length
+          ? signMessageTokens(message.tokens, send)
+          : send();
+      }
       if (message.tokens?.length)
         return signMessageTokens(message.tokens, () =>
           session.messages.send(

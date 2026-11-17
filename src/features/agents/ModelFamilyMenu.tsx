@@ -6,6 +6,7 @@ import {
   LightningIcon,
 } from "../../shared/design-system/icons";
 import { Button } from "../../shared/design-system/ui/Button";
+import { ChoiceRow } from "../../shared/design-system/ui/ChoiceRow";
 import { PreferenceRow } from "../../shared/design-system/ui/PreferenceRow";
 import styles from "./ModelFamilyMenu.module.css";
 import {
@@ -77,6 +78,7 @@ export function modelFamily(model: ModelChoice): string {
 export function ModelFamilyMenu({
   leading,
   inherited = false,
+  valueSuffix,
   appearance = "outlined",
   resetLabel,
   label,
@@ -97,6 +99,7 @@ export function ModelFamilyMenu({
 }: {
   leading?: ReactNode;
   inherited?: boolean;
+  valueSuffix?: string | undefined;
   appearance?: "outlined" | "glass-ghost" | "inverted";
   resetLabel?: string | undefined;
   label: string;
@@ -129,7 +132,7 @@ export function ModelFamilyMenu({
   const fastModels = models.filter((model) => model.fast);
   const fastSection =
     fastModels.length > 0 && fastModels.length < models.length;
-  const selectedLabel = `${selected.label}${selected.fast ? " · Fast" : ""}${inherited ? " · Default" : ""}`;
+  const selectedLabel = `${selected.label}${selected.fast ? " · Fast" : ""}${valueSuffix ?? (inherited && selected.description ? ` · ${selected.description}` : "")}`;
   const choiceRow = (model: ModelChoice, inFastSection: boolean) => {
     const leading = inFastSection && hasFamilyLogos && (
       <span className="buzz-select-leading" aria-hidden="true">
@@ -183,15 +186,14 @@ export function ModelFamilyMenu({
               </span>
             )}
             {modelLogo(modelFamily(selected), "buzz-select-leading")}
-            {/* Card labels keep Default accessible without crowding the model. */}
             <span className={styles.value}>
               <span className={`buzz-select-value ${styles.model}`}>
                 {selected.label}
               </span>
               {selected.fast && <FastMark />}
-              {inherited && appearance !== "glass-ghost" && (
+              {valueSuffix && (
                 <span className="buzz-select-value-suffix text-subtle">
-                  {" · Default"}
+                  {valueSuffix}
                 </span>
               )}
               {effortLabel && (
@@ -210,11 +212,19 @@ export function ModelFamilyMenu({
             value={inherited ? "" : selected.id}
             onValueChange={(id) => onChange(id)}
           >
-            <MenuRadioItem value="" closeOnClick>
+            <MenuRadioItem
+              value=""
+              aria-label="Default"
+              aria-description={defaultChoice.description}
+              closeOnClick
+            >
               {hasFamilyLogos && (
                 <span className="buzz-select-leading" aria-hidden="true" />
               )}
-              {defaultChoice.label} · Default
+              <ChoiceRow
+                label="Default"
+                description={defaultChoice.description}
+              />
             </MenuRadioItem>
           </MenuRadioGroup>
         )}

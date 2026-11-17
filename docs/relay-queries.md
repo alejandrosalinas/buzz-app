@@ -112,8 +112,8 @@ against the writer without replaying accepted commands. Agent deletion discovers
 member channels and confirms each removal with writer-backed rosters; unreadable
 rosters still fail closed. Standalone recipe saves use writer-backed exact-ID
 confirmation; recipe head and catalog reads remain replica-eligible. For
-writer-backed Canvas editor/Todos reads and replica-eligible template copies, see
-the [Canvas/outbox contract](plugin-architecture.md#optional-canvas-todos).
+writer-backed Canvas editor reads and replica-eligible template copies, see
+the [Canvas/outbox contract](plugin-architecture.md#canvas-saves).
 
 ## Managed-agent registration (kind 30177)
 
@@ -503,6 +503,10 @@ A channel-only link (`buzz://channel/<id>`) shows what the reader may see about
 that channel. `channels.describe(id)` answers from local evidence and never
 reads: `found` with the name and flags, `withheld`, or `unknown`. `joined`
 comes from the viewer in the roster, so a channel restored from cache counts.
+An unreadable `found` reference has `answered: true` only when a completed
+lookup admitted no readable channel. Missing `looking` alone does not establish
+an answer: it also occurs before demand and during an initial failure's backoff.
+The answer resets with access/cache state and is retained during rechecks.
 A public channel the viewer left is `found` from its signed open metadata; that
 names it but does not restore member reads. `channels.refer(id)` demands a
 background lookup once the list is ready, until the returned release; a

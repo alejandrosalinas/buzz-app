@@ -1,0 +1,162 @@
+/* Shared sidebar frame and scrollport. Callers own their rows; these rules
+   give every row inside the frame the sidebar's geometry and ink. */
+.sidebar {
+  height: 100%;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  /* Figma specifies true Semibold for unread rows, rather than the legacy 500 alias. */
+  --type-weight-semibold: 600;
+  --sidebar-padding: var(--space-2);
+  --sidebar-padding-end: var(--sidebar-padding);
+  --channel-row-radius: var(--radius-control);
+  --sidenav-emoji-size: 0.8125rem;
+  padding-inline: var(--sidebar-padding) var(--sidebar-padding-end);
+}
+.sidebarFilter {
+  flex: 0 0 auto;
+  padding: var(--space-3) 0 0;
+  min-width: 0;
+}
+.sidebarBody {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
+}
+@media (hover: hover) and (pointer: fine) {
+  .sidebar [data-icon-variant="ghost"]:hover:not([data-disabled]) {
+    background: var(--affordance-panel-hover);
+  }
+}
+.sidebar
+  [data-icon-variant="ghost"]:is(:active, [aria-expanded="true"]):not(
+    [data-disabled]
+  ) {
+  background: var(--affordance-panel-hover);
+}
+.channelListFrame {
+  position: relative;
+  /* Bring the scrollbar near the divider without clipping its native thumb. */
+  width: calc(100% + 6px);
+  min-width: 0;
+  min-height: calc(var(--space-6) + var(--space-5) + var(--space-1) + 1px);
+  flex: 1;
+  overflow: hidden;
+}
+.channelList {
+  width: 100%;
+  height: 100%;
+  min-width: 0;
+  box-sizing: border-box;
+  overflow-y: auto;
+  /* Paint positioned rows with the scrolled contents; otherwise WebKit gives
+     each row a proxy layer that lags behind fast scrolls. */
+  isolation: isolate;
+  padding-block: var(--sidebar-padding);
+  scrollbar-gutter: stable;
+  scrollbar-width: thin;
+  scrollbar-color: transparent transparent;
+}
+/* Global destinations share the channel list's row geometry. */
+.channelList,
+.sidebarFilter {
+  --channel-row-fill-start: var(--space-1);
+  --channel-row-fill-end: calc(var(--space-1) + 6px);
+}
+.sidebarFilter {
+  /* No scrollbar frame extension here, so the end fill omits its 6px. */
+  --channel-row-fill-end: var(--space-1);
+}
+/* Wrapped channel rows paint on the wrapper; direct destination and Solo chat
+   rows paint on the navigation item itself, so shorten them to the fill and
+   measure their padding from that painted edge. As in ChannelSidebarRow, icons
+   start 4px and trailing content ends 6px inside the pill. */
+.channelList [data-variant="row"],
+.sidebarFilter [data-variant="row"] {
+  width: calc(
+    100% -
+    var(--channel-row-fill-start) -
+    var(--channel-row-fill-end)
+  );
+  margin-inline: var(--channel-row-fill-start) var(--channel-row-fill-end);
+  padding-inline: calc(var(--space-2) - var(--channel-row-fill-start))
+    calc(var(--space-1) + var(--space-half));
+}
+.channelList [data-variant="row"][data-inset],
+.sidebarFilter [data-variant="row"][data-inset] {
+  padding-inline-start: calc(
+    var(--space-2) +
+    var(--space-6) -
+    var(--channel-row-fill-start)
+  );
+}
+.channelList:is(:hover, :focus-within) {
+  scrollbar-color: var(--scrollbar-thumb-quiet) transparent;
+}
+.channelList::-webkit-scrollbar {
+  width: 5px;
+}
+.channelList::-webkit-scrollbar-thumb {
+  border-block: 0;
+  border-inline: 2px 0;
+  border-style: solid;
+  border-color: transparent;
+  border-radius: var(--radius-pill);
+  background: transparent;
+  background-clip: padding-box;
+  transition: background-color 90ms cubic-bezier(0.23, 1, 0.32, 1);
+}
+.channelList:is(:hover, :focus-within)::-webkit-scrollbar-thumb {
+  background: var(--scrollbar-thumb-quiet);
+  background-clip: padding-box;
+}
+.channelListContent {
+  width: 100%;
+  min-width: 0;
+  box-sizing: border-box;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-half);
+  padding-block-end: var(--sidebar-padding);
+}
+/* Inset Retry like a row, so its focus ring stays inside the scrollport. */
+.channelListContent > button {
+  align-self: flex-start;
+  margin-inline-start: var(--channel-row-fill-start);
+}
+@media (hover: none) {
+  .channelList {
+    scrollbar-color: var(--scrollbar-thumb-quiet) transparent;
+  }
+}
+/* Hovered and selected rows take the row's paired ink, so navigation text
+   follows the fill instead of staying gray on an accent row. Selection has
+   its own ink: in dark mode it carries the accent on a neutral fill.
+   A row owner (a channel row or Solo chat row with its attached actions)
+   holds exactly one row, so hovering its actions still inks that row.
+   Structural selectors such as `:hover > * > row` also match a hovered
+   list and would ink every row in it. */
+.sidebar [data-variant="row"]:hover,
+.sidebar
+  :is([data-channel-sidebar-row], [data-solo-menu-id]):hover
+  [data-variant="row"]:not([data-selected]) {
+  color: var(--text-row);
+}
+.sidebar [data-variant="row"][data-selected],
+.sidebar
+  :is([data-channel-sidebar-row], [data-solo-menu-id])[data-selected]
+  [data-variant="row"] {
+  color: var(--text-row-selected);
+}
+
+/* A selected destination carries its fill's ink. */
+.sidebar [data-selected],
+.sidebar
+  :is([data-channel-sidebar-row], [data-solo-menu-id]):has(
+    [aria-current="page"]
+  ) {
+  --text-standard: var(--text-row-selected);
+}

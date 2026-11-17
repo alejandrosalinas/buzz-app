@@ -100,6 +100,25 @@ behavior on the label, so a rename touches copy only.
   agents: answer as one channel-scoped, top-level conversation. It is not access
   authority. The in-app agent harness reads it from the channel list; remote
   harnesses that only read `about` need to learn the label.
+- New Solo chats grant Admin to the creator's agents whose signed profiles verify
+  that ownership, including agents included through workspace defaults. Agents
+  owned by someone else keep ordinary participation. The app uses the existing
+  member-administration commands before releasing the opening message to local
+  agents or the relay. When the viewer owns the Solo chat, their own new agents
+  added later through the composer or Chat access receive Admin; other agents
+  join as Bot. Existing members keep
+  their saved roles; retries retain the original addition's role and command ID.
+  The create's local Outbox receipt retains the opening
+  admin targets across interruptions; retries reconstruct the same grants and
+  confirm their recorded IDs before sending. A recorded grant stays complete
+  after a later demotion or removal. Expired, unrecorded grants are never re-dated.
+  Outbox offers **Abandon admin setup** once the create is delivered. Confirming
+  retires its recovery receipt while keeping the chat and granted
+  roles. Grant publication and retirement share the receipt’s durable ownership
+  lock, so another window’s unfinished signature cannot publish after abandonment.
+  After confirming, retry the opening message with current roles or send a new
+  message if its signed timestamp has expired. This needs no relay update
+  and does not migrate existing members' roles or change tool-created grants.
 - The Buzz tools' `channel_create` with `solo` sends the same create for any
   caller, including the standalone stdio server: signed by the caller, with the
   label and any `members` it names. The caller is the creator, so an agent's
@@ -413,7 +432,7 @@ remain owned by the original message. Navigation and access rules are unchanged.
 
 `src/bundled/channels/ChannelsPage.tsx` owns every conversation, including the
 Solo treatment (`SoloHeading`, the shared `ChannelMembersDialog`) and drafts; `SoloWorkspaces` and
-`features/channel-navigation/SoloInventory.tsx` own the Solo half of
+`bundled/channels/SoloInventory.tsx` own the Solo half of
 `app/shell/PrimarySidebar.tsx`. Drafting, settings, sharing and conversion live
 in `src/features/solo`; Solo workspaces use
 `src/features/relay/solo-preferences.ts` and the existing recipe capability.

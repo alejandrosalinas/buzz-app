@@ -52,6 +52,7 @@ function fakeStates(initial?: PullState | "failed") {
       };
     }),
     get: () => value,
+    observe: () => () => {},
     readAt: () => undefined,
     read: () => Promise.reject(new Error("Links do not read")),
     unwatch,
@@ -204,6 +205,7 @@ function renderers() {
     relay: {},
     agents: { addTool: () => {} },
     inject: () => {},
+    provide: () => {},
   } as never);
   const [links, github] = found;
   if (!links || !github) throw new Error("expected both renderers");

@@ -21,6 +21,7 @@ import {
   projectSidebarPreferences,
   type SidebarAssignmentIntent,
   type SidebarGroups,
+  type SidebarSectionEdit,
   type SidebarSortMode,
   type SidebarFilterMode,
 } from "./sidebar-preferences";
@@ -250,18 +251,19 @@ export function nativeSidebar(transport: ReadTransport) {
       );
     },
     async renameSidebarSection(
-      intent: { sectionId: string; name: string },
+      intent: SidebarSectionEdit & Readonly<{ sectionId: string }>,
       signal: AbortSignal,
     ): Promise<SidebarGroups> {
-      const { sectionId, name } = intent;
-      if (!validSidebarSectionRename(sectionId, name))
-        throw new Error("Invalid sidebar section rename intent");
+      const { sectionId, name, icon } = intent;
+      if (!validSidebarSectionRename(sectionId, name, icon))
+        throw new Error("Invalid sidebar section edit intent");
+      const edit = { name, icon };
       const prepare = (current: Record<string, unknown>, createdAt: number) => {
         const next = editSidebarSectionRename(
           current,
           createdAt,
           sectionId,
-          name,
+          edit,
         );
         const { sections, assignments } = project("channel-sections", next);
         return { next, result: { sections, assignments } };
@@ -271,7 +273,7 @@ export function nativeSidebar(transport: ReadTransport) {
         signal,
         prepare,
         (value) =>
-          same(value, editSidebarSectionRename(value, 0, sectionId, name)),
+          same(value, editSidebarSectionRename(value, 0, sectionId, edit)),
         "Sidebar groups changed on another device; reload and try again",
       );
     },
@@ -322,7 +324,9 @@ export function nativeSidebar(transport: ReadTransport) {
               (value.sections as SidebarGroups["sections"]).some(
                 (entry) =>
                   entry.id === section &&
-                  entry.name === createSection.name.trim(),
+                  entry.name === createSection.name.trim() &&
+                  (createSection.icon === undefined ||
+                    entry.icon === createSection.icon),
               ))
           );
         },

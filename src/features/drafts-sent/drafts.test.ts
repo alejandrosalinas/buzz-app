@@ -244,3 +244,26 @@ it("clears one draft's text and files, and keeps both when storage can't forget 
   expect(count(`draft:team:thread:${root}`)).toBe(1);
   expect(viewRevision(scope, `draft:team:thread:${root}`)).not.toBeNull();
 });
+
+it("labels forward-only drafts and tracks locator changes in full and incremental reads", () => {
+  const key = "draft:team";
+  const forward = {
+    version: 1,
+    origin: "https://demo.invalid",
+    channelId: "source",
+    id: "c".repeat(64),
+  };
+  saved(key, { text: "", forward });
+  const before = readDrafts(session, NOW);
+  expect(before.entries[0]).toMatchObject({
+    text: "Forwarded message",
+    placeholder: true,
+    createdAt: NOW,
+  });
+  expect(readDrafts(session, NOW + 10)).toEqual(before);
+  saved(key, { text: "", forward: { ...forward, id: "d".repeat(64) } });
+  const next = rereadDraft(session, before, key, NOW + 60);
+  expect(next?.entries[0]?.signature).not.toBe(before.entries[0]?.signature);
+  expect(next?.entries[0]?.createdAt).toBe(NOW + 60);
+  expect(next).toEqual(readDrafts(session, NOW + 60));
+});

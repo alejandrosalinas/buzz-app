@@ -1,3 +1,7 @@
+import { useDndContext, useDraggable } from "@dnd-kit/core";
+import { ChannelSidebarRows } from "./ChannelSidebarRows";
+import { teamSidebarSource } from "../../bundled/channels/TeamSidebarSource";
+import type { RegisteredSidebarSectionSource } from "./sidebar-section-components";
 // @vitest-environment jsdom
 import "@testing-library/jest-dom/vitest";
 import {
@@ -45,17 +49,24 @@ import type {
   SidebarRow,
 } from "./sidebar-rows-service";
 import { SidebarRowsService } from "./sidebar-rows-service";
-import { createRef, useState, type ReactNode, type ReactElement } from "react";
+import {
+  createRef,
+  useState,
+  useLayoutEffect,
+  type ReactNode,
+  type ReactElement,
+  type ComponentProps,
+} from "react";
 import userEvent from "@testing-library/user-event";
 import { ChannelHeaderMenu } from "../../bundled/channels/ChannelHeaderMenu";
-import { PrimarySidebar } from "../../app/shell/PrimarySidebar";
+import { PrimarySidebar } from "../../app/shell/sidebar-section-testing";
 import { buzzLinkTarget } from "../navigation/buzz-links";
 import {
   ChannelNavigationProvider,
   useChannelNavigation,
 } from "./ChannelNavigationState";
 import { readView, writeView } from "../../shared/view-state";
-import styles from "../../app/shell/PrimarySidebar.module.css";
+import styles from "../../bundled/channels/MessagesSidebar.module.css";
 import { BestieNavigationProvider } from "../../app/shell/BestieNavigation";
 import { PageNavigation } from "../../app/shell/PageNavigation";
 import { createAgentChoices } from "../agents/choices";
@@ -261,6 +272,12 @@ function fixture(
     publish,
     commit,
     drop,
+    roster(change: Partial<ChannelList>) {
+      act(() => {
+        list = { ...list, ...change };
+        for (const listener of listeners) listener();
+      });
+    },
     connection(next: RelaySnapshot) {
       act(() => {
         snapshot = next;
@@ -3765,4 +3782,385 @@ it("moves a mounted session-backed sidebar on a CLI hint without clearing stars 
     sidebar,
   );
   expect(reads).toHaveLength(2);
+});
+
+it("restores a cold saved scroll only after the new Team slots have connected rows", async () => {
+  const f = fixture();
+  const rows = f.list.channels;
+  f.roster({ status: "loading", channels: [] });
+  const scope = f.session.scope;
+  writeView(scope, "channel-sidebar", {
+    collapsed: [],
+    contributionOrder: [],
+    scrollTop: 120,
+    location: "conversation:alpha",
+  });
+  const writes: { top: number; rows: number }[] = [];
+  const offsets = new WeakMap<Element, number>();
+  const original = Object.getOwnPropertyDescriptor(
+    Element.prototype,
+    "scrollTop",
+  );
+  Object.defineProperty(Element.prototype, "scrollTop", {
+    configurable: true,
+    get() {
+      return offsets.get(this) ?? 0;
+    },
+    set(top: number) {
+      const count = this.querySelectorAll("[data-channel-id]").length;
+      writes.push({ top, rows: count });
+      // Model the clamp only to check ordering. Real geometry belongs to the browser test.
+      offsets.set(this, count ? top : 0);
+    },
+  });
+  try {
+    render(f.view("alpha"));
+    expect(writes).toEqual([]);
+    f.roster({ status: "ready", channels: rows });
+    await screen.findByRole("button", { name: "alpha" });
+    await waitFor(() => expect(writes).toEqual([{ top: 120, rows: 3 }]));
+  } finally {
+    if (original)
+      Object.defineProperty(Element.prototype, "scrollTop", original);
+    else Reflect.deleteProperty(Element.prototype, "scrollTop");
+  }
+});
+
+it("restores saved scroll and completes focus recovery when the Team source throws, retaining Solo", async () => {
+  let failing = true;
+  const Component = teamSidebarSource.component;
+  const source = vi
+    .spyOn(teamSidebarSource, "component")
+    .mockImplementation((props: ComponentProps<typeof Component>) => {
+      if (failing) throw new Error("Team source failed");
+      return <Component {...props} />;
+    });
+  const error = vi.spyOn(console, "error").mockImplementation(() => {});
+  let finish!: () => void;
+  const heldWrite = new Promise<void>((resolve) => {
+    finish = resolve;
+  });
+  const preferences = createSidebarPreferencesStore({
+    available: true,
+    read: async () => ({
+      sections: [],
+      assignments: {},
+      starred: [],
+      muted: [],
+    }),
+    writeStar: async () => [],
+    write: async () => {
+      await heldWrite;
+      return { sections: [], assignments: {} };
+    },
+  });
+  const f = fixture(preferences.queries);
+  writeView(f.session.scope, "channel-sidebar", {
+    collapsed: [],
+    contributionOrder: [],
+    scrollTop: 120,
+    location: "conversation:alpha",
+  });
+  try {
+    render(f.view("alpha"));
+    await screen.findByRole("alert");
+    const solo = document.querySelector(
+      '[data-sidebar-slot="buzz.channels/solo"]',
+    );
+    assert(solo?.firstChild);
+    const soloContent = solo.firstChild;
+    const viewport = screen.getByRole("navigation", {
+      name: "Subscribed channels",
+    });
+    // The source fallback is a settled inventory, even though its expected rows are absent.
+    await waitFor(() => expect(viewport?.scrollTop).toBe(120));
+    expect(screen.queryByRole("button", { name: "alpha" })).toBeNull();
+
+    failing = false;
+    fireEvent.click(screen.getByRole("button", { name: "Retry" }));
+    const row = await screen.findByRole("button", { name: "beta" });
+    const user = userEvent.setup();
+    row.focus();
+    fireEvent.keyDown(row, { key: "ContextMenu" });
+    await user.hover(
+      await screen.findByRole("menuitem", { name: "Move channel" }),
+    );
+    fireEvent.click(
+      await screen.findByRole("menuitem", { name: "Create new…" }),
+    );
+    const dialog = await screen.findByRole("dialog", {
+      name: "Move to new section",
+    });
+    await user.type(
+      within(dialog).getByRole("textbox", { name: "Section name" }),
+      "Release",
+    );
+    const form = within(dialog).getByRole("textbox").closest("form");
+    assert(form);
+    // Lose the row while its optimistic move requests focus. Recovery must finish
+    // on the shell's fallback control after the failed source's slot commits.
+    failing = true;
+    act(() => fireEvent.submit(form));
+    const sidebar = screen.getByRole("complementary", { name: "Sidebar" });
+    expect(screen.queryByRole("button", { name: "beta" })).toBeNull();
+    expect(sidebar.querySelector("button")).toHaveFocus();
+    expect(solo).toContainElement(soloContent as HTMLElement);
+    expect(soloContent.isConnected).toBe(true);
+  } finally {
+    cleanup();
+    await act(async () => finish());
+    source.mockRestore();
+    error.mockRestore();
+    preferences.dispose();
+  }
+});
+
+it("restores saved scroll after reconnect only with the new generation's connected slots", async () => {
+  const f = fixture();
+  writeView(f.session.scope, "channel-sidebar", {
+    collapsed: [],
+    contributionOrder: [],
+    scrollTop: 120,
+    location: "conversation:alpha",
+  });
+  const writes: { top: number; rows: number }[] = [];
+  const offsets = new WeakMap<Element, number>();
+  const original = Object.getOwnPropertyDescriptor(
+    Element.prototype,
+    "scrollTop",
+  );
+  Object.defineProperty(Element.prototype, "scrollTop", {
+    configurable: true,
+    get() {
+      return offsets.get(this) ?? 0;
+    },
+    set(top: number) {
+      const rows = this.querySelectorAll("[data-channel-id]").length;
+      writes.push({ top, rows });
+      // A disconnected portal cannot supply scroll height. This models ordering,
+      // while the browser regressions own actual layout and clamp measurements.
+      offsets.set(this, rows ? top : 0);
+    },
+  });
+  try {
+    render(f.view("alpha"));
+    await screen.findByRole("button", { name: "alpha" });
+    await waitFor(() => expect(writes).toEqual([{ top: 120, rows: 3 }]));
+    const previous = screen.getByRole("button", { name: "alpha" });
+    writes.length = 0;
+    f.connection({ ...f.snapshot, generation: f.snapshot.generation + 1 });
+    const current = screen.getByRole("button", { name: "alpha" });
+    expect(current).not.toBe(previous);
+    expect(previous.isConnected).toBe(false);
+    expect(writes).toEqual([{ top: 120, rows: 3 }]);
+  } finally {
+    cleanup();
+    if (original)
+      Object.defineProperty(Element.prototype, "scrollTop", original);
+    else Reflect.deleteProperty(Element.prototype, "scrollTop");
+  }
+});
+
+it("keeps launch pending across a generation change until its source slots commit", async () => {
+  const commits: { pending: string | null; rows: number }[] = [];
+  const Component = teamSidebarSource.component;
+  function ObservedTeam(props: ComponentProps<typeof Component>) {
+    useLayoutEffect(() => {
+      const sidebar = document.querySelector('aside[aria-label="Sidebar"]');
+      assert(sidebar);
+      commits.push({
+        pending: sidebar.getAttribute("data-buzz-launch-pending"),
+        rows: sidebar.querySelectorAll("[data-channel-id]").length,
+      });
+    });
+    return <Component {...props} />;
+  }
+  const source = vi
+    .spyOn(teamSidebarSource, "component")
+    .mockImplementation(ObservedTeam);
+  try {
+    const f = fixture();
+    render(f.view("alpha"));
+    const sidebar = screen.getByRole("complementary", { name: "Sidebar" });
+    await waitFor(() =>
+      expect(sidebar).not.toHaveAttribute("data-buzz-launch-pending"),
+    );
+    commits.length = 0;
+    f.connection({ ...f.snapshot, generation: f.snapshot.generation + 1 });
+    // The inventory is warm, but the new generation's portals must connect
+    // before launch.ts can treat this sidebar as ready to reveal.
+    const pending = commits.filter(({ rows }) => rows === 0);
+    expect(pending.length).toBeGreaterThan(0);
+    expect(pending.every(({ pending }) => pending === "required")).toBe(true);
+    expect(screen.getByRole("button", { name: "alpha" })).toBeInTheDocument();
+    expect(
+      screen.getByRole("complementary", { name: "Sidebar" }),
+    ).not.toHaveAttribute("data-buzz-launch-pending");
+  } finally {
+    cleanup();
+    source.mockRestore();
+  }
+});
+
+it("keeps active Team drags out of the Solo row context", async () => {
+  vi.stubGlobal("PointerEvent", MouseEvent);
+  function Probe({ scope }: { scope: string }) {
+    const { active } = useDndContext();
+    return (
+      <p>
+        {scope}: {active ? "dragging" : "idle"}
+      </p>
+    );
+  }
+  const team: RegisteredSidebarSectionSource = {
+    version: 2,
+    id: "drag-team",
+    context: "buzz.channels/messages",
+    key: "example.plugin/drag-team",
+    pluginId: "example.plugin",
+    revision: "bundled",
+    scope: "team",
+    component: function DragTeam({ render }) {
+      const drag = useDraggable({
+        id: "drag-row",
+        data: { rowKind: "channel" },
+      });
+      return render([
+        {
+          id: "drag-row",
+          defaultPosition: 0,
+          element: (
+            <>
+              <button
+                type="button"
+                ref={drag.setNodeRef}
+                {...drag.listeners}
+                {...drag.attributes}
+              >
+                Drag probe
+              </button>
+              <Probe scope="Team" />
+            </>
+          ),
+        },
+      ]);
+    },
+  };
+  const solo: RegisteredSidebarSectionSource = {
+    ...team,
+    id: "drag-solo",
+    key: "example.plugin/drag-solo",
+    scope: "solo",
+    component: ({ render }) =>
+      render([
+        {
+          id: "solo-row",
+          defaultPosition: 0,
+          element: (
+            <>
+              <Probe scope="Solo" />
+              <ChannelSidebarRows open>
+                {[
+                  <button type="button" key="solo">
+                    Solo probe row
+                  </button>,
+                ]}
+              </ChannelSidebarRows>
+            </>
+          ),
+        },
+      ]),
+  };
+  const sources = [solo, team];
+  const emptySections: readonly RegisteredSidebarSection[] = [];
+  const f = fixture(undefined, "ready", undefined, {
+    version: 1,
+    register() {},
+    snapshot: () => emptySections,
+    subscribe: () => () => {},
+    sourceSnapshot: () => sources,
+    sourceSubscribe: () => () => {},
+  });
+  render(f.view("alpha"));
+  const row = screen.getByRole("button", { name: "Drag probe" });
+  const down = new MouseEvent("pointerdown", {
+    bubbles: true,
+    button: 0,
+    clientX: 10,
+    clientY: 10,
+  });
+  Object.defineProperty(down, "isPrimary", { value: true });
+  fireEvent(row, down);
+  fireEvent.pointerMove(document, { clientX: 40, clientY: 40 });
+  await waitFor(() =>
+    expect(screen.getByText("Team: dragging")).toBeInTheDocument(),
+  );
+  expect(screen.getByText("Solo: idle")).toBeInTheDocument();
+  expect(screen.getByRole("button", { name: "Solo probe row" })).toBeVisible();
+  fireEvent.pointerUp(document);
+});
+
+it("keeps create-and-move focus pending until the new group slot commits", async () => {
+  let finish!: () => void;
+  const heldWrite = new Promise<void>((resolve) => {
+    finish = resolve;
+  });
+  let saved: SidebarPreferences = {
+    sections: [],
+    assignments: {},
+    starred: [],
+    muted: [],
+  };
+  const preferences = createSidebarPreferencesStore({
+    available: true,
+    read: async () => saved,
+    writeStar: async () => [],
+    write: async (intent) => {
+      assert(intent.createSection && intent.channelId);
+      await heldWrite;
+      saved = {
+        ...saved,
+        sections: [{ ...intent.createSection, order: 0 }],
+        assignments: { [intent.channelId]: intent.createSection.id },
+      };
+      return saved;
+    },
+  });
+  try {
+    const f = fixture(preferences.queries);
+    const user = userEvent.setup();
+    render(f.view("alpha"));
+    const row = await screen.findByRole("button", { name: "beta" });
+    row.focus();
+    fireEvent.keyDown(row, { key: "ContextMenu" });
+    await user.hover(
+      await screen.findByRole("menuitem", { name: "Move channel" }),
+    );
+    fireEvent.click(
+      await screen.findByRole("menuitem", { name: "Create new…" }),
+    );
+    const dialog = await screen.findByRole("dialog", {
+      name: "Move to new section",
+    });
+    await user.type(
+      within(dialog).getByRole("textbox", { name: "Section name" }),
+      "Release",
+    );
+    const form = within(dialog).getByRole("textbox").closest("form");
+    assert(form);
+    act(() => {
+      fireEvent.submit(form);
+    });
+    // No timers or write completion: all portal and focus passes finish in layout.
+    const moved = screen.getByRole("button", { name: "beta" });
+    expect(moved.closest("[data-sidebar-section]")).toHaveAttribute(
+      "data-sidebar-section",
+      `group:${preferences.queries.snapshot().data?.sections[0]?.id}`,
+    );
+    expect(moved).toHaveFocus();
+    expect(saved.sections).toEqual([]);
+  } finally {
+    await act(async () => finish());
+    preferences.dispose();
+  }
 });

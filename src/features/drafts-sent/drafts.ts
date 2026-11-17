@@ -97,7 +97,7 @@ function draftEntry(
   );
   const text = draft.text.trim();
   const fingerprint = signature(
-    `${count}:${draft.chatCards?.length ?? 0}:${draft.gifs?.length ?? 0}:${text}`,
+    `${count}:${draft.chatCards?.length ?? 0}:${draft.gifs?.length ?? 0}:${text}${draft.forward ? `:${JSON.stringify(draft.forward)}` : ""}`,
   );
   const changed = activity[key]?.[0] !== fingerprint;
   if (changed) activity[key] = [fingerprint, nowSeconds];
@@ -109,7 +109,9 @@ function draftEntry(
       text ||
       (count
         ? `${count} attached file${count === 1 ? "" : "s"}`
-        : "Attached chat or GIF"),
+        : draft.forward
+          ? "Forwarded message"
+          : "Attached chat or GIF"),
     ...(text ? {} : { placeholder: true as const }),
     createdAt: activity[key]?.[1] ?? nowSeconds,
     signature: fingerprint,

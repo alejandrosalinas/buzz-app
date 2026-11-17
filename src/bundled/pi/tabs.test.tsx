@@ -728,3 +728,14 @@ it.each([
     );
   },
 );
+
+it("describes the inherited Pi model without nesting a Pi default label", async () => {
+  created();
+  const dialog = await openChoices();
+  const picker = within(dialog).getByRole("combobox", { name: "Model" });
+  await waitFor(() => expect(picker).toHaveTextContent("Claude X · Default"));
+  await userEvent.setup().click(picker);
+  const option = await screen.findByRole("option", { name: "Default" });
+  expect(option).toHaveAccessibleDescription("Currently Claude X");
+  expect(option).not.toHaveTextContent("Pi default");
+});

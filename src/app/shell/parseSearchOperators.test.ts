@@ -168,3 +168,18 @@ it("helpers recognize hex pubkeys and channel uuids", () => {
   assert.equal(normalizeInChannel("@alice"), "@alice");
   assert.equal(normalizeInChannel("@"), "");
 });
+
+it.each([
+  ["2025-03-31T12:00:00", "1m", "2025-02-28T00:00:00"],
+  ["2024-03-31T12:00:00", "1m", "2024-02-29T00:00:00"],
+  ["2025-01-31T12:00:00", "2m", "2024-11-30T00:00:00"],
+  ["2024-02-29T12:00:00", "1y", "2023-02-28T00:00:00"],
+  ["2025-03-31T12:00:00", "7d", "2025-03-24T00:00:00"],
+])(
+  "on %s, during:%s starts on the target month's day, or its last day",
+  (now, period, since) => {
+    expect(
+      parseSearchOperators(`notes during:${period}`, new Date(now)).since,
+    ).toBe(localSeconds(since));
+  },
+);

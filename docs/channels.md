@@ -154,10 +154,13 @@ and DMs to **Direct messages**. Neither home section accepts the other's rows. T
 drop is the same Move intent, with the same gate, optimistic placement, rollback
 notice and Retry.
 The **Channels** ellipsis menu also offers **Create section**, which creates an
-empty section without moving a channel. Its dialog retains the name and section
-ID after an attempted write fails and waits for confirmation before closing.
-The submitted name stays read-only and focused; a rejected gate that attempted
-no write leaves the draft editable. Failed confirmation uses plain copy and
+empty section without moving a channel. All four custom Team section creation
+routes, including **New → Team → New section**, offer optional Unicode or community
+emoji through the shared picker beside the name. **Remove emoji** at the top of the picker clears only the
+emoji. The dialog retains the name, selected emoji and section ID after an
+attempted write fails and waits for confirmation before closing. The submitted
+name stays read-only and focused, and emoji controls stay disabled; a rejected
+gate that attempted no write leaves the draft editable. Failed confirmation uses plain copy and
 offers Retry preferences whenever preferences are unavailable, with Create
 disabled until recovery. After a failed creation,
 the session refreshes preferences from the writer before allowing dismissal so
@@ -187,9 +190,14 @@ group; an accent line shows where it lands, and Escape cancels. Its section menu
 rewrites every live section's `order` register with one stamp, so channels, sort
 and collapsed state stay with the group's id; the order shows optimistically and
 a failure rolls back with the same move notice and Retry. **Rename section**
-in the same menu rewrites only that group's `name` register (a dialog keeps the
-entry and shows the error if the save fails), so its channels, order and sort stay
-put. The
+in the same menu changes the name, emoji, or both through **Rename**. Emoji-only
+changes do not resend the name; omitted fields preserve their latest values, and
+**Remove emoji** writes an explicit null icon register. Changed name/icon leaves
+share one atomic register edit, leaving channels, order, sort and unrelated
+preferences intact. The dialog keeps the draft and shows the error if the save
+fails; saving an unchanged draft closes without a write. The shared picker is a
+transient nested surface: Escape closes only the picker and returns focus to its
+trigger, without creating a history visit. The
 session serializes placement, sort and mute writes through one queue, retaining
 one confirmed preferences snapshot beneath
 pending Move and Sort projections. Each confirmation updates only its owned fields
@@ -364,8 +372,10 @@ a selection updates both menus; an already-inserted mention still requires actua
 DM membership on Send. Mentioning never opens the DM early or adds recipients.
 The existing `MessageComposer` owns the draft and ordinary input behavior. Its placeholder is blank before selection and lists the selected names
 afterward. Disabled mention and emoji icons stay unfilled. When the recipients
-plus the viewer are exactly an existing DM's participants, in any order, that
-DM's history loads inline above the draft. This includes a DM removed with
+plus the viewer are an existing DM's participants, in any order, that
+DM's history loads inline above the draft. Like the relay, a DM with two or
+more people is matched by its people alone, so agents in it or among the
+recipients do not change which DM it is. This includes a DM removed with
 Close conversation or Hide conversation. A subset or superset of a group's
 participants shows the recipients' avatars instead. Each recipient change
 replaces the preview with the newly matched DM's timeline, or with the avatars.
@@ -392,10 +402,40 @@ exact command receipt, and returns the canonical channel ID. A unique client tag
 allows reissuing this participant-set command after a lost response without
 receiving a generic duplicate-event receipt. No private key or arbitrary signing
 capability is exposed to the page. Other host adapters report this capability as
-unavailable until they implement it.
+unavailable until they implement it. Without `["history", "include"]` the
+relay finds or makes the DM of exactly the named members, agents included. New
+message always sends the tag, because only the relay knows who is an agent: it
+returns the DM the named people already share, which named agents join with
+its history, rather than making another. The page's preview is only a
+hint. The message goes to the DM the relay returns, and the page then opens it,
+even when that is not the DM it showed. Every other open omits the tag.
 
-Before sending, the session requires signed DM metadata and an exact signed roster
-containing the viewer and selected people. The first kind-9 message then uses the
+Before sending, the session requires signed DM metadata and a signed roster
+containing the viewer and selected people, plus only agents they did not name.
+
+## Adding to a direct message
+
+The access dialog of a DM adds people and agents through the same
+purpose-bound endpoint, which signs kind 41011 with the DM's `h` tag. Only the
+relay knows who is an agent, so the app never decides whether to ask: every
+addition first sends `["history", "ask"]`. The relay adds agents in place with
+the DM's history, and an agent never changes which DM it is. When a person
+would join a DM of two or more people, it refuses with `needs-choice: history`
+and changes nothing; only then does the dialog ask **Include history** or
+**Start a new DM** and add again with its choice. Include history adds them in
+place with `["history", "include"]`; the DM is then identified by the grown set
+of people, so messaging only the original people later starts a new DM. Start a
+new DM, without the tag, creates a DM of the existing people plus whoever is
+added, without the history; agents already in the DM stay behind. Either way,
+if a DM of the grown set of people already exists, the relay returns it and the
+dialog opens it. A DM of at most one person and their agents never gains a
+person in place: the relay starts a DM of that person plus whoever is added,
+with its agents left behind, without asking. A relay from before `"ask"`
+refuses it as `invalid: history must be "include", got "ask"`, which the app
+treats as the same question. A DM holds at most nine
+people; agents do not count. The relay enforces this and decides who is an
+agent. Opening a DM still names at most eight others, agents included. The session confirms the returned DM from signed
+discovery before reporting the addition. The first kind-9 message then uses the
 normal durable outbox. Navigation waits for an accepted receipt or verified echo.
 A failure retains recipients and draft; an uncertain delivery retries its exact
 event ID. The outbox persists recovery metadata with the operation before publication and

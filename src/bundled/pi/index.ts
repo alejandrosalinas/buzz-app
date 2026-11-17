@@ -89,6 +89,7 @@ export const apply: PluginModule["apply"] = (ctx) => {
   }
 
   agents.register<Config>({
+    supportsGuardedWake: true,
     id: TYPE_ID,
     hooks: { events: ["beforeTool", "afterTool"] },
     retire: (pubkey) => runtime.retire(pubkey),

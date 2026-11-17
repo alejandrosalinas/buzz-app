@@ -29,6 +29,7 @@ function Picker(props: {
   pending: boolean;
   open?: boolean;
   onChoose: (key: string) => void;
+  followFirst?: boolean;
 }) {
   const highlight = useSearchHighlight(props);
   return (
@@ -140,4 +141,49 @@ it("drops a waiting Enter when the results settle empty, and ignores Enter with 
   expect(fireEvent.keyDown(screen.getByRole("textbox"), { key: "Enter" })).toBe(
     true,
   );
+});
+
+it("keeps the highlight on the first row as results land, until it is moved", () => {
+  const onChoose = vi.fn();
+  const props = { query: "lau", pending: false, onChoose, followFirst: true };
+  const { rerender } = render(<Picker {...props} keys={["chat"]} />);
+  const field = screen.getByRole("textbox");
+  // Messages land above the chat: untouched, Enter opens what now leads.
+  rerender(<Picker {...props} keys={["message", "chat"]} />);
+  fireEvent.keyDown(field, { key: "Enter" });
+  expect(onChoose).toHaveBeenLastCalledWith("message");
+  // Once moved, the highlight keeps its row wherever that row goes.
+  fireEvent.keyDown(field, { key: "ArrowDown" });
+  rerender(<Picker {...props} keys={["channel", "message", "chat"]} />);
+  fireEvent.keyDown(field, { key: "Enter" });
+  expect(onChoose).toHaveBeenLastCalledWith("chat");
+});
+
+it("counts a real pointer move on the first row as moving it", () => {
+  const onChoose = vi.fn();
+  const props = { query: "lau", pending: false, onChoose, followFirst: true };
+  const { rerender } = render(<Picker {...props} keys={["chat", "dm"]} />);
+  const chat = screen.getByRole("button", { name: "chat" });
+  // The first event only records where the pointer rests.
+  fireEvent.pointerMove(chat, { clientX: 5, clientY: 5 });
+  fireEvent.pointerMove(chat, { clientX: 6, clientY: 5 });
+  rerender(<Picker {...props} keys={["message", "chat", "dm"]} />);
+  fireEvent.keyDown(screen.getByRole("textbox"), { key: "Enter" });
+  expect(onChoose).toHaveBeenLastCalledWith("chat");
+});
+
+it("does not count rows moving under a resting pointer", () => {
+  const onChoose = vi.fn();
+  const props = { query: "lau", pending: false, onChoose, followFirst: true };
+  const { rerender } = render(<Picker {...props} keys={["chat", "dm"]} />);
+  const chat = screen.getByRole("button", { name: "chat" });
+  fireEvent.pointerMove(chat, { clientX: 5, clientY: 5 });
+  // WebKit replays the event at the same place when rows move.
+  rerender(<Picker {...props} keys={["message", "chat", "dm"]} />);
+  fireEvent.pointerMove(screen.getByRole("button", { name: "message" }), {
+    clientX: 5,
+    clientY: 5,
+  });
+  fireEvent.keyDown(screen.getByRole("textbox"), { key: "Enter" });
+  expect(onChoose).toHaveBeenLastCalledWith("message");
 });

@@ -200,8 +200,10 @@ it("lookup results survive a full-window reset and refresh without asking again"
   await vi.waitFor(() => expect(attention().unread).toBe(true));
   expect(lookups()).toBeGreaterThan(0);
   const count = lookups();
-  // Overflow the 4,096-event window: every channel's evidence is dropped.
-  owner.accept(flood(4096, 800));
+  // An event larger than the whole window: every channel's evidence is dropped.
+  owner.accept([
+    { ...event(peer, 9, 800, []), content: "x".repeat(9 * 1024 * 1024) },
+  ]);
   expect(
     owner.capability.snapshot({ kind: "channel", channelId: "c0" }).freshness,
   ).toBe("stale");

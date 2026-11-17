@@ -1,3 +1,4 @@
+import { forwardReference, type ForwardReference } from "./forward-clipboard";
 import {
   clearView,
   readView,
@@ -11,6 +12,7 @@ import { messageTokenTags } from "./message-tokens";
 
 export type FollowUpMessage = {
   channelId: string;
+  forward?: ForwardReference;
   text: string;
   recipients: readonly string[];
   attachments: readonly UploadedAttachment[];
@@ -202,6 +204,7 @@ function valid(value: unknown): value is SavedFollowUp {
     typeof v.id === "string" &&
     typeof v.channelId === "string" &&
     typeof v.text === "string" &&
+    (v.forward === undefined || !!forwardReference(v.forward)) &&
     (v.sending === undefined || v.sending === true) &&
     Number.isFinite(v.createdAt) &&
     strings(v.recipients) &&

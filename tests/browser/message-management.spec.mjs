@@ -11,6 +11,78 @@ test.use({
   historyCounts: { alpha: 2, beta: 1 },
 });
 
+// Separate app windows retain their own row/confirmation while sharing the
+// production IndexedDB receipt and Web Lock. A DOM emulator cannot prove this.
+test("discarding an orphan already removed by another window closes confirmation", async ({
+  page,
+  context,
+  app,
+}, testInfo) => {
+  const message = app.sign({
+    kind: 9,
+    created_at: Math.floor(Date.now() / 1000) - 3600,
+    content: "Orphaned follow-up",
+    tags: [["h", "alpha"]],
+  });
+  await page.addInitScript(
+    ({ scope, message }) => {
+      localStorage.setItem(
+        `buzz-outbox-v1:${scope}`,
+        JSON.stringify([
+          {
+            event: message,
+            signed: message,
+            delivery: "unknown",
+            recovery: { key: "follow-up:orphan", value: "orphan" },
+          },
+        ]),
+      );
+    },
+    { scope: `https://primary.example:${app.viewer}`, message },
+  );
+  const confirm = async (window) => {
+    await open(window, app);
+    const row = window.locator(`[data-message-id="${message.id}"]`);
+    await expect(row).toBeVisible();
+    await hoverMessage(row);
+    await row.getByRole("button", { name: "More message actions" }).click();
+    await window
+      .getByRole("menuitem", { name: "Remove from this device", exact: true })
+      .click();
+    return window.getByRole("alertdialog", {
+      name: "Remove message from this device?",
+      exact: true,
+    });
+  };
+  const a = await confirm(page);
+  const other = await context.newPage();
+  app.watchPageErrors(other);
+  try {
+    const b = await confirm(other);
+    await b.getByRole("button", { name: "Remove", exact: true }).click();
+    await expect(b).toHaveCount(0);
+    await expect(other.getByText(message.content, { exact: true })).toHaveCount(
+      0,
+    );
+    await expect(a).toBeVisible();
+    await a.getByRole("button", { name: "Remove", exact: true }).click();
+    await expect(a).toHaveCount(0);
+    await expect(page.getByText(message.content, { exact: true })).toHaveCount(
+      0,
+    );
+    expect(
+      app.report.publications.filter(({ event }) =>
+        [5, 9].includes(event.kind),
+      ),
+    ).toEqual([]);
+    await page.screenshot({
+      path: testInfo.outputPath("discarded-in-both-windows.png"),
+    });
+  } finally {
+    await other.close();
+  }
+});
+
 // Real shared-row/portal integration, keyboard focus and responsive geometry;
 // failure, retry, identity and permission matrices stay in lower-layer tests.
 test("manage a channel message, peer unread state, and its thread", async ({

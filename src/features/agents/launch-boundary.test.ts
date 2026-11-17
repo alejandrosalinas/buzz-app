@@ -3,7 +3,7 @@
 // session. The config the runtime actually uses comes from confirmed synced
 // copies, the delivery carries their revision IDs, and the transport under
 // the session sees no request at start beyond a turn's conversation reads,
-// online or offline.
+// online or offline, and the runner's catch-up of the agent's mentions.
 import { Context } from "@deepseek-ai/cordis";
 import { finalizeEvent } from "nostr-tools";
 import { afterEach, expect, it, vi } from "vitest";
@@ -316,10 +316,18 @@ const recentNotesRead = (request: Request) =>
   request.memory?.agent === agentKey.pubkey &&
   /^mem\/notes\/\d{4}-\d{2}-\d{2}$/.test(request.memory.slug ?? "");
 
-/** Apart from the post-run core refresh, and with `notes` a start's recent
- * notes reads, the recorded requests are exactly one conversation read for
- * each of `conversations`, in order: an extra, a wider or a different read
- * fails. */
+/** The runner's catch-up read of the agent's mentions, of every channel
+ * (`runner.ts` `readMissed`): not a start's. A connect in the second after
+ * the agent's mentions began to be caught up leaves that second to read. */
+const mentionCatchUp = (request: Request) =>
+  request.filters.length === 1 &&
+  request.filters[0]?.["#p"]?.join() === agentKey.pubkey &&
+  !request.filters[0]["#h"];
+
+/** Apart from the post-run core refresh and mention catch-up, and with
+ * `notes` a start's recent notes reads, the recorded requests are exactly one
+ * conversation read for each of `conversations`, in order: an extra, a wider
+ * or a different read fails. */
 function expectOnlyAllowed(
   f: Fixture,
   conversations: readonly RelayEvent[] = [],
@@ -329,7 +337,9 @@ function expectOnlyAllowed(
     f.requests
       .filter(
         (request) =>
-          !postRunCoreRefresh(request) && !(notes && recentNotesRead(request)),
+          !postRunCoreRefresh(request) &&
+          !mentionCatchUp(request) &&
+          !(notes && recentNotesRead(request)),
       )
       .map((request) => request.filters),
   ).toEqual(conversations.map(conversationRead));

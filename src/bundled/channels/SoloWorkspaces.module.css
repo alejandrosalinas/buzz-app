@@ -107,7 +107,7 @@
 .sidebarContents {
   --project-icon-size: 0.9375rem;
   /* Rows and project headers share one height and one trailing slot. */
-  /* The compact sidebar row height (Channels' .sidebar rows), as in Berd. */
+  /* The compact sidebar row height (SidebarFrame’s .sidebar rows), as in Berd. */
   --session-action-size: calc(var(--space-6) + var(--space-1));
   /* Match the channel sidebar's leading and trailing content inset. */
   --session-row-inset: var(--space-2);

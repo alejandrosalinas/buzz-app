@@ -157,6 +157,11 @@ export function ButtonSpecimen() {
         <Button>Continue</Button>
       </ExamplePreview>
       <ButtonMatrix kind="text" />
+      <ExamplePreview code='<Button variant="outline-subtle" size="xs">from: person</Button>'>
+        <Button variant="outline-subtle" size="xs">
+          from: person
+        </Button>
+      </ExamplePreview>
       <ExamplePreview code='<SplitButton menuLabel="Other add options" menu={<MenuItem>View only</MenuItem>}>Add</SplitButton>'>
         <SplitButton
           variant="prominent"

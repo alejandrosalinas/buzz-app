@@ -247,6 +247,33 @@ export function memberAdministrationTemplate(
   };
 }
 
+/** The exact single-Admin addition saved by Outbox, including its retry ID.
+ * This uses the existing administration boundary; ordinary writes stay closed. */
+export function isAdminAddition(event: EventTemplate, viewer: string): boolean {
+  const tags = event?.tags;
+  if (!Array.isArray(tags)) return false;
+  const client = tags.at(-1);
+  if (
+    event.kind !== 9000 ||
+    tags.length !== 4 ||
+    tags[2]?.[0] !== "role" ||
+    tags[2]?.[1] !== "admin" ||
+    client?.length !== 2 ||
+    client[0] !== "client-id"
+  )
+    return false;
+  try {
+    lifecycleChannelId(client[1] ?? "");
+    validateMemberAdministrationTemplate(
+      { ...event, tags: tags.slice(0, -1) },
+      viewer,
+    );
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 /** Purpose-bound broker admission; relay remains the authoritative ACL boundary. */
 export function validateMemberAdministrationTemplate(
   event: EventTemplate,

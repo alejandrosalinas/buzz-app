@@ -7,12 +7,10 @@ import draftsSentManifest from "./drafts-sent/manifest.json";
 import * as draftsSent from "./drafts-sent";
 import pairingManifest from "./pairing/manifest.json";
 import * as pairing from "./pairing";
-import todosManifest from "./todos/manifest.json";
 import huddlesManifest from "./huddles/manifest.json";
 import * as huddles from "./huddles";
 import builderlabManifest from "./builderlab/manifest.json";
 import * as builderlab from "./builderlab";
-import * as todos from "./todos";
 import diffsManifest from "./diffs/manifest.json";
 import * as diffs from "./diffs";
 import mermaidManifest from "./mermaid/manifest.json";
@@ -132,11 +130,6 @@ export const bundledPlugins: readonly BundledPlugin[] = [
     manifest: { ...feedbackManifest, apiVersion: 1 },
     module: feedback,
     enabledByDefault: true,
-  },
-  {
-    manifest: { ...todosManifest, apiVersion: 1 },
-    module: todos,
-    enabledByDefault: false,
   },
   {
     manifest: { ...diffsManifest, apiVersion: 1 },

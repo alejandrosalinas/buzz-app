@@ -794,6 +794,43 @@ const pluginWake = (root?: string, where = channel) => ({
   at: 200_000,
 });
 
+it.each([true, false])(
+  "rechecks guarded Pi input after native queue waits (current=%s)",
+  async (valid) => {
+    const waiting = deferred();
+    const ready = deferred();
+    let current = true;
+    const accepted = vi.fn();
+    const f = setup({
+      deliver: async (params, process) => {
+        ready.resolve();
+        await waiting.promise;
+        const response = await process.tool(
+          { agent: self, request: params.request },
+          "prompt",
+        );
+        return response.result
+          ? { submission: 1, conversation: CONVERSATION }
+          : false;
+      },
+    });
+    const turn = f.deliver(pluginWake(root.id), {
+      accepted,
+      current: () => current,
+    });
+    await ready.promise;
+    expect(accepted).not.toHaveBeenCalled();
+    try {
+      current = valid;
+    } finally {
+      waiting.resolve();
+    }
+    await turn.run;
+    expect(accepted).toHaveBeenCalledTimes(valid ? 1 : 0);
+    expect(f.host.requests("deliver")[0]?.params.refresh).toBe(true);
+  },
+);
+
 it("takes a plugin's wake in its thread's conversation as the plugin's, and reports its failure at the thread's root", async () => {
   const { host, deliver, settled, published } = setup({
     wait: () => ({

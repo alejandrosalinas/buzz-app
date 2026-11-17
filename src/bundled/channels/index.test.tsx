@@ -11,6 +11,7 @@ afterEach(() => {
 function registered() {
   const shortcuts = { register: vi.fn() };
   apply({
+    reflect: { get: () => undefined },
     shortcuts,
     conversation: {
       registerCompletion() {},

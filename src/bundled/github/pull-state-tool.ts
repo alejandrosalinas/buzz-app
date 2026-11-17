@@ -1,49 +1,9 @@
 // An agent's lookup of a pull request's state: what the owner's links and
 // sidebar show, from the same store, with how old it is.
 import type { AddedTool } from "../../buzz-mcp/session-tools";
-import type { GitHubDetails } from "./data";
-import {
-  PULL_REFRESH_MS,
-  type PullDetails,
-  type PullStates,
-} from "./pull-states";
+import { pullStateReport } from "./pull-state-report";
+import { PULL_REFRESH_MS, type PullStates } from "./pull-states";
 import { parseGitHubReference } from "./references";
-
-/** The panel's facts, such as files changed, as plain values under
- * snake_case keys. */
-const factsOf = (facts: GitHubDetails["facts"]) =>
-  Object.fromEntries(
-    facts.map(([label, value]) => [
-      label.toLowerCase().replaceAll(" ", "_"),
-      typeof value !== "object"
-        ? value
-        : "additions" in value
-          ? `+${value.additions} -${value.deletions}`
-          : `${value.head.label} -> ${value.base.label}`,
-    ]),
-  );
-
-/** What the panel shows beyond the state, for `details: true`. */
-const detailsOf = ({ details, checklist, publicChecks }: PullDetails) => ({
-  title: details.title,
-  author: details.author,
-  ...factsOf(details.facts),
-  ...(checklist
-    ? {
-        review: {
-          decision: checklist.review.decision,
-          approved: checklist.review.approved,
-          changes_requested: checklist.review.changes,
-          waiting: checklist.review.waiting,
-        },
-        unresolved_threads: checklist.unresolved,
-        ...(checklist.moreThreads ? { more_threads_unread: true } : {}),
-        merge_state: checklist.merge,
-        auto_merge: checklist.autoMerge ?? null,
-        can_update_branch: checklist.canUpdateBranch,
-      }
-    : { checks: publicChecks?.state ?? "unknown" }),
-});
 
 export function addPullStateTool(
   agents: { addTool(tool: AddedTool): void },
@@ -89,26 +49,7 @@ export function addPullStateTool(
           `Could not read ${args.url}: ${error?.message ?? "GitHub did not answer"}`,
         );
       return JSON.stringify(
-        {
-          state: state.state,
-          ...(state.head
-            ? {
-                checks: state.checks ?? "none",
-                failed: state.failed,
-                settled: state.settled,
-                conflicts: state.conflicts,
-                head: state.head,
-              }
-            : {}),
-          ...(args.details === true && state.details
-            ? { details: detailsOf(state.details) }
-            : {}),
-          read_at: new Date(readAt).toISOString(),
-          age_seconds: Math.max(0, Math.round((Date.now() - readAt) / 1000)),
-          source: state.head ? "gh" : "public",
-          // The state above is the last one read; reading it again failed.
-          ...(error ? { last_read_failed: error.message } : {}),
-        },
+        pullStateReport({ state, readAt, error }, args.details === true),
         null,
         2,
       );

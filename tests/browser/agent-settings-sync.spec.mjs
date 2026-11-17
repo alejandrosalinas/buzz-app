@@ -34,11 +34,15 @@ test("Claude grid changes reconcile with the open settings draft", async ({
   await gridModel.click();
   await page
     .getByRole("option", {
-      name: "Fictional Claude model · Default",
+      name: "Default",
       exact: true,
     })
     .click();
-  await expect(sidebarModel).toContainText("Fictional Claude model");
+  await expect(sidebarModel).toHaveText("Default");
+  await expect(sidebarModel.locator(".buzz-select-value")).toHaveAttribute(
+    "title",
+    "Default · Follows Claude Code settings",
+  );
   await expect(pane.getByLabel("Instructions", { exact: true })).toHaveValue(
     "Keep these instructions.",
   );
@@ -51,7 +55,11 @@ test("Claude grid changes reconcile with the open settings draft", async ({
   await expect(pane.getByLabel("Instructions", { exact: true })).toHaveValue(
     "Keep these instructions.",
   );
-  await expect(sidebarModel).toContainText("Fictional Claude model");
+  await expect(sidebarModel).toHaveText("Default");
+  await expect(sidebarModel.locator(".buzz-select-value")).toHaveAttribute(
+    "title",
+    "Default · Follows Claude Code settings",
+  );
 
   // Competing model edits must remain a deliberate choice, including at narrow
   // widths and enlarged text where the host moves the pane over the grid.

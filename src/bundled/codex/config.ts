@@ -25,6 +25,21 @@ export type Model = {
 export function resolveModel(selected: string, models: readonly Model[]) {
   return selected || models.find((model) => model.isDefault)?.model;
 }
+/** A turn uses the first supported choice, then the selected model's default. */
+export function resolveEffort(
+  model: Model,
+  ...choices: (string | undefined)[]
+) {
+  return (
+    choices.find(
+      (choice) =>
+        choice &&
+        model.supportedReasoningEfforts.some(
+          (level) => level.reasoningEffort === choice,
+        ),
+    ) ?? model.defaultReasoningEffort
+  );
+}
 export const defaults: Config = {
   model: "",
   effort: "",

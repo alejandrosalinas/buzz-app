@@ -3,7 +3,7 @@ import { Button } from "../../shared/design-system/ui/Button";
 import { ToastNotice } from "../../shared/design-system/ui/Toast";
 import type { Updates } from "./updates";
 
-/** Offers restart once a downloaded update is ready, except while Settings shows it inline; dismissal lasts until it resolves. */
+/** Reports a failed install and its retry outside Settings; the top-bar action offers ready updates. */
 export function UpdateNotice({ updates }: { updates: Updates }) {
   const status = useSyncExternalStore(
     updates.subscribe,
@@ -15,29 +15,17 @@ export function UpdateNotice({ updates }: { updates: Updates }) {
     updates.inlineVisible,
     updates.inlineVisible,
   );
-  const dismissed = useSyncExternalStore(
-    updates.subscribe,
-    updates.noticeDismissed,
-    updates.noticeDismissed,
-  );
   const recovery = useSyncExternalStore(
     updates.subscribe,
     updates.noticeRecovery,
     updates.noticeRecovery,
   );
+  if (!recovery || inline) return null;
   const { state } = status;
-  const visible = state === "ready" || state === "installing" || recovery;
-  if (!visible || dismissed || inline) return null;
-  const pending = [
-    "checking",
-    "available",
-    "downloading",
-    "installing",
-  ].includes(state);
   const descriptions = {
-    idle: "Click to update",
-    ready: "Click to update",
-    installing: "Updating",
+    idle: "",
+    ready: "",
+    installing: "",
     checking: "Checking for updates...",
     available: "Preparing update...",
     downloading: "Downloading update...",
@@ -48,13 +36,7 @@ export function UpdateNotice({ updates }: { updates: Updates }) {
   };
   return (
     <ToastNotice
-      title={
-        state === "error"
-          ? "Update failed"
-          : recovery
-            ? "Software Updates"
-            : "Ready to update!"
-      }
+      title={state === "error" ? "Update failed" : "Software Updates"}
       description={
         status.state === "error" ? status.message : descriptions[state]
       }
@@ -65,14 +47,10 @@ export function UpdateNotice({ updates }: { updates: Updates }) {
       <Button
         type="button"
         size="sm"
-        loading={pending}
-        onClick={() =>
-          void (state === "ready"
-            ? updates.installAndRelaunch()
-            : updates.checkForUpdate())
-        }
+        loading={["checking", "available", "downloading"].includes(state)}
+        onClick={() => void updates.checkForUpdate()}
       >
-        {state === "ready" || state === "installing" ? "Update now" : "Retry"}
+        Retry
       </Button>
     </ToastNotice>
   );

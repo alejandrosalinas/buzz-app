@@ -10,7 +10,8 @@ const keyPattern = /^[0-9a-f]{64}$/;
  * are its readers, for example the agents a plugin shares its records with. */
 const expandable = new Set(["stream", "forum", "system"]);
 
-/** The relay remains authoritative; never offer role changes or DM expansion. */
+/** The relay remains authoritative; never offer role changes. DMs grow
+ * through `canAddToDirectMessage` instead. */
 export function canAddMembers(
   session: {
     viewer?: string | undefined;
@@ -27,6 +28,29 @@ export function canAddMembers(
     expandable.has(channel.channelType ?? "") &&
     (channel.members?.includes(session.viewer) ||
       (channel.readOnly && !channel.private && channel.joinRole !== "guest"))
+  );
+}
+
+/** A DM member may add people and agents to it; the relay decides whether a
+ * person joins this DM or a new one (see `directMessages.add`). The relay's
+ * moderation DM only carries its notices, so no one is added to it. */
+export function canAddToDirectMessage(
+  session: {
+    viewer?: string | undefined;
+    relayAuthor?: string | undefined;
+    directMessages: { available: boolean };
+  },
+  channel?: ChannelSummary,
+) {
+  return !!(
+    session.viewer &&
+    session.directMessages.available &&
+    channel?.channelType === "dm" &&
+    channel.viewerRole !== "guest" &&
+    !channel.archived &&
+    !channel.cached &&
+    channel.members?.includes(session.viewer) &&
+    !(session.relayAuthor && channel.members.includes(session.relayAuthor))
   );
 }
 

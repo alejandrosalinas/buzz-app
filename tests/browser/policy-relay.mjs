@@ -534,6 +534,9 @@ export function policyRelay({
           heldUnread &&
           filter.kinds?.includes(9) &&
           filter["#h"]?.length &&
+          // Unread repair asks for edits too; a search preview's plain
+          // channel read does not.
+          filter.include_aux &&
           filter.top_level === undefined &&
           filter.depth_limit === undefined &&
           filter.until === undefined

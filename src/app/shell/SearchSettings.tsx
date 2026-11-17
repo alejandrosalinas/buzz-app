@@ -305,11 +305,13 @@ export function useSearchSettings({
   return [
     {
       label: "Settings",
+      tone: "page",
       rank: settings[0]?.rank ?? Infinity,
       destinations: settings,
     },
     {
       label: "Plugins",
+      tone: "plugin",
       rank: pluginRows[0]?.rank ?? Infinity,
       destinations: pluginRows,
       notice: (

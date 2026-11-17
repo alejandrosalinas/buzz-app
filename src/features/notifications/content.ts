@@ -46,7 +46,11 @@ function prose(node: TextNode): string {
   return (node.children ?? []).map(prose).join(separator);
 }
 
-type PreviewOptions = Readonly<{ storedPreview?: boolean }>;
+type PreviewOptions = Readonly<{
+  storedPreview?: boolean;
+  /** The most characters kept; 200 unless given. */
+  limit?: number;
+}>;
 
 /** Flattened, bounded prose; empty when nothing displayable remains.
  * Stored previews have lost code/escape provenance and may have been cut. */
@@ -61,7 +65,8 @@ export function plainText(content: string, options: PreviewOptions = {}) {
   if (opener >= 0) bounded = `${bounded.slice(0, opener)}[Spoiler]`;
   const original = scanMarkdown(bounded);
   if (original.tooDeep) return "";
-  if (!bounded.includes("||")) return shortText(prose(original.tree), 200);
+  if (!bounded.includes("||"))
+    return shortText(prose(original.tree), options.limit ?? 200);
   const prepared = prepareMarkdown(bounded);
   if (prepared.kind === "plain") return "";
   // Protect only authored spoiler delimiters, using the renderer's source
@@ -77,7 +82,7 @@ export function plainText(content: string, options: PreviewOptions = {}) {
     source = source.slice(0, offset) + delimiter + source.slice(offset + 2);
   const { tree, tooDeep } = scanMarkdown(source);
   if (!tooDeep) remarkSpoilers(delimiter, content.length > end)(tree);
-  return tooDeep ? "" : shortText(prose(tree), 200);
+  return tooDeep ? "" : shortText(prose(tree), options.limit ?? 200);
 }
 
 /** Bounded CommonMark text, not rendered HTML or a fetch of linked/attached content. */

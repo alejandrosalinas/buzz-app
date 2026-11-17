@@ -1,0 +1,6 @@
+.icon {
+  display: inline-grid;
+  place-items: center;
+  line-height: 1;
+  --sidenav-emoji-size: var(--space-4);
+}

@@ -41,7 +41,7 @@ import {
 } from "../../features/solo/default-agent";
 import { BestieNavigationProvider } from "./BestieNavigation";
 import { PageNavigation } from "./PageNavigation";
-import { PrimarySidebar } from "./PrimarySidebar";
+import { PrimarySidebar } from "./sidebar-section-testing";
 import { ChannelNavigationProvider } from "../../features/channel-navigation/ChannelNavigationState";
 import type { Navigation } from "../../features/navigation/controller";
 import { PageSearch } from "./PageSearch";

@@ -680,8 +680,10 @@ it("retries a workspace rename against fresh defaults and filing without redunda
     // A lost confirmation may retry against its old name once the desired name is live.
     await preferences.renameSection("work", "Projects", "Solo work");
     expect(f.publish).toHaveBeenCalledOnce();
-    for (const name of [" ", "x".repeat(121)])
-      await expect(preferences.renameSection("work", name)).rejects.toThrow();
+    for (const edit of [" ", "x".repeat(121), { icon: "🚀" }])
+      await expect(preferences.renameSection("work", edit)).rejects.toThrow(
+        "Use a workspace name of 1–120 characters.",
+      );
     await expect(preferences.renameSection("gone", "Name")).rejects.toThrow(
       "no longer exists",
     );

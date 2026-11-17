@@ -71,11 +71,18 @@ export function RegionChannelGroup(props: SoloChannelGroupProps) {
     session.channels
       .list()
       .channels.find((item) => item.id === props.channelId);
+  // New task keeps its channel rules: a live, unarchived channel the viewer
+  // can write to. Starting a chat from a message needs only a writer.
+  const writable = (item: ChannelSummary) =>
+    canStartLinkedChat(session) &&
+    !item.cached &&
+    !item.archived &&
+    !item.readOnly;
   const newTask =
-    props.onNewTask && canStartLinkedChat(session, channel)
+    props.onNewTask && writable(channel)
       ? () => {
           const latest = current();
-          if (eligible(latest) && latest && canStartLinkedChat(session, latest))
+          if (eligible(latest) && latest && writable(latest))
             props.onNewTask?.();
         }
       : undefined;

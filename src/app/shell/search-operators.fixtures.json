@@ -508,6 +508,39 @@
       "until": null,
       "fullText": false,
       "positive": true
+    },
+    {
+      "name": "during_rolling_days",
+      "query": "during:7d",
+      "since": "2026-10-28T00:00:00",
+      "until": "2026-11-04T23:59:59",
+      "text": "",
+      "from": null,
+      "in": null,
+      "fullText": false,
+      "positive": false
+    },
+    {
+      "name": "during_rolling_months",
+      "query": "deploy during:3m",
+      "text": "deploy",
+      "from": null,
+      "in": null,
+      "fullText": false,
+      "positive": true,
+      "since": "2026-08-04T00:00:00",
+      "until": "2026-11-04T23:59:59"
+    },
+    {
+      "name": "during_rolling_zero_is_text",
+      "query": "during:0d",
+      "text": "during:0d",
+      "from": null,
+      "in": null,
+      "fullText": false,
+      "positive": true,
+      "since": null,
+      "until": null
     }
   ]
 }

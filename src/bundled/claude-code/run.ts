@@ -17,6 +17,7 @@ export const claudeRun = (
   AgentType<Config>,
   | "models"
   | "sessionAdmission"
+  | "supportsGuardedWake"
   | "sessionControls"
   | "run"
   | "runOnce"
@@ -25,6 +26,7 @@ export const claudeRun = (
   | "resumes"
   | "readFile"
 > => ({
+  supportsGuardedWake: true,
   sessionAdmission: true,
   models: (agent) => runtime.models(agent.key, agent.config),
   sessionControls: {

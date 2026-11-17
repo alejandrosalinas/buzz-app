@@ -42,6 +42,13 @@ test.afterAll(async () => {
 });
 
 const key = `buzz-view.v1:${JSON.stringify(["fixture", "channel-sidebar"])}`;
+const open = async (page) => {
+  await page.goto(url);
+  // Navigation can finish before React's first render publishes the fixture API.
+  await page.waitForFunction(
+    () => typeof window.sidebar?.update === "function",
+  );
+};
 // Scroll events dispatch in the rendering step, before animation frames.
 const settle = (page) =>
   page.evaluate(
@@ -64,7 +71,7 @@ test("focus skips a row relocated into a collapsed section", async ({
   page,
 }) => {
   const { errors } = watchPageErrors(page);
-  await page.goto(url);
+  await open(page);
   await update(page, { relocated: false });
   const beta = page.locator('button[data-channel-id="beta"]');
   await beta.focus();
@@ -85,7 +92,7 @@ test("restoring the saved position does not cancel a delayed entry's reveal", as
   page,
 }) => {
   const { errors } = watchPageErrors(page);
-  await page.goto(url);
+  await open(page);
   await page.evaluate(
     ([key, value]) => localStorage.setItem(key, JSON.stringify(value)),
     [key, { collapsed: [], scrollTop: 800, width: 260, location: "row:5" }],
@@ -118,7 +125,7 @@ test("a user scroll before a delayed entry renders keeps that position for its d
   page,
 }) => {
   const { errors } = watchPageErrors(page);
-  await page.goto(url);
+  await open(page);
   const sidebar = page.getByRole("navigation", {
     name: "Sidebar",
     exact: true,
@@ -161,7 +168,7 @@ test("late contributed rows retry the sidebar reveal without moving the owner", 
   page,
 }) => {
   const { errors } = watchPageErrors(page);
-  await page.goto(url);
+  await open(page);
   const sidebar = page.getByRole("navigation", {
     name: "Sidebar",
     exact: true,
@@ -191,7 +198,7 @@ test("a user scroll before contributed rows arrive cancels their reveal", async 
   page,
 }) => {
   const { errors } = watchPageErrors(page);
-  await page.goto(url);
+  await open(page);
   const sidebar = page.getByRole("navigation", {
     name: "Sidebar",
     exact: true,

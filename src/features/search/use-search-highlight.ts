@@ -30,6 +30,7 @@ export function useSearchHighlight({
   pending = false,
   isAction,
   initial,
+  followFirst = false,
 }: {
   query: string;
   /** Row keys, in display order. */
@@ -56,6 +57,10 @@ export function useSearchHighlight({
    * when it last closed; "" highlights none until the keyboard, pointer or
    * query does. Read once. */
   initial?: string;
+  /** Until the keyboard or pointer moves it, the highlight stays on the
+   * first row, whichever row that is as results arrive, rather than on the
+   * row that was first. Enter chooses the row highlighted on screen. */
+  followFirst?: boolean;
 }) {
   const id = useId();
   const [selection, setSelection] = useState(() => ({
@@ -71,6 +76,9 @@ export function useSearchHighlight({
     /** Counts keyboard moves, so each one reveals its row, even the same row
      * after the list was scrolled away from it. */
     moves: 0,
+    /** Nothing has moved the highlight for this text, which `followFirst`
+     * keeps on the first row. */
+    untouched: initial === undefined,
   }));
   const valid =
     selection.query === query &&
@@ -84,8 +92,15 @@ export function useSearchHighlight({
       resting: "",
       cleared: false,
       moves: 0,
+      untouched: true,
     });
-  const active = valid ? (selection.cleared ? "" : selection.key) : fallback;
+  const active = valid
+    ? selection.cleared
+      ? ""
+      : followFirst && selection.untouched
+        ? fallback
+        : selection.key
+    : fallback;
   /** The text whose Enter waits for its first row. */
   const [awaiting, setAwaiting] = useState<string>();
   if (awaiting !== undefined && awaiting !== query) setAwaiting(undefined);
@@ -108,6 +123,7 @@ export function useSearchHighlight({
       resting: key,
       cleared: false,
       moves: pointer ? previous.moves : previous.moves + 1,
+      untouched: false,
     }));
   };
   /** The row an arrow key moves the highlight to. */
@@ -166,6 +182,8 @@ export function useSearchHighlight({
   return {
     /** The highlighted row's key, or "" for none. */
     active,
+    /** The keyboard, pointer or a choice moved the highlight for this text. */
+    moved: selection.query === query && !selection.untouched,
     select,
     choose,
     /** Highlight nothing until the keyboard, pointer or query picks a row. */
@@ -177,6 +195,7 @@ export function useSearchHighlight({
         pointer: false,
         resting: "",
         cleared: true,
+        untouched: false,
       })),
     listId: id,
     rowId,
@@ -235,7 +254,7 @@ export function useSearchHighlight({
         if (
           event.pointerType !== "touch" &&
           pointerMoved(event) &&
-          active !== key &&
+          (active !== key || (followFirst && selection.untouched)) &&
           keys.includes(key)
         ) {
           setAwaiting(undefined);
@@ -244,6 +263,7 @@ export function useSearchHighlight({
             query,
             key,
             pointer: true,
+            untouched: false,
             // The row highlighted before the pointer took over, to return to.
             resting: previous.pointer
               ? previous.resting

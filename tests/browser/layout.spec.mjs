@@ -11,6 +11,7 @@ import {
   settingsDialog,
   settingsSections,
   settleDialogMotion,
+  settlePanelMotion,
   settleShellToggle,
 } from "./navigation.mjs";
 import { test, expect } from "./fixture.mjs";
@@ -1051,26 +1052,26 @@ companionTest(
   },
 );
 
-const todosOverlapTest = companionTest.extend({
+const sidePanelOverlapTest = companionTest.extend({
   threadUnread: true,
   readState: true,
   historyCounts: { alpha: 3, beta: 1 },
 });
-todosOverlapTest(
-  "Todos stacks beside threads and linked panels in either opening order",
+sidePanelOverlapTest(
+  "a side panel stacks beside threads and linked panels in either opening order",
   async ({ page, app }) => {
     await page.setViewportSize({ width: 1440, height: 950 });
     await open(page, app);
     await openSettings(page);
     await selectSettingsSection(page, "Manage plugins");
-    await pluginAction(page, "Todos").click();
+    await pluginAction(page, "Side panel fixture").click();
     await closeSettings(page);
     await openPage(page, "Messages");
-    const todos = page.getByRole("region", {
-      name: "Todos panel",
+    const sidePanel = page.getByRole("region", {
+      name: "Side fixture panel",
       exact: true,
     });
-    const toggle = button(page, "Toggle channel todos");
+    const toggle = button(page, "Toggle side panel fixture");
     const thread = page.getByRole("complementary", {
       name: "Thread",
       exact: true,
@@ -1086,10 +1087,10 @@ todosOverlapTest(
     });
     const stacked = async (primary) => {
       await expect(primary).toBeVisible();
-      await expect(todos).toBeVisible();
-      near((await box(todos.locator("header.panel-header"))).height, 40);
+      await expect(sidePanel).toBeVisible();
+      await settlePanelMotion(page);
       const top = await box(primary);
-      const bottom = await box(todos);
+      const bottom = await box(sidePanel);
       near(top.x, bottom.x);
       near(top.width, bottom.width);
       near(bottom.y - top.y - top.height, 1);
@@ -1133,7 +1134,7 @@ todosOverlapTest(
         '.buzz-tabs-item:has([data-tab-value^="thread:"][aria-selected="true"]) > button[aria-label^="Close "]',
       )
       .click();
-    await button(page, "Hide todos").click();
+    await button(page, "Hide side panel fixture").click();
     await openThread();
     await toggle.click();
     await stacked(thread);
@@ -1150,13 +1151,13 @@ todosOverlapTest(
         '.buzz-tabs-item:not(:has([data-tab-value^="thread:"])) > button[aria-label^="Close "]',
       )
       .click();
-    await button(page, "Hide todos").click();
+    await button(page, "Hide side panel fixture").click();
     await link(page, app, "https://github.com/block/buzz/pull/7");
     await toggle.click();
     await stacked(linked);
     await openChannelDetails(page);
     await expect(settings).toBeVisible();
-    await expect(todos).toHaveCount(0); // Settings intentionally retires the drawer.
+    await expect(sidePanel).toHaveCount(0); // Settings intentionally retires the drawer.
     await button(page, "Close Channel settings tab").click();
     await expect(linked).toBeVisible();
     await companionLauncher(page, "Companion fixture").click();

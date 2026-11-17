@@ -215,12 +215,16 @@ async function openChoices() {
 it("keeps New agent's card to instructions; the model field shows goose's default", async () => {
   created();
   expect(screen.queryByRole("combobox", { name: "Provider" })).toBeNull();
-  await waitFor(() => expect(modelButton()).toHaveTextContent("Claude"));
+  await waitFor(() =>
+    expect(modelButton()).toHaveAccessibleName(/Claude · Default/),
+  );
 });
 
 it("shows the model family icon and keeps provider options text-only", async () => {
   created();
-  await waitFor(() => expect(modelButton()).toHaveTextContent("Claude"));
+  await waitFor(() =>
+    expect(modelButton()).toHaveAccessibleName(/Claude · Default/),
+  );
   expect(
     modelButton().querySelector(".tabler-icon-brand-databricks"),
   ).toBeNull();
@@ -311,7 +315,7 @@ it("says a provider is not set up instead of offering its catalog's models", asy
   await user.click(screen.getByRole("button", { name: "Try again" }));
   await waitFor(() => expect(screen.queryByRole("alert")).toBeNull());
   await waitFor(() =>
-    expect(modelButton()).toHaveTextContent("claude-opus-5-5"),
+    expect(modelButton()).toHaveAccessibleName(/claude-opus-5-5 · Default/),
   );
 });
 
@@ -343,10 +347,10 @@ it("keeps a card's model chip to the model, while its menu shows the level", asy
   ).toHaveAttribute("aria-checked", "true");
 });
 
-it("gives a card's inherited model its name's room, naming Default only in its label", async () => {
+it("keeps the inherited model and its Default source visible on a card", async () => {
   created({ modelAppearance: "glass-ghost" });
   await waitFor(() => expect(modelButton()).toBeEnabled());
-  expect(modelButton()).toHaveTextContent(/^Claude$/);
+  expect(modelButton()).toHaveTextContent(/^Claude · Default$/);
   expect(modelButton()).toHaveAccessibleName("Goose model: Claude · Default");
 });
 
@@ -1378,7 +1382,9 @@ it("keeps the creation menu open when its provider finishes loading", async () =
     await screen.findByRole("menuitem", { name: "Edit configuration" }),
   ).toBeVisible();
   release();
-  await waitFor(() => expect(modelButton()).toHaveTextContent("Claude"));
+  await waitFor(() =>
+    expect(modelButton()).toHaveAccessibleName(/Claude · Default/),
+  );
   expect(
     screen.getByRole("menuitem", { name: "Edit configuration" }),
   ).toBeVisible();
@@ -1400,7 +1406,7 @@ it("retries Goose default model discovery", async () => {
   await waitFor(() => expect(screen.queryByRole("alert")).toBeNull());
 });
 
-it("preserves Goose model inheritance when only thinking changes", async () => {
+it("pins the named Goose model when choosing its thinking level", async () => {
   const fake = fakeSpawn({
     providers: PROVIDERS,
     defaults: { providerId: "databricks", modelId: "goose-claude" },
@@ -1420,7 +1426,7 @@ it("preserves Goose model inheritance when only thinking changes", async () => {
     />,
   );
   await waitFor(() =>
-    expect(modelButton()).toHaveTextContent("Claude · Default"),
+    expect(modelButton()).toHaveAccessibleName(/Claude · Default/),
   );
   await waitFor(() => expect(modelButton()).toBeEnabled());
   fireEvent.click(modelButton());
@@ -1428,7 +1434,7 @@ it("preserves Goose model inheritance when only thinking changes", async () => {
   fireEvent.click(await screen.findByRole("menuitemradio", { name: "Claude" }));
   fireEvent.click(await screen.findByRole("menuitemradio", { name: "High" }));
   expect(onChange).toHaveBeenCalledWith(
-    expect.objectContaining({ model: "", effort: "high" }),
+    expect.objectContaining({ model: "goose-claude", effort: "high" }),
   );
 });
 
@@ -1460,9 +1466,9 @@ it("refreshes the Settings model and thinking after saving provider credentials"
   await userEvent.setup().type(key, "test-key");
   fireEvent.click(screen.getByRole("button", { name: "Save to goose" }));
   await waitFor(() =>
-    expect(screen.getByRole("button", { name: /^Model:/ })).toHaveTextContent(
-      "claude-sonnet-5-5 · Default",
-    ),
+    expect(
+      screen.getByRole("button", { name: /^Model:/ }),
+    ).toHaveAccessibleName(/claude-sonnet-5-5 · Default/),
   );
   await waitFor(() =>
     expect(screen.getByRole("button", { name: /^Model:/ })).toBeEnabled(),

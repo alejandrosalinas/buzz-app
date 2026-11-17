@@ -75,6 +75,7 @@ import {
 } from "../../../../src/shared/design-system/ui/ThemePicker";
 import { KeyboardShortcut } from "../../../../src/shared/design-system/ui/KeyboardShortcut";
 import { CountBadge } from "../../../../src/shared/design-system/ui/CountBadge";
+import { Badge } from "../../../../src/shared/design-system/ui/Badge";
 
 function ThemePickerSpecimen() {
   const [value, setValue] = useState<ThemeMode>("system");
@@ -2478,6 +2479,14 @@ export const COMPONENT_SPECIMENS: Record<string, () => ReactNode> = {
     </p>
   ),
   "theme-picker": ThemePickerSpecimen,
+  badge: () => (
+    <div className="flex items-center gap-2">
+      <Badge size="xs">Read only</Badge>
+      <Badge size="xs" tone="success">
+        Best match
+      </Badge>
+    </div>
+  ),
   "count-badge": () => (
     <div className="flex w-64 flex-col gap-1">
       <NavigationItem

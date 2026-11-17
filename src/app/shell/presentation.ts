@@ -117,3 +117,14 @@ export function pagePresentation(page: RegisteredPage): PagePresentation {
     ...(page.icon === undefined ? {} : { image: page.icon }),
   };
 }
+
+/** Visibility compatibility for callers of AppShell predating registered sidebar contexts. */
+export function legacySidebarAvailable(
+  pages: readonly RegisteredPage[],
+  selected: string,
+) {
+  return (
+    navigationOwner(pages, selected) === "buzz.channels/channels" ||
+    pages.some((page) => page.key === selected && !!page.sidebar)
+  );
+}

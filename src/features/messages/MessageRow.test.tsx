@@ -5423,3 +5423,81 @@ it.each(["public", "agents"] as const)(
     }
   },
 );
+
+it.each([true, false])(
+  "renders one timestamp for a timed forward with seeking=%s",
+  (canSeek) => {
+    const seek = vi.fn();
+    const note = "⏱ 0:21 — **Review** this cut";
+    const snapshot = {
+      id: "a".repeat(64),
+      channelId: "source",
+      authorId: "b".repeat(64),
+      authorName: "Original Author",
+      createdAt: 1,
+      content: "Copied content",
+    };
+    const view = renderMessage({
+      row: {
+        ...row,
+        content:
+          note +
+          "\n\nForwarded message from Original Author\n\n> Copied content",
+        forward: { note, snapshot },
+      },
+      ...(canSeek ? { onMediaTime: seek } : {}),
+    });
+    try {
+      expect(screen.getByText("Review").tagName).toBe("STRONG");
+      expect(view.container).toHaveTextContent("Review this cut");
+      expect(view.container).toHaveTextContent("Copied content");
+      expect(view.container.textContent?.match(/0:21/g)).toHaveLength(1);
+      expect(view.container).not.toHaveTextContent("⏱");
+      if (canSeek) {
+        fireEvent.click(screen.getByRole("button", { name: "0:21" }));
+        expect(seek).toHaveBeenCalledExactlyOnceWith(21);
+      } else {
+        expect(screen.queryByRole("button", { name: "0:21" })).toBeNull();
+        expect(screen.getByText("0:21").tagName).toBe("SPAN");
+      }
+    } finally {
+      view.unmount();
+    }
+  },
+);
+
+it.each([true, false])(
+  "keeps an emoji forward note in a normal bubble with timestamp=%s",
+  (timed) => {
+    const note = timed ? "⏱ 0:21 — 👍" : "👍";
+    const snapshot = {
+      id: "a".repeat(64),
+      channelId: "source",
+      authorId: "b".repeat(64),
+      authorName: "Original Author",
+      createdAt: 1,
+      content: "Copied content",
+    };
+    const view = renderMessage({
+      row: {
+        ...row,
+        content:
+          note +
+          "\n\nForwarded message from Original Author\n\n> Copied content",
+        forward: { note, snapshot },
+      },
+    });
+    try {
+      expect(
+        view.container.querySelector('[data-emoji-only="true"]'),
+      ).toBeNull();
+      expect(screen.getAllByText("Copied content")).toHaveLength(1);
+      expect(view.container).toHaveTextContent("👍");
+      expect(view.container).not.toHaveTextContent("⏱");
+      if (timed)
+        expect(view.container.textContent?.match(/0:21/g)).toHaveLength(1);
+    } finally {
+      view.unmount();
+    }
+  },
+);

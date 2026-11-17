@@ -52,6 +52,14 @@ vi.mock(
 );
 
 composerDOMFixture();
+// Navigation fixtures deliberately never finish display-profile loading.
+// Ownership authority is exercised in the Solo/admin session tests.
+vi.mock("../../features/relay/solo-admins", async (original) => ({
+  ...(await original<typeof import("../../features/relay/solo-admins")>()),
+  ownedSoloAgents: vi.fn<
+    typeof import("../../features/relay/solo-admins").ownedSoloAgents
+  >(async (_profiles, _viewer, keys) => new Set(keys)),
+}));
 const owners: ReturnType<typeof createRelaySession>[] = [];
 afterEach(() => {
   cleanup();

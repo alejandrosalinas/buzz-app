@@ -64,6 +64,20 @@ export type ComposerSession = Pick<
         release?(file: import("../relay/attachments").UploadedAttachment): void;
       })
     | undefined;
+  forwarding?: {
+    resolve(
+      reference: import("./forward-clipboard").ForwardReference,
+      signal: AbortSignal,
+    ): Promise<import("./resolve-forward").ResolvedForward>;
+    send(
+      reference: import("./forward-clipboard").ForwardReference,
+      note: string,
+      mentions: readonly string[],
+      attachments: readonly import("../relay/attachments").UploadedAttachment[],
+      references: readonly string[],
+      picks: import("../relay/messages").MentionPicks,
+    ): Promise<string>;
+  };
   messages: {
     send: AsyncResult<RelaySession["messages"]["send"]>;
     reply: AsyncResult<RelaySession["messages"]["reply"]>;

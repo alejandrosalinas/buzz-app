@@ -29,6 +29,7 @@ export type ActivityReceipt = Readonly<{
   activityScope?: string;
   step?: (tool: string, target?: string) => void;
   acknowledged?: (input?: Readonly<{ steering?: true }>) => void;
+  accepted?: () => void;
   superseded?: () => void;
 }>;
 
@@ -589,6 +590,7 @@ export class ClaudeProcess {
     const settled = new Promise<Settled>((resolve) =>
       this.waiters.push(resolve),
     );
+    activity.accepted?.();
     this.write({
       type: "user",
       uuid,

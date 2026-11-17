@@ -298,39 +298,36 @@ pub(crate) async fn relay_kit_decode(
     Ok(decoded)
 }
 
+/// Opens the DM of `pubkeys` (kind:41010), or, with `channel`, adds them to
+/// that DM (kind:41011). Only with `history` `"include"` may anyone join an
+/// existing DM and read its history: an open then finds the DM of these
+/// people and adds any named agents, and an add joins that DM instead of
+/// starting a new DM of its people plus them, its agents left behind. An
+/// add's `"ask"` lets the relay decide, refusing with `needs-choice: history`
+/// when people would join. Returns the DM the relay settled on.
 #[tauri::command]
 pub(crate) async fn relay_direct_message(
     host: tauri::State<'_, IdentityHost>,
     fi: tauri::State<'_, FederatedIdentity>,
     community: String,
     pubkeys: Vec<String>,
+    channel: Option<String>,
+    history: Option<String>,
 ) -> Result<String> {
     let url = request_url(&community, "/events", "POST")?;
     let viewer = host.viewer().await?;
-    let unique: std::collections::HashSet<_> = pubkeys.iter().collect();
-    if pubkeys.is_empty()
-        || pubkeys.len() > 8
-        || unique.len() != pubkeys.len()
-        || pubkeys.iter().any(|p| !super::hex_key(p) || p == &viewer)
-    {
-        return Err("Choose between one and eight other people.".into());
-    }
+    let tags = direct_message_tags(&viewer, pubkeys, channel, history.as_deref())?;
+    let adding = tags[0][0] == "h";
+    let failed = direct_message_refusal(adding, None);
     let event = host
         .sign(EventTemplate {
-            kind: 41010,
+            kind: if adding { 41011 } else { 41010 },
             created_at: std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
                 .map_err(|_| "System clock is unavailable")?
                 .as_secs(),
             content: String::new(),
-            tags: pubkeys
-                .into_iter()
-                .map(|p| vec!["p".into(), p])
-                .chain(std::iter::once(vec![
-                    "client".into(),
-                    uuid::Uuid::new_v4().to_string(),
-                ]))
-                .collect(),
+            tags,
         })
         .await?;
     let body = serde_json::to_string(&event).map_err(|_| "Invalid channel lifecycle command")?;
@@ -345,20 +342,22 @@ pub(crate) async fn relay_direct_message(
     )
     .await?;
     if response.status != 200 {
-        return Err("The direct message could not be opened. Try again.".into());
+        let reason = serde_json::from_str::<Value>(&response.body)
+            .ok()
+            .and_then(|body| body.get("error")?.as_str().map(str::to_owned));
+        return Err(direct_message_refusal(adding, reason.as_deref()).into());
     }
-    let receipt: Value = serde_json::from_str(&response.body)
-        .map_err(|_| "The direct message could not be opened. Try again.")?;
+    let receipt: Value = serde_json::from_str(&response.body).map_err(|_| failed)?;
     if receipt.get("event_id") != event.get("id")
         || receipt.get("accepted") != Some(&Value::Bool(true))
     {
-        return Err("The direct message could not be opened. Try again.".into());
+        return Err(failed.into());
     }
     let payload = receipt
         .get("message")
         .and_then(Value::as_str)
         .and_then(|m| m.strip_prefix("response:"))
-        .ok_or("The direct message could not be opened. Try again.")?;
+        .ok_or(failed)?;
     let result: Value = serde_json::from_str(payload)
         .map_err(|_| "The relay returned an invalid direct message.")?;
     let id = result
@@ -369,6 +368,77 @@ pub(crate) async fn relay_direct_message(
         return Err("The relay returned an invalid direct message.".into());
     }
     Ok(id.into())
+}
+
+/// What to show for the relay's refusal of a DM command, from its exact
+/// reason, as `directMessageRefusal` in `direct-message-policy.ts` words it.
+/// A relay from before `ask` refuses the tag itself, which asks too.
+fn direct_message_refusal(adding: bool, reason: Option<&str>) -> &'static str {
+    match reason {
+        Some("needs-choice: history" | r#"invalid: history must be "include", got "ask""#)
+            if adding =>
+        {
+            "needs-choice: history"
+        }
+        Some(reason) if reason.contains("at most 9 people") => {
+            if adding {
+                "Couldn’t add them. A DM holds up to 9 people, not counting agents."
+            } else {
+                "A DM holds up to 9 people, not counting agents."
+            }
+        }
+        _ if adding => "Couldn’t add them. Try again.",
+        _ => "The direct message could not be opened. Try again.",
+    }
+}
+
+/// The most people and agents one addition to a DM names, as
+/// `MAX_DIRECT_MESSAGE_ADDITIONS`: the relay counts its people.
+const MAX_DIRECT_MESSAGE_ADDITIONS: usize = 100;
+
+/// The tags of a DM open, or of an addition to the DM `channel`: an `h` tag
+/// first when adding, a `p` per person, `["history", "include"]` or, adding,
+/// `["history", "ask"]` when asked, and a unique `client` tag so a repeat is
+/// a new command.
+pub(super) fn direct_message_tags(
+    viewer: &str,
+    pubkeys: Vec<String>,
+    channel: Option<String>,
+    history: Option<&str>,
+) -> Result<Vec<Vec<String>>> {
+    let unique: std::collections::HashSet<_> = pubkeys.iter().collect();
+    let most = if channel.is_some() {
+        MAX_DIRECT_MESSAGE_ADDITIONS
+    } else {
+        8
+    };
+    if pubkeys.is_empty()
+        || pubkeys.len() > most
+        || unique.len() != pubkeys.len()
+        || pubkeys.iter().any(|p| !super::hex_key(p) || p == viewer)
+    {
+        return Err(if channel.is_some() {
+            "Choose who to add to this DM.".into()
+        } else {
+            "Choose between one and eight other people.".into()
+        });
+    }
+    let mut tags = Vec::with_capacity(pubkeys.len() + 3);
+    match channel {
+        Some(channel) if uuid(&channel) => tags.push(vec!["h".into(), channel]),
+        Some(_) => return Err("Choose a direct message to add people to.".into()),
+        None => {}
+    }
+    let adding = tags.len() == 1;
+    tags.extend(pubkeys.into_iter().map(|p| vec!["p".into(), p]));
+    match history {
+        None => {}
+        Some(value @ "include") => tags.push(vec!["history".into(), value.into()]),
+        Some(value @ "ask") if adding => tags.push(vec!["history".into(), value.into()]),
+        Some(_) => return Err("Choose whether they see this DM’s history.".into()),
+    }
+    tags.push(vec!["client".into(), uuid::Uuid::new_v4().to_string()]);
+    Ok(tags)
 }
 
 pub(super) fn creation(event: &EventTemplate) -> bool {
@@ -1015,6 +1085,107 @@ mod member_administration_tests {
                 "{}: {error}",
                 case["name"]
             );
+        }
+    }
+}
+
+#[cfg(test)]
+mod direct_message_tests {
+    use super::*;
+
+    fn key(byte: char) -> String {
+        byte.to_string().repeat(64)
+    }
+
+    #[test]
+    fn an_open_names_people_only() {
+        let tags = direct_message_tags(&key('a'), vec![key('b')], None, None).unwrap();
+        assert_eq!(tags[0], vec!["p".to_string(), key('b')]);
+        assert_eq!(tags[1][0], "client");
+        assert_eq!(tags.len(), 2);
+    }
+
+    #[test]
+    fn an_open_carries_the_history_choice() {
+        let shared = direct_message_tags(&key('a'), vec![key('b')], None, Some("include")).unwrap();
+        assert_eq!(
+            shared[1],
+            vec!["history".to_string(), "include".to_string()]
+        );
+        let exact = direct_message_tags(&key('a'), vec![key('b')], None, None).unwrap();
+        assert!(!exact.iter().any(|tag| tag[0] == "history"));
+    }
+
+    #[test]
+    fn an_addition_leads_with_its_dm_and_carries_the_history_choice() {
+        let dm = uuid::Uuid::nil().to_string();
+        for value in ["include", "ask"] {
+            let tags =
+                direct_message_tags(&key('a'), vec![key('c')], Some(dm.clone()), Some(value))
+                    .unwrap();
+            assert_eq!(tags[0], vec!["h".to_string(), dm.clone()]);
+            assert_eq!(tags[1], vec!["p".to_string(), key('c')]);
+            assert_eq!(tags[2], vec!["history".to_string(), value.to_string()]);
+        }
+        let fresh = direct_message_tags(&key('a'), vec![key('c')], Some(dm), None).unwrap();
+        assert!(!fresh.iter().any(|tag| tag[0] == "history"));
+    }
+
+    #[test]
+    fn an_addition_is_bounded_only_for_size() {
+        let dm = uuid::Uuid::nil().to_string();
+        let many = |n: usize| (1..=n).map(|i| format!("{i:064}")).collect::<Vec<_>>();
+        assert!(direct_message_tags(&key('a'), many(100), Some(dm.clone()), Some("ask")).is_ok());
+        assert!(direct_message_tags(&key('a'), many(101), Some(dm), Some("ask")).is_err());
+    }
+
+    #[test]
+    fn refusals_show_the_relays_reason() {
+        for reason in [
+            "needs-choice: history",
+            r#"invalid: history must be "include", got "ask""#,
+        ] {
+            assert_eq!(
+                direct_message_refusal(true, Some(reason)),
+                "needs-choice: history"
+            );
+        }
+        assert_eq!(
+            direct_message_refusal(
+                true,
+                Some("invalid: history must be \"include\", got \"x\"")
+            ),
+            "Couldn’t add them. Try again."
+        );
+        assert_eq!(
+            direct_message_refusal(true, Some("invalid: DM supports at most 9 people")),
+            "Couldn’t add them. A DM holds up to 9 people, not counting agents."
+        );
+        assert_eq!(
+            direct_message_refusal(false, Some("needs-choice: history")),
+            "The direct message could not be opened. Try again."
+        );
+    }
+
+    #[test]
+    fn malformed_requests_are_refused() {
+        let viewer = key('a');
+        let dm = Some(uuid::Uuid::nil().to_string());
+        for (pubkeys, channel, history) in [
+            (vec![], None, None),
+            (vec![viewer.clone()], None, None),
+            (vec![key('b'), key('b')], None, None),
+            (vec!["b".into()], None, None),
+            ((0..9).map(|i| format!("{i:064}")).collect(), None, None),
+            (
+                vec![key('b')],
+                Some("not-a-uuid".to_string()),
+                Some("include"),
+            ),
+            (vec![key('b')], None, Some("ask")),
+            (vec![key('b')], dm, Some("exclude")),
+        ] {
+            assert!(direct_message_tags(&viewer, pubkeys, channel, history).is_err());
         }
     }
 }

@@ -34,10 +34,17 @@ function fixture(
   ) => Promise<void> = async () => {},
 ) {
   let ids = ["existing"];
+  // A stable snapshot per roster, as the session's list is.
+  let listed = { ids, list: { channels: ids.map((id) => ({ id })) } };
+  const list = () => {
+    if (listed.ids !== ids)
+      listed = { ids, list: { channels: ids.map((id) => ({ id })) } };
+    return listed.list;
+  };
   const session = () =>
     ({
       channels: {
-        list: () => ({ channels: ids.map((id) => ({ id })) }),
+        list,
         subscribeList: () => () => {},
       },
       sidebarPreferences: { setMute: async () => [] },
@@ -384,6 +391,49 @@ it("runs a chat archive's Undo through the lifecycle gate, after any action hold
   await screen.findByRole("dialog", { name: "Chat unarchived: Planning" });
   expect(view.result.current.lifecycleDialog).toBeUndefined();
   expect(run).toHaveBeenCalledTimes(3);
+});
+
+it("holds a workspace's bulk Undo until a single-chat action releases the gate", async () => {
+  const pending = new Map<string, () => void>();
+  const run = vi.fn(
+    (action: string, id: string) =>
+      new Promise<void>((resolve) => pending.set(`${action}:${id}`, resolve)),
+  );
+  const view = mount(fixture(run).relay, true);
+  const roadmap = { id: "b", name: "Roadmap", channelType: "solo" as const };
+  act(() => view.result.current.openLifecycle(roadmap, "archive"));
+  await waitFor(() => expect(pending.has("archive:b")).toBe(true));
+  act(() =>
+    view.result.current.archiveInactive({
+      action: "unarchive",
+      workspaceId: "work",
+      ids: ["a", "c"],
+    }),
+  );
+  expect(run).not.toHaveBeenCalledWith(
+    "unarchive",
+    expect.anything(),
+    expect.anything(),
+    expect.anything(),
+  );
+  expect(view.result.current.inactiveRuns).toHaveLength(1);
+
+  await act(async () => pending.get("archive:b")?.());
+  await waitFor(() => expect(pending.has("unarchive:a")).toBe(true));
+  expect(view.result.current.inactiveRun?.ids).toEqual(["a", "c"]);
+  // The bulk run now holds the gate; a single-chat Undo waits behind it.
+  act(() => view.result.current.undoArchive(roadmap));
+  expect(view.result.current.lifecycleDialog).toBeUndefined();
+  await act(async () => pending.get("unarchive:a")?.());
+  await waitFor(() => expect(pending.has("unarchive:c")).toBe(true));
+  await act(async () => pending.get("unarchive:c")?.());
+  await screen.findByText("Restored 2 chats");
+  await waitFor(() =>
+    expect(view.result.current.lifecycleDialog).toMatchObject({
+      channel: roadmap,
+      action: "unarchive",
+    }),
+  );
 });
 
 it("keeps a paused delete's confirmation open in place of the failure toast, then retries it", async () => {

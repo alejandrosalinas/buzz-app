@@ -4,7 +4,6 @@ import { isBestiePage, useBestieConversation } from "./bestie-context";
 import {
   useCallback,
   useEffect,
-  useMemo,
   useRef,
   useState,
   useSyncExternalStore,
@@ -35,9 +34,14 @@ import {
   type SearchPlace,
 } from "./SearchChoices";
 import { SearchResults } from "./SearchResults";
-import { ChannelDirectoryResults } from "./ChannelDirectoryResults";
-import { Tabs } from "../../shared/design-system/ui/Tabs";
 import { soloDraftTarget } from "../../features/channel-navigation/routes";
+import { readView, writeView } from "../../shared/view-state";
+import {
+  hasDraftContent,
+  mentionDraft,
+} from "../../features/messages/mention-draft";
+import { attachmentDraftCount } from "../../features/messages/attachment-draft";
+import { useToastNotification } from "../../shared/design-system/ui/Toast";
 import { usageScope } from "../../features/search/usage";
 import { unreadFirstPreference } from "../../features/search/unread-first-preference";
 
@@ -64,13 +68,8 @@ const CONVERSATION_SEARCH_BINDING: KeyBinding = { key: "f", mod: true };
 const NO_OVERRIDES: ShortcutBindingsSnapshot = { overrides: {}, error: null };
 const noSubscribe = () => () => {};
 const noOverrides = () => NO_OVERRIDES;
-type SearchView = "all" | "channels";
 /** How long a closed search keeps its place for the next opening. */
 const SEARCH_MEMORY = 5 * 60_000;
-const SEARCH_VIEWS = [
-  { value: "all", label: "All", panelId: "search-view-all" },
-  { value: "channels", label: "Channels", panelId: "search-view-channels" },
-] as const;
 
 export function PageSearch({
   pages,
@@ -85,7 +84,6 @@ export function PageSearch({
   const [open, setOpen] = useState(false);
   const [contentPresent, setContentPresent] = useState(false);
   const [query, setQuery] = useState("");
-  const [tab, setTab] = useState<SearchView>("all");
   const [scopedChannelId, setScopedChannelId] = useState<string>();
   // Search reopens where it was left, so someone checking channels one by
   // one returns to the same list. Escape, or a while away, starts fresh, as
@@ -95,14 +93,13 @@ export function PageSearch({
   const escaped = useRef(false);
   const remembered = useRef<{
     query: string;
-    tab: SearchView;
     place: SearchPlace;
     at: number;
   }>(undefined);
   // Kept text opens selected, so typing something new replaces it.
   const selectKept = useRef(false);
-  const latest = useRef({ query, tab, scopedChannelId });
-  latest.current = { query, tab, scopedChannelId };
+  const latest = useRef({ query, scopedChannelId });
+  latest.current = { query, scopedChannelId };
   const currentTarget = useSyncExternalStore(
     services?.navigation?.subscribe ?? noSubscribe,
     () => services?.navigation?.snapshot().entry.target ?? null,
@@ -126,20 +123,16 @@ export function PageSearch({
   const openRef = useRef(false);
   const setSearchOpen = useCallback((next: boolean) => {
     if (!next && openRef.current) {
-      const { query, tab, scopedChannelId } = latest.current;
+      const { query, scopedChannelId } = latest.current;
       remembered.current =
         escaped.current || scopedChannelId
           ? undefined
-          : { query, tab, place: { ...place.current }, at: Date.now() };
+          : { query, place: { ...place.current }, at: Date.now() };
       escaped.current = false;
     }
     openRef.current = next;
     if (next) setContentPresent(true);
     setOpen(next);
-  }, []);
-  const changeTab = useCallback((next: SearchView) => {
-    place.current = { top: 0, key: "" };
-    setTab(next);
   }, []);
   const begin = useCallback(() => {
     composerChannel.current = undefined;
@@ -151,10 +144,9 @@ export function PageSearch({
     const kept =
       memory &&
       Date.now() - memory.at < SEARCH_MEMORY &&
-      (memory.query.trim() || memory.tab !== "all" || !unreadFirstPreference());
+      (memory.query.trim() || !unreadFirstPreference());
     setQuery(kept ? memory.query : "");
     selectKept.current = !!kept && !!memory.query;
-    setTab(kept ? memory.tab : "all");
     place.current = kept ? { ...memory.place } : { top: 0, key: "" };
     setScopedChannelId(undefined);
     setSearchOpen(true);
@@ -183,7 +175,6 @@ export function PageSearch({
         ? document.activeElement
         : trigger.current;
     setQuery("");
-    setTab("all");
     place.current = { top: 0, key: "" };
     setScopedChannelId(currentChannelId);
     setSearchOpen(true);
@@ -302,6 +293,9 @@ export function PageSearch({
         motion="default"
         dismissOnOutsideClick
         presentation="search"
+        size="wide"
+        height="stable-tall"
+        bodyLayout="flex"
         initialFocus={input}
         finalFocus={() =>
           returnFocus.current?.id === "main-content"
@@ -335,8 +329,6 @@ export function PageSearch({
         {contentPresent &&
           (services ? (
             <CommunitySearch
-              tab={tab}
-              onTabChange={changeTab}
               place={place.current}
               services={services}
               pages={destinations}
@@ -378,9 +370,10 @@ export function PageSearch({
   );
 }
 
+/** New chat's own draft, outside any workspace (SoloDraft's `solo` key). */
+const NEW_CHAT_DRAFT = "solo:new-draft";
+
 function CommunitySearch({
-  tab,
-  onTabChange,
   place,
   services,
   pages,
@@ -396,8 +389,6 @@ function CommunitySearch({
   close,
   openSection,
 }: {
-  tab: SearchView;
-  onTabChange: (tab: SearchView) => void;
   /** Where the results were, kept for the next opening. */
   place: SearchPlace;
   services: SearchServices;
@@ -429,60 +420,7 @@ function CommunitySearch({
     services.communities.snapshot,
   );
   const connection = useRelayConnection(services.communities.relay);
-  // A conversation scope has only All.
-  const view = scopedChannelId ? "all" : tab;
-  // Switching views remounts the results and their tab row. A switch made on
-  // the row keeps focus there; any other switch returns it to the field.
-  const pointer = useRef(false);
-  const focusTab = useRef(false);
-  // Keystrokes re-render the palette; the tab row depends only on the view.
-  const tabs = useMemo(
-    () => (
-      // A pointer switch returns to the field: typing usually follows.
-      <div
-        onPointerDown={() => {
-          pointer.current = true;
-        }}
-      >
-        <Tabs
-          variant="panel"
-          label="Search in"
-          value={view}
-          items={SEARCH_VIEWS}
-          onValueChange={(next) => {
-            focusTab.current =
-              !pointer.current &&
-              document.activeElement?.getAttribute("role") === "tab";
-            pointer.current = false;
-            onTabChange(next);
-          }}
-          onReselect={() => {
-            pointer.current = false;
-            input.current?.focus();
-          }}
-        />
-      </div>
-    ),
-    [view, onTabChange, input],
-  );
-  const switchView = (delta: 1 | -1) => {
-    focusTab.current = false;
-    const index = SEARCH_VIEWS.findIndex(({ value }) => value === view);
-    onTabChange(
-      SEARCH_VIEWS[(index + delta + SEARCH_VIEWS.length) % SEARCH_VIEWS.length]
-        ?.value ?? "all",
-    );
-  };
-  // biome-ignore lint/correctness/useExhaustiveDependencies: Runs after each switch's remount.
-  useEffect(() => {
-    if (!focusTab.current) return;
-    focusTab.current = false;
-    document
-      .querySelector<HTMLElement>(
-        '[data-search-palette] [role="tab"][aria-selected="true"]',
-      )
-      ?.focus();
-  }, [view]);
+  const notify = useToastNotification();
   // Saved conversations stay searchable while the community connects or is
   // unreachable; message, people and open-channel search wait for the relay.
   const saved = !!connection.cached && !scopedChannelId;
@@ -571,15 +509,15 @@ function CommunitySearch({
     viewer: client.viewer,
     communityOrigin: communityDestination(client.selected).url,
   };
-  const current = () => {
+  const inScope = () => {
     const now = services.communities.snapshot();
     return (
-      isOpen() &&
       now.viewer === scope.viewer &&
       now.selected === client.selected &&
       services.communities.relay.snapshot().session === connection.session
     );
   };
+  const current = () => isOpen() && inScope();
   const openConversation = (
     channelId: string,
     messageId?: string,
@@ -599,37 +537,10 @@ function CommunitySearch({
   const views =
     !scopedChannelId && !saved && connection.session.channels.readDirectory
       ? {
-          resultsLabel: view === "channels" ? "Channels" : "Search results",
-          panelId: `search-view-${view}`,
-          onSwitch: switchView,
+          resultsLabel: "Search results",
           place,
-          tabs,
         }
       : undefined;
-  if (views && view === "channels")
-    return (
-      <ChannelDirectoryResults
-        key={`${client.selected}:${connection.scope}:${connection.generation}`}
-        session={connection.session}
-        query={query}
-        onQueryChange={onQueryChange}
-        input={input}
-        open={open}
-        views={views}
-        openConversation={openConversation}
-        openPreview={(channelId) => {
-          // Not a joined channel yet: its preview resolves it.
-          if (!current()) return;
-          close();
-          void services.navigation.open({
-            version: 1,
-            kind: "conversation",
-            scope,
-            channelId,
-          });
-        }}
-      />
-    );
   return (
     <>
       {views && <PreloadDirectory channels={connection.session.channels} />}
@@ -650,6 +561,62 @@ function CommunitySearch({
         views={views}
         offline={saved ? offline : undefined}
         openConversation={openConversation}
+        openAsk={(question, agent) => {
+          const current = services.communities.snapshot();
+          const relay = services.communities.relay.snapshot();
+          if (
+            !isOpen() ||
+            current.viewer !== scope.viewer ||
+            current.selected !== client.selected ||
+            relay.session !== connection.session ||
+            !relay.scope
+          )
+            return;
+          // New chat opens with the question addressed to the agent; Enter
+          // sends it. An unsent draft there is kept unless the person asks to
+          // replace it. New chat's composer reads its draft as it opens, so
+          // the question is written before New chat opens, never after.
+          const scopeKey = relay.scope;
+          const tag = `@${agent.name}`;
+          const ask = () => {
+            writeView(scopeKey, NEW_CHAT_DRAFT, {
+              text: `${tag} Search Buzz to answer: ${question}`,
+              recipients: [
+                {
+                  pubkey: agent.pubkey,
+                  name: agent.name,
+                  start: 0,
+                  end: tag.length,
+                },
+              ],
+            });
+            void services.navigation.open(
+              soloDraftTarget(scopeKey, { agent: agent.pubkey }),
+            );
+          };
+          const kept = hasDraftContent(
+            mentionDraft(readView<unknown>(scopeKey, NEW_CHAT_DRAFT, "")),
+            attachmentDraftCount(
+              connection.session,
+              `${scopeKey}:${NEW_CHAT_DRAFT}`,
+            ),
+          );
+          close();
+          if (!kept) ask();
+          else
+            notify("New chat already has an unsent draft", "info", {
+              label: "Replace it",
+              // The notice outlives search: after a community or session
+              // switch it does nothing rather than overwrite the old draft.
+              onClick: () => {
+                if (
+                  inScope() &&
+                  services.communities.relay.snapshot().scope === scopeKey
+                )
+                  ask();
+              },
+            });
+        }}
         openAgentSession={(pubkey) => {
           const current = services.communities.snapshot();
           const relay = services.communities.relay.snapshot();

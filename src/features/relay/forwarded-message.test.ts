@@ -435,3 +435,20 @@ it.each([
     );
   },
 );
+
+it("rejects an unsafe destination media target before publishing a forward", async () => {
+  const h = setup();
+  await h.outbox.ready();
+  expect(() =>
+    h.messages.forward(
+      "destination",
+      h.row,
+      "Author",
+      "⏱ 0:21 — note",
+      undefined,
+      { rootId: "b".repeat(64), mediaTargetUrl: "javascript:alert(1)" },
+    ),
+  ).toThrow("A valid media target is required");
+  expect(h.outbox.snapshot()).toEqual([]);
+  expect(h.writer.publish).not.toHaveBeenCalled();
+});

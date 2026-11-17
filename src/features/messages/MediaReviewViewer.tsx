@@ -334,7 +334,7 @@ function ReviewShell({
   };
   const markers = timecodesSeekable
     ? replies.flatMap((row) => {
-        const parsed = parseMediaTimeReply(row.content);
+        const parsed = parseMediaTimeReply(row.forward?.note ?? row.content);
         if (!parsed || !timecodeApplies(row)) return [];
         const displayId = row.workflowOwnerId ?? row.authorId;
         const profile = profiles.get(displayId);
@@ -524,6 +524,7 @@ function ReviewShell({
                   }}
                 >
                   <MessageComposer
+                    shown={commentsOpen}
                     extensions={extensions}
                     session={session}
                     scope={scope}
@@ -575,6 +576,7 @@ function ReviewShell({
       ) : attachment.kind === "video" && source ? (
         <VideoPlayer
           key={source}
+          attachmentUrl={attachment.url}
           downloadName={attachment.name ?? ""}
           videoRef={video}
           source={source}

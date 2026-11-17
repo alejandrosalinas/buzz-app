@@ -639,7 +639,10 @@ it("real broker renames a section through the signed, confirmed narrow command",
   const signal = new AbortController().signal;
   const id = "11111111-1111-4111-8111-111111111111";
   await h.transport.writeSidebarAssignment(
-    { channelId: "alpha", createSection: { id, name: "Work" } },
+    {
+      channelId: "alpha",
+      createSection: { id, name: "Work", icon: "🏢" },
+    },
     signal,
   );
   h.calls.length = 0;
@@ -650,6 +653,8 @@ it("real broker renames a section through the signed, confirmed narrow command",
     { sectionId: id },
     { sectionId: id, name: 1 },
     { sectionId: id, name: "  " },
+    { sectionId: id, icon: "  " },
+    { sectionId: id, icon: 1 },
     { sectionId: id, name: "Projects", extra: true },
   ])
     expect(
@@ -662,7 +667,7 @@ it("real broker renames a section through the signed, confirmed narrow command",
       signal,
     ),
   ).toMatchObject({
-    sections: [{ id, name: "Projects", order: 0 }],
+    sections: [{ id, name: "Projects", icon: "🏢", order: 0 }],
     assignments: { alpha: id },
   });
   expect(h.calls.map(({ url }) => new URL(url).pathname)).toEqual([
@@ -670,6 +675,29 @@ it("real broker renames a section through the signed, confirmed narrow command",
     "/events",
     "/query",
   ]);
+  h.calls.length = 0;
+  const iconOnly = await h.transport.renameSidebarSection(
+    { sectionId: id, icon: "📚" },
+    signal,
+  );
+  expect(iconOnly.sections[0]).toMatchObject({
+    id,
+    name: "Projects",
+    icon: "📚",
+    order: 0,
+  });
+  expect(h.calls.map(({ url }) => new URL(url).pathname)).toEqual([
+    "/query",
+    "/events",
+    "/query",
+  ]);
+  h.calls.length = 0;
+  const removed = await h.transport.renameSidebarSection(
+    { sectionId: id, icon: null },
+    signal,
+  );
+  expect(removed.sections[0]).not.toHaveProperty("icon");
+  expect(removed.sections[0]).toMatchObject({ name: "Projects", order: 0 });
   h.calls.length = 0;
   await h.transport.renameSidebarSection(
     { sectionId: id, name: "Projects" },

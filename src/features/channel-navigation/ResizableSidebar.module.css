@@ -1,6 +1,6 @@
 /* Page sidebars keep their CSS role inside this host-resized outer track. */
 /* biome-ignore lint/correctness/noUnknownPseudoClass: CSS Modules global selector targets the shared sidebar role. */
-.sidebar > :global(.shell-sidebar-default) {
+.sidebar :global(.shell-sidebar-default) {
   width: 100%;
   min-width: 0;
   max-width: none;

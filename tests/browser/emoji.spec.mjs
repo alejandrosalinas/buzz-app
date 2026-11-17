@@ -1362,6 +1362,7 @@ test("the first toned pick asks for a default skin tone", async ({ page }) => {
         .evaluate((tone) => getComputedStyle(tone, "::before").content),
     ).toBe('"👍🏽"');
     // Dismissing inserts nothing and saves nothing; the hand shows tones again.
+    await expect(toneMenu.locator('input[value="1"]')).toBeFocused();
     await page.keyboard.press("Escape");
     await expect(toneMenu).toHaveCount(0);
     await expect(draft).not.toContainText("👍");
@@ -1369,6 +1370,7 @@ test("the first toned pick asks for a default skin tone", async ({ page }) => {
     await page
       .getByRole("button", { name: "Choose default skin tone" })
       .click();
+    await expect(toneMenu.locator('input[value="1"]')).toBeFocused();
     expect(
       await toneMenu
         .locator(".option .skin-tone-4")

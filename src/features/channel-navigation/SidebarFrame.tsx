@@ -1,7 +1,7 @@
 import { SidebarNavigation } from "../../shared/design-system/ui/SidebarNavigation";
 import type { ReactNode } from "react";
 import { Panel } from "../../shared/design-system/ui/Panel";
-import styles from "../../bundled/channels/Channels.module.css";
+import styles from "./SidebarFrame.module.css";
 
 /** Shared sidebar surface; callers own its contents, data and scroll behavior. */
 export function SidebarFrame({

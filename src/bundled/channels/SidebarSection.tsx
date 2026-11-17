@@ -48,6 +48,7 @@ import type { RelaySession } from "../../features/relay/session";
 import type { ChannelSummary } from "../../features/relay/contracts";
 import type { SidebarSortMode } from "../../features/relay/sidebar-sort";
 import type { SidebarFilter } from "./useSidebarFilters";
+import type { SidebarSectionEdit } from "../../features/relay/sidebar-preferences";
 import { SidebarGroupIcon } from "./SidebarGroupIcon";
 import { SidebarStarIcon } from "./SidebarStarIcon";
 import { ChannelSidebarMenuItem } from "./ChannelSidebarMenuItem";
@@ -91,7 +92,7 @@ export function SidebarSection({
   headerActions?: ReactNode;
   headerNotice?: ReactNode;
   onRemove?: (() => unknown) | undefined;
-  onRename?: ((name: string) => unknown) | undefined;
+  onRename?: ((edit: SidebarSectionEdit) => unknown) | undefined;
   hideMoreActions?: boolean;
   /** Keep the disclosure affordance visible instead of revealing it on hover. */
   persistentChevron?: boolean;
@@ -156,7 +157,7 @@ export function SidebarSection({
   const [removing, setRemoving] = useState(false);
   const [removeError, setRemoveError] = useState("");
   const canRemove = !!onRemove && sectionKey.startsWith("group:");
-  const canRename = !!onRename && sectionKey.startsWith("group:");
+  const canRename = !!onRename && !!session && sectionKey.startsWith("group:");
   const remove = async () => {
     if (!onRemove || removing) return;
     setRemoving(true);
@@ -455,9 +456,12 @@ export function SidebarSection({
                 finalFocus={actionsTrigger}
               />
             )}
-            {renameOpen && onRename && (
+            {renameOpen && onRename && session && (
               <RenameSidebarSection
                 title={title}
+                icon={typeof icon === "string" ? icon : undefined}
+                session={session}
+                scope={session.scope}
                 rename={onRename}
                 close={() => setRenameOpen(false)}
                 finalFocus={actionsTrigger}

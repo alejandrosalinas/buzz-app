@@ -140,8 +140,10 @@ viewport):
   page included, so `sampled` says a repair has read every channel in unread
   scope since evidence was last emptied (a cache clear or capacity overflow) or
   a channel entered that scope: evidence then reaches past what windows loaded,
-  up to each batch's 500-row limit. A cache clear or newly accessible channel
-  starts that repair at once; an overflow waits for the next recovery tick.
+  up to each batch's 500-row limit. Narrowing a full window to its newest rows
+  (see `coverage` below) does not empty it and leaves `sampled` set. A cache
+  clear or newly accessible channel starts that repair at once; an overflow
+  waits for the next recovery tick.
   Later repairs, refreshes included, leave `sampled` set. Until it is set,
   `sampling` says a repair that can set it is reading, about to restart, or not
   yet asked for; one that fails, overflows or is abandoned (a dropped
@@ -218,13 +220,22 @@ timeline and the thread being read, without reading unopened threads' replies.
   the viewer's conversations (see [Relevant replies](#relevant-replies)). It is **not an exact total or lower
   bound**: missing markers/deletions can overcount; missing history can undercount.
 - `coverage` and `freshness` describe message evidence, separately from `sync()`.
-  Evidence is capped at 4,096 events / 8 MiB. Repair queries the membership roster
-  in sequential batches of at most 128 explicit channel IDs (the relay limit, in ID
-  order, so a rename does not move them),
+  Evidence is capped at 4,096 events / 8 MiB. An event that would pass either
+  cap first drops retained rows down to 3,072 events / 6 MiB with room for it:
+  the channel retaining the most rows gives up its oldest first, so a busy
+  channel's traffic narrows its own window rather than erasing a quiet
+  channel's unread, or every row's at once. A dropped deletion or edit takes the
+  rows it names with it, and a deletion or edit left without its target is
+  dropped, so no retained message loses its deletion. Like a batch cut off at
+  its limit, a narrowed channel can place `oldestUnreadId` after the true oldest
+  unread message. Repair
+  queries the membership roster in sequential batches of at most 128 explicit
+  channel IDs (the relay limit, in ID order, so a rename does not move them),
   with up to 500 recent rows **per batch**, not a shared remainder or one head
   request per sidebar row. A 278-channel roster therefore makes three reads.
   Earlier results publish progressively and survive a later transport failure;
-  capacity overflow retains the existing visible error/clear policy and stops repair.
+  only an event larger than the whole window overflows it: that retains the
+  visible error/clear policy and stops repair.
   A batch whose last read returned fewer rows than its limit (500), and at least one,
   is read again only from sixteen minutes (960 s) before the newest of them: that read
   saw everything in its window, and the relay accepts a `created_at` up to 900 s from
@@ -236,8 +247,9 @@ timeline and the thread being read, without reading unopened threads' replies.
   future-dated event cannot hide history. A read that returned its full limit may have
   cut off older rows (a later deletion frees a slot for one), so it installs no mark
   and drops any existing one: the next repair of that batch reads in full, as it did
-  before. Retained evidence only grows between resets, so a bounded read adds what is
-  newer to what the earlier reads already returned. Cache clears, access changes,
+  before. Between resets, retained evidence only grows or drops its oldest rows, so a
+  bounded read adds what is newer to what the earlier reads already returned.
+  Cache clears, access changes,
   capacity overflow and an explicit `refresh()` forget the marks and read every batch
   in full. A repair still waiting for its answer when they do, or still accepting it
   (a subscriber notified of the answer may refresh), installs no mark, and

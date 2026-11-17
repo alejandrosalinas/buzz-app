@@ -262,6 +262,14 @@ const REPAIR_OVERLAP = LIVE_RESUME_LAG;
 /** Rows one repair read asks for per batch. A read that returns this many may
  * have been cut off, and says nothing about what lay beyond the cut. */
 const REPAIR_LIMIT = 500;
+/** Retained evidence bounds. A full window drops its oldest rows down to the
+ * low-water marks, so eviction runs once per quarter-window of arrivals. */
+const EVIDENCE_EVENTS = 4096;
+const EVIDENCE_BYTES = 8 * 1024 * 1024;
+const EVIDENCE_LOW_EVENTS = 3072;
+const EVIDENCE_LOW_BYTES = 6 * 1024 * 1024;
+const eventBytes = (event: RelayEvent) =>
+  new TextEncoder().encode(JSON.stringify(event)).byteLength;
 /** Rendered message order: effective ms, then event id. */
 const order = (a: RelayEvent, b: RelayEvent) =>
   eventMs(a) - eventMs(b) || a.id.localeCompare(b.id);
@@ -1781,8 +1789,7 @@ export function createUnread({
     indexed = false;
     // Reference-only tombstones are retained only with a still-accessible target.
     bytes = [...events.values()].reduce(
-      (total, event) =>
-        total + new TextEncoder().encode(JSON.stringify(event)).byteLength,
+      (total, event) => total + eventBytes(event),
       0,
     );
     publish();
@@ -2360,12 +2367,61 @@ export function createUnread({
     }
     if (changed.size) publish(changed);
   }
+  /** Narrows a full window below the low-water mark, with room for `size` more
+   * bytes, instead of emptying it. The channels retaining the most rows give
+   * up their oldest first, so a quiet channel keeps its newest unread through a
+   * busy one's traffic. A deletion or edit leaves with the messages it names,
+   * so no retained message loses one; the caller then drops deletions and
+   * edits left without a target. Batch marks stay: each channel still retains
+   * everything newer than its oldest kept row, and reading every batch in full
+   * would only bring the dropped rows back. */
+  function evictOldest(size: number) {
+    const fits = () =>
+      events.size < EVIDENCE_LOW_EVENTS && bytes + size <= EVIDENCE_LOW_BYTES;
+    const drop = (event: RelayEvent) => {
+      if (!events.delete(event.id)) return;
+      bytes -= eventBytes(event);
+      if (contentKind(event)) return;
+      for (const [name, id] of event.tags) {
+        const target = name === "e" && id ? events.get(id) : undefined;
+        if (target) drop(target);
+      }
+    };
+    // Newest first, so each channel's oldest row pops off the end.
+    const byAge = new Map<string, RelayEvent[]>();
+    for (const event of [...events.values()].sort((a, b) => order(b, a))) {
+      const channel = channelOf(event) ?? "";
+      const rows = byAge.get(channel) ?? [];
+      rows.push(event);
+      byAge.set(channel, rows);
+    }
+    while (!fits()) {
+      let busiest: RelayEvent[] | undefined;
+      for (const rows of byAge.values())
+        if (!busiest || rows.length > busiest.length) busiest = rows;
+      const oldest = busiest?.pop();
+      if (!oldest) break;
+      drop(oldest);
+    }
+    indexed = false;
+  }
+  /** Drops retained deletions and edits whose target is gone, as `purge` does. */
+  function dropOrphans() {
+    const retained = new Map(events);
+    const owners = channelOwnership((targetId) => retained.get(targetId));
+    for (const [id, event] of retained)
+      if (!owners(event)) {
+        events.delete(id);
+        bytes -= eventBytes(event);
+      }
+  }
   function accept(batch: readonly RelayEvent[]) {
     if (closed) return false;
     retract(batch);
     const changed = new Set<string>();
     const incoming = new Map(batch.map((event) => [event.id, event]));
     const owners = channelOwnership((id) => incoming.get(id) ?? events.get(id));
+    let evicted = false;
     for (const event of batch) {
       if (
         ![9, 40002, 40008, 40003, 5, 9005].includes(event.kind) ||
@@ -2375,8 +2431,8 @@ export function createUnread({
       const channels = owners(event);
       if (!channels || [...channels].some((channel) => !allowed(channel)))
         continue;
-      const size = new TextEncoder().encode(JSON.stringify(event)).byteLength;
-      if (events.size >= 4096 || bytes + size > 8 * 1024 * 1024) {
+      const size = eventBytes(event);
+      if (size > EVIDENCE_BYTES) {
         events.clear();
         indexed = false;
         forget();
@@ -2389,6 +2445,10 @@ export function createUnread({
         publish();
         return false;
       }
+      if (events.size >= EVIDENCE_EVENTS || bytes + size > EVIDENCE_BYTES) {
+        evictOldest(size);
+        evicted = true;
+      }
       events.set(event.id, event);
       bytes += size;
       if (indexed && !extendIndex(event)) indexed = false;
@@ -2399,6 +2459,7 @@ export function createUnread({
       // The recursively resolved owner set already includes every activity
       // projection affected by a deletion, including delete-of-edit chains.
     }
+    if (evicted) dropOrphans();
     if (changed.size) {
       // The session admits profiles from this same batch after unread evidence.
       if (profiles)
@@ -2418,7 +2479,7 @@ export function createUnread({
           if (authors.size)
             void profiles.ensure([...authors], "background").catch(() => {});
         });
-      const global = freshness !== "observed";
+      const global = evicted || freshness !== "observed";
       freshness = "observed";
       // A freshness change is state, not just new evidence: settle it now.
       publish(global ? undefined : changed, !global);

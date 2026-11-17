@@ -6,10 +6,10 @@ import { openPage, settleShellToggle } from "./navigation.mjs";
 // Input/error permutations remain in the colocated component/store tests.
 test.use({ productionBroker: true, savedSidebar: true, largeSidebar: false });
 
-test("Channels offers empty-section creation with keyboard focus and confirmed persistence", async ({
+test("Channels offers empty-section creation with keyboard focus, emoji and confirmed persistence", async ({
   page,
   app,
-}) => {
+}, testInfo) => {
   await page.goto(app.origin);
   await openPage(page, "Messages");
   const trigger = page.getByRole("button", {
@@ -38,7 +38,47 @@ test("Channels offers empty-section creation with keyboard focus and confirmed p
     .click();
   await expect(field).toBeFocused();
   await expect(page.getByRole("menu")).toHaveCount(0);
-  await page.keyboard.type("Launch");
+  await expectIconCentered(dialog);
+  await dialog.screenshot({
+    path: testInfo.outputPath("create-section-empty-light.png"),
+  });
+  const placeholder = dialog.getByRole("button", {
+    name: "Choose section emoji",
+  });
+  await placeholder.click();
+  const search = page.getByRole("searchbox", { name: "Search emoji" });
+  await expect(search).toBeFocused();
+  const picker = page.getByRole("dialog", {
+    name: "Emoji picker",
+    exact: true,
+  });
+  await expect(picker).toHaveAttribute("data-side", "bottom");
+  await expect(
+    picker.getByRole("button", { name: "Remove emoji" }),
+  ).toHaveCount(0);
+  await expect(dialog.getByText("Emoji is optional")).toHaveCount(0);
+  await page.screenshot({
+    path: testInfo.outputPath("create-section-picker-below-light.png"),
+    clip: { x: 480, y: 270, width: 520, height: 665 },
+  });
+  await search.press("Escape");
+  await expect(search).toHaveCount(0);
+  await expect(dialog).toBeVisible();
+  await expect(placeholder).toBeFocused();
+  await placeholder.click();
+  await search.fill("bus");
+  await page.getByRole("button", { name: "🚌", exact: true }).click();
+  await expect(search).toHaveCount(0);
+  const selected = dialog.getByRole("button", {
+    name: "Change section emoji",
+  });
+  await expect(selected).toBeFocused();
+  await expect(selected).toHaveAttribute("aria-expanded", "false");
+  await field.fill("Launch");
+  await expectIconCentered(dialog);
+  await dialog.screenshot({
+    path: testInfo.outputPath("create-section-unicode-light.png"),
+  });
   await expect(field).toHaveValue("Launch");
   const creations = [];
   let lostResponse = false;
@@ -56,10 +96,12 @@ test("Channels offers empty-section creation with keyboard focus and confirmed p
       if (filters.every((filter) => filter.consistency === "strong")) {
         writerReads++;
         if (failWriterRead) {
-          failWriterRead = false;
           // Relay recovery retries a transient failure such as a 502 about a
           // second later, which can remove Retry preferences while a slow
           // click is still landing. A denial leaves the retry to the user.
+          // Keep denying until the test retries: the accepted creation's live
+          // invalidation can land after the first denial and owe one more
+          // strong read, which must not recover preferences on its own.
           app.report.relayFailures ??= [];
           app.report.relayFailures.push(route.request().url());
           await route.fulfill({
@@ -114,6 +156,7 @@ test("Channels offers empty-section creation with keyboard focus and confirmed p
   await expect.poll(() => app.report.sidebarPublications?.length ?? 0).toBe(1);
   await expect(field).toBeFocused();
   await expect(field).toHaveAttribute("readonly", "");
+  await expect(selected).toBeDisabled();
   await page.keyboard.type("es");
   await expect(field).toHaveValue("Launch");
   await page.keyboard.press("Tab");
@@ -130,18 +173,21 @@ test("Channels offers empty-section creation with keyboard focus and confirmed p
   expect(creations[1]).toEqual(creations[0]);
   await page.unroute("**/sidebar-assignment");
   await expect(trigger).toBeFocused();
-  await expect(
-    page.locator("summary").filter({ hasText: /^Launch$/ }),
-  ).toBeVisible();
+  const createdId = creations[0].createSection.id;
+  expect(creations[0].createSection.icon).toBe("🚌");
+  const created = page.locator(`[data-sidebar-section="group:${createdId}"]`);
+  await expect(created.locator("summary")).toHaveAccessibleName("Launch");
+  await expect(created.locator("summary")).toContainText("🚌");
   await expect.poll(() => app.report.sidebarPublications?.length ?? 0).toBe(1);
   const { blob } = app.report.sidebarPublications[0];
   expect(blob.assignments).toEqual({ beta: "work" });
+  expect(blob.sections.find(({ id }) => id === createdId)?.icon).toBe("🚌");
+  expect(blob.meta.s[createdId].icon[2]).toBe("🚌");
   expect(Object.keys(blob.meta.a)).not.toContain("undefined");
   await page.reload();
   await openPage(page, "Messages");
-  await expect(
-    page.locator("summary").filter({ hasText: /^Launch$/ }),
-  ).toBeVisible();
+  await expect(created.locator("summary")).toHaveAccessibleName("Launch");
+  await expect(created.locator("summary")).toContainText("🚌");
   await expect(
     page.locator(
       '[data-sidebar-section="group:work"] [data-channel-id="beta"]',
@@ -161,18 +207,20 @@ test("Channels offers empty-section creation with keyboard focus and confirmed p
   await expect(dialog.getByRole("alert")).toContainText(
     "Couldn't confirm the section was saved. Try again.",
   );
-  expect(writerReads).toBe(2);
+  expect(writerReads).toBeGreaterThanOrEqual(2);
   await expect(
     dialog.getByRole("button", { name: "Create", exact: true }),
   ).toBeDisabled();
   await expect(dialog.getByRole("alert")).not.toContainText("403");
   // Recover preferences without replaying creation, then Cancel/reopen.
+  const deniedReads = writerReads;
+  failWriterRead = false;
   await dialog.getByRole("button", { name: "Retry preferences" }).click();
   await expect(field).toBeFocused();
   await expect(
     dialog.getByRole("button", { name: "Create", exact: true }),
   ).toBeEnabled();
-  expect(writerReads).toBe(3);
+  expect(writerReads).toBe(deniedReads + 1);
   expect(creations).toHaveLength(3);
   const accepted = page
     .locator("summary")
@@ -195,10 +243,172 @@ test("Channels offers empty-section creation with keyboard focus and confirmed p
   await page.reload();
   await openPage(page, "Messages");
   await expect(accepted).toHaveCount(1);
-  await expect(
-    page.locator("summary").filter({ hasText: /^Launch$/ }),
-  ).toHaveCount(1);
+  await expect(created.locator("summary")).toHaveAccessibleName("Launch");
 });
+
+test("New → Team → New section keeps selected artwork centered at enlarged text", async ({
+  page,
+  app,
+}, testInfo) => {
+  await page.setViewportSize({ width: 480, height: 800 });
+  await page.goto(app.origin);
+  await page.evaluate(() => {
+    localStorage.setItem("buzz-font-scale.v1", "2");
+    window.dispatchEvent(
+      new StorageEvent("storage", {
+        key: "buzz-font-scale.v1",
+        newValue: "2",
+        storageArea: localStorage,
+      }),
+    );
+  });
+  await openPage(page, "Messages");
+  await settleShellToggle(page);
+  await page
+    .getByRole("button", { name: "Show navigation", exact: true })
+    .click();
+  await page.getByRole("button", { name: "New", exact: true }).click();
+  await page
+    .getByRole("menuitem", { name: "New section", exact: true })
+    .click();
+  const dialog = page.getByRole("dialog", { name: "Create new section" });
+  const field = dialog.getByRole("textbox", { name: "Section name" });
+  await expect(field).toBeFocused();
+  await expectIconCentered(dialog);
+  await dialog.getByRole("button", { name: "Choose section emoji" }).click();
+  await page.getByRole("searchbox", { name: "Search emoji" }).fill("bus");
+  await page.getByRole("button", { name: "🚌", exact: true }).click();
+  await expect(
+    page.getByRole("dialog", { name: "Emoji picker", exact: true }),
+  ).toHaveCount(0);
+  await field.fill("From New");
+  await dialog.getByRole("button", { name: "Change section emoji" }).click();
+  const search = page.getByRole("searchbox", { name: "Search emoji" });
+  const picker = page.getByRole("dialog", {
+    name: "Emoji picker",
+    exact: true,
+  });
+  await expect(search).toBeFocused();
+  await expect(
+    picker.getByRole("button", { name: "Remove emoji" }),
+  ).toBeVisible();
+  await expect
+    .poll(async () => {
+      const bounds = await picker.boundingBox();
+      return (
+        bounds.x >= 0 &&
+        bounds.y >= 0 &&
+        bounds.x + bounds.width <= 480 &&
+        bounds.y + bounds.height <= 800
+      );
+    })
+    .toBe(true);
+  await page.screenshot({
+    path: testInfo.outputPath("create-section-picker-narrow-enlarged.png"),
+  });
+  await search.press("Escape");
+  await expect(
+    dialog.getByRole("button", { name: "Change section emoji" }),
+  ).toBeFocused();
+  await expectIconCentered(dialog);
+  await dialog.screenshot({
+    path: testInfo.outputPath("create-section-narrow-enlarged.png"),
+  });
+  await dialog.getByRole("button", { name: "Create", exact: true }).click();
+  await expect(dialog).toHaveCount(0);
+  await expect.poll(() => app.report.sidebarPublications?.length ?? 0).toBe(1);
+  const { blob } = app.report.sidebarPublications[0];
+  const saved = blob.sections.find(({ name }) => name === "From New");
+  expect(saved?.icon).toBe("🚌");
+  expect(blob.meta.s[saved.id].icon[2]).toBe("🚌");
+  const section = page.locator(`[data-sidebar-section="group:${saved.id}"]`);
+  await expect(section.locator("summary")).toHaveAccessibleName("From New");
+  await page.reload();
+  await openPage(page, "Messages");
+  await settleShellToggle(page);
+  await page
+    .getByRole("button", { name: "Show navigation", exact: true })
+    .click();
+  await expect(section.locator("summary")).toHaveAccessibleName("From New");
+});
+
+test("Move channel → Create new saves the selected icon and assignment atomically", async ({
+  page,
+  app,
+}) => {
+  await page.goto(app.origin);
+  await openPage(page, "Messages");
+  await page.locator('[data-channel-id="alpha"]').click({ button: "right" });
+  await page
+    .getByRole("menuitem", { name: "Move channel", exact: true })
+    .hover();
+  await page
+    .getByRole("menuitem", { name: "Create new…", exact: true })
+    .click();
+  const dialog = page.getByRole("dialog", { name: "Move to new section" });
+  const field = dialog.getByRole("textbox", { name: "Section name" });
+  await expect(field).toBeFocused();
+  await dialog.getByRole("button", { name: "Choose section emoji" }).click();
+  await page.getByRole("searchbox", { name: "Search emoji" }).fill("bus");
+  await page.getByRole("button", { name: "🚌", exact: true }).click();
+  await field.fill("Moved");
+  await dialog
+    .getByRole("button", { name: "Create and move", exact: true })
+    .click();
+  await expect(dialog).toHaveCount(0);
+  // Moving a starred row also publishes its independent Star removal.
+  await expect.poll(() => app.report.sidebarPublications?.length ?? 0).toBe(2);
+  const { blob } = app.report.sidebarPublications.find(
+    ({ coordinate }) => coordinate === "channel-sections",
+  );
+  const saved = blob.sections.find(({ name }) => name === "Moved");
+  expect(saved?.icon).toBe("🚌");
+  expect(blob.meta.s[saved.id].icon[2]).toBe("🚌");
+  expect(blob.assignments.alpha).toBe(saved.id);
+  const section = page.locator(`[data-sidebar-section="group:${saved.id}"]`);
+  await expect(section.locator("summary")).toHaveAccessibleName("Moved");
+  await expect(section.locator('[data-channel-id="alpha"]')).toBeVisible();
+});
+
+async function expectIconCentered(dialog) {
+  const artwork = dialog.locator("[data-sidebar-group-icon]");
+  if (await artwork.count()) {
+    await expect(artwork).toBeVisible();
+    const image = artwork.locator("img");
+    if (await image.count()) {
+      await expect(image).toBeVisible();
+      await expect
+        .poll(() =>
+          image.evaluate((img) => img.complete && img.naturalWidth > 0),
+        )
+        .toBe(true);
+    }
+  }
+  const metrics = await dialog
+    .getByRole("button", {
+      name: /^(?:Choose section emoji|Change section emoji, currently .+)$/,
+    })
+    .evaluate((button) => {
+      const artwork = button.querySelector("[data-sidebar-group-icon], svg");
+      const input = button.closest(".buzz-input-group")?.querySelector("input");
+      if (!artwork || !input) throw new Error("Section emoji geometry missing");
+      const control = button.getBoundingClientRect();
+      const icon = artwork.getBoundingClientRect();
+      const name = input.getBoundingClientRect();
+      return {
+        x: Math.abs(control.x + control.width / 2 - (icon.x + icon.width / 2)),
+        y: Math.abs(
+          control.y + control.height / 2 - (icon.y + icon.height / 2),
+        ),
+        nameY: Math.abs(
+          control.y + control.height / 2 - (name.y + name.height / 2),
+        ),
+      };
+    });
+  expect(metrics.x).toBeLessThanOrEqual(1);
+  expect(metrics.y).toBeLessThanOrEqual(1);
+  expect(metrics.nameY).toBeLessThanOrEqual(1);
+}
 
 async function startDrag(page, locator) {
   await expect(locator).toBeVisible();
@@ -345,25 +555,34 @@ test("only the top channel-section boundary reveals creation, latches, cancels a
     );
   });
   await expect(field).toBeFocused();
-  await page.keyboard.type("Release");
+  await dialog.getByRole("button", { name: "Choose section emoji" }).click();
+  await page.getByRole("searchbox", { name: "Search emoji" }).fill("bus");
+  await page.getByRole("button", { name: "🚌", exact: true }).click();
+  await field.fill("Release");
   await expect(field).toHaveValue("Release");
   await dialog.getByRole("button", { name: "Create and move" }).click();
   await expect(dialog).toHaveCount(0);
   const section = page
     .locator("[data-sidebar-section]")
-    .filter({ has: page.locator("summary").filter({ hasText: /^Release$/ }) });
+    .filter({ has: page.locator("summary").filter({ hasText: /Release/ }) });
   await expect(section.locator('[data-channel-id="alpha"]')).toBeVisible();
-  await expect(
-    page.locator('[data-sidebar-section^="group:"] summary'),
-  ).toHaveText(["Release", "Work"]);
+  const ordered = page.locator('[data-sidebar-section^="group:"] summary');
+  await expect(ordered).toHaveCount(2);
+  await expect(ordered.nth(0)).toHaveAccessibleName("Release");
+  await expect(ordered.nth(1)).toHaveAccessibleName("Work");
   await expect(row).toBeFocused();
   await expect.poll(() => app.report.sidebarPublications?.length ?? 0).toBe(2);
+  const { blob } = app.report.sidebarPublications.find(
+    ({ coordinate }) => coordinate === "channel-sections",
+  );
+  const saved = blob.sections.find(({ name }) => name === "Release");
+  expect(saved?.icon).toBe("🚌");
+  expect(blob.meta.s[saved.id].icon[2]).toBe("🚌");
   await page.reload();
   await openPage(page, "Messages");
   await expect(section.locator('[data-channel-id="alpha"]')).toBeVisible();
-  await expect(
-    page.locator('[data-sidebar-section^="group:"] summary'),
-  ).toHaveText(["Release", "Work"]);
+  await expect(ordered.nth(0)).toHaveAccessibleName("Release");
+  await expect(ordered.nth(1)).toHaveAccessibleName("Work");
   await page.locator(".shell-sidebar").screenshot({
     path: testInfo.outputPath("created-section-first.png"),
   });

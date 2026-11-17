@@ -91,6 +91,8 @@ function fixture(t) {
       "desktop-build.mjs",
       "desktop-config.mjs",
       "desktop-dev.mjs",
+      // Imported at startup; helper setup runs only for explicit `me`, never here.
+      "dev-credential-helper.mjs",
       "worktree-icon.mjs",
       "worktree-port.mjs",
     ]) {
@@ -99,8 +101,13 @@ function fixture(t) {
         path.join(cwd, "scripts", file),
       );
     }
-    // Desktop development builds this helper before launching Tauri.
-    writeFileSync(path.join(cwd, "scripts/build-agent-command.mjs"), "");
+    // Desktop development stages these helpers before calling the pnpm stub.
+    for (const file of [
+      "build-agent-command.mjs",
+      "build-goose-acp.mjs",
+      "build-buzz-cli.mjs",
+    ])
+      writeFileSync(path.join(cwd, "scripts", file), "");
   }
   const run = (cwd, args) => {
     const result = spawnSync(process.execPath, args, {

@@ -141,7 +141,7 @@ type Receipt = Pick<Delivery, "step" | "acknowledged" | "superseded"> & {
   where: Where;
   /** A recovered turn holds its posting policy until its run settles. */
   settled?: Promise<void>;
-  /** An Attention prompt rebuilt when the host is ready to submit. */
+  /** A wake prompt rebuilt when the native queue is ready to submit. */
   prompt?: () => Promise<{ text: string; steer: string } | undefined>;
 };
 
@@ -543,6 +543,7 @@ export class PiRuntime {
     signal,
     step,
     acknowledged,
+    accepted,
     superseded,
     interruptible,
   }: Delivery) {
@@ -557,8 +558,8 @@ export class PiRuntime {
     // code, and the agent's own handoff comes from a turn already acting
     // for the owner.
     const wake = trigger.type !== "mention" ? trigger : undefined;
-    // Only an Attention wake refreshes its Interest's instructions as Pi takes
-    // it, and keeps its own destination for a failure recovered after a stop.
+    // Attention refreshes its instructions and retains its recovery destination.
+    // Guarded plugin wakes use the same callback for their final guard.
     const attention = wake?.type === "attention";
     // Pi runs commands as you; mentions need owner or delegated authority.
     if (trigger.type === "mention") {
@@ -652,13 +653,13 @@ export class PiRuntime {
         key,
         scope: topLevel ? channel : root,
         where,
-        ...(attention
+        ...(attention || accepted
           ? {
               prompt: async () => {
                 const text = await prompt();
-                return !interrupted && (!current || current())
-                  ? { text, steer: steerPrompt(text) }
-                  : undefined;
+                if (interrupted || (current && !current())) return;
+                accepted?.();
+                return { text, steer: steerPrompt(text) };
               },
             }
           : {}),
@@ -681,7 +682,8 @@ export class PiRuntime {
           text,
           steer: steerPrompt(text),
           request,
-          ...(attention ? { reply: where, refresh: true } : {}),
+          ...(attention ? { reply: where } : {}),
+          ...(attention || accepted ? { refresh: true } : {}),
           ...picked,
         },
         () => !interrupted && (!wake || !current || current()),

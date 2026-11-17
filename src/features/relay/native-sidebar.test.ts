@@ -812,14 +812,47 @@ it("reorders sections through native signing and readback, never rewriting a sat
   expect(records.get("channel-sections")).toBe(head);
 });
 
-it("renames a section through native signing, preserving its order and assignments", async () => {
+it("does not confirm a created section whose requested icon is lost before readback", async () => {
+  const transport = await connectNativeTransport(community);
+  const mocked = vi.mocked(invoke);
+  const implementation = mocked.getMockImplementation();
+  if (!implementation) throw new Error("Missing native transport fixture");
+  mocked.mockImplementation(async (command, args) => {
+    if (command !== "relay_sign_sidebar") return implementation(command, args);
+    const signed = (await implementation(command, args)) as ReturnType<
+      typeof finalizeEvent
+    >;
+    const value = decode([signed])["channel-sections"] as {
+      sections: { id: string; icon?: string }[];
+      meta?: { s?: Record<string, { icon?: unknown }> };
+    };
+    for (const section of value.sections) delete section.icon;
+    for (const section of Object.values(value.meta?.s ?? {}))
+      delete section.icon;
+    return signedRecord("channel-sections", value, signed.created_at);
+  });
+  await expect(
+    transport.writeSidebarAssignment?.(
+      {
+        createSection: {
+          id: "12345678-1234-1234-1234-123456789abc",
+          name: "Launch",
+          icon: "📚",
+        },
+      },
+      signal,
+    ),
+  ).rejects.toThrow("Sidebar groups changed on another device");
+});
+
+it("edits a section through native signing, preserving its order and assignments", async () => {
   records.set(
     "channel-sections",
     signedRecord("channel-sections", {
       version: 1,
       sections: [
-        { id: "work", name: "Work", order: 0 },
-        { id: "later", name: "Later", order: 1 },
+        { id: "work", name: "Work", icon: "🏢", order: 0 },
+        { id: "later", name: "Later", icon: ":later:", order: 1 },
       ],
       assignments: { alpha: "work" },
       preserved: "value",
@@ -830,7 +863,13 @@ it("renames a section through native signing, preserving its order and assignmen
     throw new Error("Missing section rename writer");
   await expect(
     transport.renameSidebarSection({ sectionId: "work", name: " " }, signal),
-  ).rejects.toThrow("Invalid sidebar section rename intent");
+  ).rejects.toThrow("Invalid sidebar section edit intent");
+  await expect(
+    transport.renameSidebarSection({ sectionId: "work", icon: " " }, signal),
+  ).rejects.toThrow("Invalid sidebar section edit intent");
+  await expect(
+    transport.renameSidebarSection({ sectionId: "work" }, signal),
+  ).rejects.toThrow("Invalid sidebar section edit intent");
   await expect(
     transport.renameSidebarSection({ sectionId: "gone", name: "X" }, signal),
   ).rejects.toThrow("no longer exists");
@@ -841,8 +880,8 @@ it("renames a section through native signing, preserving its order and assignmen
     ),
   ).toEqual({
     sections: [
-      { id: "work", name: "Projects", order: 0 },
-      { id: "later", name: "Later", order: 1 },
+      { id: "work", name: "Projects", icon: "🏢", order: 0 },
+      { id: "later", name: "Later", icon: ":later:", order: 1 },
     ],
     assignments: { alpha: "work" },
   });
@@ -851,6 +890,32 @@ it("renames a section through native signing, preserving its order and assignmen
   expect(
     (decode([head])["channel-sections"] as { preserved: string }).preserved,
   ).toBe("value");
+  expect(
+    await transport.renameSidebarSection(
+      { sectionId: "work", icon: "📚" },
+      signal,
+    ),
+  ).toMatchObject({
+    sections: [
+      { id: "work", name: "Projects", icon: "📚", order: 0 },
+      { id: "later", name: "Later", icon: ":later:", order: 1 },
+    ],
+    assignments: { alpha: "work" },
+  });
+  expect(
+    await transport.renameSidebarSection(
+      { sectionId: "work", name: "Projects", icon: null },
+      signal,
+    ),
+  ).toMatchObject({
+    sections: [
+      { id: "work", name: "Projects", order: 0 },
+      { id: "later", name: "Later", icon: ":later:", order: 1 },
+    ],
+    assignments: { alpha: "work" },
+  });
+  const editedHead = records.get("channel-sections");
+  if (!editedHead) throw new Error("Missing edited sections head");
   vi.mocked(invoke).mockClear();
   await transport.renameSidebarSection(
     { sectionId: "work", name: "Projects" },
@@ -861,7 +926,7 @@ it("renames a section through native signing, preserving its order and assignmen
       .mocked(invoke)
       .mock.calls.filter(([command]) => command === "relay_sign_sidebar"),
   ).toEqual([]);
-  expect(records.get("channel-sections")).toBe(head);
+  expect(records.get("channel-sections")).toBe(editedHead);
 });
 
 it("does not report a section order overwritten before readback as saved", async () => {

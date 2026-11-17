@@ -803,3 +803,148 @@ it("does not expose replacement intent to an earlier queued save", async () => {
       ).toBe(true);
   }
 });
+
+it("fences a fresh local recovery against another owner's durable dismissal", async () => {
+  const store = memory();
+  const a = setup(store);
+  await a.outbox.ready();
+  const id = a.outbox.send({ ...input, kind: 9007 }, recovery);
+  await vi.waitFor(() => expect(store.load()[0]?.delivery).toBe("accepted"));
+  const b = setup(store);
+  await b.outbox.ready();
+  await b.outbox.dismiss(id, recovery);
+  const publish = vi.fn(async () => {});
+  assert.exists(a.outbox.withRecovery);
+  await expect(a.outbox.withRecovery(id, recovery, publish)).rejects.toThrow(
+    "removed or changed",
+  );
+  expect(publish).not.toHaveBeenCalled();
+  assert.exists(a.outbox.finishRecovery);
+  await expect(a.outbox.finishRecovery(id, recovery)).rejects.toThrow(
+    "removed or changed",
+  );
+  expect(await a.outbox.recovery(recovery.key)).toBeUndefined();
+  expect(a.outbox.snapshot()).toEqual([]);
+  a.outbox.send({ ...input, content: "New explicit Send" });
+  await vi.waitFor(() => expect(a.publish).toHaveBeenCalledTimes(2));
+  expect(store.load().some((item) => item.event.id === id)).toBe(false);
+});
+
+it("holds shared recovery ownership through publication before dismissal can commit", async () => {
+  const store = memory();
+  const event = signed(viewer, { ...input, kind: 9007 });
+  store.save([{ event, signed: event, delivery: "accepted", recovery }]);
+  let tail = Promise.resolve();
+  let requests = 0;
+  const queued = gate();
+  const shared: OutboxStorage = {
+    ...store,
+    async lock(id, run) {
+      expect(id).toBe(event.id);
+      const before = tail;
+      const next = gate();
+      tail = next.promise;
+      if (++requests === 2) queued.release();
+      await before;
+      try {
+        return await run();
+      } finally {
+        next.release();
+      }
+    },
+  };
+  const a = setup(shared),
+    b = setup(shared);
+  await Promise.all([a.outbox.ready(), b.outbox.ready()]);
+  const entered = gate(),
+    release = gate();
+  const order: string[] = [];
+  assert.exists(a.outbox.withRecovery);
+  try {
+    const publication = a.outbox.withRecovery(event.id, recovery, async () => {
+      entered.release();
+      await release.promise;
+      order.push("published");
+    });
+    await entered.promise;
+    const dismissal = b.outbox.dismiss(event.id, recovery).then(() => {
+      order.push("dismissed");
+    });
+    await queued.promise;
+    expect(order).toEqual([]);
+    expect(store.load()).toHaveLength(1);
+    release.release();
+    await Promise.all([publication, dismissal]);
+    expect(order).toEqual(["published", "dismissed"]);
+    expect(store.load()).toEqual([]);
+    await expect(a.outbox.dismiss(event.id, recovery)).resolves.toBeUndefined();
+    expect(a.outbox.snapshot()).toEqual([]);
+  } finally {
+    release.release();
+  }
+});
+
+it.each(["key", "value"] as const)(
+  "refuses dismissal, publication and completion after shared recovery %s changes",
+  async (field) => {
+    const store = memory();
+    const event = signed(viewer, { ...input, kind: 9007 });
+    store.save([{ event, signed: event, delivery: "accepted", recovery }]);
+    const h = setup(store);
+    await h.outbox.ready();
+    const changed = { ...recovery, [field]: "different owner" };
+    store.save([
+      { event, signed: event, delivery: "accepted", recovery: changed },
+    ]);
+    const publish = vi.fn(async () => {});
+    assert.exists(h.outbox.withRecovery);
+    assert.exists(h.outbox.finishRecovery);
+    await expect(h.outbox.dismiss(event.id, recovery)).rejects.toThrow(
+      "removed or changed",
+    );
+    await expect(
+      h.outbox.withRecovery(event.id, recovery, publish),
+    ).rejects.toThrow("removed or changed");
+    await expect(h.outbox.finishRecovery(event.id, recovery)).rejects.toThrow(
+      "removed or changed",
+    );
+    expect(publish).not.toHaveBeenCalled();
+    expect(store.load()[0]?.recovery).toEqual(changed);
+  },
+);
+
+it("does not release dependent work by joining a pending abandonment", async () => {
+  const store = memory();
+  const event = signed(viewer, { ...input, kind: 9007 });
+  store.save([{ event, signed: event, delivery: "seen", recovery }]);
+  const deleting = gate(),
+    release = gate();
+  const h = setup({
+    ...store,
+    async save(records) {
+      if (!records.length) {
+        deleting.release();
+        await release.promise;
+      }
+      store.save(records);
+    },
+  });
+  await h.outbox.ready();
+  assert.exists(h.outbox.finishRecovery);
+  const deliver = vi.fn();
+  try {
+    const abandonment = h.outbox.dismiss(event.id, recovery);
+    await deleting.promise;
+    const completion = h.outbox
+      .finishRecovery(event.id, recovery)
+      .then(deliver);
+    const refused = expect(completion).rejects.toThrow("removed or changed");
+    release.release();
+    await abandonment;
+    await refused;
+    expect(deliver).not.toHaveBeenCalled();
+    expect(store.load()).toEqual([]);
+  } finally {
+    release.release();
+  }
+});

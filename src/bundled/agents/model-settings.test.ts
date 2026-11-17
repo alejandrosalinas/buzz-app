@@ -18,7 +18,7 @@ it.each([
   { name: "goose", apply: goose, provider: true, recommended: true },
   { name: "Pi", apply: pi, provider: true, recommended: false },
 ])(
-  "$name exposes only saved model selections without host I/O",
+  "$name exposes safe selections without host I/O",
   ({ name, apply, provider, recommended }) => {
     vi.spyOn(navigator, "platform", "get").mockReturnValue("MacIntel");
     let type: AgentType | undefined;
@@ -48,16 +48,44 @@ it.each([
       instructions: "private instructions",
     };
     const before = structuredClone(saved);
+    const native = name === "Codex" || name === "Claude Code";
     expect(type.readModelSettings(saved)).toEqual({
-      model: { source: "configured", value: "model-a" },
-      effort: { source: "configured", value: "high" },
+      model: {
+        source: "configured",
+        value: "model-a",
+        ...(native && { resolved: { value: "model-a", source: "configured" } }),
+      },
+      effort: {
+        source: "configured",
+        value: "high",
+        ...(native && {
+          resolved:
+            name === "Codex"
+              ? { unavailable: "not-loaded" }
+              : { value: "high", source: "configured" },
+        }),
+      },
       ...(provider && {
         provider: { source: "configured", value: "provider-a" },
       }),
     });
     expect(type.readModelSettings(type.defaults().config)).toEqual({
-      model: { source: "default" },
-      effort: { source: "default" },
+      model: {
+        source: "default",
+        ...(native && {
+          resolved: {
+            unavailable: name === "Codex" ? "not-loaded" : "unknown",
+          },
+        }),
+      },
+      effort: {
+        source: "default",
+        ...(native && {
+          resolved: {
+            unavailable: name === "Codex" ? "not-loaded" : "unknown",
+          },
+        }),
+      },
       ...(provider && { provider: { source: "default" } }),
     });
     expect(type.readModelSettings({ ...saved, effort: "" })).toMatchObject({
@@ -71,8 +99,14 @@ it.each([
     });
     if (recommended) {
       expect(type.readModelSettings({ preset: "recommended" })).toEqual({
-        model: { source: "recommended" },
-        effort: { source: "recommended" },
+        model: {
+          source: "recommended",
+          ...(native && { resolved: { unavailable: "not-loaded" } }),
+        },
+        effort: {
+          source: "recommended",
+          ...(native && { resolved: { unavailable: "not-loaded" } }),
+        },
         ...(provider && { provider: { source: "recommended" } }),
       });
     }

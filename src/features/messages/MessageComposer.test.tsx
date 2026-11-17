@@ -1892,6 +1892,11 @@ function attachByDrop(target: HTMLElement, file = attachmentFile()) {
 async function mountUploadComposer(
   options: {
     threadRootId?: string;
+    sourceMessages?: boolean;
+    sourcePrivacy?: "private" | "dm" | "solo" | "public";
+    destination?: string;
+    mediaTimeSeconds?: number;
+    mediaTargetUrl?: string;
     replyParentId?: string;
     onSend?: MessageComposerProps["onSend"];
     publish?: (event: RelayEvent, signal?: AbortSignal) => Promise<void>;
@@ -1943,6 +1948,15 @@ async function mountUploadComposer(
         return result.promise;
       },
       async query(filters) {
+        if (
+          options.sourceMessages &&
+          filters.some((filter) => filter.ids?.length)
+        )
+          return publish.mock.calls
+            .map(([event]) => event)
+            .filter((event) =>
+              filters.some((filter) => filter.ids?.includes(event.id)),
+            );
         if (filters.some((filter) => filter.kinds?.includes(0)))
           return [...(options.profiles ?? [])];
         if (
@@ -1974,7 +1988,22 @@ async function mountUploadComposer(
                           1700000000,
                           [["private"], ["t", "stream"], ["ttl", "3600"]],
                         )
-                      : metadata(relay, "channel", "General", 1700000000),
+                      : metadata(
+                          relay,
+                          "channel",
+                          "General",
+                          1700000000,
+                          options.sourcePrivacy === "private"
+                            ? [["private"]]
+                            : options.sourcePrivacy === "dm"
+                              ? [["t", "dm"]]
+                              : options.sourcePrivacy === "solo"
+                                ? [
+                                    ["t", "stream"],
+                                    ["t", "buzz.solo"],
+                                  ]
+                                : [],
+                        ),
                   ]
                 : [],
         );
@@ -2001,6 +2030,8 @@ async function mountUploadComposer(
       { kinds: [39000], "#d": ["channel"], limit: 1 },
     ]),
   );
+  if (options.destination === "other") await otherMembership(true);
+  let destination = options.destination ?? "channel";
   const scope = `https://relay.example.test:${viewer.pubkey}`;
   const composer = (presented = true, shown = true) => (
     <AgentsContext.Provider value={options.agents}>
@@ -2009,8 +2040,12 @@ async function mountUploadComposer(
           shown={shown}
           session={owner.session}
           scope={scope}
-          channelId="channel"
-          channelName="General"
+          channelId={destination}
+          channelName={destination === "channel" ? "General" : "Random"}
+          {...(options.mediaTimeSeconds !== undefined
+            ? { mediaTimeSeconds: options.mediaTimeSeconds }
+            : {})}
+          mediaTargetUrl={options.mediaTargetUrl}
           defaultMention={options.defaultMention}
           requireMention={options.requireMention}
           {...(options.extensions ? { extensions: options.extensions } : {})}
@@ -2045,6 +2080,10 @@ async function mountUploadComposer(
     sign,
     publish,
     otherMembership,
+    retargetChannel: (id: string) => {
+      destination = id;
+      view.rerender(composer());
+    },
     present: (presented: boolean, shown = true) =>
       view.rerender(composer(presented, shown)),
   };
@@ -8020,6 +8059,22 @@ it.each([
     expect(h.input()).toHaveValue(text);
   },
 );
+
+it("accepts an emoji with Tab in a list item without nesting it, then Tab nests", async () => {
+  const h = mountEmojiTypeahead();
+  await h.user.type(h.input(), "- one{Enter}:smil");
+  await screen.findByRole("option", { name: ":smile:" });
+  await h.user.keyboard("{Tab}");
+  expect(h.input()).toHaveValue("one\n😄 ");
+  expect(h.input().querySelector("ul ul")).toBeNull();
+  expect(h.input()).toHaveFocus();
+  await h.user.keyboard("{Tab}");
+  expect(h.input().querySelector("ul ul > li")).toHaveTextContent("😄");
+  await h.user.keyboard("{Shift>}{Tab}{/Shift}");
+  expect(h.input().querySelector("ul ul")).toBeNull();
+  expect(h.input().querySelectorAll("ul > li")).toHaveLength(2);
+  expect(h.input()).toHaveFocus();
+});
 
 it("types on after a custom shortcode as a separate word", async () => {
   const h = mountEmojiTypeahead();
@@ -17166,4 +17221,323 @@ it("shows an annotator's marks in the composer and retires them with the destina
   await waitFor(() =>
     expect(h.input().querySelector('[aria-invalid="spelling"]')).toBeNull(),
   );
+});
+
+it.each([false, true])(
+  "pastes a source locator, preserves the card while typing, and forwards through normal send (thread=%s)",
+  async (thread) => {
+    const root = "b".repeat(64);
+    const h = await mountUploadComposer(
+      thread
+        ? { threadRootId: root, sourceMessages: true }
+        : { sourceMessages: true },
+    );
+    const id = h.owner.session.messages.send("channel", "Original **message**");
+    await waitFor(() => expect(h.publish).toHaveBeenCalledOnce());
+    const { forwardClipboard } = await import("./forward-clipboard");
+    const { readForward } = await import("../relay/forwarded-message");
+    const payload = forwardClipboard(
+      {
+        version: 1,
+        origin: "https://relay.example.test",
+        channelId: "channel",
+        id,
+      },
+      "Untrusted clipboard text",
+    );
+    const paste = () =>
+      fireEvent.paste(h.input(), {
+        clipboardData: {
+          getData: (type: string) =>
+            type === "text/html" ? payload.html : payload.text,
+          items: [],
+        },
+      });
+    paste();
+    await screen.findByRole("button", { name: "Remove forwarded message" });
+    await waitFor(() => expect(h.send()).toBeEnabled());
+    expect(
+      screen.queryByText("Untrusted clipboard text"),
+    ).not.toBeInTheDocument();
+    fireEvent.change(h.input(), { target: { value: "My note" } });
+    paste();
+    expect(
+      await screen.findByText(/Only one forwarded message can be attached/),
+    ).toBeVisible();
+    fireEvent.click(h.send());
+    await waitFor(() => expect(h.publish).toHaveBeenCalledTimes(2));
+    const event = h.publish.mock.calls[1]?.[0];
+    expect(event && readForward(event)?.snapshot.content).toBe(
+      "Original **message**",
+    );
+    expect(event && readForward(event)?.note).toBe("My note");
+    if (thread) expect(event?.tags).toContainEqual(["e", root, "", "reply"]);
+    await waitFor(() =>
+      expect(
+        screen.queryByRole("button", { name: "Remove forwarded message" }),
+      ).not.toBeInTheDocument(),
+    );
+  },
+);
+it("keeps the note and disables Send for an inaccessible pasted forward until removed", async () => {
+  const h = await mountUploadComposer();
+  fireEvent.change(h.input(), { target: { value: "Keep this note" } });
+  const { forwardClipboard } = await import("./forward-clipboard");
+  const payload = forwardClipboard(
+    {
+      version: 1,
+      origin: "https://another.example",
+      channelId: "private",
+      id: "c".repeat(64),
+    },
+    "fake text",
+  );
+  fireEvent.paste(h.input(), {
+    clipboardData: {
+      getData: (type: string) =>
+        type === "text/html" ? payload.html : payload.text,
+      items: [],
+    },
+  });
+  expect(await screen.findByText(/belongs to another community/)).toBeVisible();
+  expect(h.send()).toBeDisabled();
+  expect(h.input()).toHaveValue("Keep this note");
+  const remove = screen.getByRole("button", {
+    name: "Remove forwarded message",
+  });
+  remove.focus();
+  await userEvent.setup().keyboard("{Enter}");
+  expect(h.input()).toHaveFocus();
+  expect(h.send()).toBeEnabled();
+  expect(h.input()).toHaveValue("Keep this note");
+});
+
+it("preserves the selected video when pasting a timed forward into a two-video thread", async () => {
+  const second = `https://relay.example.test/media/${"b".repeat(64)}.mp4`;
+  const options = {
+    sourceMessages: true,
+    threadRootId: "",
+    mediaTimeSeconds: 21,
+    mediaTargetUrl: second,
+  };
+  const h = await mountUploadComposer(options);
+  const source = h.owner.session.messages.send("channel", "Original message");
+  const root = h.owner.session.messages.send(
+    "channel",
+    "Two videos",
+    [],
+    [
+      {
+        ...uploadDescriptor("first.mp4"),
+        url: `https://relay.example.test/media/${"a".repeat(64)}.mp4`,
+        type: "video/mp4",
+      },
+      {
+        ...uploadDescriptor("second.mp4"),
+        url: second,
+        sha256: "b".repeat(64),
+        type: "video/mp4",
+      },
+    ],
+  );
+  await waitFor(() => expect(h.publish).toHaveBeenCalledTimes(2));
+  options.threadRootId = root;
+  h.present(true);
+  const { forwardClipboard } = await import("./forward-clipboard");
+  const { readForward } = await import("../relay/forwarded-message");
+  const { foldMessages } = await import("../relay/fold");
+  const payload = forwardClipboard(
+    {
+      version: 1,
+      origin: "https://relay.example.test",
+      channelId: "channel",
+      id: source,
+    },
+    "fallback",
+  );
+  fireEvent.paste(h.input(), {
+    clipboardData: {
+      getData: (type: string) =>
+        type === "text/html" ? payload.html : payload.text,
+      items: [],
+    },
+  });
+  await waitFor(() => expect(h.send()).toBeEnabled());
+  fireEvent.change(h.input(), { target: { value: "Review this cut" } });
+  fireEvent.click(h.send());
+  await waitFor(() => expect(h.publish).toHaveBeenCalledTimes(3));
+  const event = h.publish.mock.calls[2]?.[0];
+  expect(event?.tags).toContainEqual(["e", root, "", "reply"]);
+  expect(event?.tags).toContainEqual(["buzz:media", second]);
+  expect(event && readForward(event)?.note).toBe("⏱ 0:21 — Review this cut");
+  const rows = foldMessages(
+    "channel",
+    h.owner.session.viewer ?? "",
+    h.publish.mock.calls.map(([value]) => value),
+    { includeReplies: true },
+  );
+  expect(
+    rows
+      .find((row) => row.id === root)
+      ?.attachments.filter((item) => item.kind === "video"),
+  ).toHaveLength(2);
+  expect(rows.find((row) => row.id === event?.id)?.mediaTargetUrl).toBe(second);
+});
+
+it.each([
+  ["private", "other", true],
+  ["dm", "other", true],
+  ["solo", "other", true],
+  ["private", "channel", false],
+  ["dm", "channel", false],
+  ["solo", "channel", false],
+  ["public", "other", false],
+] as const)(
+  "discloses pasted %s source in %s only when privacy requires it",
+  async (sourcePrivacy, destination, expected) => {
+    const h = await mountUploadComposer({
+      sourceMessages: true,
+      sourcePrivacy,
+      destination,
+    });
+    const id = h.owner.session.messages.send("channel", "Source message");
+    await waitFor(() => expect(h.publish).toHaveBeenCalledOnce());
+    const { forwardClipboard } = await import("./forward-clipboard");
+    const payload = forwardClipboard(
+      {
+        version: 1,
+        origin: "https://relay.example.test",
+        channelId: "channel",
+        id,
+      },
+      "Untrusted clipboard text",
+    );
+    fireEvent.paste(h.input(), {
+      clipboardData: {
+        getData: (type: string) =>
+          type === "text/html" ? payload.html : payload.text,
+        items: [],
+      },
+    });
+    await waitFor(() => expect(h.send()).toBeEnabled());
+    const composer = within(screen.getByRole("form"));
+    const disclosure = composer.queryByText(
+      /will be able to read this message, even if they can’t see where it came from/,
+    );
+    expect(Boolean(disclosure)).toBe(expected);
+    if (expected) {
+      expect(disclosure).toHaveTextContent("Everyone in #Random");
+      expect(
+        document.getElementById(`${h.input().id}-forward-announcement`),
+      ).toHaveTextContent(/Everyone in #Random will be able to read/);
+      expect(
+        document.getElementById(`${h.input().id}-forward-announcement`),
+      ).toHaveAttribute("aria-live", "polite");
+      expect(
+        document.getElementById(`${h.input().id}-forward-announcement`),
+      ).toHaveAttribute("aria-atomic", "true");
+      expect(h.send()).toHaveAccessibleDescription(
+        /Everyone in #Random will be able to read/,
+      );
+      // Reopen the same saved forward in its source conversation: destination is
+      // derived from the live composer, not persisted alongside the locator.
+      await waitFor(() =>
+        expect(readView(h.scope, "draft:other", null)).toHaveProperty(
+          "forward",
+        ),
+      );
+      writeView(
+        h.scope,
+        "draft:channel",
+        readView(h.scope, "draft:other", null),
+      );
+      h.retargetChannel("channel");
+      await waitFor(() => expect(h.send()).toBeEnabled());
+      expect(
+        within(screen.getByRole("form")).queryByText(
+          /will be able to read this message/,
+        ),
+      ).not.toBeInTheDocument();
+      h.retargetChannel("other");
+      await waitFor(() =>
+        expect(h.send()).toHaveAccessibleDescription(
+          /Everyone in #Random will be able to read/,
+        ),
+      );
+      const region = document.getElementById(
+        `${h.input().id}-forward-announcement`,
+      );
+      for (const [active, shown] of [
+        [false, true],
+        [true, false],
+      ] as const) {
+        h.present(active, shown);
+        expect(region).toBeInTheDocument();
+        expect(region).toBeEmptyDOMElement();
+        h.present(true);
+        await waitFor(() =>
+          expect(region).toHaveTextContent(
+            /Everyone in #Random will be able to read/,
+          ),
+        );
+      }
+
+      fireEvent.click(
+        screen.getByRole("button", { name: "Remove forwarded message" }),
+      );
+      expect(
+        within(screen.getByRole("form")).queryByText(
+          /will be able to read this message/,
+        ),
+      ).not.toBeInTheDocument();
+      expect(region).toBeInTheDocument();
+      expect(region?.parentElement).toBe(document.body);
+      expect(region).toBeEmptyDOMElement();
+      // The source is warm: repasting must update the existing live region.
+      fireEvent.paste(h.input(), {
+        clipboardData: {
+          getData: (type: string) =>
+            type === "text/html" ? payload.html : payload.text,
+          items: [],
+        },
+      });
+      await waitFor(() => expect(h.send()).toBeEnabled());
+      expect(
+        document.getElementById(`${h.input().id}-forward-announcement`),
+      ).toBe(region);
+      expect(region).toHaveTextContent(
+        /Everyone in #Random will be able to read/,
+      );
+      expect(h.send()).toHaveAccessibleDescription(
+        /Everyone in #Random will be able to read/,
+      );
+    }
+  },
+);
+
+it("pastes a copied forward literally inside a code block", async () => {
+  const h = mount();
+  await h.user.type(h.input(), "```");
+  expect(h.input().querySelector("pre")).not.toBeNull();
+  const { forwardClipboard } = await import("./forward-clipboard");
+  const payload = forwardClipboard(
+    {
+      version: 1,
+      origin: "https://relay.example.test",
+      channelId: "source",
+      id: "ab".repeat(32),
+    },
+    "Literal copied text",
+  );
+  fireEvent.paste(h.input(), {
+    clipboardData: {
+      items: [],
+      getData: (type: string) =>
+        type === "text/html" ? payload.html : payload.text,
+    },
+  });
+  expect(h.input().querySelector("pre code")).toHaveTextContent(payload.text);
+  expect(
+    screen.queryByRole("button", { name: "Remove forwarded message" }),
+  ).not.toBeInTheDocument();
 });

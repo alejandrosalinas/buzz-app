@@ -39,8 +39,11 @@ people, agents and channels** for an owner who can add agents) filters current
 access and lists people under **Not in this chat**, each with an **Add** button;
 Enter adds the highlighted person. Adding is immediate and uses the Solo share rule
 (`canShareSoloChat`), with per-person **Adding…**, error and **Retry** states. The
-owner's selectable agents are offered too and join as Bot, even with a Guest
-admission default, without starting a run. Composer mentions use the same grant.
+owner's selectable agents are offered too. Agents whose signed profiles verify
+that the chat owner owns them join as Admin; other agents join as Bot, even with
+a Guest admission default, without starting a run. Composer mentions use the
+same rule; other participants' composer additions use Bot.
+Existing members keep their roles, and retries finish the original saved grant.
 Where the viewer cannot add agents, a note says to mention an agent in the chat
 instead.
 Current access uses the channel groups (**People**, **Agents**) with Owner and

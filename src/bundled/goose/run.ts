@@ -12,6 +12,7 @@ export const gooseRun = (
 ): Pick<
   AgentType<Config>,
   | "sessionControls"
+  | "supportsGuardedWake"
   | "run"
   | "runOnce"
   | "timeoutMs"
@@ -19,6 +20,7 @@ export const gooseRun = (
   | "resumes"
   | "readFile"
 > => ({
+  supportsGuardedWake: true,
   sessionControls: {
     scope: (agent) => config(agent.config).scope,
     state: (agent, place) => runtime.sessionState(agent, place),

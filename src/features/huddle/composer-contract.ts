@@ -25,6 +25,10 @@ export type ComposerSnapshot = {
   completions: readonly string[];
 };
 export type ComposerOperations = {
+  forwardSource: {
+    args: import("../messages/forward-clipboard").ForwardReference;
+    result: import("../messages/resolve-forward").ResolvedForward;
+  };
   models: {
     args: readonly string[];
     result: readonly import("../agents/react").MentionModelChoice[];
@@ -34,6 +38,7 @@ export type ComposerOperations = {
   send: {
     args: {
       text: string;
+      forward?: import("../messages/forward-clipboard").ForwardReference;
       draft: string;
       picks?: import("../relay/messages").MentionPicks;
       mentions: readonly string[];

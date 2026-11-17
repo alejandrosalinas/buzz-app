@@ -159,16 +159,32 @@ Each named or listed agent also has `modelSettings`. Codex, Claude Code, goose
 and Pi expose `model` and `effort`; goose and Pi also expose `provider`.
 Each field has a `source`: `configured` includes the saved string `value`,
 `default` inherits the type's defaults, and `recommended` follows
-Buzz's Recommended policy. Defaults and recommendations have no `value`: this
-read does not discover models, resolve aliases, inspect harness files or start
-a process. A type can inherit device preferences before the harness default.
-These are saved agent selections, not proof of an active turn's
-model or effort. Per-conversation choices can differ.
+Buzz's Recommended policy. These saved fields stay unchanged when defaults change.
+Codex and Claude Code also include `resolved` on each field. A known selection
+has `{ value, source }`, where the source is `configured`, `device`, `provider`
+or `recommended`. Codex uses the same device preferences, loaded model catalog
+and supported thinking fallback as execution. Claude resolves device preferences
+and cached Recommended choices; an unset native choice stays unknown because
+Claude Code settings can depend on the workspace. Model aliases remain aliases.
+An unresolved selection has `{ unavailable }`: `not-loaded` for a catalog or
+recommendation not yet loaded, `unknown` for a default the host cannot establish,
+`remote` for an execution target's settings, `unsupported` when execution would
+refuse a synced thinking choice, or `execution-unavailable` when its saved
+placement cannot be read. Reads never start discovery, inspect harness
+files or start a process. Other types can omit `resolved`.
+These are current selections, not proof of an active turn's model or effort.
+Per-conversation choices and existing sessions can differ.
 An invalid field has `source: "unavailable"`. A type without this read contract,
 an unreadable synced config, or an agent hosted elsewhere has
 `modelSettings: { unavailable: "…" }`, even when its instructions are readable.
 The type owns the projection through `AgentType.readModelSettings`; the service
 does not expose its config or infer settings from the type's name or summary.
+Plugins can feature-detect `ctx.agents.readModelSettings(agentKey)` to read the
+same safe metadata for a local membership, including one that runs on an execution
+target. It returns `modelSettings` directly, or `{ unavailable: "…" }` when the
+membership or settings are unavailable here. It does not read another device's
+defaults or alter agent settings. Named reads, lists and plugin reads share the
+same projection. See [the plugin contract](plugin-architecture.md#agent-model-selections).
 
 `team_read` returns the teams Your teams shows in that community, by id or
 exact name, or all of them: name, instructions, members, whether the team syncs
@@ -625,6 +641,52 @@ wake left in the same conversation would end with it or stay queued behind it.
 Then the wake's run
 goes on, and only what it sends is posted. Pi still waits for the wake, so a
 run of its own that fails fails what is queued behind it too, which reports it.
+
+Plugins can pass guard options to `ctx.agents.wake` when the host advertises
+support. Check the flag strictly before calling; older JavaScript hosts can
+ignore extra arguments and enqueue an unguarded wake. Never send a wake as a
+capability probe.
+
+```ts
+if (ctx.agents.supportsGuardedWake === true) {
+  const result = await ctx.agents.wake(agentKey, wake, {
+    signal: controller.signal,
+    current: () => workIsStillCurrent(),
+  });
+  if (result.status === "dropped") {
+    // No input was handed to the prompt/steer transport.
+  }
+}
+```
+
+It uses the same queue, destination and plugin-data framing as `wake`.
+The synchronous `current` predicate must return `true`. The host checks it at
+admission, after queue waits, and immediately before prompt or steering handoff.
+A thrown predicate fails closed. The host also checks plugin lifetime, agent
+identity, community session, destination membership and the owner's read access.
+A predicate cannot grant access or override Stop.
+
+The result is `{ status: "delivered" }` at the final guarded handoff to the
+runner's prompt/steer transport. This is neither an early queue acknowledgement
+nor proof of model consumption, task completion, or a durable receipt. Once input
+has been handed off, cancellation cannot retract it. A dropped result has
+`status: "dropped"` and a `reason`: `aborted` for caller cancellation, `stale` for
+a false predicate, `guard-error` for a thrown predicate, `unavailable` for a lost
+host binding or authority, or `refused` for a full queue or a harness that ends
+without handoff or does not support guarded wakes. Invalid wake or guard
+arguments throw synchronously.
+Two-argument calls still return `void` and throw on an unavailable agent or
+full queue. Plugins must
+choose their own fallback when the support flag is absent.
+The guard and result are local and are not saved across shutdown. Dropped guarded
+wakes have no retry action that could bypass the original guard.
+
+Harness authors opt in with `AgentType.supportsGuardedWake: true` only when every
+prompt/steer path checks `Delivery.current()` and `signal` after waits, immediately
+before handoff, and calls `Delivery.accepted()` at that handoff. Without this
+explicit support, a guarded wake returns `dropped/refused` before queue admission
+and never invokes `run`. Ordinary wakes still work. The bundled Claude Code,
+Codex, goose and Pi harnesses support this contract.
 
 An agent hands off to itself in another of its conversations with the
 `self_handoff` tool, which takes a channel, a thread and text. The tool requires

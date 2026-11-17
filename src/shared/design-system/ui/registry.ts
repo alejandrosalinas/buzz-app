@@ -390,6 +390,21 @@ export const COMPONENTS: readonly ComponentDefinition[] = [
     composes: ["field", "radio-group"],
   },
   {
+    slug: "badge",
+    name: "Badge",
+    purpose:
+      "Present concise, non-interactive metadata such as a search result’s Best match label.",
+    behavior:
+      "XS text capsule with neutral and success tones. Not focusable or interactive.",
+    variants: ["xs neutral", "xs success"],
+    status: "proposed",
+    collection: "components",
+    owner: "Global search",
+    source: "shared/design-system/ui/Badge.tsx",
+    baseUi: [],
+    composes: [],
+  },
+  {
     slug: "count-badge",
     name: "CountBadge",
     purpose:
@@ -498,6 +513,7 @@ export const COMPONENTS: readonly ComponentDefinition[] = [
       "ghost",
       "destructive",
       "outline",
+      "outline-subtle: standard border for quiet secondary actions",
       "attention (proposed): light dashed danger outline with slow marching ants",
       "glass",
       "glass-ghost (proposed): quiet artwork control with glass hover/open states",

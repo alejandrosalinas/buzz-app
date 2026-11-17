@@ -67,7 +67,6 @@ export function createUpdates(platform: UpdatePlatform = tauriPlatform) {
   let installInFlight = false;
   let manualResultRequested = false;
   let inlineViews = 0;
-  let noticeDismissed = false;
   let noticeRecovery = false;
   const listeners = new Set<() => void>();
   const notify = () => {
@@ -76,8 +75,6 @@ export function createUpdates(platform: UpdatePlatform = tauriPlatform) {
   const setStatus = (next: UpdateStatus) => {
     status = next;
     if (next.state === "ready") noticeRecovery = false;
-    if (next.state !== "ready" && next.state !== "installing")
-      noticeDismissed = false;
     notify();
   };
 
@@ -185,13 +182,10 @@ export function createUpdates(platform: UpdatePlatform = tauriPlatform) {
       };
     },
     inlineVisible: () => inlineViews > 0,
-    /** The ready notice stays dismissed across remounts until the update resolves. */
     dismissNotice() {
-      noticeDismissed = true;
       noticeRecovery = false;
       notify();
     },
-    noticeDismissed: () => noticeDismissed,
     /** Keep failed installs and their retry results reachable outside Settings. */
     noticeRecovery: () => noticeRecovery,
     checkForUpdate: () => runCheck(false),

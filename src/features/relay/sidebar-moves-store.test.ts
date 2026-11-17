@@ -44,6 +44,9 @@ async function setup() {
               {
                 id: intent.createSection.id,
                 name: intent.createSection.name,
+                ...(intent.createSection.icon
+                  ? { icon: intent.createSection.icon }
+                  : {}),
                 order: -1,
               },
               ...data.sections,
@@ -175,6 +178,7 @@ it.each([undefined, "first"] as const)(
     const section = {
       id: "12345678-1234-1234-1234-123456789abc",
       name: "Launch",
+      icon: "📚",
       ...(position ? { position } : {}),
     };
     try {
@@ -184,6 +188,13 @@ it.each([undefined, "first"] as const)(
         section.id,
       );
       expect(h.prefs.snapshot().data?.assignments.alpha).toBe(section.id);
+      expect(
+        h.prefs.snapshot().data?.sections.at(position ? 0 : -1),
+      ).toMatchObject({
+        id: section.id,
+        name: section.name,
+        icon: section.icon,
+      });
       expect(h.prefs.snapshot().data?.starred).toEqual([]);
       await flush();
       gate.reject(new Error("offline"));
@@ -596,6 +607,7 @@ it("creates an empty section through the queued writer without altering stars or
   const section = {
     id: "12345678-1234-1234-1234-123456789abc",
     name: "Launch",
+    icon: ":launch:",
   };
   try {
     expect(h.prefs.sectionCreationWritable).toBe(true);
@@ -628,7 +640,7 @@ it("refreshes an accepted creation before reporting a lost response, superseding
   });
   h.read.mockImplementationOnce(() => stale.promise);
   const oldRefresh = h.prefs.refresh();
-  const section = { id: "accepted", name: "Launch" };
+  const section = { id: "accepted", name: "Launch", icon: "📚" };
   try {
     await expect(h.prefs.createSection(section)).rejects.toThrow(
       "response lost",
@@ -644,6 +656,57 @@ it("refreshes an accepted creation before reporting a lost response, superseding
     h.owner.dispose();
   }
 });
+
+it.each([{ name: "Renamed", icon: "📚" }, { name: "Launch" }])(
+  "reconciles changed creation state after a lost response: %j",
+  async (remote) => {
+    const h = await setup();
+    const save = h.assignment.getMockImplementation();
+    assert(save);
+    h.assignment.mockImplementationOnce(async (intent) => {
+      await save(intent);
+      throw new Error("response lost");
+    });
+    const section = { id: "accepted", name: "Launch", icon: "📚" };
+    h.readAfterWrite.mockImplementation(async () => {
+      const current = await h.read();
+      const recovered = {
+        ...current,
+        sections: current.sections.map((entry) =>
+          entry.id === section.id
+            ? { id: entry.id, order: entry.order, ...remote }
+            : entry,
+        ),
+      };
+      h.read.mockResolvedValue(recovered);
+      return recovered;
+    });
+    try {
+      // Recovering authoritative preferences is not confirmation of this intent.
+      await expect(h.prefs.createSection(section)).rejects.toThrow(
+        "response lost",
+      );
+      expect(h.prefs.snapshot()).toMatchObject({ status: "ready" });
+      expect(h.prefs.snapshot().data?.sections.at(-1)).toEqual({
+        id: section.id,
+        order: 2,
+        ...remote,
+      });
+      expect(h.prefs.writable).toBe(true);
+      expect(h.prefs.sectionCreationWritable).toBe(true);
+      await h.prefs.refresh();
+      expect(h.prefs.snapshot()).toMatchObject({ status: "ready" });
+      expect(h.prefs.snapshot().data?.sections.at(-1)).toEqual({
+        id: section.id,
+        order: 2,
+        ...remote,
+      });
+      expect(h.assignment).toHaveBeenCalledOnce(); // Never replay the stale creation.
+    } finally {
+      h.owner.dispose();
+    }
+  },
+);
 
 it.each([false, true])(
   "gates new creation until writer reconciliation succeeds (clear cache: %s)",

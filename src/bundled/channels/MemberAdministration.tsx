@@ -288,7 +288,7 @@ export function MemberRow({
   onSendMessage?: (() => void) | undefined;
   messagePending?: boolean | undefined;
   /** Names the conversation in actions: Remove from chat or channel. */
-  place: "chat" | "channel";
+  place: "chat" | "channel" | "DM";
   invitationAction?: ReactNode;
   /** The search highlight, for rows a picker can choose with Enter. */
   highlight?:

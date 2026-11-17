@@ -4,6 +4,7 @@ import {
   validActiveWindow,
   DEFAULT_ACTIVE_WINDOW_SECONDS,
   type SidebarAssignmentIntent,
+  type SidebarSectionEdit,
   type SidebarGroups,
   type SidebarSortMode,
   type SidebarFilterMode,
@@ -33,27 +34,33 @@ export function editSidebarSectionRemoval(
   return editSidebarRecord("channel-sections", current, createdAt, writes, now);
 }
 
-/** Rewrite only the live section's name register; other fields stay untouched. */
+/** Atomically edit only supplied leaves; all other fields stay untouched. */
 export function editSidebarSectionRename(
   current: Record<string, unknown>,
   createdAt: number,
   sectionId: string,
-  name: string,
+  edit: string | SidebarSectionEdit,
   now = Date.now(),
 ): Record<string, unknown> {
   const sections = projectSidebarRecord("channel-sections", current)
     .sections as SidebarGroups["sections"];
   const section = sections.find(({ id }) => id === sectionId);
   if (!section) throw new Error("Sidebar section no longer exists");
-  const next = name.trim();
-  if (section.name === next) return current;
-  return editSidebarRecord(
-    "channel-sections",
-    current,
-    createdAt,
-    [[["s", sectionId, "name"], next]],
-    now,
-  );
+  const changes = typeof edit === "string" ? { name: edit } : edit;
+  const writes: [string[], unknown][] = [];
+  if (changes.name !== undefined) {
+    const next = changes.name.trim();
+    if (section.name !== next) writes.push([["s", sectionId, "name"], next]);
+  }
+  if (
+    changes.icon !== undefined &&
+    (changes.icon === null
+      ? section.icon !== undefined
+      : section.icon !== changes.icon)
+  )
+    writes.push([["s", sectionId, "icon"], changes.icon]);
+  if (!writes.length) return current;
+  return editSidebarRecord("channel-sections", current, createdAt, writes, now);
 }
 
 /** Requested live sections first, then unlisted live ones; every order is restamped. */
@@ -96,6 +103,8 @@ export function validSidebarAssignment(
       (sectionId === undefined &&
         /^[0-9a-f]{8}(-[0-9a-f]{4}){3}-[0-9a-f]{12}$/.test(createSection.id) &&
         validSidebarChannelId(createSection.name) &&
+        (createSection.icon === undefined ||
+          validSidebarSectionIcon(createSection.icon)) &&
         (createSection.position === undefined ||
           createSection.position === "first")))
   );
@@ -105,11 +114,22 @@ export function validSidebarSectionRemoval(sectionId: string): boolean {
   return validSidebarChannelId(sectionId);
 }
 
+export function validSidebarSectionIcon(icon: unknown): boolean {
+  return typeof icon === "string" && !!icon.trim() && icon.length <= 128;
+}
+
 export function validSidebarSectionRename(
   sectionId: string,
-  name: string,
+  name?: unknown,
+  icon?: unknown,
 ): boolean {
-  return validSidebarChannelId(sectionId) && validSidebarChannelId(name);
+  return (
+    validSidebarChannelId(sectionId) &&
+    (name !== undefined || icon !== undefined) &&
+    (name === undefined ||
+      (typeof name === "string" && validSidebarChannelId(name))) &&
+    (icon === undefined || icon === null || validSidebarSectionIcon(icon))
+  );
 }
 
 export function validSidebarSectionOrder(
@@ -168,13 +188,21 @@ export function editSidebarAssignment(
   if (createSection) {
     const name = createSection.name.trim();
     const found = sections.find((entry) => entry.id === section);
-    // Retrying an unknown publication retains the ID, never duplicates or renames.
-    if (found && found.name !== name)
+    // Retrying an unknown publication retains the ID, never duplicates or edits it.
+    // Legacy name-only retries deliberately preserve an icon learned meanwhile.
+    if (
+      found &&
+      (found.name !== name ||
+        (createSection.icon !== undefined && found.icon !== createSection.icon))
+    )
       throw new Error("The new section changed; reload and try again");
     if (!found)
       sections.push({
         id: createSection.id,
         name,
+        ...(createSection.icon === undefined
+          ? {}
+          : { icon: createSection.icon }),
         order: nextSidebarSectionOrder(current, createSection.position),
       });
   }
@@ -187,7 +215,7 @@ export function editSidebarAssignment(
     if (!added) throw new Error("Sidebar group no longer exists");
     writes.push(
       [["s", added.id, "name"], added.name],
-      [["s", added.id, "icon"], null],
+      [["s", added.id, "icon"], added.icon ?? null],
       [["s", added.id, "order"], added.order],
       [["s", added.id, "live"], true],
     );

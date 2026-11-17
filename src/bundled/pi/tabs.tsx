@@ -300,9 +300,8 @@ export function createTabs({
           models={models.value ?? []}
           loading={models.status === "loading"}
           value={value.model}
-          defaultLabel={
-            modelDefault ? `Pi default (${modelDefault})` : "Pi default"
-          }
+          defaultModel={modelDefault}
+          defaultLabel={modelDefault || "Pi default"}
           {...(models.status === "error"
             ? { description: `Could not list models: ${models.error}` }
             : missing && id && !unknown

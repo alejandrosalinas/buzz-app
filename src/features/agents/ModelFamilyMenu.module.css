@@ -1,5 +1,4 @@
-/* Reserve the inheritance marker; the model name and effort level share the
-   remaining space without painting over one another. */
+/* The model label and effort level share the available space. */
 .value {
   display: flex;
   align-items: center;

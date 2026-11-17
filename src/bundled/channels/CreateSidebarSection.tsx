@@ -8,6 +8,9 @@ import {
 import { Button } from "../../shared/design-system/ui/Button";
 import { Dialog } from "../../shared/design-system/ui/Dialog";
 import { Input } from "../../shared/design-system/ui/Input";
+import type { RelaySession } from "../../features/relay/session";
+import type { SidebarSectionDraft } from "../../features/relay/sidebar-preferences";
+import { SidebarSectionEmojiInput } from "./SidebarSectionEmojiInput";
 
 /**
  * Removing the focused Retry button leaves focus on the page or the dialog
@@ -30,11 +33,15 @@ export function CreateSidebarSection({
   writable,
   refreshing,
   retry,
+  session,
+  scope,
   finalFocus = false,
 }: {
   channelName?: string | undefined;
+  session: Pick<RelaySession, "emoji" | "media">;
+  scope: string;
   /** True only after the session accepts the move or confirms empty creation. */
-  create: (section: { id: string; name: string }) => boolean | Promise<boolean>;
+  create: (section: SidebarSectionDraft) => boolean | Promise<boolean>;
   close: () => void;
   writable: boolean;
   refreshing: boolean;
@@ -44,8 +51,9 @@ export function CreateSidebarSection({
   const formId = useId();
   const input = useRef<HTMLInputElement>(null);
   const [name, setName] = useState("");
+  const [icon, setIcon] = useState("");
   const submitted = useRef(false);
-  const section = useRef<{ id: string; name: string } | undefined>(undefined);
+  const section = useRef<SidebarSectionDraft | undefined>(undefined);
   const [pending, setPending] = useState(false);
   const [error, setError] = useState("");
   const [focusRequest, setFocusRequest] = useState(0);
@@ -71,6 +79,7 @@ export function CreateSidebarSection({
     const attempt = section.current ?? {
       id: crypto.randomUUID(),
       name: name.trim(),
+      ...(icon ? { icon } : {}),
     };
     setPending(true);
     setError("");
@@ -123,17 +132,25 @@ export function CreateSidebarSection({
           void submit();
         }}
       >
-        <Input
-          ref={input}
-          aria-label="Section name"
-          aria-describedby={error || needsRecovery ? errorId : undefined}
-          placeholder="Section name"
-          required
-          readOnly={pending || !!section.current}
-          maxLength={256}
-          value={name}
-          onChange={(event) => setName(event.target.value)}
-        />
+        <SidebarSectionEmojiInput
+          session={session}
+          scope={scope}
+          icon={icon}
+          onIconChange={setIcon}
+          disabled={pending || !!section.current}
+        >
+          <Input
+            ref={input}
+            aria-label="Section name"
+            aria-describedby={error || needsRecovery ? errorId : undefined}
+            placeholder="Section name"
+            required
+            readOnly={pending || !!section.current}
+            maxLength={256}
+            value={name}
+            onChange={(event) => setName(event.target.value)}
+          />
+        </SidebarSectionEmojiInput>
       </form>
       {(error || needsRecovery) && (
         <div id={errorId} role="alert">

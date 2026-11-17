@@ -79,7 +79,10 @@ export function QueuedFollowUps({
           <li key={entry.id} className={styles.row}>
             <div className={styles.content}>
               <QueuePreview
-                text={entry.text || "Attachment"}
+                text={
+                  entry.text ||
+                  (entry.message?.forward ? "Forwarded message" : "Attachment")
+                }
                 onFocus={() => {
                   focused.current = { id: entry.id, action: "preview" };
                 }}

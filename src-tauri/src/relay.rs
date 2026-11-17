@@ -925,7 +925,7 @@ pub(crate) async fn relay_http(
                 serde_json::from_str(body.as_deref().ok_or("Invalid relay request body")?)
                     .map_err(|_| "Invalid relay request body")?;
             let kind = event.get("kind").and_then(serde_json::Value::as_u64);
-            if matches!(kind, Some(41010)) {
+            if matches!(kind, Some(41010 | 41011)) {
                 return Err("Choose between one and eight other people.".into());
             }
             if kind == Some(30078) {

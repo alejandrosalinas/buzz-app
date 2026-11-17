@@ -1032,7 +1032,8 @@ scrollTest(
       release = resolve;
     });
     let decodes = 0;
-    await page.route("**/sidebar-preferences", async (route) => {
+    // Other communities can warm in the background; this return reuses Primary.
+    await page.route("**/primary/sidebar-preferences", async (route) => {
       decodes++;
       await held;
       await route.continue();
@@ -1085,7 +1086,7 @@ scrollTest(
       ).toBe(0);
     } finally {
       release();
-      await page.unroute("**/sidebar-preferences");
+      await page.unrouteAll({ behavior: "wait" });
     }
   },
 );

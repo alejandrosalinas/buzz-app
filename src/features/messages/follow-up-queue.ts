@@ -1052,7 +1052,11 @@ function createQueue(session: RelaySession) {
         cancel,
         async save(text: string) {
           if (closed) throw new Error("This edit is no longer available.");
-          if (!text.trim() && !entry.message?.attachments.length)
+          if (
+            !text.trim() &&
+            !entry.message?.attachments.length &&
+            !entry.message?.forward
+          )
             throw new Error("Enter a message or keep an attachment.");
           await storage.lock(id, async () => {
             if (closed) throw new Error("This edit is no longer available.");

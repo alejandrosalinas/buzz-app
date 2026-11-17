@@ -135,6 +135,35 @@ it("Active fetches activity independently of sort and shares Recent's demand lif
     h.owner.dispose();
   }
 });
+it("reads activity while a caller demands it, without an activity sort or filter", async () => {
+  const h = setup();
+  try {
+    await h.initial();
+    expect(h.activity).not.toHaveBeenCalled();
+    const release = h.channels.demandActivity?.();
+    assert(release);
+    expect(h.activity).toHaveBeenCalledOnce();
+    expect(h.channels.list().activityStatus).toBe("loading");
+    const reading = take(h.pending);
+    expect(reading.ids).toEqual(["alpha", "beta"]);
+    reading.resolve([message(h.peer, "alpha", "history", 50)]);
+    await flush();
+    const list = h.channels.list();
+    expect(list.activityStatus).toBe("ready");
+    expect(list.channels.find((c) => c.id === "beta")?.activityKnown).toBe(
+      true,
+    );
+    // Released twice: the second is a no-op, and a fresh demand reads again.
+    release();
+    release();
+    const again = h.channels.demandActivity?.();
+    expect(h.activity).toHaveBeenCalledTimes(2);
+    again?.();
+    expect(take(h.pending).signal.aborted).toBe(true);
+  } finally {
+    h.owner.dispose();
+  }
+});
 it.each(["recent", "plugin:example.plugin/rows/oldest"] as const)(
   "%s loads activity on demand, deduplicates reads, and projects verified live activity monotonically",
   async (mode) => {

@@ -1728,8 +1728,10 @@ it("takes a plugin's wake in its thread's session, as the plugin's and not a mes
   const f = setup();
   await f.deliver(root);
   await flush(100);
-  await f.run(pluginWake(root.id));
+  const accepted = vi.fn();
+  await f.run(pluginWake(root.id), { accepted });
   await flush(100);
+  expect(accepted).toHaveBeenCalledOnce();
   const goose = f.goose();
   expect(goose?.turns).toHaveLength(2);
   expect(goose?.turns[1]?.sessionId).toBe(goose?.turns[0]?.sessionId);

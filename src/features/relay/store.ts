@@ -3566,6 +3566,7 @@ export function createChannelStore(
         archived: hasTag(event, "archived", "true"),
         joined: false,
         readable: false,
+        ...(state.withheld.has(id) ? { answered: true as const } : {}),
         ...(looking ? { looking: true as const } : {}),
       };
     }

@@ -1267,7 +1267,7 @@
         4.6, 9.4
       ],
       "PageUp from a message link preserves native scroll ownership": [4.2, 8],
-      "Todos stacks beside threads and linked panels in either opening order": [
+      "a side panel stacks beside threads and linked panels in either opening order": [
         11.1, 21
       ],
       "a focused message stays mounted until focus leaves the timeline": [
@@ -3079,11 +3079,6 @@
         0.3, 0.6
       ]
     },
-    "tests/browser/todos.spec.mjs": {
-      "opt-in Todos saves ordinary Canvas and disabling leaves it editable": [
-        16, 26.3
-      ]
-    },
     "tests/browser/typeahead.spec.mjs": {
       "a later emoji trigger wins after a mention without discarding recipient intent": [
         5.4, 2.5
@@ -3341,7 +3336,6 @@
     "src/app/settings-sections.test.ts": 0,
     "src/app/shell/AppShell.test.tsx": 5.6,
     "src/app/shell/BestieNavigation.test.tsx": 1.9,
-    "src/app/shell/ChannelDirectoryResults.test.tsx": 3.8,
     "src/app/shell/CommunityShortcuts.test.tsx": 0,
     "src/app/shell/LaunchWindowControls.test.tsx": 0.3,
     "src/app/shell/MarkAllReadShortcut.test.tsx": 0.5,
@@ -3617,8 +3611,6 @@
     "src/bundled/terminal/bridge.test.ts": 0,
     "src/bundled/terminal/index.test.ts": 0,
     "src/bundled/terminal/sessions.test.ts": 0.2,
-    "src/bundled/todos/TodosPanel.test.tsx": 11.5,
-    "src/bundled/todos/model.test.ts": 0.2,
     "src/bundled/typesafe/TypeSafeSettings.test.tsx": 0.5,
     "src/bundled/typesafe/index.test.ts": 0,
     "src/bundled/usage/UsagePage.test.tsx": 6.2,

@@ -404,18 +404,23 @@ test("opening Save keeps the active textarea line above the footer", async ({
 // Real flex geometry and clipping are the contract; jsdom cannot detect text
 // painting over adjacent effort labels in a constrained model trigger.
 test("card model and effort labels do not overlap", async ({ page }) => {
-  for (const model of ["gpt-6-sol", "gpt-6-sol-extended-context-preview"]) {
+  for (const [model, pinned] of [
+    ["gpt-6-sol", true],
+    ["gpt-6-sol-extended-context-preview", true],
+    ["gpt-6-sol-extended-context-preview", false],
+  ]) {
     await page.goto(
-      `/tests/fixtures/agent-library.html?inheritedModel=${model}`,
+      `/tests/fixtures/agent-library.html?inheritedModel=${model}${pinned ? "&pinned" : ""}`,
     );
     const trigger = page
       .getByRole("gridcell", { name: "Ada", exact: true })
       .getByRole("button", {
-        name: `Model: ${model} · Default, Automatic`,
+        name: `Model: ${pinned ? model : `${model} · Default`}, Automatic`,
         exact: true,
       });
     await expect(trigger).toBeVisible();
-    await expect(trigger).not.toHaveText(/Default/);
+    if (pinned) await expect(trigger).not.toHaveText(/Default/);
+    else await expect(trigger).toHaveText(`${model} · DefaultAutomatic`);
     for (const theme of ["light", "dark"]) {
       for (const width of [390, 800, 1280]) {
         await page.setViewportSize({ width, height: 950 });
@@ -435,6 +440,7 @@ test("card model and effort labels do not overlap", async ({ page }) => {
             const model = button.querySelector(".buzz-select-value");
             const effort = button.querySelector(".text-body-sm");
             const content = model.parentElement;
+            const source = button.querySelector(".buzz-select-value-suffix");
             const caret = [...button.querySelectorAll("svg")].at(-1);
             return {
               effortAfterModel:
@@ -443,6 +449,13 @@ test("card model and effort labels do not overlap", async ({ page }) => {
               contentBeforeCaret:
                 content.getBoundingClientRect().right <=
                 caret.getBoundingClientRect().left + 0.5,
+              sourceVisible:
+                !source ||
+                (source.getBoundingClientRect().width > 0 &&
+                  source.getBoundingClientRect().left >=
+                    model.getBoundingClientRect().right - 0.5 &&
+                  source.getBoundingClientRect().right <=
+                    effort.getBoundingClientRect().left + 0.5),
               contained: getComputedStyle(content).overflow === "hidden",
               modelTruncates:
                 getComputedStyle(model).textOverflow === "ellipsis",
@@ -456,6 +469,7 @@ test("card model and effort labels do not overlap", async ({ page }) => {
           ).toEqual({
             effortAfterModel: true,
             contentBeforeCaret: true,
+            sourceVisible: true,
             contained: true,
             modelTruncates: true,
             effortTruncates: true,

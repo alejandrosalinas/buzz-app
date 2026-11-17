@@ -188,6 +188,7 @@ it("gives agents a github_link_pr tool for the Solo chat they work in", async ()
       relay: () => relay,
     },
     inject,
+    provide: () => {},
   } as never);
   const client = {
     key: "a".repeat(64),

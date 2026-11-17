@@ -803,9 +803,7 @@ it("applies provider precedence without rewriting records and falls back for inc
   await f.provider.saveDefaults({ model: "model-b", effort: "medium" });
   render(<f.tabs.SettingsTab {...f.props()} />);
   await waitFor(() =>
-    expect(screen.getByRole("combobox", { name: "Model" })).toHaveTextContent(
-      "Model B · Default",
-    ),
+    expect(screen.getByTitle("Model B · Default")).toBeVisible(),
   );
   // Inheriting a saved provider preference is a default, not a recommendation.
   expect(screen.getByLabelText("Thinking")).toHaveTextContent(
@@ -818,6 +816,114 @@ it("applies provider precedence without rewriting records and falls back for inc
   const invalid = new CodexProvider(f.spawn, localStore());
   expect(invalid.resolve(defaults)).toEqual(defaults);
 });
+it("reads current defaults and mixed overrides through the provider resolver without discovery", async () => {
+  const f = fixture();
+  const read = (raw: unknown = defaults) => f.provider.readModelSettings(raw);
+  expect(read().model).toEqual({
+    source: "default",
+    resolved: { unavailable: "not-loaded" },
+  });
+  expect(f.spawn).not.toHaveBeenCalled();
+  await f.provider.check();
+  expect(read()).toEqual({
+    model: {
+      source: "default",
+      resolved: { value: "model-a", source: "provider" },
+    },
+    effort: {
+      source: "default",
+      resolved: { value: "low", source: "provider" },
+    },
+  });
+  await f.provider.saveDefaults({ model: "model-b", effort: "medium" });
+  expect(read()).toEqual({
+    model: {
+      source: "default",
+      resolved: { value: "model-b", source: "device" },
+    },
+    effort: {
+      source: "default",
+      resolved: { value: "medium", source: "device" },
+    },
+  });
+  expect(read({ ...defaults, effort: "high" })).toEqual({
+    model: {
+      source: "default",
+      resolved: { value: "model-b", source: "device" },
+    },
+    effort: {
+      source: "configured",
+      value: "high",
+      resolved: { value: "medium", source: "provider" },
+    },
+  });
+  expect(read({ ...defaults, model: "model-a" })).toEqual({
+    model: {
+      source: "configured",
+      value: "model-a",
+      resolved: { value: "model-a", source: "configured" },
+    },
+    effort: {
+      source: "default",
+      resolved: { value: "low", source: "provider" },
+    },
+  });
+  expect(
+    read({ ...defaults, model: "model-a", effort: "high" }).effort,
+  ).toEqual({
+    source: "configured",
+    value: "high",
+    resolved: { value: "high", source: "configured" },
+  });
+  const calls = f.spawn.mock.calls.length;
+  expect(
+    f.provider.readModelSettings(defaults, { execution: "remote" }).model,
+  ).toEqual({ source: "default", resolved: { unavailable: "remote" } });
+  expect(
+    f.provider.readModelSettings(defaults, { execution: "unavailable" }).effort,
+  ).toEqual({
+    source: "default",
+    resolved: { unavailable: "execution-unavailable" },
+  });
+  expect(f.spawn).toHaveBeenCalledTimes(calls);
+});
+
+it("reads a changed provider catalog default and reports a failed source honestly", async () => {
+  const f = fixture();
+  await f.provider.check();
+  const spawn = f.spawn.getMockImplementation();
+  if (!spawn) throw new Error("Missing host fixture");
+  f.spawn.mockImplementation((id, options) =>
+    spawn(id, {
+      ...options,
+      onStdout: (data) => {
+        if (id === "codex") return options?.onStdout?.(data);
+        const wire = JSON.parse(data);
+        if (Array.isArray(wire.result?.data))
+          for (const row of wire.result.data)
+            row.isDefault = row.model === "model-b";
+        options?.onStdout?.(`${JSON.stringify(wire)}\n`);
+      },
+    }),
+  );
+  await f.provider.check();
+  expect(f.provider.readModelSettings(defaults)).toMatchObject({
+    model: {
+      source: "default",
+      resolved: { value: "model-b", source: "provider" },
+    },
+    effort: {
+      source: "default",
+      resolved: { value: "medium", source: "provider" },
+    },
+  });
+  f.disk.signedIn = false;
+  await f.provider.check();
+  expect(f.provider.readModelSettings(defaults).model).toEqual({
+    source: "default",
+    resolved: { unavailable: "unknown" },
+  });
+});
 it("selects a model in the Settings dropdown without changing local Codex preferences", async () => {
   const configured = { model: "model-b", model_reasoning_effort: "high" };
   const f = fixture({ configured });
@@ -825,7 +931,7 @@ it("selects a model in the Settings dropdown without changing local Codex prefer
   render(<f.tabs.DefaultControl onConfigure={vi.fn()} />);
   const user = userEvent.setup();
   const control = screen.getByRole("button", { name: /^Codex default model:/ });
-  expect(control).toHaveTextContent("Model A");
+  expect(control).toHaveTextContent("Default");
   expect(control).toHaveTextContent("Automatic");
   await user.click(control);
   fireEvent.click(await screen.findByRole("menuitem", { name: "Other" }));
@@ -903,7 +1009,7 @@ it("shows a provider model recheck inside a focusable inactive picker", async ()
   await f.provider.check();
   render(<f.tabs.DefaultControl onConfigure={vi.fn()} />);
   const picker = screen.getByRole("button", { name: /^Codex default model:/ });
-  expect(picker).toHaveTextContent("Model A");
+  expect(picker).toHaveTextContent("Default");
   const spawn = f.spawn.getMockImplementation();
   if (!spawn) throw new Error("Missing host fixture");
   const listed = deferred<void>();
@@ -935,7 +1041,7 @@ it("shows a provider model recheck inside a focusable inactive picker", async ()
   await act(() => checked);
   await waitFor(() => expect(picker).toBeEnabled());
   expect(picker).not.toHaveAttribute("aria-disabled", "true");
-  expect(picker).toHaveTextContent("Model A");
+  expect(picker).toHaveTextContent("Default");
 });
 it("keeps model-default provider thinking dynamic across save and reopen", async () => {
   const f = fixture();
@@ -975,7 +1081,8 @@ it("shows the recommended model and default thinking despite different local Cod
   });
   render(<f.tabs.SettingsTab {...f.props()} />);
   await waitFor(() => expect(screen.getByLabelText("Model")).toBeEnabled());
-  expect(screen.getByLabelText("Model")).toHaveTextContent("Model A");
+  expect(screen.getByLabelText("Model")).toHaveTextContent("Default");
+  expect(screen.getByTitle("Model A · Default")).toBeVisible();
   expect(screen.getByLabelText("Thinking")).toHaveTextContent("Low");
 });
 it("loads model/effort choices and saves only after a validated workspace, holding the saving state", async () => {
@@ -985,16 +1092,16 @@ it("loads model/effort choices and saves only after a validated workspace, holdi
   render(<f.tabs.SettingsTab {...f.props(defaults, save)} />);
   await waitFor(() => expect(screen.getByLabelText("Model")).toBeEnabled());
   expect(screen.queryByText("Model A description.")).not.toBeInTheDocument();
-  expect(screen.getByLabelText("Model")).toHaveTextContent("Model A · Default");
+  expect(screen.getByLabelText("Model")).toHaveTextContent("Default");
   expect(screen.getByLabelText("Thinking")).toHaveTextContent("Low · Default");
   const user = userEvent.setup();
   await user.click(screen.getByRole("combobox", { name: "Model" }));
   expect(
     await screen.findByRole("option", {
-      name: "Model A · Default",
-      description: "Model A description.",
+      name: "Default",
+      description: "Currently Model A",
     }),
-  ).toHaveAccessibleDescription("Model A description.");
+  ).toHaveAccessibleDescription("Currently Model A");
   const model = await screen.findByRole("option", { name: "Model B" });
   expect(model).toHaveAccessibleDescription("Model B description.");
   await user.click(model);
@@ -1114,8 +1221,8 @@ it("renders provider, model, and thinking as direct settings inputs", async () =
   await user.click(modelControl);
   await user.click(
     await screen.findByRole("option", {
-      name: "Model A · Default",
-      description: "Model A description.",
+      name: "Default",
+      description: "Currently Model A",
     }),
   );
   expect(screen.getByLabelText("Thinking")).toHaveTextContent("Low · Default");
@@ -1195,6 +1302,33 @@ it("preserves unavailable saved choices and closes a late provider check on disp
   await pending;
 });
 
+it("can pin the current default Codex model when creating an agent", async () => {
+  const f = fixture();
+  const onChange = vi.fn();
+  render(
+    <f.tabs.CreateModel
+      config={defaults}
+      onChange={onChange}
+      disabled={false}
+    />,
+  );
+  const picker = await screen.findByRole("combobox", { name: "Model" });
+  await waitFor(() => expect(picker).toBeEnabled());
+  const user = userEvent.setup();
+  await user.click(picker);
+  expect(
+    await screen.findByRole("option", { name: "Default" }),
+  ).toHaveAttribute("aria-selected", "true");
+  const pinned = screen.getByRole("option", { name: "Model A" });
+  expect(pinned).toHaveAttribute("aria-selected", "false");
+  await user.click(pinned);
+  expect(onChange).toHaveBeenCalledExactlyOnceWith({
+    ...defaults,
+    model: "model-a",
+    effort: "low",
+  });
+});
+
 it("starts a new agent from a model and instructions, keeping the rest", async () => {
   const f = fixture();
   const config = {
@@ -1238,8 +1372,8 @@ it("starts a new agent from a model and instructions, keeping the rest", async (
   await user.click(await screen.findByRole("combobox", { name: "Model" }));
   await user.click(
     await screen.findByRole("option", {
-      name: "Model A · Default",
-      description: "Model A description.",
+      name: "Default",
+      description: "Currently Model A",
     }),
   );
   expect(onChange).toHaveBeenLastCalledWith({
@@ -1754,9 +1888,7 @@ it("keeps discovery alive for remaining cards and shares a retry after failure",
   view.rerender(cards(1));
   held.release();
   await waitFor(() =>
-    expect(screen.getByRole("combobox", { name: "Model" })).toHaveTextContent(
-      "Model A",
-    ),
+    expect(screen.getByTitle("Model A · Default")).toBeVisible(),
   );
   expect(f.processes).toHaveLength(1);
   view.unmount();
@@ -1825,7 +1957,7 @@ it("replaces sign-in with available models after Codex login succeeds", async ()
   await waitFor(() => {
     const models = screen.getAllByRole("combobox", { name: "Model" });
     expect(models).toHaveLength(2);
-    for (const model of models) expect(model).toHaveTextContent("Model A");
+    for (const model of models) expect(model).toHaveTextContent("Default");
   });
   expect(
     screen.queryByRole("button", { name: "Sign in" }),
@@ -1874,7 +2006,7 @@ it("lists models without a sign-in when the model provider needs no OpenAI accou
   );
   expect(
     await screen.findByRole("combobox", { name: "Model" }),
-  ).toHaveTextContent("Model A");
+  ).toHaveTextContent("Default");
   expect(screen.queryByRole("button", { name: "Sign in" })).toBeNull();
   expect(f.provider.snapshot().readiness).toBe("ready");
 });
@@ -1911,7 +2043,7 @@ it("offers to install Codex from its card when Buzz has no copy", async () => {
   await act(() => f.provider.check());
   expect(
     await screen.findByRole("combobox", { name: "Model" }),
-  ).toHaveTextContent("Model A");
+  ).toHaveTextContent("Default");
   expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
 });
 
@@ -1985,7 +2117,8 @@ it("moves the card from Install integration to Sign in once the install succeeds
   expect(model).toBeDisabled();
   expect(model).not.toHaveFocus();
   loading.resolve();
-  await waitFor(() => expect(model).toHaveTextContent("Model A"));
+  await waitFor(() => expect(model).toBeEnabled());
+  expect(within(model).getByTitle("Model A · Default")).toBeVisible();
   // The dialog left with setup; its focus moves to the model field once it
   // can take it.
   await waitFor(() => expect(model).toHaveFocus());
@@ -2170,12 +2303,12 @@ it.each(["Identity", "Settings"])(
   },
 );
 
-it("keeps the recommended model inherited when only effort changes", async () => {
+it("pins the named model when choosing its effort from the defaults menu", async () => {
   const f = fixture();
   await f.provider.check();
   render(<f.tabs.DefaultControl onConfigure={vi.fn()} />);
   const control = screen.getByRole("button", { name: /^Codex default model:/ });
-  expect(control).toHaveTextContent("Model A · Default");
+  expect(control).toHaveTextContent("Default");
   fireEvent.click(control);
   fireEvent.click(await screen.findByRole("menuitem", { name: "Other" }));
   fireEvent.click(
@@ -2184,7 +2317,7 @@ it("keeps the recommended model inherited when only effort changes", async () =>
   fireEvent.click(await screen.findByRole("menuitemradio", { name: "High" }));
   await waitFor(() =>
     expect(f.provider.snapshot().defaults).toMatchObject({
-      model: "",
+      model: "model-a",
       effort: "high",
     }),
   );
@@ -2425,6 +2558,9 @@ it("keeps remote settings read-only without opening a model catalog", async () =
   );
   const user = userEvent.setup();
   await user.click(screen.getByRole("combobox", { name: "Model" }));
+  expect(
+    await screen.findByRole("option", { name: "Default" }),
+  ).toHaveAccessibleDescription("Follows the target computer's settings");
   expect(
     await screen.findByRole("option", { name: /Custom model/ }),
   ).toBeVisible();
@@ -2726,15 +2862,33 @@ describe("Recommended", () => {
     const saved = { ...defaults, preset: "recommended" as const };
     // Until the catalog is read it runs on the device's default.
     expect(f.provider.recommended()).toBeUndefined();
+    expect(f.provider.readModelSettings(saved).model).toEqual({
+      source: "recommended",
+      resolved: { unavailable: "not-loaded" },
+    });
     await f.provider.check();
     // Model Z isn't offered, nor Model B on Extra high, so the next
     // candidate, over device defaults.
     expect(f.provider.recommended()).toEqual(candidate);
+    expect(f.provider.readModelSettings(saved)).toEqual({
+      model: {
+        source: "recommended",
+        resolved: { value: "model-b", source: "recommended" },
+      },
+      effort: {
+        source: "recommended",
+        resolved: { value: "medium", source: "recommended" },
+      },
+    });
     // Kept for the launch: a later failed check doesn't move it to the default.
     f.disk.signedIn = false;
     await f.provider.check();
     expect(f.provider.snapshot().readiness).toBe("attention");
     expect(f.provider.recommended()).toEqual(candidate);
+    expect(f.provider.readModelSettings(saved).effort).toEqual({
+      source: "recommended",
+      resolved: { value: "medium", source: "recommended" },
+    });
     f.disk.signedIn = true;
     expect(f.provider.resolve(saved)).toMatchObject({
       model: "model-b",
@@ -2767,6 +2921,13 @@ describe("Recommended", () => {
     await f.provider.saveDefaults({ model: "model-a", effort: "" });
     await f.provider.check();
     expect(f.provider.recommended()).toBeNull();
+    expect(
+      f.provider.readModelSettings({ ...defaults, preset: "recommended" })
+        .model,
+    ).toEqual({
+      source: "recommended",
+      resolved: { value: "model-a", source: "device" },
+    });
     expect(
       f.provider.resolve({ ...defaults, preset: "recommended" }).model,
     ).toBe("model-a");

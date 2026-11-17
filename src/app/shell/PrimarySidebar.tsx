@@ -1,596 +1,230 @@
-import { soloNavigationFor } from "../../features/channel-navigation/solo-navigation";
 import {
-  useEffect,
-  useLayoutEffect,
-  useMemo,
+  createContext,
+  useContext,
+  useCallback,
   useState,
+  useMemo,
   useSyncExternalStore,
   type ReactNode,
 } from "react";
-import { SoloRegions } from "../../features/channel-navigation/SoloRegions";
-import { SoloInventory } from "../../features/channel-navigation/SoloInventory";
-import {
-  sidebarTarget,
-  soloDraft,
-} from "../../features/channel-navigation/routes";
-import { RecoveryNotice } from "../../features/relay/RecoveryNotice";
-import {
-  ChannelInventory,
-  sidebarEntryLocation,
-} from "../../features/channel-navigation/ChannelInventory";
-import { SidebarBoundary } from "../../features/channel-navigation/SidebarBoundary";
+import { OwnedContribution } from "../../plugins/OwnedContribution";
+import { contributionKey } from "../../features/conversation/ContributionBoundary";
+import { resolveSidebarContext } from "../../features/sidebar/contracts";
+import { SidebarContextFrame } from "../../features/sidebar/SidebarContextFrame";
+import { ResizableSidebar } from "../../features/channel-navigation/ResizableSidebar";
 import { SidebarFrame } from "../../features/channel-navigation/SidebarFrame";
 import { SidebarList } from "../../features/channel-navigation/SidebarList";
-import { SidebarSection } from "../../bundled/channels/SidebarSection";
-import { ResizableSidebar } from "../../features/channel-navigation/ResizableSidebar";
-import { SidebarUnread } from "../../bundled/channels/SidebarUnread";
-import { Button } from "../../shared/design-system/ui/Button";
-import type { RelayData } from "../../features/relay/service";
-import type { RelaySession } from "../../features/relay/session";
-import type { Agents } from "../../features/agents/service";
-import type { Navigation } from "../../features/navigation/controller";
-import type { OpenTarget } from "../../features/navigation/targets";
-import { Tabs } from "../../shared/design-system/ui/Tabs";
-import { OwnedContribution } from "../../plugins/OwnedContribution";
-import type {
-  RegisteredSidebarRestriction,
-  SidebarScope,
-} from "../../features/channel-navigation/sidebar-scope-service";
-import styles from "./PrimarySidebar.module.css";
-
-import { useRelayConnection } from "../../features/relay/react";
-import { relayPartition } from "../../features/relay/partition";
-import { targetKey } from "../../features/navigation/targets";
-import { readView, writeView } from "../../shared/view-state";
-import type { ChannelList } from "../../features/relay/contracts";
-import type { ContributionReader } from "../../features/conversation/contracts";
-import type { ChatIcon, ChatMenu } from "../../features/conversation/service";
-import type { SidebarRows } from "../../features/channel-navigation/sidebar-rows-service";
-import type { SidebarSections } from "../../features/channel-navigation/sidebar-sections-service";
 import {
-  CommunityRefusalNotice,
-  CommunitySignIn,
-  issuerMayAnswerAgain,
-} from "../../features/federated-identity/CommunitySignIn";
-import type { FederatedIdentity } from "../../features/federated-identity/service";
-import type { Membership } from "../../features/communities/service";
+  SidebarSectionSources,
+  SidebarSectionSlotView,
+} from "../../features/channel-navigation/SidebarSectionSources";
+import type { SidebarSections } from "../../features/channel-navigation/sidebar-sections-service";
+import type { RegisteredSidebarContext } from "../../features/sidebar/contracts";
+import type {
+  RegisteredSidebarSectionSource,
+  SidebarSectionSource,
+} from "../../features/channel-navigation/sidebar-section-components";
+import type { PagesReader, RegisteredPage } from "../../features/pages/service";
+import type { OpenTarget } from "../../features/navigation/targets";
 
+const emptyContexts: readonly RegisteredSidebarContext[] = [];
+const emptySources: readonly RegisteredSidebarSectionSource[] = [];
 const noSubscription = () => () => {};
-
-const sameConversation = (a: OpenTarget, b: OpenTarget) =>
-  a.kind === "conversation" &&
-  b.kind === "conversation" &&
-  targetKey(a) !== targetKey(b) &&
-  targetKey(sidebarTarget(a)) === targetKey(sidebarTarget(b));
-/** The latest attempt that opened a destination. Moving within the open
- * conversation, as opening or closing a thread does, keeps the previous one,
- * so it renders nothing here; reopening the same target is a new one. A
- * preserved opening applies only to itself, so entering or leaving one is. */
-function destinationAttempt(navigator: Navigation) {
-  let previous = navigator.snapshot();
-  let shown = previous.attempt;
-  return () => {
-    const next = navigator.snapshot();
-    if (
-      next.attempt.id !== previous.attempt.id &&
-      (next.attempt.sidebar !== shown.sidebar ||
-        !sameConversation(previous.entry.target, next.entry.target))
-    )
-      shown = next.attempt;
-    previous = next;
-    return shown;
-  };
-}
-
-type Filter = "all" | "solo" | "team";
-const filters = [
-  { value: "all", label: "All", panelId: "sidebar-all" },
-  { value: "solo", label: "Solo", panelId: "sidebar-solo" },
-  { value: "team", label: "Team", panelId: "sidebar-team" },
-] as const;
-
-type Props = {
-  federatedIdentity?: FederatedIdentity;
-  /** Joined communities, so a sign-in switch names the ones it affects. */
-  memberships?: readonly Membership[] | undefined;
-  relay: RelayData;
-  navigator: Navigation;
-  agents?: Agents | undefined;
-  chatIcons?: ContributionReader<ChatIcon> | undefined;
-  chatMenus?: ContributionReader<ChatMenu> | undefined;
-  sidebarSections?: SidebarSections | undefined;
-  /** A plugin restriction shows only Solo; the saved filter returns after. */
-  sidebarScope?: SidebarScope | undefined;
-  sidebarRows?: SidebarRows | undefined;
-  target: OpenTarget;
+const noContexts = () => emptyContexts;
+type PageSidebar = {
+  page: RegisteredPage;
+  registry: PagesReader;
   children: ReactNode;
-  creationAction?: ReactNode;
+  resetIdentity?: unknown;
+};
+const PageSidebarState = createContext<PageSidebar | undefined>(undefined);
+
+/** The legacy page contract participates as one opaque slot in the same host. */
+const pageSource: SidebarSectionSource["component"] = ({ target, render }) => {
+  const state = useContext(PageSidebarState);
+  const Sidebar = state?.page.sidebar;
+  if (!state || !Sidebar) return null;
+  return render([
+    {
+      id: state.page.id,
+      defaultPosition: 0,
+      element: (
+        <OwnedContribution
+          entry={state.page}
+          registry={state.registry}
+          resetIdentity={state.resetIdentity}
+          fallback={
+            <div className="shell-sidebar-default">
+              <SidebarFrame label={`${state.page.title} sidebar`}>
+                <SidebarList>
+                  <p role="alert">This page’s sidebar is unavailable.</p>
+                  {state.children}
+                </SidebarList>
+              </SidebarFrame>
+            </div>
+          }
+        >
+          {() => <Sidebar target={target}>{state.children}</Sidebar>}
+        </OwnedContribution>
+      ),
+    },
+  ]);
 };
 
-/** Filters the navigation inventory without replacing the current conversation. */
-export function PrimarySidebar(props: Props) {
-  const connection = useRelayConnection(props.relay);
-  const scope = connection.scope ?? "disconnected";
-  return (
-    <ScopedSidebar
-      {...props}
-      key={scope}
-      scope={scope}
-      connection={connection}
-    />
-  );
-}
-
-function ScopedSidebar({
+export function PrimarySidebar({
+  registry,
+  target,
   scope,
-  connection,
-  ...props
-}: Props & {
+  children,
+  creationAction,
+  replacement,
+  pendingReplacement = false,
+  owner,
+}: {
+  registry: SidebarSections;
+  owner?: string;
+  target: OpenTarget;
   scope: string;
-  connection: ReturnType<typeof useRelayConnection>;
+  children: ReactNode;
+  creationAction?: ReactNode;
+  replacement?: Omit<PageSidebar, "children"> | undefined;
+  pendingReplacement?: boolean;
 }) {
-  const attemptView = useMemo(
-    () => destinationAttempt(props.navigator),
-    [props.navigator],
+  const contexts = useSyncExternalStore(
+    registry.contextSubscribe ?? noSubscription,
+    registry.contextSnapshot ?? noContexts,
   );
-  const shownAttempt = useSyncExternalStore(
-    props.navigator.subscribe,
-    attemptView,
+  const matched = resolveSidebarContext(contexts, target, owner);
+  // AppShell hides navigation on standalone pages while retaining its subtree.
+  const [previous, setPrevious] = useState(matched);
+  if (matched && matched !== previous) setPrevious(matched);
+  const context =
+    matched ?? (previous && contexts.includes(previous) ? previous : undefined);
+  const page = replacement?.page;
+  const adapted = useMemo<RegisteredSidebarSectionSource | undefined>(
+    () =>
+      page && {
+        version: 2,
+        id: page.id,
+        key: page.key,
+        pluginId: page.pluginId,
+        revision: page.revision,
+        component: pageSource,
+        context: page.key,
+      },
+    [page],
   );
-  const attempt = shownAttempt.id;
-  const preserveSidebar = shownAttempt.sidebar === "preserve";
-  const [observedAttempt, setObservedAttempt] = useState(attempt);
-  const [view, setView] = useState(() => {
-    const saved = readView<{ filter?: unknown; location?: unknown } | null>(
-      scope,
-      "navigation-scope",
-      null,
-    );
+  const sections = useMemo<SidebarSections>(() => {
+    let previous: readonly RegisteredSidebarSectionSource[] | undefined;
+    let filtered: readonly RegisteredSidebarSectionSource[] = adapted
+      ? [adapted]
+      : emptySources;
     return {
-      filter:
-        saved?.filter === "solo"
-          ? "solo"
-          : saved?.filter === "team"
-            ? "team"
-            : ("all" as Filter),
-      location:
-        typeof saved?.location === "string" ? saved.location : undefined,
+      ...registry,
+      sourceSnapshot: () => {
+        if (adapted) return filtered;
+        const current = registry.sourceSnapshot?.() ?? emptySources;
+        if (current !== previous) {
+          previous = current;
+          filtered = current.filter(
+            (source) => source.context === context?.key,
+          );
+        }
+        return filtered;
+      },
     };
-  });
-  const sidebarScope = props.sidebarScope;
-  useEffect(
-    () =>
-      soloNavigationFor(connection.session)?.subscribeReveal(
-        (_id, explicit) =>
-          explicit &&
-          // A restriction already shows Solo; keep the saved filter for after.
-          !sidebarScope?.snapshot().length &&
-          setView((current) =>
-            current.filter === "team"
-              ? { ...current, filter: "solo" }
-              : current,
-          ),
-      ),
-    [connection.session, sidebarScope],
+  }, [registry, context, adapted]);
+  const fallback = (
+    <SidebarContextFrame label="Page navigation">
+      <SidebarList>{children}</SidebarList>
+    </SidebarContextFrame>
   );
-  const soloNavigation = soloNavigationFor(connection.session);
-  // Select the title, not the snapshot: Solo regions are rebuilt on every message.
-  const soloTitle = useSyncExternalStore(
-    soloNavigation?.subscribe ?? noSubscription,
-    () =>
-      soloNavigation
-        ?.snapshot()
-        .regions.find((region) => region.source && !region.hidden)?.title ??
-      "Solo",
-  );
-  const target = props.target;
-  const local =
-    "scope" in target &&
-    target.scope &&
-    relayPartition(target.scope.communityOrigin, target.scope.viewer) === scope;
-  // The conversation's own Solo label, not the opening page, says which
-  // inventory owns it; an unlisted conversation waits until it is known.
-  const channels = connection.session?.channels;
-  const conversation = target.kind === "conversation" ? target.channelId : "";
-  // Only the destination: the list is replaced on every message preview.
-  const listedDestination = useSyncExternalStore(
-    channels?.subscribeList ?? noSubscription,
-    () => conversationDestination(channels?.list(), conversation),
-  );
-  const preferences = connection.session?.soloPreferences;
-  const soloPreferences = useSyncExternalStore(
-    preferences?.subscribe ?? noSubscription,
-    () => preferences?.snapshot(),
-  );
-  // The community refused this account: one notice on every page says what
-  // fixes it, so the sidebar keeps no notice or Try again of its own.
-  const refused =
-    connection.status === "error" && connection.denied && !connection.retrying;
-  // A cached startup session has no Solo capabilities yet; its unavailable
-  // placeholders still change height when the live inventories arrive.
-  const soloReady =
-    (connection.status === "ready" || connection.status === "error") &&
-    soloPreferences?.status !== "idle" &&
-    soloPreferences?.status !== "loading";
-  const destination = local
-    ? target.kind === "conversation"
-      ? listedDestination
-      : target.kind === "page" && target.pluginId === "buzz.channels"
-        ? soloDraft(target.route?.params)
-          ? "solo"
-          : "team"
-        : undefined
-    : undefined;
-  const location = destination ? targetKey(target) : undefined;
-  const sidebarLocation = destination
-    ? sidebarEntryLocation(target)
-    : undefined;
-  const restriction = useSyncExternalStore(
-    props.sidebarScope?.subscribe ?? noSubscription,
-    () => props.sidebarScope?.snapshot()[0],
-  );
-  // A deliberate filter change leaves the pane alone; only a new destination reveals its inventory.
-  if (attempt !== observedAttempt) setObservedAttempt(attempt);
-  if (
-    destination &&
-    location &&
-    (view.location !== location || attempt !== observedAttempt)
-  ) {
-    // A restriction keeps the saved filter for when it ends.
-    setView({
-      filter:
-        view.filter === "all" || restriction || preserveSidebar
-          ? view.filter
-          : destination,
-      location,
-    });
-  }
-  useEffect(() => {
-    writeView(scope, "navigation-scope", view);
-  }, [scope, view]);
-  const filter = restriction ? "solo" : view.filter;
-  const setFilter = (filter: Filter) => setView({ filter, location });
-  // Without the tabs there is no tab to label the panel.
-  const panelId = restriction ? undefined : `sidebar-${filter}`;
-  const header = (
-    <>
-      <div className={styles.sidebarControls}>
-        <div className={styles.sidebarScope}>
-          {restriction && props.sidebarScope ? (
-            <RestrictionBanner
-              entry={restriction}
-              registry={props.sidebarScope}
-            />
-          ) : (
-            <Tabs
-              label="Navigation scope"
-              variant="segmented"
-              size="sm"
-              value={filter}
-              items={
-                soloTitle === "Solo"
-                  ? filters
-                  : [
-                      filters[0],
-                      filters[2],
-                      { ...filters[1], label: soloTitle },
-                    ]
-              }
-              onValueChange={setFilter}
-            />
-          )}
-        </div>
-        {props.creationAction}
-      </div>
-      {props.children && !restriction && (
-        <div className={styles.destinations}>{props.children}</div>
-      )}
-    </>
-  );
+  if (replacement && adapted)
+    return (
+      <PageContext
+        key={contributionKey(replacement.page)}
+        scope={scope}
+        target={target}
+        sections={sections}
+        replacement={replacement}
+      >
+        {children}
+      </PageContext>
+    );
+  if (pendingReplacement)
+    return (
+      <ResizableSidebar scope={scope} className="shell-sidebar">
+        {fallback}
+      </ResizableSidebar>
+    );
+  if (!context) return fallback;
+  const Component = context.component;
   return (
-    <SidebarBoundary
-      key={`${scope}:${connection.generation}`}
-      header={header}
-      panelId={panelId}
+    <OwnedContribution
+      key={contributionKey(context)}
+      entry={context}
+      registry={{ snapshot: registry.contextSnapshot ?? noContexts }}
+      fallback={fallback}
     >
-      {connection.session &&
-      (connection.status === "ready" || connection.cached) ? (
-        <ChannelInventory
-          relay={props.relay}
-          navigator={props.navigator}
-          agents={props.agents}
-          target={props.target}
-          queries={connection.session}
-          scope={scope}
-          viewer={connection.viewer}
-          sidebarSections={props.sidebarSections}
-          sidebarRows={props.sidebarRows}
-          cached={!!connection.cached}
-          layoutReady={filter === "team" || soloReady}
-          preserveSidebar={preserveSidebar}
-          connectionError={connection.error}
-          render={({
-            sidebar,
-            dmPreviews,
-            frame,
-            before,
-            content,
-            after,
-            dialogs,
-          }) => (
-            <ResizableSidebar scope={scope} className="shell-sidebar">
-              <SidebarFrame
-                label="Sidebar"
-                header={header}
-                panelId={panelId}
-                {...frame}
-              >
-                {/* Relay outages for every inventory recover through one
-                    automatic owner; its one notice shows on every page. */}
-                {!connection.cached && (
-                  <RecoveryNotice recovery={connection.session.recovery} />
-                )}
-                <LiveSignIn
-                  session={connection.session}
-                  identity={communityIdentity(
-                    props.federatedIdentity,
-                    connection.origin,
-                  )}
-                  relay={connection.origin}
-                  memberships={props.memberships}
-                  tryAgain={() => props.relay.tryAgain()}
-                />
-                {before}
-                <SidebarUnread listRef={sidebar.list} dmPreviews={dmPreviews}>
-                  <section
-                    aria-label={soloTitle}
-                    className={styles.sidebarGroup}
-                    hidden={filter === "team"}
-                  >
-                    <SoloInventory
-                      key={`${scope}:${connection.generation}`}
-                      session={connection.session}
-                      scope={scope}
-                      navigator={props.navigator}
-                      target={props.target}
-                      chatIcons={props.chatIcons}
-                      chatMenus={props.chatMenus}
-                      sidebarRows={props.sidebarRows}
-                      renderContents={(
-                        ordinary,
-                        header,
-                        pendingClick,
-                        composeOrdinary,
-                      ) => (
-                        <SoloRegions
-                          key={`regions:${scope}:${connection.generation}`}
-                          session={connection.session}
-                          scope={scope}
-                          navigator={props.navigator}
-                          target={props.target}
-                          sidebar={sidebar}
-                          ordinary={ordinary}
-                          composeOrdinary={composeOrdinary}
-                          pendingClick={pendingClick}
-                          groupDisclosure={
-                            filter === "all"
-                              ? {
-                                  sectionKey: "scope:solo",
-                                  title: soloTitle,
-                                  open:
-                                    !sidebar.collapsed.includes("scope:solo"),
-                                  onToggle: (open) =>
-                                    sidebar.toggle("scope:solo", open),
-                                }
-                              : undefined
-                          }
-                          hidePrimaryHeading={filter === "solo"}
-                          fallback={
-                            <>
-                              {header}
-                              {ordinary}
-                            </>
-                          }
-                        />
-                      )}
-                    />
-                  </section>
-                  <div
-                    className={styles.sidebarGroup}
-                    hidden={filter === "solo"}
-                  >
-                    {filter === "all" ? (
-                      <InventoryGroup
-                        sidebar={sidebar}
-                        sectionKey="scope:team"
-                        title="Team"
-                        ownsCurrent={destination === "team" && !preserveSidebar}
-                        location={sidebarLocation}
-                      >
-                        {content}
-                      </InventoryGroup>
-                    ) : (
-                      content
-                    )}
-                  </div>
-                </SidebarUnread>
-                {after}
-              </SidebarFrame>
-              {dialogs}
-            </ResizableSidebar>
+      {() => (
+        <Component
+          target={target}
+          creationAction={creationAction}
+          Frame={SidebarContextFrame}
+          renderSections={(props) => (
+            <SidebarSectionSources
+              {...props}
+              registry={sections}
+              environment={{ target, active: () => true }}
+            />
           )}
-        />
-      ) : (
-        <div className="shell-sidebar-default">
-          <SidebarFrame
-            label="Sidebar"
-            header={header}
-            panelId={panelId}
-            launchPending={
-              connection.status === "connecting" ? "required" : undefined
-            }
-          >
-            <SidebarList>
-              {/* A connection retrying by itself is still connecting; only a
-                  settled failure asks for Try again, right beside its notice. */}
-              {refused ? (
-                <CommunityRefusalNotice
-                  // A refusal while connecting is the relay's about access.
-                  refusal={connection.refusal ?? "access"}
-                  identity={communityIdentity(
-                    props.federatedIdentity,
-                    connection.origin,
-                  )}
-                  retry={props.relay.tryAgain}
-                  relay={connection.origin}
-                  memberships={props.memberships}
-                />
-              ) : (
-                <div className={styles.connectionStatus}>
-                  <p>
-                    {connection.status === "connecting" || connection.retrying
-                      ? "Connecting…"
-                      : connection.status === "error"
-                        ? "Couldn’t load channels."
-                        : "Choose a community to see channels."}
-                  </p>
-                  {connection.status === "error" && !connection.retrying && (
-                    <>
-                      <CommunitySignIn
-                        identity={communityIdentity(
-                          props.federatedIdentity,
-                          connection.origin,
-                        )}
-                        error={connection.error}
-                        retry={props.relay.tryAgain}
-                        relay={connection.origin}
-                        memberships={props.memberships}
-                        asksAgain
-                      />
-                      <Button onClick={props.relay.tryAgain}>Try again</Button>
-                    </>
-                  )}
-                </div>
-              )}
-            </SidebarList>
-          </SidebarFrame>
-        </div>
+        >
+          {children}
+        </Component>
       )}
-    </SidebarBoundary>
+    </OwnedContribution>
   );
 }
 
-/** The sign-in session for the community's own server, when it has one. */
-function communityIdentity(
-  identity: FederatedIdentity | undefined,
-  origin: string | undefined,
-) {
-  return (origin && identity?.forCommunity?.(origin)) || identity;
-}
-
-function InventoryGroup({
-  sidebar,
-  sectionKey,
-  title,
-  ownsCurrent,
-  location,
+function PageContext({
+  scope,
+  target,
+  sections,
+  replacement,
   children,
 }: {
-  sidebar: Parameters<typeof SoloRegions>[0]["sidebar"];
-  sectionKey: string;
-  title: string;
-  ownsCurrent: boolean;
-  location: string | undefined;
+  scope: string;
+  target: OpenTarget;
+  sections: SidebarSections;
+  replacement: Omit<PageSidebar, "children">;
   children: ReactNode;
 }) {
-  const open = !sidebar.collapsed.includes(sectionKey);
-  useLayoutEffect(
-    () =>
-      sidebar.beforeReveal((next) => {
-        if (!ownsCurrent || next !== location || open) return true;
-        sidebar.toggle(sectionKey, true);
-        return false;
-      }),
-    [
-      location,
-      open,
-      ownsCurrent,
-      sectionKey,
-      sidebar.beforeReveal,
-      sidebar.toggle,
-    ],
-  );
+  const [ready, setReady] = useState(false);
+  const committed = useCallback((value: boolean) => setReady(value), []);
   return (
-    <SidebarSection
-      sectionKey={sectionKey}
-      title={title}
-      open={open}
-      onToggle={(next) => sidebar.toggle(sectionKey, next)}
-      hideMoreActions
-      persistentChevron
-    >
-      {children}
-    </SidebarSection>
-  );
-}
-
-/** A protected community can refuse after its channel list is shown: native
- * discovery hands back the transport before NIP-FI admission, so the refusal
- * arrives on the live socket. Its recovery reconnects only that socket; a
- * refusal its sign-in server may change offers Try again, which asks it. */
-function LiveSignIn({
-  session,
-  identity,
-  relay,
-  memberships,
-  tryAgain,
-}: {
-  session: RelaySession;
-  identity: FederatedIdentity | undefined;
-  relay: string | undefined;
-  memberships: readonly Membership[] | undefined;
-  tryAgain: () => void;
-}) {
-  const live = useSyncExternalStore(
-    session.live.subscribe,
-    session.live.snapshot,
-    session.live.snapshot,
-  );
-  if (live.status !== "error") return null;
-  const asksAgain = !!identity && issuerMayAnswerAgain(live.error);
-  return (
-    <>
-      <CommunitySignIn
-        identity={identity}
-        error={live.error}
-        retry={session.live.retry}
-        relay={relay}
-        memberships={memberships}
-        asksAgain={asksAgain}
-      />
-      {asksAgain && <Button onClick={tryAgain}>Try again</Button>}
-    </>
-  );
-}
-
-/** Unknown until the channel list can say; a channel outside it is Team's. */
-function conversationDestination(list: ChannelList | undefined, id: string) {
-  const channel = list?.channels.find((item) => item.id === id);
-  if (!channel && list?.status !== "ready") return undefined;
-  return channel?.channelType === "solo" ? "solo" : "team";
-}
-
-/** A plugin's banner, isolated so its failure keeps the sidebar working. */
-function RestrictionBanner({
-  entry,
-  registry,
-}: {
-  entry: RegisteredSidebarRestriction;
-  registry: SidebarScope;
-}) {
-  return (
-    <OwnedContribution entry={entry} registry={registry} fallback={null}>
-      {({ banner: Banner }) => <Banner />}
-    </OwnedContribution>
+    <ResizableSidebar scope={scope} className="shell-sidebar">
+      <div
+        style={{ display: "contents" }}
+        data-buzz-launch-pending={ready ? undefined : "required"}
+      >
+        <PageSidebarState value={{ ...replacement, children }}>
+          <SidebarSectionSources
+            registry={sections}
+            environment={{ target, active: () => true }}
+            settled
+            onReady={committed}
+          >
+            {(slots, sources) => (
+              <>
+                {sources()}
+                {slots.map((slot) => (
+                  <SidebarSectionSlotView key={slot.key} slot={slot} />
+                ))}
+              </>
+            )}
+          </SidebarSectionSources>
+        </PageSidebarState>
+      </div>
+    </ResizableSidebar>
   );
 }

@@ -11,6 +11,7 @@ type ButtonVariant =
   | "ghost"
   | "destructive"
   | "outline"
+  | "outline-subtle"
   | "attention"
   | "glass"
   | "glass-ghost"
@@ -95,8 +96,11 @@ export function Button({
           ? "prominent"
           : variant === "quiet" || variant === "subtle-muted"
             ? "subtle"
-            : variant
+            : variant === "outline-subtle"
+              ? "outline"
+              : variant
       }
+      data-outline-subtle={variant === "outline-subtle" || undefined}
       data-muted={variant === "subtle-muted" || undefined}
       data-size={size === "compact" ? "sm" : size === "default" ? "md" : size}
       data-button-shape={shape}

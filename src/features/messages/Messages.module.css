@@ -216,6 +216,12 @@
     calc(100% - 2 * var(--message-side-space) + var(--space-1) - var(--space-8))
   );
 }
+.message[data-full-width] {
+  width: 100%;
+}
+.message:where([data-full-width]):has(> .messageGutter) > .messageBody {
+  max-width: none;
+}
 .message[data-viewer-message] > .messageBody {
   flex: 0 1 auto;
   width: fit-content;

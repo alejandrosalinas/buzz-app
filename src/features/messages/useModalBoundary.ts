@@ -1,4 +1,5 @@
 import { useEffect, useRef, type RefObject } from "react";
+import { behindActiveOverlay } from "../../shared/design-system/overlayLayer";
 
 const FOCUSABLE =
   'a[href], button:not([disabled]), input:not([disabled]), textarea:not([disabled]), select:not([disabled]), [tabindex]:not([tabindex="-1"]):not([disabled])';
@@ -40,6 +41,14 @@ export function useModalBoundary(
     }
     initialFocus.current?.focus({ preventScroll: true });
     const keydown = (event: KeyboardEvent) => {
+      if (event.key !== "Escape" && event.key !== "Tab") return;
+      // A nested popup owns Escape and Tab even before its autofocus settles.
+      // Its document listener can run after this viewer's listener.
+      if (
+        event.defaultPrevented ||
+        behindActiveOverlay(initialFocus.current ?? container)
+      )
+        return;
       // Portalled dialogs, including non-modal controls, own their focus through Base UI.
       const popup =
         event.target instanceof Element

@@ -97,11 +97,21 @@ export type SidebarPreferences = SidebarGroups &
     filters?: Readonly<Record<string, SidebarFilterMode>>;
     activeWindowSeconds?: Readonly<Record<string, number>>;
   }>;
+export type SidebarSectionDraft = Readonly<{
+  id: string;
+  name: string;
+  icon?: string;
+}>;
+/** At least one field is supplied; omission preserves the latest saved value. */
+export type SidebarSectionEdit = Readonly<{
+  name?: string | undefined;
+  icon?: string | null | undefined;
+}>;
 export type SidebarAssignmentIntent = Readonly<{
   /** Omit only when creating an empty section. */
   channelId?: string;
   sectionId?: string;
-  createSection?: Readonly<{ id: string; name: string; position?: "first" }>;
+  createSection?: SidebarSectionDraft & Readonly<{ position?: "first" }>;
 }>;
 export type SidebarAssignmentMutator = (
   intent: SidebarAssignmentIntent,
@@ -112,7 +122,8 @@ export type SidebarSectionRemovalMutator = (
   signal: AbortSignal,
 ) => Promise<SidebarGroups>;
 export type SidebarSectionRenameMutator = (
-  intent: Readonly<{ sectionId: string; name: string; expectedName?: string }>,
+  intent: SidebarSectionEdit &
+    Readonly<{ sectionId: string; expectedName?: string }>,
   signal: AbortSignal,
 ) => Promise<SidebarGroups>;
 export type SidebarSectionOrderMutator = (
@@ -121,7 +132,7 @@ export type SidebarSectionOrderMutator = (
 ) => Promise<SidebarGroups>;
 /** Adds an empty section without assigning a conversation. */
 export type SidebarSectionCreationMutator = (
-  section: Readonly<{ id: string; name: string }>,
+  section: SidebarSectionDraft,
   signal: AbortSignal,
 ) => Promise<SidebarGroups>;
 export type SidebarStarMutator = (

@@ -1,3 +1,6 @@
+import { forwardClipboard } from "./forward-clipboard";
+import { splitPartition } from "../relay/partition";
+import { forwardBody, forwardTag } from "../relay/forwarded-message";
 // @vitest-environment jsdom
 import "@testing-library/jest-dom/vitest";
 import { composerDOMFixture } from "./composer-testing";
@@ -37,6 +40,7 @@ afterEach(() => {
 type MediaKind = "image" | "video";
 type ReviewFixtureOptions = {
   kind: MediaKind;
+  forwardSource?: boolean;
   typingAgent?: ReturnType<typeof keypair>;
   openComments?: boolean;
   replies?: (
@@ -56,6 +60,7 @@ function mime(kind: MediaKind) {
 
 async function setupReview({
   kind,
+  forwardSource = false,
   typingAgent,
   openComments = true,
   replies: buildReplies = () => [],
@@ -68,16 +73,14 @@ async function setupReview({
   // The DOM emulator has no playback engine; keep native playback calls observable.
   vi.spyOn(HTMLMediaElement.prototype, "play").mockResolvedValue(undefined);
   vi.spyOn(HTMLMediaElement.prototype, "pause").mockImplementation(() => {});
-  if (fromThread) {
-    // jsdom has no layout observer; the real thread still owns its read lifecycle.
-    vi.stubGlobal(
-      "ResizeObserver",
-      class {
-        observe() {}
-        disconnect() {}
-      },
-    );
-  }
+  // jsdom has no layout observer; threads and forwarded cards use one.
+  vi.stubGlobal(
+    "ResizeObserver",
+    class {
+      observe() {}
+      disconnect() {}
+    },
+  );
   const viewer = keypair();
   const relay = keypair();
   const attachment = {
@@ -104,7 +107,9 @@ async function setupReview({
     signed(viewer, template),
   );
   const publish = vi.fn(async () => {});
+  const source = message(viewer, "private-source", "Private forward source", 1);
   const events = [
+    ...(forwardSource ? [source] : []),
     root,
     ...replies,
     ...(typingAgent
@@ -132,6 +137,18 @@ async function setupReview({
             return [
               roster(relay, "one", [viewer.pubkey]),
               metadata(relay, "one", "One"),
+              ...(forwardSource
+                ? [
+                    roster(relay, "private-source", [viewer.pubkey]),
+                    metadata(
+                      relay,
+                      "private-source",
+                      "Private source",
+                      1_700_000_000,
+                      [["private"]],
+                    ),
+                  ]
+                : []),
             ];
           if (filter.ids)
             return events.filter((event) => filter.ids?.includes(event.id));
@@ -195,7 +212,7 @@ async function setupReview({
   );
   if (openComments && !fromThread)
     fireEvent.click(screen.getByRole("button", { name: "Show comments" }));
-  return { owner, root, sign, user, attachmentOwner, openReview };
+  return { owner, root, sign, user, attachmentOwner, openReview, source };
 }
 
 function deferredRead() {
@@ -934,3 +951,91 @@ it.each(["image", "video"] as const)(
     ).toBeVisible();
   },
 );
+
+it("uses only the stripped sender note in a timed forward marker", async () => {
+  const note = "⏱ 0:21 — Review this cut";
+  await setupReview({
+    kind: "video",
+    replies: (viewer, root) => {
+      const snapshot = {
+        id: "a".repeat(64),
+        channelId: "source",
+        authorId: "b".repeat(64),
+        authorName: "Original Author",
+        createdAt: 1,
+        content: "Copied content",
+      };
+      return [
+        message(viewer, "one", forwardBody(snapshot, note), 2, [
+          ["e", root.id, "", "reply"],
+          forwardTag(snapshot),
+        ]),
+      ];
+    },
+  });
+  await screen.findByText("Review this cut");
+  const video = document.querySelector("video");
+  assert.exists(video);
+  Object.defineProperty(video, "duration", { configurable: true, value: 60 });
+  fireEvent.durationChange(video);
+  const marker = await screen.findByRole("button", { name: /^Seek to 0:21,/ });
+  fireEvent.focus(marker);
+  const tooltip = await screen.findByRole("tooltip");
+  expect(tooltip.textContent).toMatch(/^0:21 · .*: Review this cut$/);
+  expect(tooltip.textContent).not.toMatch(
+    /Forwarded message|Original Author|Copied content|⏱/,
+  );
+});
+
+it("keeps the comment composer forward announcer inside the media-review modal", async () => {
+  const { owner, source } = await setupReview({
+    kind: "image",
+    forwardSource: true,
+  });
+  const input = await screen.findByRole("textbox", { name: "Reply to thread" });
+  const dialog = input.closest('[role="dialog"][aria-modal="true"]');
+  expect(dialog).not.toBeNull();
+  const announcement = document.getElementById(
+    `${input.id}-forward-announcement`,
+  );
+  expect(announcement).not.toBeNull();
+  expect(announcement?.parentElement).toBe(dialog);
+  expect(announcement).toHaveAttribute("aria-live", "polite");
+  const partition = splitPartition(owner.session.scope);
+  assert.exists(partition);
+  const payload = forwardClipboard(
+    {
+      version: 1,
+      origin: partition.communityOrigin,
+      channelId: "private-source",
+      id: source.id,
+    },
+    "Private forward source",
+  );
+  fireEvent.paste(input, {
+    clipboardData: {
+      getData: (type: string) =>
+        type === "text/html" ? payload.html : payload.text,
+      items: [],
+    },
+  });
+  await waitFor(() =>
+    expect(announcement).toHaveTextContent(
+      /Everyone in #One will be able to read/,
+    ),
+  );
+  fireEvent.click(screen.getByRole("button", { name: "Hide comments" }));
+  expect(announcement).toBeEmptyDOMElement();
+  expect(document.getElementById(`${input.id}-forward-announcement`)).toBe(
+    announcement,
+  );
+  fireEvent.click(screen.getByRole("button", { name: "Show comments" }));
+  await waitFor(() =>
+    expect(announcement).toHaveTextContent(
+      /Everyone in #One will be able to read/,
+    ),
+  );
+  expect(document.getElementById(`${input.id}-forward-announcement`)).toBe(
+    announcement,
+  );
+});

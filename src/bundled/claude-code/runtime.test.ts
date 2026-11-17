@@ -2025,8 +2025,10 @@ it("takes a plugin's wake in its thread's session, as the plugin's and not a mes
   await deliver({ type: "mention", event: root });
   await flush(10);
   read.mockResolvedValue([root]);
-  await deliver(pluginWake(root.id));
+  const accepted = vi.fn();
+  await deliver(pluginWake(root.id), { accepted });
   await flush(10);
+  expect(accepted).toHaveBeenCalledOnce();
   const used = claudes().filter((process) => process.prompts.length);
   expect(used).toHaveLength(1);
   const prompt = used[0]?.prompts[1] ?? "";

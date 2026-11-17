@@ -70,8 +70,40 @@ it("creates and assigns together, imports legacy fields into registers and keeps
     ),
   ).toThrow("changed");
 });
+it.each(["📚", ":books:"])(
+  "creates and confirms the requested %s icon",
+  (icon) => {
+    const create = {
+      createSection: { id, name: " Launch ", icon },
+    };
+    const created = prepareSidebarAssignment([], create, secret);
+    const saved = decode(created.event);
+    expect(saved.sections).toEqual([{ id, name: "Launch", icon, order: 0 }]);
+    expect(saved.meta.s[id].icon[2]).toBe(icon);
+    expect(
+      prepareSidebarAssignment([created.event], create, secret).event,
+    ).toBeUndefined();
+    expect(
+      prepareSidebarAssignment(
+        [created.event],
+        { createSection: { id, name: "Launch" } },
+        secret,
+      ).event,
+    ).toBeUndefined();
+    expect(() =>
+      prepareSidebarAssignment(
+        [created.event],
+        { createSection: { id, name: "Launch", icon: "Other" } },
+        secret,
+      ),
+    ).toThrow("changed");
+  },
+);
+
 it.each([
   { ...intent, createSection: { id, name: " " } },
+  { ...intent, createSection: { id, name: "Launch", icon: " " } },
+  { ...intent, createSection: { id, name: "Launch", icon: null } },
   { ...intent, createSection: { id: "__proto__", name: "Launch" } },
   { ...intent, createSection: { id, name: "Launch", position: "last" } },
   { ...intent, createSection: { id, name: "Launch", position: 0 } },

@@ -4,7 +4,15 @@ import "@testing-library/jest-dom/vitest";
 import type { ComposerInputElement } from "../messages/composer-dom";
 import { composerDOMFixture } from "../messages/composer-testing";
 
-import { afterEach, assert, beforeEach, expect, it, vi } from "vitest";
+import {
+  afterEach,
+  assert,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  vi,
+} from "vitest";
 import {
   act,
   cleanup,
@@ -170,16 +178,28 @@ function setup(
     );
   });
   let rosterTime = 1_700_000_000;
-  const openDirectMessage = vi.fn(async (pubkeys: readonly string[]) => {
-    events[events.length - 1] = roster(
-      relay,
-      channel,
-      [viewer.pubkey, ...pubkeys],
-      ++rosterTime,
-    );
-    return channel;
-  });
+  const openDirectMessage = vi.fn(
+    async (pubkeys: readonly string[], ..._options: unknown[]) => {
+      events[events.length - 1] = roster(
+        relay,
+        channel,
+        [viewer.pubkey, ...pubkeys],
+        ++rosterTime,
+      );
+      return channel;
+    },
+  );
+  /** The viewer's own agents, which New Message offers. */
+  const agents: { pubkey: string; name: string }[] = [];
   const create = () => {
+    const local = {
+      status: "ready" as const,
+      agents: agents.map((agent) => ({
+        ...agent,
+        relayUrl: "https://relay.example",
+        owner: viewer.pubkey,
+      })),
+    };
     const owner = createRelaySession(
       {
         scope: "https://relay.example",
@@ -194,7 +214,14 @@ function setup(
           publish,
         },
       },
-      { outboxStorage: storage },
+      {
+        outboxStorage: storage,
+        agentChoices: {
+          snapshot: () => local,
+          subscribe: () => () => {},
+          refresh: async () => {},
+        },
+      },
     );
     owners.push(owner);
     return owner;
@@ -250,6 +277,7 @@ function setup(
     await user.type(screen.getByRole("textbox"), "Durable first message");
   };
   return {
+    agents,
     storage,
     query,
     events,
@@ -818,6 +846,117 @@ it("loads matching DM history inline and keeps the draft while recipients change
   expect(screen.getByRole("textbox")).toHaveTextContent("Keep this draft");
 });
 
+it("opens the DM of these people with its history, whether or not it shows one", async () => {
+  const t = setup();
+  const owner = t.create();
+  t.mount(owner);
+  await t.compose();
+  await screen.findByRole("region", { name: "Channel message history" });
+  await t.user.click(send());
+  await waitFor(() => expect(t.openDirectMessage).toHaveBeenCalledOnce());
+  // The relay picks the DM by its people, and restores it if it is hidden.
+  expect(t.openDirectMessage.mock.calls[0]?.[2]).toEqual({
+    includeHistory: true,
+  });
+  cleanup();
+
+  const fresh = setup();
+  fresh.mount(fresh.create());
+  await fresh.user.click(await screen.findByRole("option", { name: "Zoe" }));
+  expect(
+    screen.queryByRole("region", { name: "Channel message history" }),
+  ).not.toBeInTheDocument();
+  await fresh.user.type(screen.getByRole("textbox"), "Hello Zoe");
+  await fresh.user.click(send());
+  await waitFor(() => expect(fresh.openDirectMessage).toHaveBeenCalledOnce());
+  expect(fresh.openDirectMessage.mock.calls[0]?.[2]).toEqual({
+    includeHistory: true,
+  });
+});
+
+describe("the relay picks the DM, and the preview is only a hint", () => {
+  const sentTo = (t: ReturnType<typeof setup>) =>
+    t.publish.mock.calls.map(
+      ([event]) => event.tags.find(([name]) => name === "h")?.[1],
+    );
+
+  it("sends a 1:1 to the people's DM when the preview shows a group whose other member claims to be an agent", async () => {
+    const t = setup();
+    // Mallory is a person to the relay, but her own profile says agent, so
+    // the page counts the group as Avery's DM and, sorting first, shows it.
+    const mallorys = "00000000-0000-4000-8000-000000000000";
+    t.events.unshift(
+      profile(third, { name: "Mallory", is_agent: true }),
+      signed(relay, {
+        kind: 39000,
+        tags: [
+          ["d", mallorys],
+          ["hidden", ""],
+          ["t", "dm"],
+          ["private", ""],
+        ],
+        content: JSON.stringify({ name: "Avery, Mallory", channel_type: "dm" }),
+      }),
+      roster(relay, mallorys, [viewer.pubkey, other.pubkey, third.pubkey]),
+      message(other, mallorys, "Mallory is here", 1_700_000_002),
+    );
+    const owner = t.create();
+    t.mount(owner);
+    await owner.session.profiles.ensure([third.pubkey]);
+    await t.user.click(await screen.findByRole("option", { name: "Avery" }));
+    await showsHistory(owner, mallorys, "Mallory is here");
+    await t.user.type(screen.getByRole("textbox"), "Just us");
+    await t.user.click(send());
+    await waitFor(() => expect(t.onStarted).toHaveBeenCalledOnce());
+    // The relay returns Avery's 1:1, and the message and page go there.
+    expect(t.openDirectMessage.mock.calls).toEqual([
+      [[other.pubkey], expect.any(AbortSignal), { includeHistory: true }],
+    ]);
+    expect(sentTo(t)).toEqual([channel]);
+    expect(t.onStarted).toHaveBeenCalledWith(channel, expect.any(String));
+  });
+
+  it("sends to a DM an agent joined in place, by the people it still has", async () => {
+    const t = setup();
+    // Avery's DM, which the viewer's agent Zoe joined later: the relay still
+    // knows it by its people, not by all its members.
+    const at = t.events.findIndex(
+      (event) => event.kind === 0 && event.pubkey === another.pubkey,
+    );
+    t.events[at] = signed(another, {
+      kind: 0,
+      content: JSON.stringify({ name: "Zoe", is_agent: true }),
+      tags: [],
+    });
+    t.agents.push({ pubkey: another.pubkey, name: "Zoe" });
+    t.events[t.events.length - 1] = roster(relay, channel, [
+      viewer.pubkey,
+      other.pubkey,
+      another.pubkey,
+    ]);
+    t.events.unshift(message(other, channel, "Zoe joined", 1_700_000_001));
+    const owner = t.create();
+    t.mount(owner);
+    await t.user.click(await screen.findByRole("option", { name: "Avery" }));
+    await addRecipient(t, "Zoe, Agent");
+    await showsHistory(owner, channel, "Zoe joined");
+    expect(screen.queryByText(/Sending adds/)).toBeNull();
+    await t.user.type(screen.getByRole("textbox"), "Hello");
+    await t.user.click(send());
+    await waitFor(() => expect(t.onStarted).toHaveBeenCalledOnce());
+    // Tagged, the relay finds this DM by its people instead of making an
+    // empty one of exactly these members.
+    expect(t.openDirectMessage.mock.calls).toEqual([
+      [
+        [other.pubkey, another.pubkey],
+        expect.any(AbortSignal),
+        { includeHistory: true },
+      ],
+    ]);
+    expect(sentTo(t)).toEqual([channel]);
+  });
+});
+
 /** A group DM with Avery and Zoe, plus one earlier message in each DM. */
 function groupHistory(t: ReturnType<typeof setup>) {
   t.events.unshift(
@@ -943,6 +1082,37 @@ it("previews only the DM whose participants exactly match, in any order", async 
   await showsHistory(owner, channel, "Earlier conversation");
   expect(t.openDirectMessage).not.toHaveBeenCalled();
   expect(t.publish).not.toHaveBeenCalled();
+});
+
+it("previews a group DM of the same people even when it also holds an agent", async () => {
+  const t = setup();
+  groupHistory(t);
+  const bot = keypair();
+  t.events.unshift(
+    signed(bot, {
+      kind: 0,
+      content: JSON.stringify({ name: "Bot" }),
+      tags: [["auth", viewer.pubkey, "", "a".repeat(128)]],
+    }),
+  );
+  const at = t.events.findIndex(
+    (event) =>
+      event.kind === 39002 &&
+      event.tags.some(([name, value]) => name === "d" && value === group),
+  );
+  t.events[at] = roster(relay, group, [
+    viewer.pubkey,
+    other.pubkey,
+    another.pubkey,
+    bot.pubkey,
+  ]);
+  const owner = t.create();
+  t.mount(owner);
+  await owner.session.profiles.ensure([bot.pubkey]);
+  await t.user.click(await screen.findByRole("option", { name: "Zoe" }));
+  await addRecipient(t, "Avery");
+  await showsHistory(owner, group, "Group history");
+  expect(t.openDirectMessage).not.toHaveBeenCalled();
 });
 
 it("never shows a previous match's history that finishes loading after an edit", async () => {

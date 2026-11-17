@@ -191,6 +191,10 @@ export function parseAnswer<T>(
     );
   if (code === 0 && answer?.data) return answer.data;
   const reason = stderr.trim().replace(/^gh: /, "");
+  // GitHub failed, as when a request outlasts its deadline and a gateway's
+  // error page stands in for the answer (`HTTP 502`), or GitHub says why
+  // (`Server Error (HTTP 502)`): gh itself works.
+  if (/\bHTTP 5\d\d\b/.test(reason)) throw new GitHubError(reason);
   // No GraphQL answer: `gh` is missing, signed out or offline, or its
   // sign-in no longer works ("Bad credentials").
   if (!answer || !("data" in answer || "errors" in answer))

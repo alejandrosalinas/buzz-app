@@ -24,7 +24,10 @@ import {
   communityGitRepository,
   parseGitRead,
 } from "../src/features/repos/git.ts";
-import { validateMemberAdministrationTemplate } from "../src/features/channel-members/administration-protocol.ts";
+import {
+  isAdminAddition,
+  validateMemberAdministrationTemplate,
+} from "../src/features/channel-members/administration-protocol.ts";
 import { validateLifecycleTemplate } from "../src/features/relay/channel-lifecycle-protocol.ts";
 import { validateDetailsTemplate } from "../src/features/relay/channel-details-protocol.ts";
 import { validateArchiveRequestTemplate } from "../src/features/relay/identity-archive-protocol.ts";
@@ -52,6 +55,7 @@ import {
   directMessageEvent,
   directMessageReceipt,
 } from "./direct-messages.mjs";
+import { directMessageRefusal } from "../src/features/relay/direct-message-policy.ts";
 import { SocketRequestError } from "../src/features/relay/socket-requests.ts";
 import { CANVAS_MAX_EVENT_BYTES } from "../src/features/channel-templates/canvas-limits.ts";
 import {
@@ -2769,9 +2773,12 @@ export function relayBrokerPlugin({
           if (directMessage) {
             try {
               filters = directMessageEvent(filters, viewer, key);
-            } catch {
+            } catch (error) {
               return json(res, 400, {
-                error: "Choose between one and eight other people.",
+                error:
+                  error instanceof Error
+                    ? error.message
+                    : "Choose between one and eight other people.",
                 sent: false,
               });
             }
@@ -2791,7 +2798,13 @@ export function relayBrokerPlugin({
                 ? claimReason
                 : leave
                   ? leaveRefusal
-                  : undefined;
+                  : directMessage
+                    ? (body) =>
+                        directMessageRefusal(
+                          filters.tags.some(([name]) => name === "h"),
+                          body?.error,
+                        )
+                    : undefined;
           if (invite || member || leave) {
             // Community-bound only; the relay remains the authority for roles.
             if (!scoped)
@@ -2963,7 +2976,8 @@ export function relayBrokerPlugin({
           if (signing || publishing) {
             if (administration) {
               try {
-                validateMemberAdministrationTemplate(filters, viewer);
+                if (!isAdminAddition(filters, viewer))
+                  validateMemberAdministrationTemplate(filters, viewer);
               } catch {
                 return json(res, 400, {
                   error: "Invalid member administration command",

@@ -104,8 +104,9 @@ have separate boundaries. A page sidebar is isolated by the same owned-contribut
 boundary, so a failure falls back to a concise alert without taking down the page,
 Settings, or shell. The host owns the slot, collapse state, labels, and narrow drawer;
 the page owns its sidebar content and local interaction state. Sidebar presentation
-helpers remain importable from `bundled/channels`; the conversation sidebar also
-exposes a versioned section contribution for plugins.
+helpers live in `features/channel-navigation`; the global host selects a bundled
+preview context, and adapts `Page.sidebar` through the same section engine. Messages
+contributes its conversation sidebar rather than being part of the host.
 
 Channels is the page-authoring example, not a thin registration wrapper over a
 host-owned product page. Keep page-specific components, styles, interactions and tests
@@ -322,6 +323,22 @@ rendering and Custom emoji Settings stay available; catalog, event tags and deli
 session-owned. The standard composer remains shared host UI, independent of any
 example plugin. Automated tests use source-only external consumer and tool fixtures
 to exercise component reuse and contribution lifecycle.
+
+### Agent model selections
+
+A plugin that injects `agents` can feature-detect
+`ctx.agents.readModelSettings?.(agentKey)`. This async read returns the same
+safe `modelSettings` projection as `agent_read`, without instructions or raw
+configuration. It accepts a local membership key from the agent service.
+Missing, unreadable or unsupported settings return `{ unavailable: "…" }`.
+Each supported field retains its saved policy and can include a resolved
+selection with provenance. A remote execution target never inherits this
+device's defaults. See [model read semantics](agents.md#creating-and-changing-agents-from-a-conversation)
+for field shapes and unresolved states. The read uses existing resolver state;
+it never starts model discovery, launches a harness or changes an agent.
+The result describes a current selection, not an existing session's override.
+Older hosts lack the method. A missing method or unresolved value does not
+establish a model; consumers must preserve that distinction.
 
 ## Optional network diagnostics
 
@@ -805,6 +822,52 @@ ctx.reflect.get("sidebarSections")?.register({
   }],
 });
 ```
+
+#### Bundled section components (internal preview)
+
+The service also has bundled-only previews, `registerContext` and version-2
+`registerSource`. A context declares its id, target matcher, optional navigation
+page owner and component. The host resolves the applicable context and supplies
+its frame and section renderer; replacing a context unmounts its sources. A
+source must name its context's full `<pluginId>/<contextId>` key. The source
+props are neutral: target, live ownership check and publication callback;
+Messages-specific state stays in the Messages contribution. Peer visibility,
+source customization and opening these previews to ordinary plugins are deferred.
+
+The preview is likely to change and is type-visible through the author API's exported
+`SidebarSections` type. Registration is supported only for bundled owners;
+the runtime rejects non-bundled owners. Version-1 registration and snapshots
+remain unchanged; plugin-development introspection currently lists only
+version-1 sections.
+
+A source runs once and supplies live `{ id, defaultPosition, element, title? }`
+sections through its `render` callback. Use stable component types and opaque,
+stable section ids. The shell names each slot `<pluginId>/<sectionId>`, orders
+slots by rank and then ordinal key, and drops invalid or duplicate descriptors.
+Slot ids do not replace saved collapse, sort, filter or drag keys. Team ranks
+follow the existing saved group order, with version-1 contributions trailing in
+their existing saved order; there is no new order record or migration.
+
+Sources run beside the shell and portal their content into keyed containers.
+Only structure and committed keys cross the shell's store; current content stays
+in the source's React render. Team sources mount inside the shared Team drag
+context. Solo sources stay outside it and retain their existing nested drag
+context. Keep any context or synthetic-event owner needed by portaled content
+above its source, since React events follow the source ancestry.
+
+Each slot has its own error boundary and Retry. A source failure replaces its
+slots with one unavailable-and-Retry placeholder; a source returning no
+publication settles empty. Registrations and publications are fenced by owner
+incarnation, so disabling or replacing a source retires its old content.
+The bundled Messages context mounts the Channels inventory as its one preferences,
+view, action and status owner. Its failures retain the whole-sidebar fallback;
+a thin Team source failure affects Team and its version-1 slots while Solo stays
+mounted. Both built-in sources require the required Channels plugin to activate.
+
+The viewport waits for every current section key to commit before consuming a
+saved scroll position. Container refs and portal publication settle during layout,
+before paint. Browser tests must still verify scrolling, group spacing, focus and
+drag hit testing: a DOM emulator cannot establish their geometry.
 
 ### Solo-only sidebar
 
@@ -1397,7 +1460,7 @@ contracts with their own layout and local navigation.
 
 ### Bundled defaults
 
-**Channels is the only required bundled plugin.** Todos, Usage, Reminders,
+**Channels is the only required bundled plugin.** Usage, Reminders,
 Workflows, Changesets, Shared compute, Charts and File viewer are off by default for fresh installs. Bestie,
 Feedback, Diff viewer, Identity Naming, Agent Activity, Terminal, Links, GitHub, Inbox,
 Repositories, Agents, Claude, Codex, Builderlab,
@@ -1463,8 +1526,8 @@ Re-enabling never reopens a
 stale tab. Eligibility and `channelContext` are presentation, **not authority**:
 the panel must independently verify access before reading any sensitive data and
 fence asynchronous reads on revocation. Channels registers **View canvas** this
-way. Canvas has no separate plugin toggle; Solo,
-Todos, and agents use the same session capability. Its editor keeps the channel's
+way. Canvas has no separate plugin toggle; Solo
+and agents use the same session capability. Its editor keeps the channel's
 draft locally, so returning to the channel or reopening Canvas restores it. Members of archived
 channels can read Canvas and History, but cannot edit, save, or restore through the panel.
 A retained unpublished draft is labeled as local; History shows the saved versions.
@@ -1604,60 +1667,13 @@ drawer, and re-enabling starts closed. See [Terminal](terminal.md) for native su
 session behavior and validation limits. This is a host-matched preview addition,
 not cross-version capability negotiation.
 
-### Optional Canvas todos
+### Canvas saves
 
-Todos (`buzz.todos`) is bundled **off by default** in browser and desktop. Enable
-it under Settings → Plugins → Manage plugins. Its channel-header ListChecks button opens a right-hand
-side panel, grouping items as To do, In progress and Done, with add, a per-item status
-selector, check/uncheck, one optional assignee per item, automatic
-saving after each action, and explicit Refresh. It uses shared controls and theme
-tokens; Channels still owns panel geometry, responsive placement and selection. Terminal remains in the bottom drawer.
-
-The source of truth is ordinary Markdown in one root level-two `Todos` section:
-
-```markdown
-## Todos
-
-- [ ] Review the plan
-- [/] Build the preview
-- [x] Share the preview
-```
-
-`[/]` marks Doing, the common Markdown convention for an in-progress task;
-ordinary Markdown renders it as plain text. Canvases without it keep their
-existing meaning: `[ ]` is To do and `[x]`/`[X]` is Done.
-
-Unordered checkbox items in that section are shown, including nested tasks. Nested tasks remain under their root task’s status group, with collapsible subtrees.
-Quotes and fenced examples are not tasks in this view. Doing and checkbox edits
-change one source byte; additions insert below the heading without rewriting other
-content.
-People who can’t write the channel’s Canvas, such as guests, see Todos read-only.
-Duplicate Todos sections block editing until corrected in Canvas. Disabling removes
-the convenience UI, not the saved list: Channel actions → View canvas remains editable.
-
-An optional terminal suffix records assignment as ordinary Markdown:
-` · Assignee: [Display name](nostr:npub…)`, using a full valid npub, not the abbreviated
-placeholder shown here. Only that exact structural suffix is assignment metadata;
-other links/prose remain task text. The public key is identity; names are escaped
-presentation. Assign/change/clear edits only the suffix. The selector uses the
-current channel member roster, including that boundary for shared naming policy,
-with public-key qualifiers in the opened choices. Missing rosters disable assignment controls; failed profile reads retain key/name fallbacks
-and offer retry. Profile renames never rewrite saved Canvas. Former members remain
-visible and can be changed or cleared. Assignment sends no notification and grants
-no channel membership or access.
-
-Canvas reads occur on open and explicit Refresh, not on a timer. Missing assignee
-and member profiles use the existing shared background directory. Typing an unfinished
-new item stays local; Add, checkbox and assignment actions save automatically.
-Task actions pause while saving; the new-item input stays editable and retains
-its text when the save finishes. If the loaded Canvas was written in the current second,
-a single cancellable wait respects its timestamp ordering; there is no background
-retry loop. Failures and recovered drafts expose Retry rather than silently publishing
-on reopen. Save uses the existing session Canvas/outbox contract, including its
+Canvas editor saves use the session Canvas/outbox contract, including its
 256 KiB content limit (the complete signed event must also fit the relay's
 512 KiB frame), fresh membership check, writer-backed Canvas head/editor-confirmation
 reads and exact signed-event recovery. Canvas reads default to strong consistency
-for editor/Todos bases and setup preconditions. Setup delivery and its separate
+for editor bases and setup preconditions. Setup delivery and its separate
 exact-ID confirmation both use writer-backed reads; unknown seed outcomes are
 checked without automatically replaying the seed. Template copies explicitly opt
 out and remain replica-eligible; Channel Settings no longer reads a Canvas preview.
@@ -1667,7 +1683,7 @@ It ignores mismatched events before selecting the current head; an invalid newer
 event cannot hide a valid returned head. History rejects pages containing invalid
 coordinates. These checks precede Solo's separate owner/agent-attestation check,
 so an authentic signature on unrelated content cannot make it Canvas instructions.
-Editor/Todos saves carry `expected-revision=<loaded
+Editor saves carry `expected-revision=<loaded
 head id>` (or `none` when absent); template seeds carry `none`. On relays supporting
 Canvas compare-and-swap, stale preconditions are refused atomically before mutation.
 A proven conflict keeps the local draft and dismisses only that rejected outbox
@@ -3380,6 +3396,31 @@ desktop app are not exercised there.
 ## Desktop browser
 
 Plugins can render the host-provided [`browser.View` component](browser.md) inside a panel. It opens HTTP(S) pages beside the conversation on macOS desktop. The host owns website rendering, navigation controls, and native session cleanup. Remote pages receive no Buzz IPC bridge; plugin JavaScript remains trusted same-process code. The [capability guide](browser.md#try-the-capability-with-a-local-plugin) includes a complete local-plugin example and installation steps.
+
+## GitHub pull request states
+
+While the bundled GitHub plugin is on, it provides `ctx.githubPulls`: the pull
+request states the app already holds, read-only. Links in messages, the panel
+and agents' watches read pull requests; `ctx.githubPulls` never reads GitHub, so
+using it costs nothing against GitHub's limits.
+
+`prState(url, { details })` gives what the agent tool `github_pr_state` gives,
+built by the same code: `state` (`"open"`, `"draft"`, `"merged"` or
+`"closed"`), with a `gh` read also `checks`, `failed`, `settled`, `conflicts`
+and `head`, then `read_at`, `age_seconds`, `source` and, when reading it again
+failed, `last_read_failed`. With `details: true` it adds the panel's `details`
+once something read them. Where the tool would read GitHub, `prState` gives
+undefined instead: the app holds no state for it (not read, could not be read,
+or forgotten after nobody showed it for a while), or `url` is not a pull
+request's. `subscribe(listener)` calls back after a read records a changed
+state, or when `last_read_failed` changes: reading again starts failing, fails
+for another reason, or works again. A read that finds the same state only moves
+`read_at` and `age_seconds` and is not announced, so show freshness from your
+own clock; a state the app forgets is not announced either. The report is a
+copy: changing it changes nothing the app holds.
+The service goes away when the GitHub plugin is turned off, so take it with
+`ctx.inject(["githubPulls"], (child) => …)` rather than a top-level `inject`, which
+would keep the plugin from starting without it.
 
 ## Decisions
 

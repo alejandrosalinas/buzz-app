@@ -1,4 +1,5 @@
 // @vitest-environment jsdom
+import { soloAdminRecovery } from "../../features/relay/solo-admins";
 import "@testing-library/jest-dom/vitest";
 import { afterEach, assert, expect, it, vi } from "vitest";
 import {
@@ -7,6 +8,7 @@ import {
   render,
   screen,
   waitFor,
+  within,
 } from "@testing-library/react";
 import {
   HELD_RETRY_REFUSED,
@@ -60,6 +62,33 @@ function show(item: OutgoingEvent) {
   fireEvent.click(screen.getByText("Outbox · 1 items"));
   return { retry, add, acknowledge };
 }
+
+it("labels a setup with unconfirmed creation and withholds abandonment and removal", () => {
+  const viewer = keypair();
+  const agent = keypair().pubkey;
+  const event = signed(viewer, {
+    kind: 9007,
+    content: "",
+    tags: [
+      ["h", "chat"],
+      ["p", agent],
+    ],
+  });
+  show({
+    event,
+    delivery: "unknown",
+    recovery: soloAdminRecovery("chat", [agent], [agent]),
+  });
+  expect(
+    screen.getByText("Opening agent admin setup · Unconfirmed"),
+  ).toBeVisible();
+  expect(
+    screen.queryByRole("button", { name: "Abandon admin setup" }),
+  ).not.toBeInTheDocument();
+  expect(
+    screen.queryByRole("button", { name: "Remove from outbox" }),
+  ).not.toBeInTheDocument();
+});
 
 it("does not offer generic retry for guarded invitations from either profile or composer", () => {
   const { retry } = show({ ...invitation, guarded: true });
@@ -525,3 +554,171 @@ it.each(["agent", "team", "solo", "agent-share"] as const)(
     }
   },
 );
+
+it("abandons expired admin setup durably through Outbox and releases the chat gate", async () => {
+  const viewer = keypair(),
+    relay = keypair(),
+    agent = keypair();
+  const channel = crypto.randomUUID();
+  const creation = signed(viewer, {
+    kind: 9007,
+    created_at: Math.floor(Date.now() / 1000) - 16 * 60,
+    content: "",
+    tags: [
+      ["h", channel],
+      ["p", agent.pubkey],
+    ],
+  });
+  let records: readonly OutgoingEvent[] = [
+    {
+      event: eventDto(creation),
+      signed: creation,
+      delivery: "accepted",
+      recovery: soloAdminRecovery(channel, [agent.pubkey], [agent.pubkey]),
+    },
+  ];
+  const events = new Map<string, RelayEvent>([[creation.id, creation]]);
+  const now = Date.now();
+  const clock = vi
+    .spyOn(Date, "now")
+    .mockReturnValue((creation.created_at + 14 * 60) * 1000);
+  let failRemoval = false;
+  const storage = {
+    load: () => structuredClone(records),
+    save: (next: readonly OutgoingEvent[]) => {
+      if (failRemoval && !next.some((item) => item.recovery))
+        throw new Error("Storage unavailable");
+      records = structuredClone(next);
+    },
+  };
+  const adminSign = vi.fn<RelayWriter["sign"]>(async (template) =>
+    signed(viewer, template),
+  );
+  const publish = vi.fn(async (event: RelayEvent) => {
+    events.set(event.id, event);
+  });
+  const open = () =>
+    createRelaySession(
+      {
+        viewer: viewer.pubkey,
+        relayAuthor: relay.pubkey,
+        channelIdentity: true,
+        media: () => undefined,
+        query: async (filters) =>
+          [
+            ...events.values(),
+            metadata(relay, channel, "Work", creation.created_at, [
+              ["t", "stream"],
+              ["t", "buzz.solo"],
+              ["private"],
+              ["P", viewer.pubkey],
+            ]),
+            signed(relay, {
+              kind: 39002,
+              content: "",
+              tags: [
+                ["d", channel],
+                ["p", viewer.pubkey, "", "owner"],
+                ["p", agent.pubkey, "", "member"],
+              ],
+            }),
+          ].filter((event) =>
+            filters.some((filter) => matchesEvent(event, filter)),
+          ),
+        writer: {
+          kinds: [9, 9007],
+          sign: async (template) => signed(viewer, template),
+          publish,
+        },
+        memberAdministration: { sign: adminSign, publish },
+      },
+      { outboxStorage: storage },
+    );
+  const first = open();
+  let resumed: ReturnType<typeof open> | undefined;
+  try {
+    const session = first.session;
+    const outbox = session.outbox;
+    assert.exists(outbox);
+    await outbox.ready();
+    session.channels.ensureList();
+    await vi.waitFor(() =>
+      expect(session.channels.list().status).toBe("ready"),
+    );
+    const view = render(
+      <OutboxStatus
+        outbox={outbox}
+        profiling={session.profiling}
+        memberAdditions={session.memberAdditions}
+      />,
+    );
+    fireEvent.click(screen.getByText("Outbox · 1 items"));
+    const remove = () =>
+      screen.getByRole("button", { name: "Abandon admin setup" });
+    await screen.findByRole("button", { name: "Abandon admin setup" });
+    expect(screen.getByText(/Opening agent admin setup · Sent/)).toBeVisible();
+    expect(
+      screen.queryByRole("button", { name: "Remove from outbox" }),
+    ).not.toBeInTheDocument();
+    fireEvent.click(remove());
+    let confirmation = screen.getByRole("alertdialog", {
+      name: "Abandon admin setup?",
+    });
+    expect(
+      within(confirmation).getByText(/Retry your opening message/),
+    ).toBeVisible();
+    fireEvent.click(
+      within(confirmation).getByRole("button", { name: "Cancel" }),
+    );
+    expect(outbox.snapshot().some((item) => item.recovery)).toBe(true);
+    clock.mockReturnValue(now);
+    await expect(session.channelWrites.prepareOpening(channel)).rejects.toThrow(
+      "expired",
+    );
+    failRemoval = true;
+    fireEvent.click(remove());
+    confirmation = screen.getByRole("alertdialog", {
+      name: "Abandon admin setup?",
+    });
+    const confirm = within(confirmation).getByRole("button", {
+      name: "Abandon admin setup",
+    });
+    fireEvent.click(confirm);
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      "Storage unavailable",
+    );
+    expect(outbox.snapshot().some((item) => item.recovery)).toBe(true);
+    await expect(session.channelWrites.prepareOpening(channel)).rejects.toThrow(
+      "expired",
+    );
+    failRemoval = false;
+    fireEvent.click(confirm);
+    await waitFor(() => expect(outbox.snapshot()).toHaveLength(0));
+    expect(records.some((item) => item.recovery)).toBe(false);
+    expect(session.channels.get?.(channel)?.members).toContain(agent.pubkey);
+    view.unmount();
+    const sent = session.messages.send(
+      channel,
+      "Continue with the current roles",
+      [agent.pubkey],
+    );
+    await vi.waitFor(() => expect(events.has(sent)).toBe(true));
+    first.dispose();
+    resumed = open();
+    await resumed.session.outbox?.ready();
+    resumed.session.channels.ensureList();
+    await vi.waitFor(() =>
+      expect(resumed?.session.channels.list().status).toBe("ready"),
+    );
+    const next = resumed.session.messages.send(channel, "After restart", [
+      agent.pubkey,
+    ]);
+    await vi.waitFor(() => expect(events.has(next)).toBe(true));
+    expect(adminSign).not.toHaveBeenCalled();
+    expect(publish.mock.calls.every(([event]) => event.kind === 9)).toBe(true);
+  } finally {
+    first.dispose();
+    resumed?.dispose();
+    clock.mockRestore();
+  }
+});

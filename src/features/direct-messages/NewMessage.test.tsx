@@ -318,6 +318,7 @@ it("finds a hosted agent by its owned name and sends without local custody", asy
   expect(t.directMessages.open).toHaveBeenCalledWith(
     [hosted.pubkey],
     expect.any(AbortSignal),
+    true,
   );
   expect(t.messages.send).toHaveBeenCalledOnce();
 });
@@ -1211,8 +1212,8 @@ it("keeps a failed draft editable and resolves changed recipients again", async 
     expect(t.onStarted).toHaveBeenCalledWith(channel, "d".repeat(64)),
   );
   expect(t.directMessages.open.mock.calls).toEqual([
-    [[people[0]?.pubkey], expect.any(AbortSignal)],
-    [[people[0]?.pubkey, people[1]?.pubkey], expect.any(AbortSignal)],
+    [[people[0]?.pubkey], expect.any(AbortSignal), true],
+    [[people[0]?.pubkey, people[1]?.pubkey], expect.any(AbortSignal), true],
   ]);
   expect(t.outbox.dismiss).toHaveBeenCalledOnce();
 });
@@ -1258,6 +1259,7 @@ it("holds Send while the To field has text that is not a recipient", async () =>
   expect(t.directMessages.open).toHaveBeenCalledWith(
     [people[0]?.pubkey],
     expect.any(AbortSignal),
+    true,
   );
 });
 
@@ -1753,6 +1755,10 @@ it("checks local agents again after opening and leaves queued retries alone", as
   await screen.findByRole("alert");
   expect(t.messages.send).not.toHaveBeenCalled();
   t.updateControl(previous);
+  // Someone joined the DM the first attempt was given, so the relay now
+  // gives these recipients another, and the message goes there.
+  const moved = "22222222-2222-4222-8222-222222222222";
+  t.directMessages.open.mockResolvedValueOnce(moved);
   t.directMessages.delivery.mockReturnValue("unknown");
   t.directMessages.delivered.mockRejectedValueOnce(new Error("Uncertain"));
   await t.user.click(send());
@@ -1761,6 +1767,10 @@ it("checks local agents again after opening and leaves queued retries alone", as
   await t.user.click(screen.getByRole("button", { name: "Retry send" }));
   await waitFor(() => expect(t.onStarted).toHaveBeenCalledOnce());
   expect(t.messages.send).toHaveBeenCalledOnce();
+  expect(t.messages.send.mock.calls[0]?.[0]).toBe(moved);
+  // The queued message keeps its exact event: Retry send opened nothing.
+  expect(t.directMessages.open).toHaveBeenCalledTimes(2);
+  expect(t.onStarted).toHaveBeenCalledWith(moved, expect.any(String));
 });
 
 it("distinguishes namesake options and chips without pictures", async () => {
@@ -2079,6 +2089,7 @@ it("labels people by verified identity, never an editable handle, and opens the 
   expect(t.directMessages.open).toHaveBeenCalledWith(
     [aleksandr.pubkey],
     expect.any(AbortSignal),
+    true,
   );
 });
 

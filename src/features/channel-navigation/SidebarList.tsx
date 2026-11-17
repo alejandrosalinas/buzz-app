@@ -1,5 +1,5 @@
 import { useCallback, type ReactNode, type RefObject } from "react";
-import styles from "../../bundled/channels/Channels.module.css";
+import styles from "./SidebarFrame.module.css";
 import { useScrollEdges } from "../../shared/design-system/ui/useScrollEdges";
 
 type Props = {

@@ -70,6 +70,16 @@ export interface Outbox {
   ready(): Promise<void>;
   /** Fresh shared-journal ownership without importing another window's operations. */
   recovery(key: string): Promise<OutgoingEvent | undefined>;
+  /** Verify the exact durable receipt and retain its dismissal lock through
+   * dependent publication. Signing must happen before acquiring this lock.
+   * Older Outboxes may omit this; dependent publication must fail closed. */
+  withRecovery?(
+    id: string,
+    recovery: OutboxRecovery,
+    run: () => Promise<unknown>,
+  ): Promise<void>;
+  /** Complete under exact ownership, without joining an independent dismissal. */
+  finishRecovery?(id: string, recovery: OutboxRecovery): Promise<void>;
   send(
     input: OutboxInput,
     recovery?: OutboxRecovery,
@@ -338,6 +348,17 @@ export function createOutbox(
   let storageError: string | undefined;
   let hydrated = false;
   let durable = Promise.resolve();
+  let ownership = Promise.resolve();
+  function locked<T>(id: string, run: () => Promise<T>): Promise<T> {
+    if (storage.lock) return storage.lock(id, run);
+    // Memory/single-window stores still serialize publication with dismissal.
+    const work = ownership.then(run, run);
+    ownership = work.then(
+      () => {},
+      () => {},
+    );
+    return work;
+  }
   const notify = () => {
     visible = Object.freeze([
       ...completed.entries().map(([, item]) => item),
@@ -911,6 +932,42 @@ export function createOutbox(
     else schedule(event.id, intent);
     return { id: event.id, persisted: intent };
   }
+  async function withRecovery(
+    id: string,
+    recovery: OutboxRecovery,
+    run: () => Promise<unknown>,
+    dismissAbsent = false,
+  ): Promise<void> {
+    await outbox.ready();
+    await durable.catch(() => {});
+    await locked(id, async () => {
+      const shared = (await storage.load({ readOnly: true })).find(
+        (item) => item.event.id === id,
+      );
+      if (closed) throw abortError();
+      if (
+        shared?.recovery?.key !== recovery.key ||
+        shared.recovery.value !== recovery.value
+      ) {
+        // This includes fresh local receipts: they cannot reclaim a durable
+        // dismissal through a later unrelated journal save.
+        storage.forget?.(id);
+        restoredReceipts.delete(id);
+        completed.delete(id);
+        snapshot = Object.freeze(
+          snapshot.filter((item) => item.event.id !== id),
+        );
+        notify();
+        // Only dismissal is idempotent. Missing ownership must still fence
+        // dependent publication and successful recovery completion.
+        if (!shared && dismissAbsent) return;
+        throw new Error(
+          "This operation was removed or changed in another window. Retry the message to continue.",
+        );
+      }
+      await run();
+    });
+  }
   const outbox: Outbox = Object.freeze({
     snapshot: () => finalSnapshot ?? snapshot,
     subscribe: (listener: () => void) => subscribe(listeners, listener),
@@ -942,6 +999,12 @@ export function createOutbox(
         notify();
       }
       return shared;
+    },
+    withRecovery,
+    async finishRecovery(id: string, recovery: OutboxRecovery) {
+      await withRecovery(id, recovery, () => persist(id, "dismiss"));
+      admissionGates.delete(id);
+      sendHolds.delete(id);
     },
     async recover(id: string, recovery: OutboxRecovery, consume?: () => void) {
       const adopt = async () => {
@@ -1159,7 +1222,9 @@ export function createOutbox(
           ),
         );
       const remove = () => persist(id, "dismiss");
-      const work = (storage.lock ? storage.lock(id, remove) : remove())
+      const work = (
+        owner ? withRecovery(id, owner, remove, true) : locked(id, remove)
+      )
         .then(() => {
           admissionGates.delete(id);
           sendHolds.delete(id);

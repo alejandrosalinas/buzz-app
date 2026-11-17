@@ -2,12 +2,20 @@ import { canonicalDetailsName } from "./channel-details-protocol";
 import { exactLifecycleTag } from "./channel-lifecycle-protocol";
 import { channelIdentityUnsupported, channelLabelTags } from "./channel-labels";
 import { SOLO_NAMED_LABEL, SOLO_LABEL } from "../solo/labels";
-import type { Outbox } from "./outbox";
+import type { Outbox, OutboxRecovery } from "./outbox";
+import type { RelayWriter } from "./transport";
+import {
+  promoteSoloAdmins,
+  soloAdminKey,
+  soloAdminRecovery,
+  soloAgentOwnership,
+} from "./solo-admins";
 import { isBatchAddition } from "../channel-members/members";
 import { withdraw } from "./withdraw";
 import type { ChannelQueries, ChannelSummary } from "./contracts";
 import type { RelayReader } from "./reader";
 import type { EventData } from "./events";
+import type { ProfileQueries } from "./profile-directory";
 
 export const DEFAULT_TEMPORARY_CHANNEL_TTL_SECONDS = 7 * 24 * 60 * 60;
 
@@ -41,11 +49,14 @@ export function createChannelWrites(
   agents?: {
     selectable: () => readonly string[];
     archived: (pubkey: string) => boolean;
+    profiles?: Pick<ProfileQueries, "event">;
+    viewer?: string;
   },
   relayAuthor?: string,
   /** Signed roster discovery, including channels this viewer cannot open. */
   discovery: RelayReader = reader,
   channelIdentity = false,
+  adminWriter?: RelayWriter,
 ) {
   const available = !!outbox?.supports(9007);
   function writer(addition = false) {
@@ -455,8 +466,6 @@ export function createChannelWrites(
     if (active?.() === false)
       throw new DOMException("Channel addition cancelled", "AbortError");
     const original = await refreshMembership(id);
-    // Solo agents must be able to reply even with a saved Guest admission default.
-    const roleTags = original.channelType === "solo" ? [["role", "bot"]] : [];
     if (active?.() === false)
       throw new DOMException("Channel addition cancelled", "AbortError");
     const unique = [...new Set(keys)].filter(
@@ -503,14 +512,35 @@ export function createChannelWrites(
           item.event.tags.some(
             ([name, value]) => name === "p" && value === key,
           ) &&
-          roles.length === roleTags.length &&
-          roles.every((tag) => tag.length === 2 && tag[1] === "bot")
+          roles.length === (original.channelType === "solo" ? 1 : 0) &&
+          // Recovery finishes the saved grant even if the viewer's role changed.
+          roles.every(
+            (tag) =>
+              tag.length === 2 && (tag[1] === "bot" || tag[1] === "admin"),
+          )
         );
       });
       if (previous && Date.now() / 1000 - previous.event.created_at >= 15 * 60)
         throw new Error(
           `This agent-add request expired. Open Outbox, remove the “Add agent ${key.slice(0, 12)}” item, then add the agent again. Check channel membership first if the request was unconfirmed.`,
         );
+      let owned: (() => boolean) | undefined;
+      if (
+        original.channelType === "solo" &&
+        !previous &&
+        original.viewerRole === "owner"
+      ) {
+        owned = await freshOwnership(key);
+      }
+      const roleTags =
+        original.channelType === "solo"
+          ? [
+              [
+                "role",
+                original.viewerRole === "owner" && owned?.() ? "admin" : "bot",
+              ],
+            ]
+          : [];
       const operation =
         previous?.event.id ??
         writer(!!active).send(
@@ -531,8 +561,73 @@ export function createChannelWrites(
     if (original?.channelType === "solo")
       await refresh(id, { members: unique });
   }
+  /** Cached discovery is not evidence for a new automatic Admin grant. */
+  async function freshOwnership(key: string) {
+    const events = await discovery.read(
+      [{ kinds: [0], authors: [key], limit: 1, consistency: "strong" }],
+      { signal, fresh: true, priority: "foreground" },
+    );
+    const owned = await soloAgentOwnership(
+      agents?.profiles,
+      agents?.viewer,
+      key,
+    );
+    return () =>
+      owned() &&
+      events.some(
+        (event) =>
+          event.kind === 0 &&
+          event.pubkey === key &&
+          event.id === agents?.profiles?.event?.(key)?.id,
+      );
+  }
   /** Solo chats this device is starting, until they can take events. */
   const starts = new Map<string, Promise<void>>();
+  const adminSetups = new Map<string, Promise<void>>();
+  /** Publication retries also call this after reload. The create's local
+   * receipt retains the original recipients until every grant is recorded. */
+  function prepareOpening(id: string): Promise<void> | undefined {
+    const pending = (receipts ?? outbox)
+      ?.snapshot()
+      .find((item) => item.recovery?.key === soloAdminKey(id));
+    if (!pending) return;
+    const active = adminSetups.get(id);
+    if (active) return active;
+    const work = (async () => {
+      const source = writer();
+      const withRecovery = source.withRecovery;
+      const finishRecovery = source.finishRecovery;
+      if (!adminWriter || !relayAuthor || !withRecovery || !finishRecovery)
+        throw new Error("This connection cannot set up chat admins.");
+      await created(pending.event.id);
+      const saved = await source.recovery(soloAdminKey(id));
+      if (!saved?.recovery)
+        throw new Error(
+          "Chat admin setup ended in another window. Retry this message to continue.",
+        );
+      const recovery = saved.recovery;
+      await promoteSoloAdmins(
+        saved,
+        {
+          ...adminWriter,
+          publish: (event, signal, checkOwnership) =>
+            withRecovery(saved.event.id, recovery, () => {
+              checkOwnership();
+              return adminWriter.publish(event, signal);
+            }),
+        },
+        discovery,
+        relayAuthor,
+        signal,
+        freshOwnership,
+      );
+      signal.throwIfAborted();
+      await finishRecovery(saved.event.id, recovery);
+    })();
+    adminSetups.set(id, work);
+    void work.catch(() => {}).finally(() => adminSetups.delete(id));
+    return work;
+  }
   /** The Canvas of each chat this device is starting ("" for none), until
    * its save lands; see `startingCanvas`. */
   const canvases = new Map<string, string>();
@@ -594,6 +689,7 @@ export function createChannelWrites(
     refreshMembership,
     memberChannels,
     listsMember,
+    prepareOpening,
     createChannel(
       id: string,
       title: string,
@@ -651,6 +747,7 @@ export function createChannelWrites(
       members: readonly string[] = [],
       active?: () => boolean,
       labels: readonly string[] = [],
+      recovery?: OutboxRecovery,
     ) {
       writer();
       identifier(id);
@@ -683,7 +780,7 @@ export function createChannelWrites(
             ...[...new Set(members)].map((key) => ["p", key]),
           ],
         },
-        undefined,
+        recovery,
         active,
       );
     },
@@ -701,8 +798,15 @@ export function createChannelWrites(
       /** The chat's Canvas, and the work that saves it once the chat
        * exists; nothing waits for it, and a failure leaves a working chat. */
       setup?: { canvas: string; apply(): Promise<unknown> },
-      options?: { labels?: readonly string[]; active?: () => boolean },
+      options?: {
+        labels?: readonly string[];
+        active?: () => boolean;
+        admins?: readonly string[];
+      },
     ) {
+      const recovery = soloAdminRecovery(id, members, options?.admins);
+      if (recovery && (!adminWriter || !relayAuthor))
+        throw new Error("This connection cannot set up chat admins.");
       const create = api.create(
         id,
         title,
@@ -711,6 +815,7 @@ export function createChannelWrites(
         members,
         options?.active,
         options?.labels,
+        recovery,
       );
       channels.start?.({
         id,

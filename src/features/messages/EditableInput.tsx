@@ -410,6 +410,8 @@ export type EditableInputProps = Omit<
   onEditLink?(edit: ComposerLinkEdit): void;
   /** A paste would exceed the serialized message budget; nothing was inserted. */
   onPasteTooLong?(): void;
+  /** Handle semantic clipboard content only when prose paste permits it. */
+  onSemanticPaste?(data: DataTransfer): boolean;
   /** Vet a pasted identity link as a notification recipient: the recipient under
    * its current name, or null to keep the display-only chip. */
   acceptRecipient?(pubkey: string): MentionRecipient | null;
@@ -431,6 +433,7 @@ export function EditableInput({
   onFormatsChange,
   onEditLink,
   onPasteTooLong,
+  onSemanticPaste,
   acceptRecipient,
   onAnnotationMenu,
   ...events
@@ -449,6 +452,7 @@ export function EditableInput({
     onFormatsChange,
     onEditLink,
     onPasteTooLong,
+    onSemanticPaste,
     acceptRecipient,
     onAnnotationMenu,
     disabled,
@@ -463,6 +467,7 @@ export function EditableInput({
     onFormatsChange,
     onEditLink,
     onPasteTooLong,
+    onSemanticPaste,
     acceptRecipient,
     onAnnotationMenu,
     disabled,
@@ -504,6 +509,8 @@ export function EditableInput({
     sync(draft: MentionDraft, reset?: boolean): void;
     /** Applies the settles held through the composition that has just ended. */
     settleHeld(): void;
+    /** Nests the caret's list item, or outdents it; false outside a list. */
+    indent(outdent: boolean): boolean;
   } | null>(null);
 
   useLayoutEffect(() => {
@@ -2173,21 +2180,6 @@ export function EditableInput({
           // A caret key reported as a control character would be typed as that
           // character by the native path. Move the caret here instead.
           if (named !== event.key) return moveCaret(named, event);
-          if (
-            event.key === "Tab" &&
-            !event.altKey &&
-            !event.metaKey &&
-            !event.ctrlKey &&
-            editable()
-          ) {
-            const command = event.shiftKey ? liftListItem : sinkListItem;
-            if (
-              command(composerSchema.nodes.list_item)(editor.state, (tr) =>
-                editor.dispatch(closeHistory(tr)),
-              )
-            )
-              return true;
-          }
           if (event.key === "Backspace" || event.key === "Delete") {
             if (!editable()) return false;
             if (
@@ -2357,6 +2349,12 @@ export function EditableInput({
               return true;
             }
             const code = editor.state.selection.$from.parent.type.spec.code;
+            if (
+              !code &&
+              event.clipboardData &&
+              current.current.onSemanticPaste?.(event.clipboardData)
+            )
+              return true;
             // Code takes visible text verbatim; prose preserves copied web links.
             const html = event.clipboardData?.getData("text/html") ?? "";
             const hasPlain =
@@ -2736,6 +2734,13 @@ export function EditableInput({
         for (const held of heldSettles.current.splice(0))
           held.resolve(held.apply());
       },
+      indent(outdent) {
+        if (!editable()) return false;
+        syncNativeSelection();
+        return (outdent ? liftListItem : sinkListItem)(
+          composerSchema.nodes.list_item,
+        )(editor.state, (tr) => editor.dispatch(closeHistory(tr)));
+      },
       sync(next, reset = false) {
         if (
           !reset &&
@@ -2893,6 +2898,16 @@ export function EditableInput({
             !event.shiftKey &&
             view.current &&
             openAnnotation.current?.(view.current.state.selection.head)
+          )
+            event.preventDefault();
+          // After the host, which claims Tab to accept a completion.
+          if (
+            !event.defaultPrevented &&
+            event.key === "Tab" &&
+            !event.altKey &&
+            !event.metaKey &&
+            !event.ctrlKey &&
+            api.current?.indent(event.shiftKey)
           )
             event.preventDefault();
           if (!event.defaultPrevented && event.key === "Enter") {
