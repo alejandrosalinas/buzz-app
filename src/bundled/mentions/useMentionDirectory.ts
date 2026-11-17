@@ -1,7 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import type { ComposerSession } from "../../features/messages/composer-session";
 import type { ChannelSummary } from "../../features/relay/contracts";
-import { allowsOutsideMentions } from "../../features/messages/mention-admission";
 import { matchPerson } from "../../features/search/person-match";
 import { verifiedName } from "../../features/profiles/useVerifiedNames";
 import { searchDebounce, searchable } from "../../shared/search-debounce";
@@ -142,11 +141,8 @@ export function useMentionDirectory(
   enabled: boolean,
   lifetime: string,
 ) {
-  const active =
-    enabled &&
-    allowsOutsideMentions(channel) &&
-    !channel?.archived &&
-    !channel?.readOnly;
+  // The caller applies allowsOutsideMentions: it depends on composer mode.
+  const active = enabled && !!channel && !channel.archived && !channel.readOnly;
   // A retry belongs to the query it was asked for. The picker keeps one hook
   // mounted across openings, so a count that never reset would hold every
   // later query of the session to a fresh read, off the prefix-page and

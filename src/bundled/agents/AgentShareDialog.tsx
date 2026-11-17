@@ -491,7 +491,6 @@ export function AgentShareDialog({
   return (
     <Dialog
       open
-      headerGap="compact"
       footerGap="compact"
       title={previewing ? `Export ${agent.name}` : `Share ${agent.name}`}
       description={

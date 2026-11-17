@@ -41,6 +41,10 @@ pub(crate) struct Request {
     timeout_ms: Option<u64>,
     /// An Apps deploy: this archive, POSTed as a multipart form.
     upload: Option<Upload>,
+    /// With the session of the sign-in server for this community
+    /// (`server_for`) instead of the build's Builderlab: the bundled
+    /// Builderlab plugin's API calls only, never Apps.
+    relay: Option<String>,
 }
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -53,8 +57,9 @@ pub(crate) struct Upload {
     name: String,
     content_type: String,
 }
-/// The plugin whose Apps tools may reach the Apps Platform. Its id is
-/// reserved, so no installed plugin can claim it.
+/// The plugin whose Apps tools may reach the Apps Platform, and whose API
+/// calls may name a community's sign-in server. Its id is reserved, so no
+/// installed plugin can claim it.
 const APPS_PLUGIN: (&str, &str) = ("block.builderlab", "bundled");
 fn method() -> String {
     "GET".into()
@@ -165,17 +170,22 @@ pub(crate) async fn federated_identity_request(
     if grant.authority != config.id {
         return Err("Plugin authority mismatch".into());
     }
-    let destination = if request.apps {
-        apps_destination(config, (&id, &revision), &request)?
-    } else {
-        validate(config, &grant, &request)?
+    let (server, destination) = match &request.relay {
+        None if request.apps => (
+            host.inner().clone(),
+            apps_destination(config, (&id, &revision), &request)?,
+        ),
+        None => (host.inner().clone(), validate(config, &grant, &request)?),
+        Some(relay) => {
+            community_destination(host.inner(), (&id, &revision), relay, &grant, &request)?
+        }
     };
     if !live() {
         return Err("Plugin registration retired".into());
     }
     // Only the account the caller started under may answer: a session
     // replaced since then refuses instead of acting for the new account.
-    let token = host
+    let token = server
         .with_session(|token, current, _| (current == session).then(|| token.clone()))
         .ok_or("Sign in to your community first")?
         .ok_or("Federated session changed")?;
@@ -187,7 +197,7 @@ pub(crate) async fn federated_identity_request(
     // Only the adapter's session route ends the session; an Apps refusal is
     // checked there too.
     if response.status == 401 {
-        host.recheck(&session).await;
+        server.recheck(&session).await;
     }
     Ok(response)
 }
@@ -287,6 +297,42 @@ fn apps_destination(
     }
     check_headers(request)?;
     Ok(destination)
+}
+/// A Builderlab API call with the session of the sign-in server for `relay`:
+/// the same granted routes, under that server's API base path.
+fn community_destination(
+    host: &FederatedIdentity,
+    plugin: (&str, &str),
+    relay: &str,
+    grant: &buzzodz_plugins::FederatedIdentityGrant,
+    request: &Request,
+) -> Result<(FederatedIdentity, url::Url), String> {
+    let first = host
+        .config()
+        .ok_or("Federated identity is not configured")?;
+    if plugin != APPS_PLUGIN || request.apps {
+        return Err("Authenticated operation is not granted".into());
+    }
+    let server = host.server_for(&super::config::canonical_relay(relay)?)?;
+    let config = server
+        .config()
+        .ok_or("Federated identity is not configured")?;
+    let grant = buzzodz_plugins::FederatedIdentityGrant {
+        authority: config.id.clone(),
+        operations: grant
+            .operations
+            .iter()
+            .filter_map(|op| {
+                let route = op.path.strip_prefix(&first.api_base_path)?;
+                Some(buzzodz_plugins::AuthenticatedOperation {
+                    method: op.method.clone(),
+                    path: format!("{}{route}", config.api_base_path),
+                })
+            })
+            .collect(),
+    };
+    let destination = validate(config, &grant, request)?;
+    Ok((server, destination))
 }
 fn validate(
     config: &super::config::Config,
@@ -607,6 +653,77 @@ mod tests {
         assert!(!sent.contains("cookie") && !sent.contains("x-bb-"));
     }
 
+    #[test]
+    fn community_calls_use_that_communitys_server_from_builderlab_only() {
+        use super::super::config::Config;
+        let first = Config::parse(r#"{"version":1,"id":"test","identityOrigin":"https://identity.example","adapterBase":"https://identity.example","apiBasePath":"/api/","communityHosts":["relay.example"]}"#).unwrap();
+        let peer = Config::parse(r#"{"version":1,"id":"peer","identityOrigin":"https://peer.example","adapterBase":"https://peer.example/goose","apiBasePath":"/goose/","communityHosts":["*.peer.example"]}"#).unwrap();
+        let peer = FederatedIdentity::with_store(
+            Some(peer),
+            String::new(),
+            String::new(),
+            std::sync::Arc::new(super::super::tests::Memory::default()),
+        );
+        let host = super::super::tests::with_customers(first, vec![peer], false);
+        let grant = buzzodz_plugins::FederatedIdentityGrant {
+            authority: "test".into(),
+            operations: vec![buzzodz_plugins::AuthenticatedOperation {
+                method: "GET".into(),
+                path: "/api/list".into(),
+            }],
+        };
+        let call = |plugin, relay: &str, path: &str, apps: bool| {
+            let request = Request {
+                path: path.into(),
+                method: "GET".into(),
+                apps,
+                relay: Some(relay.into()),
+                ..Request::default()
+            };
+            community_destination(&host, plugin, relay, &grant, &request).map(
+                |(server, destination)| {
+                    (server.config().unwrap().id.clone(), destination.to_string())
+                },
+            )
+        };
+        // The granted route, under the peer's API base path, with its session.
+        assert_eq!(
+            call(APPS_PLUGIN, "wss://team.peer.example", "/goose/list", false).unwrap(),
+            ("peer".into(), "https://peer.example/goose/list".into())
+        );
+        // A community no other server covers stays with the build's.
+        assert_eq!(
+            call(APPS_PLUGIN, "wss://other.example", "/api/list", false).unwrap(),
+            ("test".into(), "https://identity.example/api/list".into())
+        );
+        for (plugin, relay, path, apps) in [
+            // Only the granted routes, rebased: not the first server's path.
+            (APPS_PLUGIN, "wss://team.peer.example", "/api/list", false),
+            (
+                APPS_PLUGIN,
+                "wss://team.peer.example",
+                "/goose/other",
+                false,
+            ),
+            // Never another plugin, nor Apps.
+            (
+                ("example.fi", "bundled"),
+                "wss://team.peer.example",
+                "/goose/list",
+                false,
+            ),
+            (
+                APPS_PLUGIN,
+                "wss://team.peer.example",
+                "/v1/agent/contract",
+                true,
+            ),
+            // Only a secure community origin.
+            (APPS_PLUGIN, "ws://team.peer.example", "/goose/list", false),
+        ] {
+            assert!(call(plugin, relay, path, apps).is_err(), "{relay}{path}");
+        }
+    }
     fn apps_request(path: &str) -> Request {
         Request {
             path: path.into(),

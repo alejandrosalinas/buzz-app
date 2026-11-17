@@ -24,7 +24,10 @@ import type { Agents } from "../../features/agents/service";
 import { PrimarySidebar } from "./PrimarySidebar";
 import { ToastProvider } from "../../shared/design-system/ui/Toast";
 import { SoloInventory } from "../../features/channel-navigation/SoloInventory";
-import { conversationTarget } from "../../features/channel-navigation/routes";
+import {
+  conversationTarget,
+  sidebarTarget,
+} from "../../features/channel-navigation/routes";
 import type { ContributionReader } from "../../features/conversation/contracts";
 import type { ChatIcon, ChatMenu } from "../../features/conversation/service";
 import type { SidebarRows } from "../../features/channel-navigation/sidebar-rows-service";
@@ -207,12 +210,19 @@ export function fixture(
     async clearCache() {},
   };
   let attempt = 0;
+  let visit = new AbortController();
   let sidebar: NavigationOpenOptions["sidebar"];
+  // Each opening ends the previous attempt's visit, as the controller does.
+  const begin = (next: OpenTarget, options?: NavigationOpenOptions) => {
+    sidebar = options?.sidebar;
+    target = next;
+    attempt++;
+    visit.abort();
+    visit = new AbortController();
+  };
   const open = vi.fn(
     async (next: OpenTarget, options?: NavigationOpenOptions) => {
-      sidebar = options?.sidebar;
-      target = next;
-      attempt++;
+      begin(next, options);
       rendered.rerender(tree());
       publish();
       return { status: "opened" as const };
@@ -222,9 +232,10 @@ export function fixture(
     open,
     subscribe,
     snapshot: () => ({
+      entry: { target },
       attempt: {
         id: String(attempt),
-        signal: new AbortController().signal,
+        signal: visit.signal,
         sidebar,
       },
     }),
@@ -255,7 +266,7 @@ export function fixture(
                   creationAction={creationAction}
                   relay={relay}
                   navigator={navigator}
-                  target={target}
+                  target={sidebarTarget(target)}
                   chatIcons={chatIcons}
                   chatMenus={chatMenus}
                   sidebarRows={host.sidebarRows}
@@ -308,6 +319,13 @@ export function fixture(
       });
     },
     open,
+    /** A navigation the shell does not render the sidebar for, as a thread move. */
+    navigateWithin(next: OpenTarget) {
+      act(() => {
+        begin(next);
+        publish();
+      });
+    },
     /** The sidebar's hand-off to the conversation page it opens. */
     handoff: () => handoff,
     markThrough,

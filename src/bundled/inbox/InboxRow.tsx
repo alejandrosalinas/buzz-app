@@ -13,6 +13,7 @@ import type { InboxFeedSnapshot } from "../../features/relay/inbox-feed";
 import type { RelaySession } from "../../features/relay/session";
 import { workflowLabel } from "../../features/relay/workflow-attribution";
 import { messagePreview } from "../../features/notifications/content";
+import { ByteLru } from "../../features/relay/budget";
 import { avatarMedia } from "../../shared/avatar-source";
 import { LightningIcon, SmileyIcon } from "../../shared/design-system/icons";
 import { Avatar } from "../../shared/design-system/ui/Avatar";
@@ -28,6 +29,20 @@ type ResolveName = (
   fallback: string,
   candidates?: readonly string[],
 ) => string;
+
+/** Row previews by message text, least recently used dropped first. Each
+ * preview parses Markdown, and every filter change or live event renders all
+ * rows again, remounting rows a filter hid. The budget counts the source
+ * text, which is the key. */
+const previews = new ByteLru<string>(500, 1024 * 1024);
+const rowPreview = (content: string) => {
+  let text = previews.get(content);
+  if (text === undefined) {
+    text = messagePreview(content);
+    previews.set(content, text, content.length);
+  }
+  return text;
+};
 
 export const hasUnread = (item: InboxItem) =>
   item.unreadCount > 0 || item.manual;
@@ -134,7 +149,7 @@ export function InboxRowButton({
       previewId={previewId}
       preview={
         incompletePreview(feed, [item.previewMessageId, ...item.messageIds]) ??
-        messagePreview(item.preview)
+        rowPreview(item.preview)
       }
     />
   );
@@ -182,7 +197,7 @@ export function ReactionRowButton({
         ? channelText(channel)
         : "Conversation";
   const reactions = groupReactions(item.events);
-  const preview = messagePreview(item.message.content);
+  const preview = rowPreview(item.message.content);
   const emojiNames = reactions
     .map((reaction) =>
       reaction.emoji

@@ -1,5 +1,6 @@
 // Wires config channels into one bound community: the relay's support check,
 // then for each agent its config channel, live sync, and online saves.
+import { onRecommended, PRESET } from "./recommended";
 import type { RelayEvent } from "../relay/events";
 import type { RelaySession } from "../relay/session";
 import {
@@ -89,6 +90,8 @@ export function fields(
     version: 1,
     agentType: agent.type,
     settings: { ...kept, ...pickSettings(schema, config) },
+    // Undefined drops a mark the head had: the agent is off Recommended.
+    preset: onRecommended(config) ? PRESET : undefined,
   };
 }
 

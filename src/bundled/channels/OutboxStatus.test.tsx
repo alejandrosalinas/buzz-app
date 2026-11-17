@@ -9,6 +9,7 @@ import {
   waitFor,
 } from "@testing-library/react";
 import {
+  HELD_RETRY_REFUSED,
   createOutbox,
   type Outbox,
   type OutgoingEvent,
@@ -71,6 +72,19 @@ it("does not offer generic retry for guarded invitations from either profile or 
   expect(
     screen.getByRole("button", { name: "Remove from outbox" }),
   ).toBeVisible();
+  expect(retry).not.toHaveBeenCalled();
+});
+
+it("does not offer generic retry for a held send and says where to retry it", () => {
+  const { retry } = show({
+    event: { id: "brief", kind: 9, content: "Brief", tags: [["h", "c"]] },
+    held: true,
+    delivery: "failed",
+  } as OutgoingEvent);
+  expect(
+    screen.queryByRole("button", { name: "Retry" }),
+  ).not.toBeInTheDocument();
+  expect(screen.getByText(HELD_RETRY_REFUSED)).toBeVisible();
   expect(retry).not.toHaveBeenCalled();
 });
 

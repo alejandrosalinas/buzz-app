@@ -221,6 +221,36 @@ export function promptMessage(
   };
 }
 
+/** The ids of the Buzz events a tool result reports sending, as Buzz's
+ * message tools answer, `sent <event-id>`. */
+export const sentEventIds = (output: string) =>
+  [...output.matchAll(/\bsent ([0-9a-f]{64})\b/g)].flatMap(
+    (match) => match[1] ?? [],
+  );
+/** A sent message once its result reports success: posted, as the event the
+ * result names, so a reply can be found by its id. */
+export const postedAs = (output: string) => {
+  const [messageId] = sentEventIds(output);
+  return { posted: true, ...(messageId ? { messageId } : {}) };
+};
+
+/** The ids of the Buzz events a prompt was for: an exact record's first line,
+ * or an older turn's escaped event. */
+export function promptEventIds(sections: readonly PromptSection[]) {
+  return sections.flatMap(({ tag, body }) => {
+    if (!EVENT_TAGS.has(tag)) return [];
+    for (const json of [body.split("\n", 1)[0], body]) {
+      try {
+        const id = eventId(object(JSON.parse(json ?? ""))?.id);
+        if (id) return [id];
+      } catch {
+        // Not an event record.
+      }
+    }
+    return [];
+  });
+}
+
 /** Thread evidence from the prompt's `<context>`: root, channel, or unknown. */
 function promptThread(sections: PromptSection[]) {
   const context = sections.find((section) => section.tag === "context")?.body;
@@ -699,12 +729,21 @@ function buildTranscript(
       // stays a tool, with its error.
       turn.items = turn.items.map((item) => {
         const text = item.type === "tool" && sent.get(item.toolCallId);
-        return text &&
-          item.status === "completed" &&
-          !errored.has(item.toolCallId) &&
-          postsMessage(item.title)
-          ? { id: item.id, at: item.at, type: "message", text, posted: true }
-          : item;
+        if (
+          !text ||
+          item.type !== "tool" ||
+          item.status !== "completed" ||
+          errored.has(item.toolCallId) ||
+          !postsMessage(item.title)
+        )
+          return item;
+        return {
+          id: item.id,
+          at: item.at,
+          type: "message",
+          text,
+          ...postedAs(item.output),
+        };
       });
       // Older harnesses omit threadRootEventId; the prompt context still names it.
       turn.threadRootId = payloadThread ?? prompt;

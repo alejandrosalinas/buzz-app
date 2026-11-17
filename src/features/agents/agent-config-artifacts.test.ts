@@ -68,6 +68,54 @@ describe("artifact identity", () => {
   });
 });
 
+describe("preset tag", () => {
+  const preset = (t: { tags: string[][] }) =>
+    t.tags.filter(([name]) => name === "preset");
+  const settings = async () => ({
+    channel,
+    type: "buzz.agent.settings" as const,
+    d: await artifactD("buzz.agent.settings", channel),
+  });
+  const body = (extra: object = {}) =>
+    JSON.stringify({ version: 1, agentType: "goose", settings: {}, ...extra });
+
+  it("tags agent settings on Automatic, so they can be counted from tags", async () => {
+    const expected = await settings();
+    const on = artifactTemplate({
+      ...expected,
+      op: "create",
+      title: "Agent settings",
+      content: body({ preset: "recommended" }),
+    });
+    expect(preset(on)).toEqual([["preset", "recommended"]]);
+    expect(artifactProblem(sign(on), expected)).toBeUndefined();
+    // Off Automatic, a preset tag carried from the head is dropped, so the
+    // tag always matches the content.
+    const off = artifactTemplate({
+      ...expected,
+      op: "update",
+      prev: "a".repeat(64),
+      title: "Agent settings",
+      content: body(),
+      extra: [["preset", "recommended"]],
+    });
+    expect(preset(off)).toEqual([]);
+  });
+
+  it("tags only agent settings", async () => {
+    const d = await artifactD("buzz.agent.instructions", channel);
+    const t = artifactTemplate({
+      channel,
+      type: "buzz.agent.instructions",
+      d,
+      op: "create",
+      title: "Agent instructions",
+      content: JSON.stringify({ version: 1, text: "", preset: "recommended" }),
+    });
+    expect(preset(t)).toEqual([]);
+  });
+});
+
 describe("artifact validation", () => {
   it("accepts a valid revision, including empty instructions", async () => {
     const { expected, event } = await instructions("");

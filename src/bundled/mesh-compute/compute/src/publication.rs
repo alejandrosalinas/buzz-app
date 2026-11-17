@@ -44,7 +44,7 @@ pub fn sdk_status_event(
     owner: &OwnerKeypair,
     member: &str,
     serving: bool,
-    status: &mesh_llm_sdk::EmbeddedNodeStatus,
+    status: &mesh_llm_embedded_runtime::EmbeddedMeshNodeStatus,
     device: &LocalDevice,
 ) -> anyhow::Result<EventBuilder> {
     status_event(
@@ -264,7 +264,7 @@ mod tests {
         let token = crate::transport_policy::endpoint_token_for_test([iroh::TransportAddr::Ip(
             "192.168.1.20:9999".parse().unwrap(),
         )]);
-        let sdk = mesh_llm_sdk::EmbeddedNodeStatus {
+        let sdk = mesh_llm_embedded_runtime::EmbeddedMeshNodeStatus {
             api_base_url: "http://127.0.0.1:19337/v1".into(),
             console_url: "http://127.0.0.1:13131".into(),
             invite_token: Some(token.clone()),

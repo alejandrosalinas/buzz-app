@@ -11,7 +11,7 @@ import {
 } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { useState } from "react";
-import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { AgentDefaults } from "../agents/AgentDefaults";
 import type {
   Agents,
@@ -1775,3 +1775,243 @@ it.each([
     );
   },
 );
+
+describe("Recommended", () => {
+  // A synthetic candidate on a provider the fake goose has set up.
+  const candidate = {
+    harness: "goose",
+    provider: "databricks",
+    model: "goose-model-b",
+    effort: "high",
+    label: "Model B",
+  };
+  beforeEach(() =>
+    vi.stubEnv("VITE_BUZZ_RECOMMENDED_AGENT", JSON.stringify([candidate])),
+  );
+  afterEach(() => vi.unstubAllEnvs());
+  const settings = (config: Config, supported = ["goose-model-b"]) => {
+    const fake = fakeSpawn({
+      providers: PROVIDERS,
+      defaults: { providerId: "databricks", modelId: "goose-claude" },
+      supported,
+      thinking: {
+        "goose-model-b": { current: "low", levels: ["low", "high"] },
+      },
+    });
+    const { SettingsTab } = createTabs({
+      setup: new GooseSetup(fake),
+      ...unused,
+    });
+    const save = vi.fn(async (_config: Config) => undefined);
+    render(
+      <SettingsTab
+        agent={
+          {
+            key: "c".repeat(64),
+            pubkey: "c".repeat(64),
+            name: "Agent A",
+            type: "buzz.goose/goose",
+            owner: "a".repeat(64),
+            config,
+          } as Agent<Config>
+        }
+        save={save}
+      />,
+    );
+    return { save, user: userEvent.setup() };
+  };
+  const aiSettings = () => screen.getByRole("combobox", { name: "AI setup" });
+  const choose = async (
+    user: ReturnType<typeof userEvent.setup>,
+    option: RegExp,
+  ) => {
+    await user.click(aiSettings());
+    await waitFor(() =>
+      expect(screen.getByRole("option", { selected: true })).toHaveFocus(),
+    );
+    await user.click(await screen.findByRole("option", { name: option }));
+  };
+  /** Whether a manual row is folded away, out of reach under Automatic. */
+  const folded = (name: string) =>
+    screen.getByRole("combobox", { name }).closest("[inert]") !== null;
+
+  it("drops Recommended for a manual choice, starting from the candidate", async () => {
+    const { save, user } = settings({
+      ...DEFAULT_CONFIG,
+      preset: "recommended",
+    } as Config);
+    expect(aiSettings()).toHaveTextContent("Automatic");
+    // Automatic's menu says what it found once goose has listed the model.
+    expect(screen.queryByText("Model B · High")).not.toBeInTheDocument();
+    await user.click(aiSettings());
+    const recommendation = await screen.findByRole("option", {
+      name: "Automatic",
+    });
+    expect(await screen.findByText("Model B · High")).toBeInTheDocument();
+    await waitFor(() => expect(recommendation).toHaveFocus());
+    await user.keyboard("{Escape}");
+    await waitFor(() =>
+      expect(aiSettings()).toHaveAttribute("aria-expanded", "false"),
+    );
+    await waitFor(() => expect(aiSettings()).toHaveFocus());
+    expect(aiSettings()).toHaveAccessibleDescription(
+      "Set to Model B (recommended)",
+    );
+    // Recommended owns the provider, model and thinking level; their rows
+    // wait for Manual.
+    expect(
+      screen.queryByRole("combobox", { name: "Provider" }),
+    ).not.toBeInTheDocument();
+    await choose(user, /^Custom/);
+    expect(folded("Thinking")).toBe(false);
+    expect(aiSettings()).not.toHaveAccessibleDescription();
+    // Manual starts from what Automatic ran on.
+    expect(
+      screen.getByRole("combobox", { name: "Thinking" }),
+    ).toHaveTextContent("High");
+    await user.click(screen.getByRole("button", { name: "Save" }));
+    await waitFor(() => expect(save).toHaveBeenCalled());
+    const [config] = save.mock.calls[0] ?? [];
+    expect(config).toMatchObject({
+      provider: "databricks",
+      model: "goose-model-b",
+      effort: "high",
+    });
+    expect(config).not.toHaveProperty("preset");
+  });
+
+  it("puts a custom agent back on Recommended", async () => {
+    const { save, user } = settings({
+      ...DEFAULT_CONFIG,
+      provider: "databricks",
+      model: "own",
+      effort: "low",
+      instructions: "Be brief.",
+    });
+    expect(aiSettings()).toHaveTextContent("Custom");
+    await choose(user, /^Automatic$/);
+    expect(folded("Provider")).toBe(true);
+    await user.click(screen.getByRole("button", { name: "Save" }));
+    // Its own model settings go with it, so none contradicts the candidate.
+    await waitFor(() =>
+      expect(save).toHaveBeenCalledWith({
+        ...DEFAULT_CONFIG,
+        instructions: "Be brief.",
+        preset: "recommended",
+      }),
+    );
+  });
+
+  it("takes a card's model pick off Recommended", async () => {
+    vi.stubEnv(
+      "VITE_BUZZ_RECOMMENDED_AGENT",
+      JSON.stringify([
+        { ...candidate, provider: "anthropic", model: "claude-opus-5-5" },
+      ]),
+    );
+    const { changes } = created({
+      saved: { anthropic: ["ANTHROPIC_API_KEY"] },
+      modelAppearance: "glass-ghost",
+      config: { ...DEFAULT_CONFIG, preset: "recommended" } as Config,
+    });
+    const user = userEvent.setup();
+    // The card shows what the agent runs on.
+    await waitFor(() => expect(modelButton()).toBeEnabled());
+    expect(modelButton()).toHaveTextContent(/^claude-opus-5-5$/);
+    await user.click(modelButton());
+    (await screen.findByRole("menuitem", { name: "Claude" })).focus();
+    await user.keyboard("{ArrowRight}");
+    (
+      await screen.findByRole("menuitemradio", { name: "claude-opus-5-5" })
+    ).focus();
+    await user.keyboard("{ArrowRight}");
+    await user.click(await screen.findByRole("menuitemradio", { name: "Low" }));
+    expect(changes.at(-1)).toEqual({
+      ...DEFAULT_CONFIG,
+      provider: "anthropic",
+      model: "claude-opus-5-5",
+      effort: "low",
+    });
+  });
+
+  it("says when no recommended model is offered, so it runs on goose's default", async () => {
+    settings({ ...DEFAULT_CONFIG, preset: "recommended" } as Config, []);
+    expect(
+      await screen.findByText(
+        "No recommended model is available, so this uses Goose’s default.",
+      ),
+    ).toBeInTheDocument();
+  });
+
+  it("never returns to Recommended when a manual choice is the default", async () => {
+    // Marked here, but a model chosen elsewhere synced in: Custom.
+    const { save, user } = settings({
+      ...DEFAULT_CONFIG,
+      provider: "databricks",
+      model: "own",
+      preset: "recommended",
+    } as Config);
+    expect(aiSettings()).toHaveTextContent("Custom");
+    await user.click(screen.getByRole("combobox", { name: "Provider" }));
+    await user.click(
+      await screen.findByRole("option", { name: /^From goose config/ }),
+    );
+    // The rows stay open, and the save carries no mark.
+    expect(folded("Provider")).toBe(false);
+    expect(aiSettings()).toHaveTextContent("Custom");
+    await user.click(screen.getByRole("button", { name: "Save" }));
+    await waitFor(() => expect(save).toHaveBeenCalled());
+    expect(save.mock.calls[0]?.[0]).not.toHaveProperty("preset");
+  });
+
+  it("drops a mark left from before on any save of a Custom agent", async () => {
+    // A model synced in from elsewhere made it Custom; the mark stayed.
+    const { save, user } = settings({
+      ...DEFAULT_CONFIG,
+      model: "own",
+      preset: "recommended",
+    } as Config);
+    await user.type(
+      screen.getByRole("textbox", { name: "Instructions" }),
+      "Be brief.",
+    );
+    await user.click(screen.getByRole("button", { name: "Save" }));
+    await waitFor(() => expect(save).toHaveBeenCalled());
+    expect(save.mock.calls[0]?.[0]).toMatchObject({ model: "own" });
+    expect(save.mock.calls[0]?.[0]).not.toHaveProperty("preset");
+  });
+
+  it("keeps the agent's harness when another is recommended first", async () => {
+    vi.stubEnv(
+      "VITE_BUZZ_RECOMMENDED_AGENT",
+      JSON.stringify([
+        {
+          harness: "codex",
+          model: "model-a",
+          effort: "high",
+          label: "Model A",
+        },
+        candidate,
+      ]),
+    );
+    const { user } = settings({
+      ...DEFAULT_CONFIG,
+      preset: "recommended",
+    } as Config);
+    // Goose's own candidate, never Codex's.
+    await user.click(aiSettings());
+    expect(await screen.findByText("Model B · High")).toBeInTheDocument();
+    expect(screen.queryByText("Model A · High")).not.toBeInTheDocument();
+  });
+
+  it("shows today's settings in a build without a recommendation", () => {
+    vi.stubEnv("VITE_BUZZ_RECOMMENDED_AGENT", "");
+    settings({ ...DEFAULT_CONFIG, preset: "recommended" } as Config);
+    expect(
+      screen.queryByRole("combobox", { name: "AI setup" }),
+    ).not.toBeInTheDocument();
+    expect(
+      screen.getByRole("combobox", { name: "Provider" }),
+    ).toBeInTheDocument();
+  });
+});

@@ -16,8 +16,7 @@ import {
   clearRegistration,
   type RegistrationIntent,
 } from "../agents/registration";
-import { oauthTarget } from "../oauth/browser";
-import type { BuilderlabSession } from "../session";
+import { sessionTarget, type BuilderlabSession } from "../session";
 
 const PREFIX = "buzz.builderlab.adapter-identity.v1:";
 type Identity = {
@@ -36,7 +35,7 @@ export function builderlabType(
   openSettings?: (section: string) => void,
 ): AgentType {
   const scope = () => ({
-    target: oauthTarget(),
+    target: sessionTarget(session),
     subject: session.credential().account.subject,
   });
   function remember(
@@ -64,7 +63,12 @@ export function builderlabType(
     )
       throw new Error("Saved Builderlab agent identity is invalid.");
     const current = scope();
-    if (value.target !== current.target || value.subject !== current.subject)
+    // Another server's agent is managed only from one of its communities.
+    if (value.target !== current.target)
+      throw new Error(
+        "This agent is on another Builderlab server. Open one of its communities to manage it.",
+      );
+    if (value.subject !== current.subject)
       throw new Error(
         "Sign in to the Builderlab account that created this agent.",
       );
@@ -95,6 +99,28 @@ export function builderlabType(
       throw new DOMException("Builderlab session changed.", "AbortError");
     if (!agent) throw new Error("Agent not found in this Builderlab account.");
     return agent;
+  }
+  /** Runs an operation on the server it started on: a selection that moves
+   * the session to another server aborts it before its next request. */
+  async function pinned<T>(
+    signal: AbortSignal,
+    run: (signal: AbortSignal) => Promise<T>,
+  ): Promise<T> {
+    const target = sessionTarget(session);
+    const moved = new AbortController();
+    const stop = session.subscribe(() => {
+      if (sessionTarget(session) !== target)
+        moved.abort(
+          new Error(
+            "The selected community uses another Builderlab server. Try again from this agent's community.",
+          ),
+        );
+    });
+    try {
+      return await run(AbortSignal.any([signal, moved.signal]));
+    } finally {
+      stop();
+    }
   }
   async function validateCreation(config: unknown, signal: AbortSignal) {
     await session.ensureSignedIn(signal);
@@ -145,59 +171,72 @@ export function builderlabType(
       },
     ],
     remote: {
-      async provision({ name, picture, config, signal }) {
-        await validateCreation(config, signal);
-        const agent = await client.register(
-          name,
-          signal,
-          ({ pubkey, id }, intent) => remember(pubkey, id, intent),
-          picture,
-        );
-        return {
-          pubkey: agent.pubkey,
-          ...(agent.picture ? { picture: agent.picture } : {}),
-        };
-      },
-      async activate({ pubkey, auth, community, config, signal }) {
-        await session.ensureSignedIn(signal);
-        const saved = identity(pubkey);
-        const draft =
-          config === undefined
-            ? undefined
-            : await validateCreation(config, signal);
-        // Agents persisted unfinished setup before invoking activation. Until
-        // here, a failed setup write must still replay the original provision.
-        if (saved?.registration) clearRegistration(saved.registration);
-        await client.activate(pubkey, auth, community, signal);
-        if (draft) await client.configure(pubkey, draft, signal);
-      },
-      async profile({ signal, ...profile }) {
-        await session.ensureSignedIn(signal);
-        await client.updateProfile(profile, signal);
-      },
-      async interrupt({ pubkey, signal, ...place }) {
-        // A stop is urgent: it never waits on an interactive sign-in.
-        session.credential();
-        return client.cancelTurn(await resolve(pubkey, signal), place, signal);
-      },
-      instructions: {
-        async get({ pubkey, signal }) {
-          return (await listed(pubkey, signal)).instructions ?? "";
-        },
-        async set({ pubkey, instructions, signal }) {
-          await client.updateInstructions(
-            await listed(pubkey, signal),
-            instructions,
+      provision: ({ name, picture, config, signal }) =>
+        pinned(signal, async (signal) => {
+          await validateCreation(config, signal);
+          const agent = await client.register(
+            name,
+            signal,
+            ({ pubkey, id }, intent) => remember(pubkey, id, intent),
+            picture,
+          );
+          return {
+            pubkey: agent.pubkey,
+            ...(agent.picture ? { picture: agent.picture } : {}),
+          };
+        }),
+      activate: ({ pubkey, auth, community, config, signal }) =>
+        pinned(signal, async (signal) => {
+          await session.ensureSignedIn(signal);
+          const saved = identity(pubkey);
+          const draft =
+            config === undefined
+              ? undefined
+              : await validateCreation(config, signal);
+          // Agents persisted unfinished setup before invoking activation.
+          // Until here, a failed setup write must still replay the original
+          // provision.
+          if (saved?.registration) clearRegistration(saved.registration);
+          await client.activate(pubkey, auth, community, signal);
+          if (draft) await client.configure(pubkey, draft, signal);
+        }),
+      profile: ({ signal, ...profile }) =>
+        pinned(signal, async (signal) => {
+          await session.ensureSignedIn(signal);
+          await client.updateProfile(profile, signal);
+        }),
+      interrupt: ({ pubkey, signal, ...place }) =>
+        pinned(signal, async (signal) => {
+          // A stop is urgent: it never waits on an interactive sign-in.
+          session.credential();
+          return client.cancelTurn(
+            await resolve(pubkey, signal),
+            place,
             signal,
           );
-        },
+        }),
+      instructions: {
+        get: ({ pubkey, signal }) =>
+          pinned(
+            signal,
+            async (signal) => (await listed(pubkey, signal)).instructions ?? "",
+          ),
+        set: ({ pubkey, instructions, signal }) =>
+          pinned(signal, async (signal) => {
+            await client.updateInstructions(
+              await listed(pubkey, signal),
+              instructions,
+              signal,
+            );
+          }),
       },
-      async remove({ pubkey, signal }) {
-        await session.ensureSignedIn(signal);
-        const saved = await resolve(pubkey, signal);
-        await client.delete(saved, signal);
-        if (saved.registration) clearRegistration(saved.registration);
-      },
+      remove: ({ pubkey, signal }) =>
+        pinned(signal, async (signal) => {
+          await session.ensureSignedIn(signal);
+          const saved = await resolve(pubkey, signal);
+          await client.delete(saved, signal);
+          if (saved.registration) clearRegistration(saved.registration);
+        }),
     },
   };
 }

@@ -60,6 +60,8 @@ export function apply(ctx: Context) {
     );
     React.useEffect(() => session.channels.ensureList(), [session]);
     const [selected, select] = React.useState("");
+    const [sharing, setSharing] = React.useState(false);
+    const shareTrigger = React.useRef<HTMLButtonElement>(null);
     const channel =
       list.channels.find((item) => item.id === selected) ?? list.channels[0];
     return h(
@@ -92,6 +94,45 @@ export function apply(ctx: Context) {
           ),
         ),
       ),
+      channel &&
+        h(
+          "button",
+          {
+            ref: shareTrigger,
+            type: "button",
+            onClick: () => setSharing(true),
+          },
+          "Share consumer record",
+        ),
+      sharing &&
+        channel &&
+        h(ui.ui.MembersDialog, {
+          key: `${session.scope}:${channel.id}`,
+          session,
+          channelId: channel.id,
+          trigger: shareTrigger,
+          close: () => setSharing(false),
+          title: "Record access",
+          shareLink:
+            "buzz://plugin?id=test.conversation-consumer&record=general",
+          memberActions: {
+            canAdd: false,
+            pending: false,
+            async change() {
+              throw new Error("Consumer is read only");
+            },
+          },
+          accessSettings: h(ui.ui.GeneralAccess, {
+            capability: session.channelDetails,
+            channelId: channel.id,
+            channel: { ...channel, readOnly: true, visibility: "private" },
+            policy: {
+              subject: "record",
+              allowPublic: false,
+              visibilityDescription: () => "Record access changes.",
+            },
+          }),
+        }),
       channel
         ? h(Conversation, {
             connection,

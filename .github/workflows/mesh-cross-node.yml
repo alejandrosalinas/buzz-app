@@ -41,7 +41,7 @@ jobs:
       - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: .cache/mesh-cross-node
-          key: mesh-smoke-assets-linux-v0.78.1-8030f045
+          key: mesh-smoke-assets-linux-v0.79.0-8030f045
       - name: Full mesh crate tests
         run: ./bin/cargo test --locked -p buzz-mesh-compute
       - name: Remote-only completion and provider outage

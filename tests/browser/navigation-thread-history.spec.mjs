@@ -12,6 +12,7 @@ import {
 } from "./timeline.mjs";
 
 import { wheel } from "./timeline.mjs";
+import { markAllRead } from "./reading.mjs";
 
 const closeRequest = `{ const tabEvent = "buzz:close-active-tab";\n${readFileSync(
   new URL("../../src-tauri/src/close-request.js", import.meta.url),
@@ -44,7 +45,7 @@ test("Back restores each thread visit before the previous channel", async ({
   const headStarted = new Promise((resolve) => {
     sawHead = resolve;
   });
-  await page.route("**/api/relay/**/query", async (route) => {
+  await page.route("**/api/relay/primary/query", async (route) => {
     if (
       route
         .request()
@@ -61,7 +62,15 @@ test("Back restores each thread visit before the previous channel", async ({
     await open(page, app);
     await beta.focus(); // Prepare without selecting or adding a navigation visit.
     await headStarted;
-    await expect.poll(() => app.report.unreadHolds.length).toBe(1);
+    // Every joined community holds its unread batch; only primary's is under test.
+    await expect
+      .poll(
+        () =>
+          app.report.unreadHolds.filter(
+            ({ community }) => community === "primary",
+          ).length,
+      )
+      .toBe(1);
     await expect(beta).toHaveAccessibleName("Beta");
   } finally {
     releaseHead();
@@ -158,6 +167,7 @@ for (const reading of [false, true]) {
     let last;
     for (let i = 0; i < 120; i++) last = app.reply(root.id, false, false);
     await open(page, app);
+    await markAllRead(page);
     const region = page.getByRole("region", {
       name: "Thread messages",
       exact: true,
@@ -167,7 +177,7 @@ for (const reading of [false, true]) {
       release = resolve;
     });
     let requested = false;
-    const routePattern = "**/api/relay/**/query";
+    const routePattern = "**/api/relay/primary/query";
     await page.route(routePattern, async (route) => {
       if (
         !requested &&

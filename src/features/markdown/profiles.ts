@@ -13,6 +13,9 @@ export type MarkdownProfile = Readonly<{
   /** AST transforms after syntax; the renderer runs them once guards pass. */
   transforms: readonly Pluggable[];
   html: HtmlPolicy;
+  /** HAST transforms after remark-rehype. They may annotate or restructure
+   * elements, never add raw HTML. */
+  rehype?: readonly Pluggable[] | undefined;
   /** The URL policy for screens whose policy needs no instance context. */
   urlTransform?: UrlTransform | undefined;
 }>;

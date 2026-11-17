@@ -244,6 +244,26 @@ it("summarises the agents' spend and opens a costly session's thread", async () 
   });
 });
 
+it("counts a session with no conversation, listing it without a link to open", async () => {
+  const {
+    channelId: _channel,
+    root: _root,
+    ...standalone
+  } = session("a", 750_000);
+  render(
+    <UsagePage
+      agents={host([agent("Pixel")], async () => [standalone])}
+      open={vi.fn()}
+    />,
+  );
+  const hero = await screen.findByRole("region", { name: "Estimated cost" });
+  expect(within(hero).getByText("$3.00")).toBeTruthy();
+  expect(screen.getByText("No conversation")).toBeTruthy();
+  expect(
+    screen.queryByRole("button", { name: /Open conversation/ }),
+  ).toBeNull();
+});
+
 it("opens an agent from By agent in Agents", async () => {
   const relay = agent("Relay");
   const open = vi.fn(async () => ({ status: "opened" as const }));

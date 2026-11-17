@@ -1184,7 +1184,6 @@ export function PluginImport({
                 : "Load built plugins containing manifest.json and plugin.js. Buzz doesn’t build source code or run install scripts."
         }
         size={error || (reviewing && updating) ? "compact" : "wide"}
-        headerGap={reviewing && updating ? "compact" : "default"}
         footerGap={reviewing && updating ? "compact" : "default"}
         leadingActions={
           !error &&

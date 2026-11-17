@@ -447,7 +447,9 @@ it.each(["reject", "commit"] as const)(
         expect(publish.mock.calls[1]?.[0]).toEqual(publish.mock.calls[0]?.[0]);
       } else {
         expect(await result).toBeUndefined();
-        expect(input).toHaveAccessibleName("Reply to thread");
+        await waitFor(() =>
+          expect(input).toHaveAccessibleName("Reply to thread"),
+        );
         expect(outbox.snapshot()).toHaveLength(0);
         expect(publish).toHaveBeenCalledTimes(1);
       }

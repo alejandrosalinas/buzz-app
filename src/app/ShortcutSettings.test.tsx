@@ -328,6 +328,7 @@ it("presents actual host registrations in navigation, interface sizing, search/s
       "Reply in thread to selected message",
       "Mark unread from selected message",
       "Delete selected message",
+      "Quote selected text",
       "Reload Buzz",
     ]);
   } finally {

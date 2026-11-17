@@ -434,6 +434,8 @@ function setup(
     storage: localStore(),
     resumeInterrupted: vi.fn(),
     dismissInterrupted: vi.fn(),
+    interruptedTurns: () => [],
+    readInterrupted: async () => [],
     wake: vi.fn(),
     memberships: vi.fn(
       (_pubkey: string): ReturnType<Agents["memberships"]> => [],
@@ -3912,6 +3914,231 @@ it.each(["error", "unavailable"] as const)(
   },
 );
 
+it("tells a browser's Import an agent that agents run in the desktop app", async () => {
+  const user = userEvent.setup();
+  const navigator = {
+    open: vi.fn(async () => ({ status: "opened" as const })),
+  } as unknown as Navigation;
+  // Outside the desktop app no agent type registers.
+  const { agents } = setup([], { status: "unavailable", page: { navigator } });
+  const none: RegisteredAgentType[] = [];
+  agents.types = () => none;
+  await user.click(screen.getByRole("button", { name: "New agent" }));
+  await user.click(
+    await screen.findByRole("menuitem", { name: "Import an agent" }),
+  );
+  const dialog = await screen.findByRole("dialog", { name: "Import an agent" });
+  expect(
+    within(dialog).getByText(
+      "Agents runs in the desktop app. Open Buzz there to import one.",
+    ),
+  ).toBeVisible();
+  // The page behind it says the same.
+  expect(
+    screen.getByText("Agents runs in the desktop app", { exact: true }),
+  ).toBeInTheDocument();
+  expect(within(dialog).queryByText(/Manage plugins/)).not.toBeInTheDocument();
+});
+
+it("tells Import an agent that agents could not load, as the page does", async () => {
+  const user = userEvent.setup();
+  const navigator = {
+    open: vi.fn(async () => ({ status: "opened" as const })),
+  } as unknown as Navigation;
+  const { agents } = setup([], { status: "error", page: { navigator } });
+  const none: RegisteredAgentType[] = [];
+  agents.types = () => none;
+  await user.click(screen.getByRole("button", { name: "New agent" }));
+  await user.click(
+    await screen.findByRole("menuitem", { name: "Import an agent" }),
+  );
+  const dialog = await screen.findByRole("dialog", { name: "Import an agent" });
+  // Without a reason, the page's own fallback.
+  expect(
+    within(dialog).getByText("Agents could not load. Try again."),
+  ).toBeVisible();
+  expect(within(dialog).queryByText(/Manage plugins/)).not.toBeInTheDocument();
+});
+
+// No plugin registered a type that runs agents here: every agent plugin off,
+// or one on that failed to activate. The dialog names what is missing.
+it("links Import an agent to Manage plugins while no type runs agents here", async () => {
+  const user = userEvent.setup();
+  const navigator = {
+    open: vi.fn(async () => ({ status: "opened" as const })),
+  } as unknown as Navigation;
+  const { agents } = setup([agent("Ada", 1)], { page: { navigator } });
+  const none: RegisteredAgentType[] = [];
+  agents.types = () => none;
+  await user.click(screen.getByRole("button", { name: "New agent" }));
+  await user.click(
+    await screen.findByRole("menuitem", { name: "Import an agent" }),
+  );
+  const dialog = await screen.findByRole("dialog", { name: "Import an agent" });
+  expect(
+    within(dialog).getByText(/No harness that runs agents on this computer/),
+  ).toHaveTextContent(
+    "No harness that runs agents on this computer is available. Check Manage plugins.",
+  );
+  await user.click(
+    within(dialog).getByRole("button", { name: "Manage plugins" }),
+  );
+  expect(navigator.open).toHaveBeenCalledExactlyOnceWith({
+    version: 1,
+    kind: "settings",
+    section: "plugins",
+  });
+  // Settings opens in place of the dialog, not over it.
+  expect(
+    screen.queryByRole("dialog", { name: "Import an agent" }),
+  ).not.toBeInTheDocument();
+});
+
+// Only a hosted type is on. Import keeps it out, since an imported agent
+// needs a key here, and must not claim no plugin is on: Manage plugins shows
+// one enabled.
+it("does not say no plugin is on when only a hosted type is", async () => {
+  const user = userEvent.setup();
+  const navigator = {
+    open: vi.fn(async () => ({ status: "opened" as const })),
+  } as unknown as Navigation;
+  const { agents, types } = setup([agent("Ada", 1)], { page: { navigator } });
+  const cloud = {
+    ...types[0],
+    key: "test/cloud",
+    title: "Cloud",
+    remote: {},
+  } as unknown as RegisteredAgentType;
+  const hosted = [cloud];
+  agents.types = () => hosted;
+  await user.click(screen.getByRole("button", { name: "New agent" }));
+  await user.click(
+    await screen.findByRole("menuitem", { name: "Import an agent" }),
+  );
+  const dialog = await screen.findByRole("dialog", { name: "Import an agent" });
+  expect(
+    within(dialog).getByText(/No harness that runs agents on this computer/),
+  ).toHaveTextContent(
+    "No harness that runs agents on this computer is available. Check Manage plugins.",
+  );
+  expect(within(dialog).queryByText(/plugin is turned on/)).toBeNull();
+  await user.click(
+    within(dialog).getByRole("button", { name: "Manage plugins" }),
+  );
+  expect(navigator.open).toHaveBeenCalledExactlyOnceWith({
+    version: 1,
+    kind: "settings",
+    section: "plugins",
+  });
+});
+
+it("keeps Manage plugins plain text while an import is still running", async () => {
+  const user = userEvent.setup();
+  const navigator = {
+    open: vi.fn(async () => ({ status: "opened" as const })),
+  } as unknown as Navigation;
+  const { agents, change } = setup([], { page: { navigator } });
+  let finish = () => {};
+  agents.port.mockImplementationOnce(
+    () =>
+      new Promise((resolve) => {
+        finish = () => resolve({ agent: agent("Ada", 1), notes: [] });
+      }),
+  );
+  await user.click(
+    await screen.findByRole("button", { name: /Import them now/ }),
+  );
+  const dialog = screen.getByRole("dialog", { name: "Import an agent" });
+  await user.click(
+    await within(dialog).findByRole("button", { name: "Import as Echo, Ada" }),
+  );
+  // The last agent plugin goes off while Ada is still importing.
+  const none: RegisteredAgentType[] = [];
+  agents.types = () => none;
+  act(() => change({}));
+  expect(
+    within(dialog).getByText(/No harness that runs agents on this computer/),
+  ).toHaveTextContent(
+    "No harness that runs agents on this computer is available. Check Manage plugins.",
+  );
+  // Opening Settings would close the dialog over the import, which Close
+  // and Escape may not do either, so the link waits as plain text.
+  expect(
+    within(dialog).queryByRole("button", { name: "Manage plugins" }),
+  ).not.toBeInTheDocument();
+  await user.keyboard("{Escape}");
+  expect(screen.getByRole("dialog", { name: "Import an agent" })).toBeVisible();
+  finish();
+  await user.click(
+    await within(dialog).findByRole("button", { name: "Manage plugins" }),
+  );
+  expect(navigator.open).toHaveBeenCalledExactlyOnceWith({
+    version: 1,
+    kind: "settings",
+    section: "plugins",
+  });
+  expect(
+    screen.queryByRole("dialog", { name: "Import an agent" }),
+  ).not.toBeInTheDocument();
+});
+
+it("links a Marketplace agent's Import to Manage plugins while no agent type plugin is on", async () => {
+  const user = userEvent.setup();
+  const navigator = {
+    open: vi.fn(async () => ({ status: "opened" as const })),
+  } as unknown as Navigation;
+  const view = setup([], { page: { navigator } });
+  const none: RegisteredAgentType[] = [];
+  view.agents.types = () => none;
+  const owner = createRelaySession(null);
+  const session = {
+    ...owner.session,
+    read: vi.fn().mockResolvedValue([
+      {
+        id: "ab".repeat(32),
+        pubkey: "cd".repeat(32),
+        kind: 30175,
+        created_at: 1,
+        tags: [
+          ["d", "helper"],
+          ["shared", "true"],
+        ],
+        content: JSON.stringify({
+          display_name: "Marketplace helper",
+          system_prompt: "Help with tasks.",
+        }),
+      },
+    ]),
+  };
+  const snapshot = { status: "ready" as const, generation: 1, session };
+  const relay = { ...view.relay, snapshot: () => snapshot };
+  try {
+    view.rerender(
+      <AgentsPage agents={view.agents} relay={relay} navigator={navigator} />,
+    );
+    await user.click(screen.getByRole("tab", { name: "Marketplace" }));
+    await user.click(
+      await screen.findByRole("button", { name: "Marketplace helper" }),
+    );
+    await user.click(screen.getByRole("button", { name: "Import" }));
+    const dialog = screen.getByRole("dialog", { name: "Marketplace helper" });
+    await user.click(
+      within(dialog).getByRole("button", { name: "Manage plugins" }),
+    );
+    expect(navigator.open).toHaveBeenCalledExactlyOnceWith({
+      version: 1,
+      kind: "settings",
+      section: "plugins",
+    });
+    expect(
+      screen.queryByRole("dialog", { name: "Marketplace helper" }),
+    ).not.toBeInTheDocument();
+  } finally {
+    view.unmount();
+    owner.dispose();
+  }
+});
+
 it("says in Settings where an agent's config lives, and why it is only here", async () => {
   const user = userEvent.setup();
   const { agents, notify } = setup([agent("Ada", 1)]);
@@ -7324,4 +7551,54 @@ describe("a team Save that finishes after its editor is gone", () => {
       f.dispose();
     }
   });
+});
+
+it("shows Automatic as a read-only detail on a recommended agent card", async () => {
+  vi.stubEnv(
+    "VITE_BUZZ_RECOMMENDED_AGENT",
+    JSON.stringify([
+      { harness: "codex", model: "model-a", label: "Model A", effort: "high" },
+    ]),
+  );
+  try {
+    const saved = {
+      ...agent("Ada", 1),
+      type: "test/codex",
+      config: { preset: "recommended" },
+    };
+    const { agents } = setup([saved], {
+      more: [
+        {
+          key: "test/codex",
+          pluginId: "test",
+          revision: "1",
+          id: "codex",
+          title: "Codex",
+          summary: () => "model-a",
+          icon: RobotIcon,
+          defaults: () => ({ config: {} }),
+          CreateModel: () => <button type="button">Manual model</button>,
+          tabs: [
+            {
+              id: "settings",
+              title: "Settings",
+              role: "settings",
+              component: () => <p>Model settings</p>,
+            },
+          ],
+        } as RegisteredAgentType,
+      ],
+    });
+    const card = screen.getByRole("gridcell", { name: "Ada" });
+    expect(
+      within(card).queryByRole("button", { name: "Manual model" }),
+    ).not.toBeInTheDocument();
+    expect(within(card).getByText("Model A (Automatic)")).toBeVisible();
+    expect(
+      within(card).queryByRole("button", { name: "Automatic" }),
+    ).not.toBeInTheDocument();
+    expect(agents.save).not.toHaveBeenCalled();
+  } finally {
+    vi.unstubAllEnvs();
+  }
 });

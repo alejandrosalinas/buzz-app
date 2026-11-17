@@ -51,7 +51,9 @@ import { SurfaceButton } from "../../shared/design-system/ui/SurfaceButton";
 import { PreferenceRow } from "../../shared/design-system/ui/PreferenceRow";
 import { SettingsGroup } from "../../shared/design-system/ui/SettingsGroup";
 import { InlineHeader } from "../../shared/design-system/ui/Header";
+import { LoadingRegion } from "../../shared/design-system/ui/LoadingRegion";
 import { AgentInstructions } from "../../features/agents/AgentInstructions";
+import { SettingsSectionLink } from "../../features/navigation/SettingsSectionLink";
 import { ProfileBackdrop } from "../../features/profiles/ProfileBackdrop";
 import { agentAvatars } from "../../features/agents/avatar-packs";
 import hero from "../../features/profiles/ProfileHero.module.css";
@@ -68,6 +70,8 @@ type Importing = Readonly<{
   onImported(agent: Agent): void;
   /** Opens an agent of yours that an import would only copy. */
   onOpen?: ((agent: Agent) => void) | undefined;
+  /** Opens a Settings section, such as Manage plugins. */
+  openSettings?: ((section: string) => void) | undefined;
 }>;
 
 export type SharedAgentSelection = {
@@ -446,12 +450,52 @@ function copies(
   }
 }
 
+/** Why Import has no type to import as: agents run only in the desktop app,
+ * they could not load, their types are still registering, or no harness that
+ * runs agents on this computer is available. Only the last has a remedy in
+ * Settings, and it has more than one cause: every agent plugin is off, only a
+ * hosted type (one its provider runs, so it cannot take an imported key) is
+ * on, or a plugin that is on failed to activate. The snapshot being ready
+ * says the inventory loaded, not that a plugin activated, so this names what
+ * is missing rather than why. */
+export function NoImportTypes({
+  agents,
+  openSettings,
+}: Pick<Importing, "agents" | "openSettings">) {
+  const { snapshot } = useAgents(agents);
+  if (snapshot.status === "loading")
+    return (
+      <LoadingRegion pending label="Loading agent types…">
+        {null}
+      </LoadingRegion>
+    );
+  return (
+    <p className="m-0 text-body-sm text-secondary">
+      {snapshot.status === "unavailable" ? (
+        // As the Agents page's own empty state words it.
+        "Agents runs in the desktop app. Open Buzz there to import one."
+      ) : snapshot.status === "error" ? (
+        `Agents could not load. ${snapshot.error ?? "Try again."}`
+      ) : (
+        <>
+          No harness that runs agents on this computer is available. Check{" "}
+          <SettingsSectionLink section="plugins" open={openSettings}>
+            Manage plugins
+          </SettingsSectionLink>
+          .
+        </>
+      )}
+    </p>
+  );
+}
+
 export function SharedImportDialog({
   shared,
   agents,
   types,
   onImported,
   onOpen,
+  openSettings,
   onClose,
   finalFocus,
 }: Importing & {
@@ -542,7 +586,6 @@ export function SharedImportDialog({
             ? "Edited. Changes only affect your copy."
             : "Import it as is, or edit anything below first. Changes only affect your copy."
       }
-      headerGap="compact"
       footerGap="compact"
       finalFocus={finalFocus}
       preventClose={pending}
@@ -586,9 +629,19 @@ export function SharedImportDialog({
       {/* Laid out as the agent's Identity tab will show it once imported. */}
       <div ref={body} className="grid gap-4">
         {types.length === 0 ? (
-          <p className="m-0 text-body-sm text-secondary">
-            Enable an agent type plugin to import agents.
-          </p>
+          <NoImportTypes
+            agents={agents}
+            // Settings opens in place of the dialog, not over it, so while
+            // an import keeps the dialog open the link is plain text.
+            openSettings={
+              openSettings && !pending
+                ? (section) => {
+                    onClose();
+                    openSettings(section);
+                  }
+                : undefined
+            }
+          />
         ) : (
           <SettingsGroup>
             <PreferenceRow

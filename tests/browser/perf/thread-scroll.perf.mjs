@@ -51,8 +51,20 @@ async function openThread(page, app, perf) {
 const history = (page) =>
   page.getByRole("region", { name: "Thread messages", exact: true });
 
-// Every older page is requested by upward wheel input at the top and held by
-// the fixture until released, so each step waits for its request and rows.
+// Every older page is held by the fixture until released. Opening the unread
+// thread pages older itself to find its first unread reply; release those
+// pages until it is positioned.
+async function openPositioned(page, app) {
+  await expect(async () => {
+    for (const receipt of app.pending) receipt.release();
+    await expect(history(page)).not.toHaveAttribute("data-positioning", {
+      timeout: 100,
+    });
+  }).toPass();
+}
+
+// Upward wheel input at the top requests the remaining older pages, so each
+// step waits for its request and rows.
 async function loadHistory(page, app) {
   const element = history(page);
   const expected =
@@ -60,8 +72,11 @@ async function loadHistory(page, app) {
   const box = await element.boundingBox();
   await page.mouse.move(box.x + box.width - 12, box.y + box.height / 2);
   let released = app.pending.length;
-  for (let page_ = 0; page_ < 9; page_++) {
-    const before = await element.locator(topLevel).count();
+  for (
+    let before = await element.locator(topLevel).count();
+    before < expected;
+    before = await element.locator(topLevel).count()
+  ) {
     await element.evaluate((node) => {
       node.scrollTop = 0;
     });
@@ -102,7 +117,7 @@ for (const name of ["thread-scroll-open", ...Object.keys(gestures)])
       }
       await reply.click();
       const element = history(page);
-      await expect(element).not.toHaveAttribute("data-positioning");
+      await openPositioned(page, app);
       const loaded = await loadHistory(page, app);
       await element.evaluate((node) => {
         node.scrollTop = node.scrollHeight;

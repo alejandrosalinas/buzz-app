@@ -1046,6 +1046,42 @@ export function EditableInput({
       editor.focus();
       return { from, to: editor.state.selection.to };
     };
+    /** Quote copied timeline content after the draft, wherever its caret is,
+     * and continue on a new line below it. A blank last paragraph, such as an
+     * empty draft's, gives way to the quote. Quoted identity links stay
+     * references: unlike a paste, quoting someone never notifies them. */
+    const insertQuote = (html: string) => {
+      if (!editable() || composing.current || editor.composing) return false;
+      const copy = buzzCopyDocument(html);
+      if (!copy?.textContent.trim()) return false;
+      const { nodes } = composerSchema;
+      const tr = closeHistory(editor.state.tr);
+      const end = tr.doc.content.size;
+      const last = tr.doc.lastChild;
+      const from =
+        last?.type === nodes.paragraph && !last.content.size
+          ? end - last.nodeSize
+          : end;
+      tr.replaceWith(from, end, [
+        nodes.blockquote.create(null, copy.content),
+        nodes.paragraph.create(),
+      ]);
+      tr.setSelection(Selection.atEnd(tr.doc));
+      if (
+        composerMarkdown(projectComposerDocument(tr.doc).draft).length >
+        current.current.maxLength
+      ) {
+        current.current.onPasteTooLong?.();
+        return false;
+      }
+      const before = editor.state;
+      editor.dispatch(tr.scrollIntoView());
+      if (editor.state === before) return false;
+      // The reply typed below the quote is its own undo step.
+      separateHistory = true;
+      editor.focus();
+      return true;
+    };
     const replaceRecipients = (recipients: readonly MentionRecipient[]) => {
       if (!editable() || composing.current || editor.composing) return false;
       const source = projection();
@@ -1978,6 +2014,7 @@ export function EditableInput({
             const dom = document.createElement("span");
             dom.className = tokenClass.current;
             dom.contentEditable = "false";
+            dom.setAttribute("spellcheck", "false");
             dom.dataset.source = node.attrs.source;
             hosts.current.set(dom, {
               key: `token-${++tokenHosts}`,
@@ -2529,6 +2566,7 @@ export function EditableInput({
         },
       },
       editLink: { configurable: true, value: editLink },
+      insertQuote: { configurable: true, value: insertQuote },
       removeRecipient: {
         configurable: true,
         value: (pubkey: string) => {

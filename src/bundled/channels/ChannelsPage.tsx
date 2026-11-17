@@ -26,6 +26,7 @@ import { useReturnHighlight } from "../../features/messages/use-return-highlight
 import { useMessageOpening } from "../../features/messages/use-message-opening";
 import { ChannelBody } from "./ChannelBody";
 import {
+  type ConversationTab,
   entryPane,
   panelTabId,
   rootOfTab,
@@ -36,6 +37,7 @@ import { ChannelMembersDialog } from "./ChannelMembersDialog";
 import { ChannelHeaderIdentity, memberAccess } from "./ChannelHeaderIdentity";
 import {
   matchesConversation,
+  openEmptyChannels,
   soloDraft,
   soloDraftTarget,
 } from "../../features/channel-navigation/routes";
@@ -56,6 +58,11 @@ import { IconButton } from "../../shared/design-system/ui/IconButton";
 import { ChannelHeaderMenu } from "./ChannelHeaderMenu";
 import { ChannelSettingsPanel } from "./ChannelSettingsPanel";
 import { ChannelJoinNotice } from "../../features/messages/ChannelJoinNotice";
+import {
+  ArchivedChannelNotice,
+  ChannelStateNotice,
+  ChannelStateRegion,
+} from "./ChannelStateNotice";
 import { ChannelLifecycleActions } from "./ChannelLifecycleActions";
 import { lifecycleNoun } from "./ChannelLifecycleDialog";
 import type { PageNavigation } from "../../features/navigation/service";
@@ -92,7 +99,7 @@ import {
   ChatCircleIcon,
   GearIcon,
 } from "../../shared/design-system/icons/index";
-import { channelIcon } from "../../features/channels/channel-icon";
+import { channelIcon, channelText } from "../../features/channels/channel-icon";
 import { communityRefusalTitle } from "../../features/federated-identity/CommunitySignIn";
 import type { RelayData } from "../../features/relay/service";
 import type { RelaySession } from "../../features/relay/session";
@@ -409,6 +416,14 @@ function ChannelWorkspace({
   const [composerFocus, setComposerFocus] = useState(0);
   const [trackSoloMove, soloMoveNotices] = useSoloMoveRecovery(queries);
   const historyContainer = useRef<HTMLElement>(null);
+  // The channel whose lost membership took focus from the conversation.
+  const focusAfterLoss = useRef<string>(undefined);
+  const backTrigger = useRef<HTMLButtonElement>(null);
+  // What last took focus in the conversation pane, until focus moves to
+  // another element outside it.
+  const paneFocus = useRef<Element>(undefined);
+  // The channel the conversation showed at the last commit.
+  const shownChannel = useRef<string>(undefined);
   // A visit applied by a header opening must not take that opening's focus.
   const [preservedVisit, setPreservedVisit] = useState<PageNavigation>();
   // A started join focuses the composer when membership makes it writable,
@@ -600,6 +615,84 @@ function ChannelWorkspace({
         ? { channelId: current.id, queries }
         : undefined;
   });
+  // How the open channel was last named while joined, so losing that
+  // membership while it is open is explained. Only relay-confirmed membership
+  // counts, not membership downloaded from disk, and only a complete, ready
+  // roster is evidence of the loss. The viewer's own submitted Leave or Delete
+  // explains itself: its loss can arrive before its navigation, or,
+  // unconfirmed, after its failure, until the relay answers for the channel by
+  // dropping it or by a complete roster read that still lists it (see
+  // `ownLosses`). Until it ends, the snapshot stays: one that fails before
+  // publishing lost nothing, so a removal during it is someone else's. A
+  // confirmation still open has lost nothing either: a loss behind it, or
+  // after Cancel, is someone else's.
+  const lifecycleDialog = handoff?.lifecycleDialog;
+  const recordedLoss =
+    !!requestedChannel &&
+    !!handoff?.ownLosses.some(
+      ({ channelId }) => channelId === requestedChannel,
+    );
+  const ownLoss =
+    recordedLoss ||
+    (!!requestedChannel &&
+      lifecycleDialog?.channel.id === requestedChannel &&
+      !!lifecycleDialog.submitted &&
+      (lifecycleDialog.action === "leave" ||
+        lifecycleDialog.action === "delete"));
+  // From the roster, not the sidebar: an archived or hidden channel opened
+  // from Search is joined too.
+  const joinedHere =
+    ownLoss || cached
+      ? undefined
+      : list.channels.find(
+          (channel) =>
+            channel.id === requestedChannel &&
+            !channel.cached &&
+            !channel.huddle &&
+            !channel.metadataPending &&
+            channel.channelType !== "solo" &&
+            channel.channelType !== "dm",
+        );
+  const [joinedVisit, setJoinedVisit] = useState<{
+    queries: RelaySession;
+    id: string;
+    label: string;
+    /** The access check's answer while joined: one that still stands after
+     * the loss predates it. */
+    access: typeof resolved;
+    /** Its loss has been shown, so access checks of later visits to the same
+     * channel (a thread, a message link) keep it rather than flicker. */
+    shown?: true;
+  }>();
+  if (joinedHere) {
+    const label = channelText(joinedHere);
+    if (
+      joinedVisit?.queries !== queries ||
+      joinedVisit.id !== joinedHere.id ||
+      joinedVisit.label !== label ||
+      joinedVisit.access !== resolved ||
+      joinedVisit.shown
+    )
+      setJoinedVisit({ queries, id: joinedHere.id, label, access: resolved });
+  } else if (
+    joinedVisit &&
+    (recordedLoss ||
+      joinedVisit.id !== requestedChannel ||
+      joinedVisit.queries !== queries)
+  )
+    setJoinedVisit(undefined);
+  const removed =
+    joinedVisit &&
+    !ownLoss &&
+    joinedVisit.id === requestedChannel &&
+    joinedVisit.queries === queries &&
+    !joinedRequest &&
+    (!resolving || joinedVisit.shown) &&
+    list.status === "ready" &&
+    list.coverage !== "partial"
+      ? joinedVisit
+      : undefined;
+  if (removed && !removed.shown) setJoinedVisit({ ...removed, shown: true });
   // Sidebar routing can update the same mounted page. Keep its saved default
   // aligned with the resolved conversation, not only page-local clicks.
   useEffect(() => {
@@ -1918,6 +2011,16 @@ function ChannelWorkspace({
   const hasPanel = companion || hasChannelPanel;
   const showingChannelPanel = tabState.paneOpen && hasChannelPanel;
   const showingPanel = companion || showingChannelPanel;
+  const highlightedThread =
+    showingChannelPanel && !companion
+      ? tabState.tabs.find(
+          (tab): tab is Extract<ConversationTab, { kind: "thread" }> =>
+            tab.kind === "thread" &&
+            tabPane(tab) === "side" &&
+            tab.id === selectedTab &&
+            tab.channelId === currentId,
+        )
+      : undefined;
   // A plain channel visit reads its visible selected thread along with the
   // conversation that holds focus. A link to a message or thread, passive
   // restoration and another channel’s retained tab do not.
@@ -1977,13 +2080,16 @@ function ChannelWorkspace({
   }, [routedTab, navigation?.signal, currentId, split.ref]);
   useEffect(() => {
     // Only an explicit settings click moves focus; restoring a visit does not.
-    if (settingsFocus)
+    if (
+      settingsFocus ||
+      settings?.focusRequest === navigator.snapshot().attempt.id
+    )
       split.ref.current
         ?.querySelector<HTMLElement>(
           '[data-panel-workspace] [data-tab-value="settings"]',
         )
         ?.focus({ preventScroll: true });
-  }, [settingsFocus, split.ref]);
+  }, [settingsFocus, settings?.focusRequest, split.ref, navigator]);
   const settingsContent = (
     <ChannelSettingsPanel
       scope={scope}
@@ -2057,6 +2163,47 @@ function ChannelWorkspace({
       )}
     </ChannelSettingsPanel>
   );
+  // Unarchive's confirmation returns focus to its trigger, which restoring
+  // removes; the restored composer takes focus, as after Join.
+  const unarchive = (channel: ChannelSummary, trigger: HTMLElement) =>
+    handoff?.openLifecycle(channel, "unarchive", trigger, navigation?.signal, {
+      close() {
+        if (trigger.isConnected) trigger.focus({ preventScroll: true });
+      },
+      depart() {
+        if (showing.current === channel.id)
+          setComposerFocus((value) => value + 1);
+      },
+    });
+  // Lands where Leave does: the sidebar's neighbor, else the empty route.
+  const backToChannels = (id: string) => {
+    if (handoff?.openSuccessor.current) handoff.openSuccessor.current(id);
+    else openEmptyChannels(navigator, scope);
+  };
+  // Neutral: an admin's removal, Leave on another device and someone else's
+  // Delete all drop the channel from the roster alike.
+  const removedTitle =
+    removed && `You’re no longer a member of ${removed.label}`;
+  const archivedChannel = current?.archived && !solo ? current : undefined;
+  const stateNotice = removedTitle ? (
+    <ChannelStateNotice title={removedTitle}>
+      <Button
+        ref={backTrigger}
+        type="button"
+        size="sm"
+        onClick={() => backToChannels(removed.id)}
+      >
+        Back to channels
+      </Button>
+    </ChannelStateNotice>
+  ) : archivedChannel ? (
+    <ArchivedChannelNotice
+      channel={archivedChannel}
+      session={queries}
+      unarchive={(trigger) => unarchive(archivedChannel, trigger)}
+    />
+  ) : undefined;
+  // A focused composer that archiving removes hands focus to the history.
   const focusArchivedHistory = useCallback(() => {
     const history = historyContainer.current;
     if (
@@ -2070,6 +2217,79 @@ function ChannelWorkspace({
       history.querySelector<HTMLElement>("[data-message-scroller]") ?? history
     ).focus({ preventScroll: true });
   }, [currentId, queries.channels]);
+  // Whether the composer below renders.
+  const composing =
+    !!current &&
+    !current.archived &&
+    current.viewerRole !== "guest" &&
+    (!current.readOnly || !!current.cached);
+  // Lost membership unmounts the composer, and the header and history with
+  // it unless the channel stays open as a preview this visit already
+  // resolved. Focus in them falls to the body. The history pane holds it
+  // while access is rechecked, until the notice shows and places it.
+  useLayoutEffect(() => {
+    const shown = shownChannel.current;
+    shownChannel.current = currentId;
+    const focused = paneFocus.current;
+    const history = historyContainer.current;
+    if (
+      // Writable still: nothing was lost.
+      composing ||
+      !shown ||
+      shown !== requestedChannel ||
+      !focused ||
+      focused.isConnected ||
+      !history?.isConnected ||
+      history.closest("[inert]")
+    )
+      return;
+    const active = document.activeElement;
+    if (
+      (active && active !== document.body) ||
+      queries.channels.list().channels.some(({ id }) => id === shown)
+    )
+      return;
+    paneFocus.current = history;
+    focusAfterLoss.current = shown;
+    history.focus({ preventScroll: true });
+  }, [currentId, requestedChannel, queries.channels, composing]);
+  // A private channel's notice offers the only way on; a public preview's
+  // history is readable again. Focus that moved elsewhere meanwhile stays.
+  const removedId = removed?.id;
+  // The joined channel's answer still stands: the loss's own check is pending.
+  const unchecked = resolved === removed?.access;
+  useLayoutEffect(() => {
+    const lost = focusAfterLoss.current;
+    if (!lost) return;
+    // No notice will place it: another channel is open, the loss is the
+    // viewer's own, or the channel is back without one. A later loss must
+    // not inherit it.
+    if (lost !== requestedChannel || ownLoss || (current && !removedId)) {
+      focusAfterLoss.current = undefined;
+      return;
+    }
+    // Access is still settling: a preview this visit resolved is reloading.
+    // Once the loss is checked, a channel still not open has nothing to read:
+    // the relay answers for a private one too, without refusing.
+    if (lost !== removedId || (!current && previewAvailable && unchecked))
+      return;
+    focusAfterLoss.current = undefined;
+    const history = historyContainer.current;
+    const active = document.activeElement;
+    if (active && active !== document.body && active !== history) return;
+    (current
+      ? (history?.querySelector<HTMLElement>("[data-message-scroller]") ??
+        history)
+      : backTrigger.current
+    )?.focus({ preventScroll: true });
+  }, [
+    removedId,
+    current,
+    requestedChannel,
+    ownLoss,
+    previewAvailable,
+    unchecked,
+  ]);
   const channelNotice =
     !!current &&
     (current.archived ||
@@ -2087,6 +2307,7 @@ function ChannelWorkspace({
   // The conversation: full width for Solo, or the first main-pane tab.
   const body = (
     <div className={styles.conversationBody}>
+      <ChannelStateRegion>{stateNotice}</ChannelStateRegion>
       <MessageManagementStatus />
       <section
         data-channel-history
@@ -2116,12 +2337,15 @@ function ChannelWorkspace({
             }
             holding={contextHolding}
             inlineTarget={contextTarget}
+            openThreadRootId={
+              highlightedThread ? rootOfTab(highlightedThread) : undefined
+            }
             onOpenThread={openThread}
             revealMessageId={
               sent?.channelId === current.id ? sent.id : undefined
             }
           />
-        ) : (
+        ) : removed ? null : (
           <div
             className={styles.empty}
             data-buzz-launch-pending={
@@ -2277,6 +2501,17 @@ function ChannelWorkspace({
         data-solo-focus-pane={solo ? "" : undefined}
         inert={covered}
         aria-hidden={covered || undefined}
+        onFocus={(event) => {
+          paneFocus.current = event.target;
+        }}
+        onBlur={(event) => {
+          // A removed element or an unfocused window leaves no new target.
+          if (
+            event.relatedTarget &&
+            !event.currentTarget.contains(event.relatedTarget)
+          )
+            paneFocus.current = undefined;
+        }}
       >
         <div
           className={`${styles.conversation}${solo ? ` ${styles.soloConversation}` : ""}`}

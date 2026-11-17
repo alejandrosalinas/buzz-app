@@ -807,11 +807,14 @@ function Dashboard({
               ) : (
                 <ul className={styles.list}>
                   {result.costliest.map(({ agent, session, cost: total }) => {
+                    const channelId = session.channelId;
+                    // A watch's or timer's turn has no conversation to open.
+                    const name =
+                      session.title ??
+                      (channelId ? "Untitled session" : "No conversation");
                     const label = (
                       <span className={styles.sessionText}>
-                        <span className={styles.name}>
-                          {session.title ?? "Untitled session"}
-                        </span>
+                        <span className={styles.name}>{name}</span>
                         <span className={styles.label}>
                           {[
                             agent.name,
@@ -826,14 +829,13 @@ function Dashboard({
                         </span>
                       </span>
                     );
-                    const channelId = session.channelId;
                     return (
                       <li key={`${agent.pubkey}:${session.id}`}>
                         {channelId ? (
                           <NavigationItem
                             label={label}
                             trailing={<Amount total={total} />}
-                            aria-label={`${session.title ?? "Untitled session"}, ${agent.name}, ${costLabel(total)}. Open conversation`}
+                            aria-label={`${name}, ${agent.name}, ${costLabel(total)}. Open conversation`}
                             onClick={() =>
                               void open({
                                 version: 1,

@@ -24,58 +24,73 @@ export type UrlPluginSource = Readonly<{
   sha256: string;
 }>;
 export type PluginLinkSource = GitPluginSource | UrlPluginSource;
-export type OpenTarget =
-  | Readonly<{ version: 1; kind: "home" }>
-  | Readonly<{
-      version: 1;
-      kind: "settings";
-      section?: string;
-      /** Plugin-owned presentation data for a contributed Settings card. */
-      route?: Readonly<{ version: number; params: JsonValue }>;
-      /** Nested provider controls within Agent setup; presentation only. */
-      provider?: string;
-      scope?: NavigationScope | null;
-      pluginImport?: PluginLinkSource;
-      pluginId?: string;
-    }>
-  | Readonly<{
-      version: 1;
-      kind: "page";
-      pluginId: string;
-      pageId: string;
-      /** null explicitly restores Personal space; omission leaves community selection alone. */
-      scope?: NavigationScope | null;
-      route?: Readonly<{ version: number; params: JsonValue }>;
-    }>
-  | Readonly<{
-      version: 1;
-      kind: "plugin";
-      pluginId: string;
-      /** Omitted: the plugin's primary page, else its first. */
-      pageId?: string;
-      /** String route data from a link. The resolved page's own validator
-       * decides whether it applies; the page opens without it otherwise. */
-      params?: Readonly<Record<string, string>>;
-      scope?: NavigationScope | null;
-    }>
-  | Readonly<{
-      version: 1;
-      kind: "conversation";
-      scope: NavigationScope;
-      channelId: string;
-      messageId?: string;
-      /** Hint only. Resolve the actual root from verified message evidence. */
-      threadRootId?: string;
-      /** With threadRootId: the thread opens beside that root, revealed in the
-       * channel timeline even beyond its newest page, as Open in channel asks. */
-      context?: "channel";
-      /** Presentation within this conversation; never mutation or confirmation state. */
-      panel?: "members";
-      /** Message selected for the forwarding dialog; never submission state. */
-      forward?: string;
-      /** Read-only content selected beside this conversation; never an action. */
-      detail?: Readonly<{ target: string; rootId?: string }>;
-    }>;
+/**
+ * The community join dialog over a visit: presentation only. It names the
+ * viewer it was opened for and the community address, never an invite code,
+ * a draft or an instruction to connect.
+ */
+export type JoinPresentation = Readonly<{
+  viewer: string;
+  /** Opaque identity of one opening: its in-memory state is keyed by it. */
+  visit: string;
+  community?: string;
+}>;
+export type OpenTarget = Readonly<{ join?: JoinPresentation }> &
+  (
+    | Readonly<{ version: 1; kind: "home" }>
+    | Readonly<{
+        version: 1;
+        kind: "settings";
+        section?: string;
+        /** Plugin-owned presentation data for a contributed Settings card. */
+        route?: Readonly<{ version: number; params: JsonValue }>;
+        /** Nested provider controls within Agent setup; presentation only. */
+        provider?: string;
+        /** Where Identity opens, in view and focused; presentation only. */
+        part?: "organization-sign-in";
+        scope?: NavigationScope | null;
+        pluginImport?: PluginLinkSource;
+        pluginId?: string;
+      }>
+    | Readonly<{
+        version: 1;
+        kind: "page";
+        pluginId: string;
+        pageId: string;
+        /** null explicitly restores Personal space; omission leaves community selection alone. */
+        scope?: NavigationScope | null;
+        route?: Readonly<{ version: number; params: JsonValue }>;
+      }>
+    | Readonly<{
+        version: 1;
+        kind: "plugin";
+        pluginId: string;
+        /** Omitted: the plugin's primary page, else its first. */
+        pageId?: string;
+        /** String route data from a link. The resolved page's own validator
+         * decides whether it applies; the page opens without it otherwise. */
+        params?: Readonly<Record<string, string>>;
+        scope?: NavigationScope | null;
+      }>
+    | Readonly<{
+        version: 1;
+        kind: "conversation";
+        scope: NavigationScope;
+        channelId: string;
+        messageId?: string;
+        /** Hint only. Resolve the actual root from verified message evidence. */
+        threadRootId?: string;
+        /** With threadRootId: the thread opens beside that root, revealed in the
+         * channel timeline even beyond its newest page, as Open in channel asks. */
+        context?: "channel";
+        /** Presentation within this conversation; never mutation or confirmation state. */
+        panel?: "members";
+        /** Message selected for the forwarding dialog; never submission state. */
+        forward?: string;
+        /** Read-only content selected beside this conversation; never an action. */
+        detail?: Readonly<{ target: string; rootId?: string }>;
+      }>
+  );
 
 const MAX_BYTES = 8192;
 const token = /^[a-z0-9][a-z0-9._-]{0,127}$/;
@@ -222,6 +237,45 @@ function boundScope(input: unknown): NavigationScope {
   });
 }
 
+function joinPresentation(input: unknown): JoinPresentation {
+  const value = record(input);
+  fields(value, ["viewer", "visit", "community"]);
+  if (value.community !== undefined && typeof value.community !== "string")
+    throw invalid();
+  return Object.freeze({
+    viewer: text(value.viewer, hex).toLowerCase(),
+    visit: text(value.visit),
+    ...(value.community !== undefined
+      ? { community: relayOrigin(value.community) }
+      : {}),
+  });
+}
+
+/** Settings and the join dialog cover the workspace: the page beneath keeps
+ * its visit and presentation, and cannot acknowledge the covering visit. */
+export function coversWorkspace(target: OpenTarget) {
+  return target.kind === "settings" || target.join !== undefined;
+}
+
+/** The visit under a join dialog. */
+export function withoutJoin(target: OpenTarget): OpenTarget {
+  if (!target.join) return target;
+  const { join: _join, ...rest } = target;
+  return Object.freeze(rest) as OpenTarget;
+}
+
+/**
+ * The view a join dialog opened over `target` keeps beneath it. Settings keeps
+ * its section, scope, provider and plugin details but not a card's route or a
+ * plugin import: restoring the dialog must not replay the action they start.
+ */
+export function joinBeneath(target: OpenTarget): OpenTarget {
+  const view = withoutJoin(target);
+  if (view.kind !== "settings") return view;
+  const { route: _route, pluginImport: _pluginImport, ...rest } = view;
+  return Object.freeze(rest);
+}
+
 function stringParams(input: unknown): Readonly<Record<string, string>> {
   const value = record(input);
   const keys = Object.keys(value).sort();
@@ -284,7 +338,7 @@ function parseRoute(input: unknown) {
 /** All bound ingresses use this parser. A valid address is not authorization. */
 export function parseOpenTarget(input: unknown): OpenTarget {
   try {
-    const value = record(input);
+    const { join, ...value } = record(input);
     if (value.version !== 1) throw invalid();
     let target: OpenTarget;
     switch (value.kind) {
@@ -299,11 +353,18 @@ export function parseOpenTarget(input: unknown): OpenTarget {
           "section",
           "route",
           "provider",
+          "part",
           "scope",
           "pluginImport",
           "pluginId",
         ]);
         if (value.provider !== undefined && value.section !== "agents")
+          throw invalid();
+        if (
+          value.part !== undefined &&
+          (value.section !== "identity" ||
+            value.part !== "organization-sign-in")
+        )
           throw invalid();
         if (value.pluginImport !== undefined && value.section !== "plugins")
           throw invalid();
@@ -322,6 +383,9 @@ export function parseOpenTarget(input: unknown): OpenTarget {
             : {}),
           ...(value.provider !== undefined
             ? { provider: text(value.provider, provider) }
+            : {}),
+          ...(value.part === "organization-sign-in"
+            ? { part: value.part }
             : {}),
           ...(value.scope !== undefined
             ? { scope: value.scope === null ? null : boundScope(value.scope) }
@@ -443,6 +507,8 @@ export function parseOpenTarget(input: unknown): OpenTarget {
       default:
         throw invalid();
     }
+    if (join !== undefined)
+      target = { ...target, join: joinPresentation(join) };
     if (new TextEncoder().encode(JSON.stringify(target)).length > MAX_BYTES)
       throw invalid();
     return Object.freeze(target);

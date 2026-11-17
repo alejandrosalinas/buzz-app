@@ -891,9 +891,14 @@ test("local previews stay interactive during eager upload and removal collapses 
       .toBeGreaterThanOrEqual(2);
     // Own the playback boundary; the short fixture's autoplay may still be
     // running or may already have ended when WebKit reaches this assertion.
+    // A zero rate plays without advancing the clock, so the clip can neither
+    // end nor loop while the eager-upload assertions run. Not `loop`: with it
+    // the Play click once hung Linux WebKit in CI with the clip mid-way, so
+    // no loop seek had occurred and the stall's cause is not pinned down;
+    // rate 0 removes both the end and the loop seek, as messages.spec.mjs does.
     await video.evaluate((el) => {
       window.openDraftVideo = el;
-      el.loop = true;
+      el.playbackRate = 0;
       el.pause();
     });
     await dialog

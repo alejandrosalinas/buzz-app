@@ -13,7 +13,7 @@ import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { nativeFixture } from "./native-fixture.mjs";
 import { run } from "./run-command.mjs";
-import { createServer } from "./vite-server.mjs";
+import { createServer, warmUp } from "./vite-server.mjs";
 import { signPackage } from "../fixtures/plugin-release.mjs";
 
 // Proves the real CLI -> native catalog -> browser module replacement boundary.
@@ -85,6 +85,10 @@ test("signature enforcement applies signed CLI updates and withdraws an unsigned
       server: { host: "127.0.0.1", port: 0, strictPort: false },
     });
     await server.listen();
+    // The fixture loads every bundled plugin, about 1,900 modules on a cold
+    // dev server; compile them outside the navigation budget, which a busy
+    // runner can otherwise exhaust.
+    await warmUp(server, "/tests/fixtures/conversation.tsx");
     await page.goto(
       `http://127.0.0.1:${server.httpServer.address().port}/tests/fixtures/conversation.html`,
     );

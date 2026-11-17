@@ -16,6 +16,7 @@ import { HELPFUL_HINT_REST_MS } from "../shared/design-system/ui/hoverIntent";
 
 const communities: CommunityReader = {
   subscribe: () => () => {},
+  retained: () => undefined,
   snapshot: () => ({
     status: "ready",
     relayAvailable: false,

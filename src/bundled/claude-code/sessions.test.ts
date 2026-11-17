@@ -408,7 +408,7 @@ it("resumes a saved conversation after its process stops", async () => {
   expect(resumed?.prompts).toEqual(["later"]);
   expect(store.get("c/root")).toMatchObject({ id: "new-1", seen: 5 });
   // Only the new session tells what it started with; the resume does not.
-  expect(started.mock.calls).toEqual([["new-1", "prompt"]]);
+  expect(started.mock.calls).toEqual([["new-1", "prompt", undefined]]);
 });
 
 it("bounds a channel session's thread history while retaining recently used threads", async () => {
@@ -610,6 +610,13 @@ it("runs a one-off turn in a new session that is never saved", async () => {
   expect(claude?.killed).toBe(true);
   expect(pool.snapshot()).toEqual([]);
   expect(store.get("timer/a #1")).toBeUndefined();
+});
+
+it("tells which one-off turn a new session was started for", async () => {
+  const started = vi.fn();
+  const { pool } = sessions({ started });
+  await pool.runOnce("timer/a", () => "wake");
+  expect(started.mock.calls).toEqual([["new-1", "prompt", "timer/a"]]);
 });
 
 it("asks a one-off turn for its prompt only once its process is ready", async () => {

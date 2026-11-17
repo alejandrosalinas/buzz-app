@@ -19,6 +19,10 @@ export type UserStatus = Readonly<{
   expiresAt?: number;
 }>;
 export type StatusInput = Pick<UserStatus, "text" | "emoji" | "expiresAt">;
+/** Unwatched authors whose status stays loaded while the profiles stream is
+ * live, so rows that scroll or switch back into view read nothing again. Live
+ * traffic keeps them current. */
+const IDLE_AUTHORS = 500;
 
 function parse(event: RelayEvent): UserStatus | undefined {
   if (
@@ -65,6 +69,10 @@ export function createUserStatuses(
   >();
   const watched = new Map<string, number>();
   const loaded = new Set<string>();
+  /** Unwatched authors still held, oldest first. */
+  const idle = new Set<string>();
+  /** Whether live profiles traffic keeps idle authors current. */
+  let live = false;
   const listeners = new Set<() => void>();
   let snapshot: ReadonlyMap<string, UserStatus> = new Map();
   let controller = new AbortController();
@@ -107,11 +115,13 @@ export function createUserStatuses(
   function accept(events: readonly RelayEvent[]) {
     if (closed) return;
     for (const event of events) {
-      // Live traffic for offscreen people need not grow this session's cache.
+      // Live traffic for offscreen people need not grow this session's cache;
+      // an idle author read without a status still takes its first one.
       if (
         !watched.has(event.pubkey) &&
         event.pubkey !== viewer &&
-        !records.has(event.pubkey)
+        !records.has(event.pubkey) &&
+        !loaded.has(event.pubkey)
       )
         continue;
       const status = parse(event);
@@ -176,6 +186,18 @@ export function createUserStatuses(
       });
     return pending;
   }
+  /** Drops the oldest idle authors beyond `limit`. */
+  function evictIdle(limit: number) {
+    let evicted = false;
+    for (const id of idle) {
+      if (idle.size <= limit) break;
+      idle.delete(id);
+      // Evict the whole coordinate, never only its latest replacement evidence.
+      loaded.delete(id);
+      evicted = records.delete(id) || evicted;
+    }
+    if (evicted) publish();
+  }
   function schedule() {
     if (scheduled || closed || retryTimer !== undefined) return;
     scheduled = true;
@@ -193,7 +215,10 @@ export function createUserStatuses(
   }
   function watch(ids: readonly string[]) {
     const unique = [...new Set(ids)].filter((id) => /^[0-9a-f]{64}$/.test(id));
-    for (const id of unique) watched.set(id, (watched.get(id) ?? 0) + 1);
+    for (const id of unique) {
+      watched.set(id, (watched.get(id) ?? 0) + 1);
+      idle.delete(id);
+    }
     schedule();
     return () => {
       for (const id of unique) {
@@ -201,11 +226,7 @@ export function createUserStatuses(
         if (count) watched.set(id, count);
         else {
           watched.delete(id);
-          // Evict the whole coordinate, never only its latest replacement evidence.
-          if (id !== viewer) {
-            loaded.delete(id);
-            records.delete(id);
-          }
+          if (id !== viewer) idle.add(id);
         }
       }
       if (!watched.size) {
@@ -213,7 +234,7 @@ export function createUserStatuses(
         retryTimer = undefined;
         retryAttempt = 0;
       }
-      publish();
+      evictIdle(live ? IDLE_AUTHORS : 0);
     };
   }
   async function save(input: StatusInput) {
@@ -319,6 +340,7 @@ export function createUserStatuses(
     pending = undefined;
     loaded.clear();
     records.clear();
+    idle.clear();
     publish();
     schedule();
   }
@@ -378,6 +400,13 @@ export function createUserStatuses(
     resume() {
       resetRetries();
       schedule();
+    },
+    /** Whether the profiles stream is live. Without it nothing keeps an idle
+     * author's status current, so idle authors are dropped and read again
+     * when their rows return. */
+    live(next: boolean) {
+      live = next;
+      if (!live) evictIdle(0);
     },
     dispose() {
       closed = true;

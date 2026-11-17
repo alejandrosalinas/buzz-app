@@ -1,4 +1,5 @@
 import { protectionTranscript } from "./protection-transcript";
+import type { PRESET } from "../../features/agents/recommended";
 import { fileStore } from "../../features/agents/state";
 import type { AgentExecution } from "../../features/agents/execution";
 import { executionSpawn } from "./execution";
@@ -22,7 +23,10 @@ import {
   unsupportedSynced,
   unverifiedSynced,
 } from "../../features/agents/agent-config";
-import { fromOwner, workflowOf } from "../../features/agents/owner-attestation";
+import {
+  mentionAuthority,
+  workflowOf,
+} from "../../features/agents/owner-attestation";
 import type { TranscriptTurn } from "../../features/agents/activity-transcript";
 import type { AgentReads } from "../../features/agents/reads";
 import { localStore, type AgentStore } from "../../features/agents/store";
@@ -86,6 +90,7 @@ import {
   type SessionsPlace,
 } from "./transcript";
 import { sessionPrompts } from "../../features/agents/session-prompts";
+import { standaloneSessions } from "../../features/agents/standalone-sessions";
 
 /** The effort levels Claude lists, which a session can switch to between
  * turns. Claude runs `max` as `xhigh` in a stream-json session, so it is not
@@ -111,6 +116,8 @@ export type Config = Readonly<{
   workspace: string;
   /** Whether each thread is its own session, or the whole channel is one. */
   scope: Scope;
+  /** On Recommended, whose model and thinking level runs replace these. */
+  preset?: typeof PRESET;
 }>;
 export const DEFAULT_CONFIG: Config = Object.freeze({
   model: "",
@@ -294,17 +301,30 @@ export class ClaudeRuntime {
   }
   /** Where each of the agent's sessions ran, with the ids this app saved
    * there, for its usage: its workspace and every folder its conversations
-   * were given. */
+   * were given. A one-off turn runs in the workspace, so its sessions, which
+   * `started` recorded, are listed there. */
   sessionPlaces(agent: AgentKey, workspace: string) {
     const scope = this.reads(agent)?.scope;
     const folders = scope
       ? agentFolders(this.storage, scope, agent)
       : new Map();
-    const places = new Map<string, { place: SessionsPlace; saved: string[] }>([
-      ["", { place: workspace, saved: [] }],
+    const places = new Map<
+      string,
+      { place: SessionsPlace; saved: string[]; standalone: string[] }
+    >([
+      [
+        "",
+        {
+          place: workspace,
+          saved: [],
+          standalone: standaloneSessions(this.storage, "claude-code", agent)
+            .list()
+            .map(({ id }) => id),
+        },
+      ],
     ]);
     for (const folder of folders.values())
-      places.set(folder, { place: { folder }, saved: [] });
+      places.set(folder, { place: { folder }, saved: [], standalone: [] });
     for (const saved of this.conversations(agent))
       places.get(folders.get(saved.key) ?? "")?.saved.push(saved.sessionId);
     return [...places.values()];
@@ -963,16 +983,13 @@ export class ClaudeRuntime {
     // for the owner.
     const wake = trigger.type !== "mention" ? trigger : undefined;
     // Claude runs commands as you; mentions need owner or delegated authority.
-    if (
-      trigger.type === "mention" &&
-      !(await fromOwner(
+    if (trigger.type === "mention") {
+      const authority = await mentionAuthority(
         trigger.event,
         agent.owner,
         workflowOf(this.reads(agent.key), agent.pubkey),
-      ))
-    ) {
-      ignored?.();
-      return;
+      );
+      if (authority !== "owner") return ignored?.(authority);
     }
     signal.throwIfAborted();
     const entry = this.entry(agent, settings);
@@ -1617,9 +1634,20 @@ export class ClaudeRuntime {
           }),
         delete: (key) => saved.delete(key),
       },
-      started: (session, text) => {
-        if (!this.target)
-          void this.prompts(agent).save(session, [{ label: "", text }]);
+      started: (session, text, once) => {
+        if (this.target) return;
+        void this.prompts(agent).save(
+          session,
+          [{ label: "", text }],
+          // A one-off turn's session is outside any conversation.
+          once ? { at: Date.now(), title: "", conversation: null } : undefined,
+        );
+        // Its transcript names no conversation, so only this says it is the
+        // agent's, for its usage; the saved prompts drop old sessions.
+        if (once)
+          void standaloneSessions(this.storage, "claude-code", agent).add(
+            session,
+          );
       },
       onChange: () => this.notify(),
       fingerprint: (key) =>

@@ -131,7 +131,7 @@ export const composerSchema = new Schema<
     recipient: {
       attrs: { pubkey: {}, name: {} },
       inclusive: false,
-      toDOM: () => ["span", 0],
+      toDOM: () => ["span", { spellcheck: "false" }, 0],
     },
     literal: { inclusive: false, toDOM: () => ["span", 0] },
     link: {

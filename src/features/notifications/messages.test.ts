@@ -941,6 +941,64 @@ it.each([true, false])(
 );
 
 it.each([true, false])(
+  "a saved preferences copy holds ordinary alerts until the mute read confirms (saved muted=%s)",
+  async (saved) => {
+    vi.spyOn(Date, "now").mockReturnValue(1_780_000_000_000);
+    const preferences = (muted: boolean) => ({
+      sections: [],
+      assignments: {},
+      starred: [],
+      muted: muted ? ["room"] : [],
+    });
+    let release!: () => void;
+    const held = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    // Another device changed the mute after this device saved its copy.
+    const decode = vi.fn<SidebarDecoder>(async () => {
+      await held;
+      return preferences(!saved);
+    });
+    const h = await setup(Promise.resolve(), undefined, undefined, {
+      decode,
+      saved: preferences(saved),
+    });
+    try {
+      await vi.waitFor(() => {
+        expect(decode).toHaveBeenCalledOnce();
+        expect(h.owner.session.sidebarPreferences.snapshot()).toMatchObject({
+          status: "loading",
+          cached: true,
+          data: { muted: saved ? ["room"] : [] },
+        });
+      });
+      const root = message(h.viewer, "room", "root", 1_779_999_999);
+      h.emit([root], "replay");
+      const reply = message(h.peer, "room", "waiting", 1_780_000_000, [
+        ["e", root.id, "", "reply"],
+      ]);
+      h.emit([reply], "live");
+      // Mention is an observable presentation barrier behind the reply.
+      h.emit([h.make("mention")], "live");
+      await vi.waitFor(() => expect(h.show).toHaveBeenCalledOnce());
+      expect(h.show.mock.calls[0]?.[0].body).toBe("mention");
+    } finally {
+      release();
+    }
+    await vi.waitFor(() =>
+      expect(h.owner.session.sidebarPreferences.snapshot().status).toBe(
+        "ready",
+      ),
+    );
+    if (!saved) h.emit([h.make("second mention")], "live");
+    await vi.waitFor(() => expect(h.show).toHaveBeenCalledTimes(2));
+    expect(h.show.mock.calls[1]?.[0].body).toBe(
+      saved ? "waiting" : "second mention",
+    );
+  },
+);
+
+it.each([true, false])(
   "a live reply whose parent is outside the window waits for its conversation lookup (viewer's parent=%s)",
   async (own) => {
     vi.spyOn(Date, "now").mockReturnValue(1_780_000_000_000);

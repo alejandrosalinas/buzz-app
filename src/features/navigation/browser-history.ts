@@ -2,6 +2,7 @@ import {
   HISTORY_CAPACITY,
   navigationEntry,
   homeTarget,
+  dismissalOf,
   type NavigationEntry,
   type NavigationHistory,
   type HistorySnapshot,
@@ -351,11 +352,8 @@ export function createBrowserHistory(host: Window): NavigationHistory {
     dismiss(visits, input) {
       if (disposed || (typeof visits !== "function" && !visits.length)) return;
       const fallback = parseOpenTarget(input);
-      const closing = [...known].filter(([, entry]) =>
-        typeof visits === "function"
-          ? visits(entry.target)
-          : visits.includes(entry.id),
-      );
+      const closes = dismissalOf([...known.values()], visits);
+      const closing = [...known].filter(([, entry]) => closes(entry));
       for (const [index] of closing) dismissed.add(index);
       saveDismissed();
       if (dismissed.has(stamp.index)) {

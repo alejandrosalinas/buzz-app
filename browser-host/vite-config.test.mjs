@@ -185,6 +185,29 @@ it("loads the broker's Vite config without native-compatibility warnings", () =>
               );
               delete process.env[name];
             }
+            // Recommended agent candidates reach the frontend as validated;
+            // unset (every OSS build) leaves no recommendation.
+            const candidates = '[{"harness":"codex","model":"model-a","effort":"high","label":"Model A"},{"harness":"goose","provider":"provider-a","model":"model-b","effort":"high","label":"Model B"}]';
+            for (const [value, expected] of [[candidates, candidates], [' ' + candidates + ' ', candidates], ['', ''], [undefined, '']]) {
+              if (value === undefined) delete process.env.BUZZ_RECOMMENDED_AGENT;
+              else process.env.BUZZ_RECOMMENDED_AGENT = value;
+              const result = await loadConfigFromFile({ command: 'build', mode: 'production' }, configFile);
+              assert.equal(result.config.define['import.meta.env.VITE_BUZZ_RECOMMENDED_AGENT'], JSON.stringify(expected));
+            }
+            for (const invalid of ['{"harness":"goose"}', '[]', '[{"harness":"pi","model":"m","effort":"high","label":"M"}]', '[{"harness":"goose","model":"m","effort":"high","label":"M"}]', '[{"harness":"codex","provider":"p","model":"m","effort":"high","label":"M"}]', 'not json']) {
+              process.env.BUZZ_RECOMMENDED_AGENT = invalid;
+              await assert.rejects(
+                loadConfigFromFile({ command: 'build', mode: 'production' }, configFile),
+                /BUZZ_RECOMMENDED_AGENT/,
+              );
+            }
+            // The build names the candidate and field at fault, not their values.
+            process.env.BUZZ_RECOMMENDED_AGENT = '[{"harness":"codex","model":"m","effort":"high","label":"M"},{"harness":"codex","model":"","effort":"secret","label":"M"}]';
+            await assert.rejects(
+              loadConfigFromFile({ command: 'build', mode: 'production' }, configFile),
+              error => String(error).includes('BUZZ_RECOMMENDED_AGENT[1].model') && !String(error).includes('secret'),
+            );
+            delete process.env.BUZZ_RECOMMENDED_AGENT;
             // A fresh checkout uses production for both dev and packaged frontends.
             // Explicit empty values retain the deployment opt-out.
             for (const local of ['', 'BUZZ_BUILDERLAB_URL=']) {

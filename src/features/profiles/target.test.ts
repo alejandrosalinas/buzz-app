@@ -2,6 +2,7 @@ import { profileHistoryTarget, profileHistoryRoute } from "./target";
 import { expect, it } from "vitest";
 import {
   claimProfileTranscript,
+  claimTranscriptFocus,
   openProfileTranscript,
   profileTranscriptRequest,
   profileAgentHint,
@@ -133,6 +134,20 @@ it("asks for a transcript once per opening until its profile claims it", () => {
   // Opening the same target again is a new opening.
   openProfileTranscript(activity, open);
   expect(claimProfileTranscript(activity)).toBeGreaterThan(first ?? 0);
+});
+
+it("keeps an opening's message for the profile that claims that opening", () => {
+  const activity = profileActivityViewTarget("ef".repeat(32)) ?? "";
+  // A failed opening leaves no message behind.
+  openProfileTranscript(activity, () => false, ["lost"]);
+  openProfileTranscript(activity, () => true);
+  const plain = claimProfileTranscript(activity) as number;
+  expect(claimTranscriptFocus(plain)).toBeUndefined();
+  expect(claimTranscriptFocus(plain - 1)).toBeUndefined();
+  openProfileTranscript(activity, () => true, ["reply", "prompt"]);
+  const focused = claimProfileTranscript(activity) as number;
+  expect(claimTranscriptFocus(focused)).toEqual(["reply", "prompt"]);
+  expect(claimTranscriptFocus(focused)).toBeUndefined();
 });
 
 it("restores version addresses only for a recognized underlying profile", () => {

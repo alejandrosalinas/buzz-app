@@ -46,7 +46,8 @@ They contain no saved content. Subscribe before the first read, then read again.
 ## Device data
 
 `preferences.update(id, change)` reads the latest preference, calls the synchronous
-callback, saves the result, and rebuilds that row's indexes in one transaction.
+callback, saves the result, and updates that row's indexes in one transaction.
+Unchanged index entries stay saved, including when only device preferences change.
 Preferences stay in a separate store. Values such as `false` and `null` remain
 explicit. The callback must return JSON and must not start asynchronous work.
 
@@ -142,8 +143,9 @@ receipt confirms publication; a network error does not prove non-delivery.
 
 Writes request strict durability. Transactions include only the object stores that each operation uses. Row writes
 and indexed pages use all four stores. Metadata operations use only metadata.
-Large row batches can still delay other collections' reads or writes. A changed row rewrites
-its indexes. Index upgrades scan the collection. Delta completion does not scan records.
+Large row batches can still delay other collections' reads or writes. A changed row
+recomputes its projected indexes but writes only added or removed entries. Index
+upgrades scan the collection. Delta completion does not scan records.
 An unchanged record and preference need no row writes or index rebuild.
 Source, refresh, and revision checks still run before this comparison.
 Ancestry comparison and separate source-membership writes are absent. The database upgrade removes the obsolete membership store, builds the host

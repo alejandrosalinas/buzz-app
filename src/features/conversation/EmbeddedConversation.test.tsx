@@ -368,11 +368,10 @@ it("confirms, cancels, recovers and retries a card's deletion", async () => {
   assert.exists(first);
   expect(first.event.kind).toBe(5);
   expect(first.event.tags).toContainEqual(["e", h.posts.alpha.id]);
+  // The dialog closes on submit; the failure is reported outside it.
+  await waitFor(() => expect(screen.queryByRole("alertdialog")).toBeNull());
   await act(async () =>
     first.result.reject(new PublishRejected("Deletion refused")),
-  );
-  fireEvent.click(
-    within(await screen.findByRole("alertdialog")).getByText("Close"),
   );
   // Recovery belongs to the card's channel, not every card on the page.
   expect(

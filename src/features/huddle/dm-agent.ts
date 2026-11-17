@@ -1,13 +1,17 @@
 import { relayOrigin } from "../communities/destination";
 import type { Agents } from "../agents/service";
+import type { ChannelSummary } from "../relay/contracts";
 import type { RelaySnapshot } from "../relay/service";
 import type { HuddleDestination } from "./bridge";
 
-/** Only this device's owned, unprotected voice runtime can join automatically. */
+/** Only this device's owned, unprotected voice runtime can join automatically.
+ * A caller already iterating the channel list passes the destination's
+ * channel, so a scan of every channel does not search the list again. */
 export function dmVoiceAgent(
   connection: RelaySnapshot,
   destination: HuddleDestination,
   agents: Pick<Agents, "snapshot" | "types">,
+  channel?: ChannelSummary,
 ) {
   if (
     connection.status !== "ready" ||
@@ -16,9 +20,11 @@ export function dmVoiceAgent(
     connection.viewer !== destination.viewer
   )
     return undefined;
-  const parent = connection.session.channels
-    .list()
-    .channels.find((channel) => channel.id === destination.channelId);
+  const parent =
+    channel ??
+    connection.session.channels
+      .list()
+      .channels.find((item) => item.id === destination.channelId);
   if (
     parent?.channelType !== "dm" ||
     parent.archived ||

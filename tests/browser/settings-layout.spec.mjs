@@ -3,6 +3,7 @@ import {
   openSettings,
   selectSettingsSection,
   settingsDialog,
+  settingsSections,
 } from "./navigation.mjs";
 import { test, expect } from "./fixture.mjs";
 import { npubEncode } from "nostr-tools/nip19";
@@ -244,6 +245,63 @@ test("settings share a centered, bounded column and keep controls contained acro
       path: info.outputPath(`${name.toLowerCase()}-dark-390-200.png`),
     });
   }
+});
+
+// Once the section list scrolls, a classic scrollbar takes its width from the
+// labels. Only a browser with scrollbars that take space can show that.
+test("settings section labels fit beside a classic scrollbar", {
+  tag: "@classic-scrollbars",
+}, async ({ page, app }) => {
+  test.skip(
+    process.platform !== "linux" && !process.env.BUZZ_CLASSIC_SCROLLBARS,
+    "Set BUZZ_CLASSIC_SCROLLBARS=1 on a Mac whose scrollbars take space",
+  );
+  // A short window makes the fixture's section list scroll.
+  await page.setViewportSize({ width: 1440, height: 700 });
+  await page.goto(app.origin);
+  await openSettings(page);
+  await page.evaluate(() => document.fonts.ready);
+  const sections = settingsSections(page);
+  await expect
+    .poll(
+      () =>
+        sections.evaluate((nav) => {
+          const style = getComputedStyle(nav);
+          return (
+            nav.offsetWidth -
+            nav.clientWidth -
+            parseFloat(style.borderLeftWidth) -
+            parseFloat(style.borderRightWidth)
+          );
+        }),
+      {
+        message: "the section list scrolls beside a scrollbar that takes space",
+      },
+    )
+    .toBeGreaterThan(0);
+  const labels = await sections.evaluate((nav) =>
+    // The community address row truncates long hosts by design.
+    [
+      ...nav.querySelectorAll(
+        ".navigation-item:not([aria-label]) .navigation-item-label",
+      ),
+    ].map((label) => {
+      const text = document.createRange();
+      text.selectNodeContents(label);
+      return {
+        name: label.textContent,
+        overflows:
+          text.getBoundingClientRect().width >
+          label.getBoundingClientRect().width,
+      };
+    }),
+  );
+  expect(labels.map(({ name }) => name)).toEqual(
+    expect.arrayContaining(["Channel templates", "Software updates"]),
+  );
+  expect(
+    labels.filter(({ overflows }) => overflows).map(({ name }) => name),
+  ).toEqual([]);
 });
 
 // Real layout metrics and Base UI focus handoff need a browser; empty/loading

@@ -1040,6 +1040,51 @@ it("loads model/effort choices and saves only after a validated workspace, holdi
   );
   expect(f.processes[0]?.end).toHaveBeenCalled();
 });
+it("saves Codex apps and plugins on and off, and keeps them off for a protected agent", async () => {
+  const f = fixture();
+  const save = vi.fn(async () => {});
+  const { unmount } = render(
+    <f.tabs.SettingsTab {...f.props(defaults, save)} />,
+  );
+  const user = userEvent.setup();
+  const allow = screen.getByRole("switch", {
+    name: "Codex apps and plugins",
+  });
+  expect(allow).not.toBeChecked();
+  await user.click(allow);
+  await user.click(screen.getByRole("button", { name: "Save" }));
+  await waitFor(() =>
+    expect(save).toHaveBeenLastCalledWith({ ...defaults, apps: true }),
+  );
+  unmount();
+  render(
+    <f.tabs.SettingsTab {...f.props({ ...defaults, apps: true }, save)} />,
+  );
+  await user.click(
+    screen.getByRole("switch", { name: "Codex apps and plugins" }),
+  );
+  await user.click(screen.getByRole("button", { name: "Save" }));
+  await waitFor(() => expect(save).toHaveBeenLastCalledWith(defaults));
+  cleanup();
+  const props = f.props({ ...defaults, apps: true }, save);
+  render(
+    <f.tabs.SettingsTab
+      {...props}
+      agent={{
+        ...props.agent,
+        protection: { provider: "security", policy: {} },
+      }}
+    />,
+  );
+  const locked = screen.getByRole("switch", {
+    name: "Codex apps and plugins",
+  });
+  expect(locked).not.toBeChecked();
+  expect(locked).toHaveAttribute("aria-disabled", "true");
+  expect(
+    screen.getByText("Protected agents never use Codex apps or plugins."),
+  ).toBeInTheDocument();
+});
 it("renders provider, model, and thinking as direct settings inputs", async () => {
   const f = fixture();
   const save = vi.fn(async () => {});
@@ -2635,4 +2680,144 @@ it("reports Codex connection readiness only after resolving a model", async () =
   expect(
     screen.queryByText(/This model isn’t available/),
   ).not.toBeInTheDocument();
+});
+
+describe("Recommended", () => {
+  // A synthetic candidate the fake Codex offers.
+  const candidate = {
+    harness: "codex",
+    model: "model-b",
+    effort: "medium",
+    label: "Model B",
+  };
+  beforeEach(() =>
+    vi.stubEnv("VITE_BUZZ_RECOMMENDED_AGENT", JSON.stringify([candidate])),
+  );
+  afterEach(() => vi.unstubAllEnvs());
+
+  it("recommends a candidate only when Codex is signed in and offers its model", async () => {
+    await expect(fixture().provider.recommends(candidate)).resolves.toBe(true);
+    await expect(
+      fixture().provider.recommends({ ...candidate, model: "model-z" }),
+    ).resolves.toBe(false);
+    // Its model, on a thinking level that model doesn't offer.
+    await expect(
+      fixture().provider.recommends({ ...candidate, effort: "xhigh" }),
+    ).resolves.toBe(false);
+    await expect(
+      fixture({ signedIn: false }).provider.recommends(candidate),
+    ).resolves.toBe(false);
+    await expect(
+      fixture({ installed: false }).provider.recommends(candidate),
+    ).resolves.toBe(false);
+  });
+
+  it("runs an agent on Recommended on the first candidate its catalog offers", async () => {
+    vi.stubEnv(
+      "VITE_BUZZ_RECOMMENDED_AGENT",
+      JSON.stringify([
+        { ...candidate, model: "model-z" },
+        { ...candidate, effort: "xhigh" },
+        candidate,
+      ]),
+    );
+    const f = fixture();
+    await f.provider.saveDefaults({ model: "model-a", effort: "low" });
+    const saved = { ...defaults, preset: "recommended" as const };
+    // Until the catalog is read it runs on the device's default.
+    expect(f.provider.recommended()).toBeUndefined();
+    await f.provider.check();
+    // Model Z isn't offered, nor Model B on Extra high, so the next
+    // candidate, over device defaults.
+    expect(f.provider.recommended()).toEqual(candidate);
+    // Kept for the launch: a later failed check doesn't move it to the default.
+    f.disk.signedIn = false;
+    await f.provider.check();
+    expect(f.provider.snapshot().readiness).toBe("attention");
+    expect(f.provider.recommended()).toEqual(candidate);
+    f.disk.signedIn = true;
+    expect(f.provider.resolve(saved)).toMatchObject({
+      model: "model-b",
+      effort: "medium",
+      preset: "recommended",
+    });
+    expect(f.provider.resolve(defaults).model).toBe("model-a");
+    // A remote target's catalog isn't this computer's: it runs on the
+    // target's own Codex default.
+    expect(f.provider.resolve(saved, true)).toMatchObject({
+      model: "",
+      effort: "",
+    });
+  });
+
+  it("keeps Apps and plugins to this computer", () => {
+    const f = fixture();
+    const allowed = { ...defaults, apps: true };
+    expect(f.provider.resolve(allowed).apps).toBe(true);
+    // A remote target has its own Codex sign-in.
+    expect(f.provider.resolve(allowed, true)).not.toHaveProperty("apps");
+  });
+
+  it("runs on Codex's own default when no candidate is offered", async () => {
+    vi.stubEnv(
+      "VITE_BUZZ_RECOMMENDED_AGENT",
+      JSON.stringify([{ ...candidate, model: "model-z" }]),
+    );
+    const f = fixture();
+    await f.provider.saveDefaults({ model: "model-a", effort: "" });
+    await f.provider.check();
+    expect(f.provider.recommended()).toBeNull();
+    expect(
+      f.provider.resolve({ ...defaults, preset: "recommended" }).model,
+    ).toBe("model-a");
+    // A catalog that can't be read is the same.
+    const signedOut = fixture({ signedIn: false });
+    await signedOut.provider.check();
+    expect(signedOut.provider.recommended()).toBeNull();
+  });
+
+  it("takes up a candidate a later catalog offers after none was offered", async () => {
+    // Model B on Medium, which this catalog doesn't offer yet.
+    const levels = ["low"];
+    const f = fixture({ modelBReasoningEfforts: levels });
+    await f.provider.check();
+    expect(f.provider.recommended()).toBeNull();
+    levels.push("medium");
+    await f.provider.check();
+    expect(f.provider.recommended()).toEqual(candidate);
+  });
+
+  it("drops Recommended for a manual choice in Settings", async () => {
+    const f = fixture();
+    const save = vi.fn(async () => {});
+    const { SettingsTab } = f.tabs;
+    render(
+      <SettingsTab
+        {...f.props({ ...defaults, preset: "recommended" }, save)}
+      />,
+    );
+    const user = userEvent.setup();
+    const aiSettings = screen.getByRole("combobox", { name: "AI setup" });
+    expect(aiSettings).toHaveTextContent("Automatic");
+    expect(screen.queryByText("Model B · Medium")).not.toBeInTheDocument();
+    await user.click(aiSettings);
+    expect(await screen.findByText("Model B · Medium")).toBeInTheDocument();
+    expect(aiSettings).toHaveAccessibleDescription(
+      "Set to Model B (recommended)",
+    );
+    // The model rows wait for Manual.
+    const thinking = () => screen.getByRole("combobox", { name: "Thinking" });
+    expect(
+      screen.queryByRole("combobox", { name: "Thinking" }),
+    ).not.toBeInTheDocument();
+    await user.click(await screen.findByRole("option", { name: /^Custom/ }));
+    expect(thinking().closest("[inert]")).toBeNull();
+    await user.click(screen.getByRole("button", { name: "Save" }));
+    await waitFor(() => expect(save).toHaveBeenCalled());
+    expect(save).toHaveBeenCalledWith({
+      ...defaults,
+      model: "model-b",
+      effort: "medium",
+    });
+  });
 });

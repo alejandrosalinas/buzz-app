@@ -471,18 +471,20 @@ export function EmojiArtwork({
   emoji,
   scale,
   offset,
+  x,
   animate,
 }: {
   emoji: string;
   scale?: number | undefined;
   offset?: number | undefined;
+  x?: number | undefined;
   animate: boolean;
 }) {
   const canvas = useRef<HTMLCanvasElement>(null);
   useLayoutEffect(() => {
     if (canvas.current)
-      paintEmojiAvatar(canvas.current, emoji, undefined, scale, offset);
-  }, [emoji, scale, offset]);
+      paintEmojiAvatar(canvas.current, emoji, undefined, scale, offset, x);
+  }, [emoji, scale, offset, x]);
   return (
     <canvas
       ref={canvas}

@@ -68,6 +68,8 @@ export function profileActivityViewKey(target: string): string | undefined {
  * profile shown for them. Each opening is numbered, so a profile can tell a
  * new one from one it already has. */
 const transcriptRequests = new Map<string, number>();
+/** The Buzz events an opening asks its transcript to show, by opening. */
+const transcriptFocus = new Map<number, readonly string[]>();
 const transcriptListeners = new Set<() => void>();
 let transcriptOpenings = 0;
 const changed = () => {
@@ -80,18 +82,40 @@ export function subscribeProfileTranscripts(listener: () => void) {
 /** Opens an Activity `target` through `open`, asking the profile it opens
  * to show its conversation's transcript once. A target that is only shown
  * again, as when its retained tab remounts on returning to the channel, asks
- * for nothing. */
+ * for nothing. `focus` names the Buzz events whose turn the transcript shows
+ * first: a message, and the message it answers. */
 export function openProfileTranscript(
   target: string,
   open: (target: string) => boolean,
+  focus?: readonly string[],
 ): boolean {
   if (!profileActivityViewKey(target)) return open(target);
   const base = profileHistoryBase(target);
-  transcriptRequests.set(base, ++transcriptOpenings);
+  const opening = ++transcriptOpenings;
+  transcriptRequests.set(base, opening);
+  if (focus?.length) transcriptFocus.set(opening, focus);
   const opened = open(target);
-  if (!opened) transcriptRequests.delete(base);
+  if (!opened) {
+    transcriptRequests.delete(base);
+    transcriptFocus.delete(opening);
+  }
   changed();
   return opened;
+}
+/** The reader's presses and key presses so far, so a transcript opened for
+ * them can tell whether they have since moved on themselves. */
+let inputs = 0;
+if (typeof window !== "undefined")
+  for (const type of ["pointerdown", "keydown"])
+    window.addEventListener(type, () => void inputs++, true);
+export const readerInputs = () => inputs;
+/** Takes the events `opening` asked its transcript to show. */
+export function claimTranscriptFocus(
+  opening: number,
+): readonly string[] | undefined {
+  const focus = transcriptFocus.get(opening);
+  transcriptFocus.delete(opening);
+  return focus;
 }
 /** The opening still asking `target`'s profile for its transcript. */
 export function profileTranscriptRequest(target: string): number | undefined {

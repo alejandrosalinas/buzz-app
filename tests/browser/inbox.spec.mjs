@@ -2,6 +2,7 @@ import { finalizeEvent, generateSecretKey, getPublicKey } from "nostr-tools";
 import { test, expect } from "./fixture.mjs";
 import { open } from "./timeline.mjs";
 import { activityRow, openPage } from "./navigation.mjs";
+import { releasing } from "./reading.mjs";
 
 // Browser-only contract: actual sidebar/plugin routing -> exact thread target,
 // browser history, and responsive/light-dark CSS. Matrices stay in RTL/unread tests.
@@ -478,7 +479,7 @@ test.describe("signed newest-first Inbox windows", () => {
       exact: true,
     });
     const target = detail.locator(`[data-message-id="${oldest.id}"]`);
-    await expect(target).toBeInViewport();
+    await releasing(app, () => expect(target).toBeInViewport({ timeout: 100 }));
     await expect(
       detail.getByRole("textbox", { name: "Reply to thread" }),
     ).toBeVisible();

@@ -149,6 +149,9 @@ export type ComposerInputElement = HTMLDivElement & {
   toggleFormat(format: ComposerFormat): void;
   insertLineBreak(): boolean;
   editLink(): ComposerLinkEdit | null;
+  /** Append this app's copied `text/html` as a quote and leave the caret on a
+   * new line after it; false when the draft cannot take it. */
+  insertQuote(html: string): boolean;
   removeRecipient(pubkey: string): void;
   undo(redo: boolean): void;
   reset(draft: MentionDraft): void;

@@ -45,12 +45,12 @@ function fixture(lane?: ReturnType<typeof createApiAdmission>) {
     starred: [],
     muted: [],
   };
-  const install = (value: KitValue, deleted = false) => {
+  const install = (value: KitValue, deleted = false, createdAt = time++) => {
     const record: KitRecord = { version: 1, community, deleted, value };
     events.push(
       signed(viewer, {
         kind: 30078,
-        created_at: time++,
+        created_at: createdAt,
         tags: [
           ["d", coordinate(record)],
           ["t", kitTag(record)],
@@ -140,6 +140,236 @@ function fixture(lane?: ReturnType<typeof createApiAdmission>) {
     preferences: owner.session.sidebarPreferences,
   };
 }
+
+it("reorders Solo workspaces through the existing groups record and preserves fresh defaults and filing", async () => {
+  const f = fixture();
+  const solo = f.session.soloPreferences;
+  const personal = { id: "personal", name: "Personal", defaultTemplateId: "p" };
+  const added = {
+    id: "added",
+    name: "Added elsewhere",
+    defaultTemplateId: "a",
+  };
+  try {
+    f.install({ ...groups, groups: [...groups.groups, personal] });
+    await solo.ensure();
+    expect(solo.sectionOrderWritable).toBe(true);
+    const fresh = {
+      ...groups,
+      groups: [
+        { id: "work", defaultTemplateId: "template", name: "Updated work" },
+        personal,
+        added,
+      ],
+      assignments: { [channel]: "personal", [other]: "work" },
+    };
+    f.install(fresh);
+    await solo.reorderSections("personal", ["personal", "gone", "work"]);
+    const event = f.publish.mock.calls.at(-1)?.[0];
+    expect(event).toBeDefined();
+    const record = JSON.parse(event?.content ?? "null");
+    expect(record.value).toEqual({
+      ...fresh,
+      groups: [personal, fresh.groups[0], added],
+    });
+    expect(solo.snapshot().data?.sections.map(({ id }) => id)).toEqual([
+      "personal",
+      "work",
+      "added",
+    ]);
+    const writes = f.publish.mock.calls.length;
+    await solo.reorderSections("personal", ["personal", "work", "added"]);
+    expect(f.publish).toHaveBeenCalledTimes(writes);
+    for (const write of [f.assignment, f.removal, f.sort, f.star])
+      expect(write).not.toHaveBeenCalled();
+  } finally {
+    f.dispose();
+  }
+});
+
+it("rolls back a failed Solo workspace order and retries through the same store", async () => {
+  const f = fixture();
+  const solo = f.session.soloPreferences;
+  try {
+    f.install({
+      ...groups,
+      groups: [
+        ...groups.groups,
+        { id: "home", name: "Home", defaultTemplateId: "h" },
+      ],
+    });
+    await solo.ensure();
+    f.prepare.mockRejectedValueOnce(new Error("Order could not save"));
+    const saving = solo.reorderSections("home", ["home", "work"]);
+    expect(solo.snapshot().data?.sections[0]?.id).toBe("home");
+    await expect(saving).rejects.toThrow("Order could not save");
+    expect(solo.snapshot().data?.sections[0]?.id).toBe("work");
+    const failed = solo.snapshot().orderError;
+    if (!failed) throw new Error("Missing failed order");
+    expect(failed.sectionIds).toEqual(["home", "work"]);
+    await solo.reorderSections(failed.sectionId, failed.sectionIds);
+    expect(solo.snapshot().orderError).toBeUndefined();
+    expect(solo.snapshot().data?.sections[0]?.id).toBe("home");
+  } finally {
+    f.dispose();
+  }
+});
+
+it("refuses workspace order writes without a fresh catalog and rejects duplicate ids", async () => {
+  const f = fixture();
+  const solo = f.session.soloPreferences;
+  try {
+    f.install(groups);
+    await solo.ensure();
+    await expect(
+      solo.reorderSections("work", ["work", "work"]),
+    ).rejects.toThrow("Invalid Solo workspace order");
+    f.query.mockRejectedValueOnce(new Error("offline"));
+    await expect(solo.reorderSections("work", ["work"])).rejects.toThrow(
+      "offline",
+    );
+    expect(f.publish).not.toHaveBeenCalled();
+    expect(solo.snapshot().data?.sections[0]?.id).toBe("work");
+  } finally {
+    f.dispose();
+  }
+});
+
+const SAVE_SECOND = 1_900_000_000;
+function fixedClockFixture() {
+  vi.useFakeTimers();
+  const f = fixture();
+  vi.mocked(Date.now).mockRestore();
+  vi.setSystemTime(SAVE_SECOND * 1000 + 250);
+  return f;
+}
+
+it("serializes rapid workspace creation, reorder and filing into distinct protocol seconds", async () => {
+  const f = fixedClockFixture();
+  const solo = f.session.soloPreferences;
+  try {
+    f.install(groups);
+    await solo.ensure();
+    await solo.createSection({ id: "home", name: "Home" });
+    let settled = false;
+    const saving = Promise.all([
+      solo.reorderSections("home", ["home", "work"]),
+      solo.assign(channel, "home"),
+    ]).finally(() => {
+      settled = true;
+    });
+    void saving.catch(() => {});
+    await vi.advanceTimersByTimeAsync(0);
+    expect(settled).toBe(false);
+    await vi.advanceTimersByTimeAsync(749);
+    expect(f.publish).toHaveBeenCalledTimes(1);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(f.publish).toHaveBeenCalledTimes(2);
+    await vi.advanceTimersByTimeAsync(999);
+    expect(f.publish).toHaveBeenCalledTimes(2);
+    await vi.advanceTimersByTimeAsync(1);
+    await saving;
+    expect(f.publish.mock.calls.map(([event]) => event.created_at)).toEqual([
+      SAVE_SECOND,
+      SAVE_SECOND + 1,
+      SAVE_SECOND + 2,
+    ]);
+    const saved = JSON.parse(
+      f.publish.mock.calls.at(-1)?.[0].content ?? "null",
+    ).value;
+    expect(saved.groups.map(({ id }: { id: string }) => id)).toEqual([
+      "home",
+      "work",
+    ]);
+    expect(saved.assignments).toEqual({ [other]: "work", [channel]: "home" });
+  } finally {
+    f.dispose();
+    vi.useRealTimers();
+  }
+});
+
+it.each(["clearCache", "dispose"] as const)(
+  "cancels a workspace timestamp wait on %s before publication",
+  async (action) => {
+    const f = fixedClockFixture();
+    const solo = f.session.soloPreferences;
+    try {
+      f.install(groups);
+      await solo.ensure();
+      await solo.createSection({ id: "home", name: "Home" });
+      const saving = solo.reorderSections("home", ["home", "work"]);
+      const cancelled = expect(saving).rejects.toBeDefined();
+      await vi.advanceTimersByTimeAsync(0);
+      expect(solo.snapshot().orderError).toBeUndefined();
+      f[action]();
+      await cancelled;
+      await vi.advanceTimersByTimeAsync(2_000);
+      expect(f.publish).toHaveBeenCalledTimes(1);
+      expect(f.prepare).toHaveBeenCalledTimes(1);
+    } finally {
+      f.dispose();
+      vi.useRealTimers();
+    }
+  },
+);
+
+it("retains the kit revision check when another workspace head arrives during the wait", async () => {
+  const f = fixedClockFixture();
+  const solo = f.session.soloPreferences;
+  try {
+    f.install(groups);
+    await solo.ensure();
+    await solo.createSection({ id: "home", name: "Home" });
+    const saving = solo.reorderSections("home", ["home", "work"]);
+    const conflict = expect(saving).rejects.toThrow(
+      "This saved recipe changed",
+    );
+    void conflict.catch(() => {});
+    await vi.advanceTimersByTimeAsync(0);
+    f.install(
+      {
+        ...groups,
+        groups: [
+          ...groups.groups,
+          { id: "home", name: "Changed elsewhere", defaultTemplateId: "" },
+        ],
+      },
+      false,
+      SAVE_SECOND + 1,
+    );
+    await vi.advanceTimersByTimeAsync(750);
+    await conflict;
+    expect(f.publish).toHaveBeenCalledTimes(1);
+  } finally {
+    f.dispose();
+    vi.useRealTimers();
+  }
+});
+
+it("leaves future-dated workspace heads subject to the kit timestamp refusal", async () => {
+  const f = fixedClockFixture();
+  try {
+    f.install(
+      {
+        ...groups,
+        groups: [
+          ...groups.groups,
+          { id: "home", name: "Home", defaultTemplateId: "" },
+        ],
+      },
+      false,
+      SAVE_SECOND + 10,
+    );
+    await f.session.soloPreferences.ensure();
+    await expect(
+      f.session.soloPreferences.reorderSections("home", ["home", "work"]),
+    ).rejects.toThrow("Please wait a second");
+    expect(f.publish).not.toHaveBeenCalled();
+  } finally {
+    f.dispose();
+    vi.useRealTimers();
+  }
+});
 
 it("retries a catalog read cancelled by initial roster authority", async () => {
   const viewer = keypair(),
@@ -410,6 +640,67 @@ it("does not overwrite project filing when a refresh fails, and reconciles retri
   }
 });
 
+it("retries a workspace rename against fresh defaults and filing without redundant writes or recreating deleted workspaces", async () => {
+  const f = fixture();
+  try {
+    f.install(groups);
+    const preferences = f.session.soloPreferences;
+    await preferences.ensure();
+    const fresh: Groups = {
+      ...groups,
+      groups: [
+        {
+          id: "work",
+          name: "Renamed elsewhere",
+          defaultTemplateId: "new-default",
+        },
+        { id: "other", name: "Keep", defaultTemplateId: "" },
+      ],
+      assignments: { [channel]: "work", [other]: "other" },
+    };
+    f.install(fresh);
+    f.query.mockRejectedValueOnce(new Error("offline"));
+    await expect(
+      preferences.renameSection("work", "Projects"),
+    ).rejects.toThrow();
+    expect(f.publish).not.toHaveBeenCalled();
+    expect(preferences.snapshot().data?.sections[0]?.name).toBe("Solo work");
+    await expect(
+      preferences.renameSection("work", "Projects", "Solo work"),
+    ).rejects.toThrow("workspace name needs review");
+    expect(f.publish).not.toHaveBeenCalled();
+    await preferences.renameSection("work", " Projects ", "Renamed elsewhere");
+    expect(preferences.snapshot().data?.sections[0]?.name).toBe("Projects");
+    expect(written(f).map((record) => record.value)).toEqual([
+      {
+        ...fresh,
+        groups: [{ ...fresh.groups[0], name: "Projects" }, fresh.groups[1]],
+      },
+    ]);
+    // A lost confirmation may retry against its old name once the desired name is live.
+    await preferences.renameSection("work", "Projects", "Solo work");
+    expect(f.publish).toHaveBeenCalledOnce();
+    for (const name of [" ", "x".repeat(121)])
+      await expect(preferences.renameSection("work", name)).rejects.toThrow();
+    await expect(preferences.renameSection("gone", "Name")).rejects.toThrow(
+      "no longer exists",
+    );
+    expect(f.publish).toHaveBeenCalledOnce();
+    expect(f.assignment).not.toHaveBeenCalled();
+    f.install(
+      { ...groups, groups: [], assignments: {} },
+      false,
+      (f.publish.mock.calls[0]?.[0].created_at ?? 0) + 1,
+    );
+    await expect(preferences.renameSection("work", "Restore")).rejects.toThrow(
+      "no longer exists",
+    );
+    expect(f.publish).toHaveBeenCalledOnce();
+  } finally {
+    f.dispose();
+  }
+});
+
 it("confirms native-shaped reordered assignment maps without losing group order", async () => {
   const f = fixture();
   try {
@@ -474,6 +765,64 @@ it("checks the exact project capacity before saving and reclaims a removed filin
     expect(assignments?.[id]).toBe("work");
     expect(assignments?.[removed]).toBeUndefined();
   } finally {
+    f.dispose();
+  }
+});
+
+it("drops filings of archived or deleted chats when the Solo record is full", async () => {
+  const f = fixture();
+  const value: Groups = {
+    type: "groups",
+    id: "me",
+    groups: [{ id: "work", name: "Work", defaultTemplateId: "" }],
+    assignments: {},
+  };
+  const record = () => ({
+    version: 1 as const,
+    community,
+    deleted: false,
+    value,
+  });
+  let id = "";
+  for (let i = 1; i < 1000; i++) {
+    id = `00000000-0000-4000-8000-${i.toString(16).padStart(12, "0")}`;
+    value.assignments[id] = "work";
+    if (!kitRecordFits(record())) {
+      delete value.assignments[id];
+      break;
+    }
+  }
+  f.install(value);
+  const [first, second, kept] = Object.keys(value.assignments);
+  if (!first || !second || !kept) throw new Error("Missing filing");
+  let known = false;
+  const controller = new AbortController();
+  // The chat being filed is reported gone too, as a brand-new chat can be.
+  const solo = createSoloPreferences(
+    f.session.channelKit,
+    controller.signal,
+    () => (known ? [first, second, id] : []),
+  );
+  try {
+    await solo.queries.ensure();
+    await expect(solo.queries.assign(id, "work")).rejects.toThrow(
+      "Solo workspace storage is full",
+    );
+    expect(f.publish).not.toHaveBeenCalled();
+    known = true;
+    await solo.queries.assign(id, "work");
+    const assignments = solo.queries.snapshot().data?.assignments;
+    expect(assignments?.[id]).toBe("work");
+    expect(assignments?.[first]).toBeUndefined();
+    expect(assignments?.[second]).toBeUndefined();
+    expect(assignments?.[kept]).toBe("work");
+    // With room again, a save leaves the remaining filings alone.
+    known = false;
+    await solo.queries.assign(first, "work");
+    expect(solo.queries.snapshot().data?.assignments?.[first]).toBe("work");
+  } finally {
+    controller.abort();
+    solo.dispose();
     f.dispose();
   }
 });

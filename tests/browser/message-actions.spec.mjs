@@ -1,6 +1,7 @@
 import { hoverMessage } from "./message-actions.mjs";
 import { test, expect } from "./fixture.mjs";
 import { open, settle } from "./timeline.mjs";
+import { chooseDefaultSkinTone } from "./skin-tone.mjs";
 
 test.use({
   productionBroker: true,
@@ -237,6 +238,7 @@ test("message actions reveal, copy, restore focus and reply across responsive la
       },
     });
   });
+  await chooseDefaultSkinTone(page);
   await open(page, app);
   const event = app.append("primary", "alpha", "Message actions browser check");
   const row = page.locator(
@@ -523,6 +525,7 @@ test("copied Buzz links and the desktop alias reveal their destination from a co
 });
 
 test("DM actions open the correct reply thread", async ({ page, app }) => {
+  await chooseDefaultSkinTone(page);
   await open(page, app);
   await page
     .getByRole("navigation", { name: "Subscribed channels" })

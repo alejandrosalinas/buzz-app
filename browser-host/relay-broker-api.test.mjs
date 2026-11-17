@@ -1304,6 +1304,37 @@ test.each([
   },
 );
 
+test("each community has its own query capacity", async () => {
+  let release;
+  const held = new Promise((resolve) => {
+    release = resolve;
+  });
+  const h = await harness(async (call, count, event) => {
+    await held;
+    return success(call, count, event);
+  });
+  const controllers = [];
+  const post = (route) => {
+    const controller = new AbortController();
+    controllers.push(controller);
+    return h.post(route, filters, controller.signal);
+  };
+  try {
+    const primary = Array.from({ length: 6 }, () => post("primary/query"));
+    await vi.waitFor(() => expect(h.calls).toHaveLength(6));
+    expect((await h.post("primary/query", filters)).status).toBe(429);
+    const secondary = post("secondary/query");
+    await vi.waitFor(() => expect(h.calls).toHaveLength(7));
+    release();
+    for (const response of [...primary, secondary])
+      expect((await response).status).toBe(200);
+  } finally {
+    release();
+    for (const c of controllers) c.abort();
+    await h.close();
+  }
+});
+
 test("local capacity is explicitly unsent, not relay quota; unknown upstream publication is never resent", async () => {
   let release;
   const held = new Promise((resolve) => {

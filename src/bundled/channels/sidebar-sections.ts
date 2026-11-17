@@ -5,8 +5,22 @@ export function isChannelSectionKey(key: string) {
   return key === "channels" || key.startsWith("group:");
 }
 
-export function isChannelDropSectionKey(key: string) {
-  return key === "starred" || isChannelSectionKey(key);
+export type SidebarRowKind = "channel" | "dm";
+
+const anyRow: readonly SidebarRowKind[] = ["channel", "dm"];
+const channelRows: readonly SidebarRowKind[] = ["channel"];
+const dmRows: readonly SidebarRowKind[] = ["dm"];
+const noRows: readonly SidebarRowKind[] = [];
+
+/**
+ * Rows a pointer drop may place in a section. Starred and saved groups take
+ * channels and DMs; Channels and Direct messages each take back only their own.
+ */
+export function sidebarDropRowKinds(key: string) {
+  if (key === "starred" || key.startsWith("group:")) return anyRow;
+  if (key === "channels") return channelRows;
+  if (key === "dms") return dmRows;
+  return noRows;
 }
 
 export function contributedSidebarSectionKey(key: string) {

@@ -5,6 +5,7 @@ import {
   createPluginUpdateCapabilityBridge,
   type PluginUpdateCapability,
 } from "./updates";
+import { samePluginRelease } from "./same-release";
 import type { PluginInfo } from "./types";
 
 export type GitPluginInstallSource = Readonly<{
@@ -39,6 +40,15 @@ type PluginInstallationSourceKind =
   | "bundled"
   | "absent"
   | "unavailable";
+export type PluginReleaseCandidate = Readonly<{
+  source: PluginInstallSource;
+  release: Readonly<{ revision: string; publisher?: string | null }>;
+}>;
+export type PluginReleaseComparison =
+  | "current"
+  | "different"
+  | "review"
+  | "unknown";
 export type PluginInstaller = Readonly<{
   /** The source kinds `requestInstall` accepts. Missing on hosts that accept only Git. */
   sources?: readonly ("git" | "url")[];
@@ -55,7 +65,16 @@ export type PluginInstaller = Readonly<{
    * the ready catalog does not contain the manifest ID.
    */
   getInstallationSource?(id: string): PluginInstallationSourceKind;
-  /** Listen for status changes; call getInstallationStatus after subscribing for the current status. */
+  /** Compares one supplied release without raw installed metadata; "different" does not prove it is newer. */
+  compareInstallationRelease?(
+    id: string,
+    candidate: PluginReleaseCandidate,
+  ): PluginReleaseComparison;
+  /**
+   * Subscribe before reading current status. The callback is an invalidation
+   * signal for membership or release/source identity changes and may repeat the
+   * same status; re-read the capabilities after it fires.
+   */
   subscribeInstallationStatus(
     id: string,
     listener: (status: PluginInstallationStatus) => void,
@@ -475,6 +494,77 @@ function savedInstallationSourceKind(
   return "unavailable";
 }
 
+function listedReleaseSource(
+  id: string,
+  source: PluginInstallSource,
+): PluginInstallSource | null {
+  const parsed = parsePluginInstallSource(source);
+  if (!parsed) return null;
+  if (isUrlInstallSource(parsed)) return parsed.id === id ? parsed : null;
+  return parsed.commit && parsed.path !== undefined ? parsed : null;
+}
+
+// Native imports persist URL-normalized provenance, including scp-style SSH remotes.
+function comparableSourceUrl(value: string) {
+  return new URL(
+    scpRepository.test(value) ? `ssh://${value.replace(":", "/")}` : value,
+  ).href;
+}
+
+function compareReleaseSource(
+  installed: PluginInfo,
+  candidate: PluginInstallSource,
+): "same" | "different-pin" | "unrelated" | "unknown" {
+  if (installed.source !== "external" || installed.error !== null)
+    return "unknown";
+  const source: unknown = installed.updateSource;
+  const sourceKind = savedInstallationSourceKind(installed);
+  if (!source || (sourceKind !== "git" && sourceKind !== "url"))
+    return "unknown";
+
+  if (sourceKind === "url") {
+    if (!isUrlInstallSource(candidate)) return "unrelated";
+    const saved = source as { url: string; sha256: string };
+    if (comparableSourceUrl(saved.url) !== comparableSourceUrl(candidate.url))
+      return "unrelated";
+    return saved.sha256.toLowerCase() === candidate.sha256
+      ? "same"
+      : "different-pin";
+  }
+
+  const saved = source as {
+    repository: string;
+    reference: string;
+    path: string;
+    commit?: string;
+  };
+  if (!saved.commit) return "unknown";
+  if (isUrlInstallSource(candidate)) return "unrelated";
+  if (!candidate.commit) return "unknown";
+  if (
+    comparableSourceUrl(saved.repository) !==
+      comparableSourceUrl(candidate.repository) ||
+    saved.reference !== candidate.reference ||
+    saved.path !== candidate.path
+  )
+    return "unrelated";
+  return saved.commit.toLowerCase() === candidate.commit
+    ? "same"
+    : "different-pin";
+}
+
+function installationIdentityKey(plugin: PluginInfo | undefined) {
+  return plugin
+    ? JSON.stringify([
+        plugin.source,
+        plugin.error,
+        plugin.revision,
+        plugin.publisher ?? null,
+        plugin.updateSource ?? null,
+      ])
+    : undefined;
+}
+
 export function createPluginInstallCore({
   plugins,
   requests,
@@ -501,6 +591,60 @@ export function createPluginInstallCore({
     if (!plugin) return "absent";
     return savedInstallationSourceKind(plugin);
   };
+  const getInstallationIdentity = (id: string) => {
+    const { configuration } = plugins.snapshot();
+    if (configuration.status !== "ready")
+      return { status: "unavailable" as const, plugin: undefined };
+    const matches = configuration.catalog.plugins.filter(
+      (plugin) => plugin.manifest.id === id,
+    );
+    return {
+      status: matches.length > 0 ? ("installed" as const) : ("absent" as const),
+      plugin: matches.length === 1 ? matches[0] : undefined,
+    };
+  };
+  const compareInstallationRelease = (
+    id: string,
+    candidate: PluginReleaseCandidate,
+  ): PluginReleaseComparison => {
+    if (!candidate || typeof candidate !== "object" || Array.isArray(candidate))
+      return "unknown";
+    const installed = getInstallationIdentity(id);
+    if (installed.status !== "installed" || !installed.plugin) return "unknown";
+
+    const listedSource = listedReleaseSource(id, candidate.source);
+    const release = candidate.release;
+    if (
+      !listedSource ||
+      typeof release?.revision !== "string" ||
+      release.revision.trim().length === 0 ||
+      release.revision.length > 128 ||
+      typeof release.publisher !== "string" ||
+      release.publisher.trim().length === 0 ||
+      release.publisher.length > 256
+    )
+      return "unknown";
+
+    const sourceComparison = compareReleaseSource(
+      installed.plugin,
+      listedSource,
+    );
+    if (sourceComparison === "unknown") return "unknown";
+    if (
+      typeof installed.plugin.publisher !== "string" ||
+      installed.plugin.publisher.trim().length === 0
+    )
+      return "unknown";
+    if (installed.plugin.publisher !== release.publisher) return "review";
+    if (sourceComparison === "unrelated") return "review";
+    if (sourceComparison === "same")
+      return samePluginRelease(installed.plugin, release)
+        ? "current"
+        : "review";
+    return samePluginRelease(installed.plugin, release)
+      ? "review"
+      : "different";
+  };
 
   return {
     holdReview: requests.holdReview,
@@ -509,16 +653,23 @@ export function createPluginInstallCore({
     registerUpdates: requests.registerUpdates,
     getInstallationStatus,
     getInstallationSource,
+    compareInstallationRelease,
     subscribeInstallationStatus(
       id: string,
       listener: (status: PluginInstallationStatus) => void,
     ) {
-      let current = getInstallationStatus(id);
+      let current = getInstallationIdentity(id);
+      let currentKey = installationIdentityKey(current.plugin);
       return plugins.subscribe(() => {
-        const next = getInstallationStatus(id);
-        if (next === current) return;
+        const next = getInstallationIdentity(id);
+        if (
+          next.status === current.status &&
+          installationIdentityKey(next.plugin) === currentKey
+        )
+          return;
         current = next;
-        listener(next);
+        currentKey = installationIdentityKey(next.plugin);
+        listener(next.status);
       });
     },
     async submit(
@@ -645,6 +796,13 @@ export function createPluginInstallerService(
 
     getInstallationSource(id: string): PluginInstallationSourceKind {
       return host.core.getInstallationSource(id);
+    }
+
+    compareInstallationRelease(
+      id: string,
+      candidate: PluginReleaseCandidate,
+    ): PluginReleaseComparison {
+      return host.core.compareInstallationRelease(id, candidate);
     }
 
     subscribeInstallationStatus(

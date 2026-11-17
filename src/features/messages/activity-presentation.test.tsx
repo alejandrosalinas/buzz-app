@@ -42,6 +42,29 @@ it("keeps row activity props identical while each projection's values are equal"
   expect(result.current.agents("row", [agent, "other"])).not.toBe(agents);
 });
 
+it("forgets row activity props for rows that left the timeline", () => {
+  const row: ActivityRowPresentation = {
+    requestId: root,
+    active: false,
+    ownsLive: true,
+    container: "history",
+  };
+  const { result, rerender } = renderHook(
+    ({ rows }: { rows: readonly { id: string }[] }) =>
+      useStableRowActivity(rows),
+    { initialProps: { rows: [{ id: "row" }, { id: "kept" }] } },
+  );
+  const first = result.current.activity("row", row);
+  const replied = result.current.agents("replied:row", [agent]);
+  const kept = result.current.activity("kept", row);
+  // Trimmed from history, then loaded again as an older page.
+  rerender({ rows: [{ id: "kept" }] });
+  rerender({ rows: [{ id: "row" }, { id: "kept" }] });
+  expect(result.current.activity("row", row)).not.toBe(first);
+  expect(result.current.agents("replied:row", [agent])).not.toBe(replied);
+  expect(result.current.activity("kept", row)).toBe(kept);
+});
+
 it("re-renders on typing and activity only for the row that owns the live signal", () => {
   const live = fixture();
   const row = {

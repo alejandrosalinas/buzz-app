@@ -1,4 +1,4 @@
-import { expect, it } from "vitest";
+import { expect, it, vi } from "vitest";
 import { exactEmoji, searchEmoji, searchCustomEmoji } from "./emoji-search";
 
 it("verifies one exact shortcode for the closing colon, not ranking ties or namesakes", async () => {
@@ -133,5 +133,22 @@ it("copies native primitives even when Mart previously mutated the shared dictio
     smile.name = originalName;
     smile.keywords = originalKeywords;
     delete raw.emojis[customId];
+  }
+});
+
+it("Unicode completions use the picker's saved default skin tone", async () => {
+  const [hand] = await searchEmoji("call_me_hand", [], 1, 4);
+  expect(hand?.text).toBe("🤙🏽");
+  vi.stubGlobal("localStorage", {
+    getItem: (key: string) => (key === "emoji-mart.skin" ? "6" : null),
+  });
+  try {
+    const [saved] = await searchEmoji("call_me_hand", [], 1);
+    expect(saved?.text).toBe("🤙🏿");
+    // Emoji without tones keep their only form.
+    const [rocket] = await searchEmoji("rocket", [], 1);
+    expect(rocket?.text).toBe("🚀");
+  } finally {
+    vi.unstubAllGlobals();
   }
 });

@@ -240,6 +240,13 @@ describe("createBrowserPlatform", () => {
     }).catch((error: unknown) => error);
     expect((outage as BrowserAttachError).page).toBe("unavailable");
 
+    const refusedSignIn = await attach({
+      message:
+        "Sign in again in Settings → Identity → Organization sign-in, then reopen this app",
+      page: "sign-in",
+    }).catch((error: unknown) => error);
+    expect((refusedSignIn as BrowserAttachError).page).toBe("sign-in");
+
     const unknownPage = await attach({ message: "x", page: "elsewhere" }).catch(
       (error: unknown) => error,
     );

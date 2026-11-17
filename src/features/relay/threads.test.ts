@@ -8,7 +8,7 @@ import {
   threadReference,
   type ThreadResume,
 } from "./threads";
-import { byteSize } from "./budget";
+import { byteSize, listByteSize } from "./budget";
 import { ReadError } from "./errors";
 import { foldMessages } from "./fold";
 import type { RelayReader } from "./reader";
@@ -26,6 +26,7 @@ import {
 } from "./testing";
 
 vi.mock("./fold", { spy: true });
+vi.mock("./budget", { spy: true });
 
 const relay = keypair(),
   viewer = keypair(),
@@ -482,10 +483,14 @@ it("drops a resumed row its repair does not read again", async () => {
   const resume = await closed();
   // The relay omits a deleted row, and its deletion with it.
   const view = direct([root, first], { resume });
-  expect(view.view.snapshot().status).toBe("ready");
+  expect(view.view.snapshot()).toMatchObject({
+    status: "ready",
+    resumed: true,
+  });
   expect(replyIds(view)).toEqual([first.id, gone.id]);
   await view.view.refresh();
   expect(replyIds(view)).toEqual([first.id]);
+  expect(view.view.snapshot().resumed).toBeUndefined();
   // A repair that fails leaves nothing it could not confirm on screen.
   const failing = direct(new Error("offline"), { resume });
   expect(failing.view.snapshot().replies).toHaveLength(2);
@@ -493,6 +498,7 @@ it("drops a resumed row its repair does not read again", async () => {
   expect(failing.view.snapshot()).toMatchObject({
     status: "error",
     replies: [],
+    resumed: undefined,
   });
 });
 
@@ -1003,6 +1009,133 @@ it("explicitly limits oversized evidence rather than evicting aux and resurrecti
   });
 });
 
+// Sign this immutable evidence once at module setup, outside each test's clock.
+const summaryBudgetFixture = (() => {
+  const deleted = reply("deleted", 2);
+  const replies = [
+    deleted,
+    ...Array.from({ length: 999 }, (_, i) => reply(`${i}`, i + 3)),
+  ];
+  const summaries = Object.freeze(
+    replies.map((_, i) =>
+      signed(relay, {
+        kind: 39005,
+        created_at: i + 2,
+        tags: [["e", root.id]],
+        content: JSON.stringify({ reply_count: i + 1 }),
+      }),
+    ),
+  );
+  return Object.freeze({
+    deleted,
+    summaries,
+    events: Object.freeze([root, ...replies, ...summaries]),
+    tombstone: signed(alice, {
+      kind: 5,
+      content: "",
+      tags: [["e", deleted.id]],
+    }),
+    overflow: Object.freeze(
+      Array.from({ length: 998 }, (_, i) => reply(`more ${i}`, i + 1002)),
+    ),
+  });
+})();
+
+it.each(["live", "read"])(
+  "compacts superseded summaries before the %s thread budget without evicting messages or tombstones",
+  async (source) => {
+    const { deleted, summaries, events, tombstone, overflow } =
+      summaryBudgetFixture;
+    const thread = createThreadView({
+      channelId: "a",
+      messageId: root.id,
+      relayAuthor: relay.pubkey,
+      reader: { read: async () => events },
+      seed: root,
+      local: undefined,
+      canAccess: () => true,
+      visible: (events) => events,
+      notify: (listener) => listener(),
+    });
+    try {
+      if (source === "read") await thread.view.refresh();
+      else thread.receive(events);
+      expect(thread.view.snapshot()).toMatchObject({
+        limited: false,
+        error: undefined,
+        root: { id: root.id, replyCount: 1000 },
+      });
+      expect(thread.view.snapshot().replies).toHaveLength(1000);
+      expect(thread.events()).toHaveLength(1002);
+      expect(thread.events()).toContain(summaries.at(-1));
+
+      thread.receive([tombstone]);
+      thread.receive([deleted, ...summaries.slice(0, -1)]);
+      expect(thread.view.snapshot().replies).toHaveLength(999);
+      expect(thread.events()).toContain(deleted);
+      expect(thread.events()).toContain(tombstone);
+      expect(thread.events()).toHaveLength(1003);
+
+      // The cap still applies to messages, even after summary compaction.
+      thread.receive(overflow);
+      expect(thread.view.snapshot()).toMatchObject({
+        status: "error",
+        limited: true,
+        root: undefined,
+        replies: [],
+      });
+    } finally {
+      thread.view.dispose();
+    }
+  },
+);
+
+it("retains one authorized summary per target with replay-independent timestamp and id ordering", () => {
+  const answer = reply("answer", 2);
+  const summary = (
+    key: typeof relay,
+    target: string,
+    time: number,
+    count: number,
+  ) =>
+    signed(key, {
+      kind: 39005,
+      created_at: time,
+      tags: [["e", target]],
+      content: JSON.stringify({ reply_count: count }),
+    });
+  const first = summary(relay, root.id, 3, 2);
+  const second = summary(relay, root.id, 3, 3);
+  const winner = first.id < second.id ? first : second;
+  const loser = winner === first ? second : first;
+  const childSummary = summary(relay, answer.id, 2, 1);
+  const thread = createThreadView({
+    channelId: "a",
+    messageId: root.id,
+    relayAuthor: relay.pubkey,
+    reader: {} as RelayReader,
+    seed: root,
+    local: undefined,
+    canAccess: () => true,
+    visible: (events) => events,
+    notify: (listener) => listener(),
+  });
+  try {
+    thread.receive([answer, loser, childSummary]);
+    thread.receive([winner, summary(alice, root.id, 100, 999)]);
+    thread.receive([loser, summary(relay, root.id, 2, 1)]);
+    expect(thread.events().filter((event) => event.kind === 39005)).toEqual(
+      expect.arrayContaining([winner, childSummary]),
+    );
+    expect(thread.events()).toHaveLength(4);
+    expect(thread.view.snapshot().root?.replyCount).toBe(
+      JSON.parse(winner.content).reply_count,
+    );
+  } finally {
+    thread.view.dispose();
+  }
+});
+
 it("trips the live byte limit at exactly the whole-thread serialised size", async () => {
   const h = seeded();
   const first = reply("first", 10);
@@ -1189,6 +1322,69 @@ it.each([
     );
   },
 );
+
+it("skips folding and budgeting known replay IDs while admitting new evidence after reads and purge", async () => {
+  const events = [
+    root,
+    ...Array.from({ length: 500 }, (_, i) => reply(`${i}`, i + 2)),
+  ];
+  let hidden: string | undefined;
+  const thread = createThreadView({
+    channelId: "a",
+    messageId: root.id,
+    relayAuthor: relay.pubkey,
+    reader: { read: async () => events },
+    seed: root,
+    local: undefined,
+    canAccess: () => true,
+    visible: (events) => events.filter((event) => event.id !== hidden),
+    notify: (listener) => listener(),
+  });
+  const clear = () => {
+    vi.mocked(foldMessages).mockClear();
+    vi.mocked(listByteSize).mockClear();
+  };
+  try {
+    clear();
+    thread.receive([root]);
+    expect(foldMessages).not.toHaveBeenCalled();
+    expect(listByteSize).not.toHaveBeenCalled();
+
+    await thread.view.refresh();
+    const snapshot = thread.view.snapshot();
+    expect(snapshot.replies).toHaveLength(500);
+    const listener = vi.fn();
+    thread.view.subscribe(listener);
+    clear();
+    // Reconnect delivers retained replies individually, not as one batch.
+    for (const event of events) thread.receive([event]);
+    expect(foldMessages).not.toHaveBeenCalled();
+    expect(listByteSize).not.toHaveBeenCalled();
+    expect(listener).not.toHaveBeenCalled();
+    expect(thread.view.snapshot()).toBe(snapshot);
+
+    const fresh = reply("new", 502);
+    thread.receive([...events, fresh]);
+    expect(thread.view.snapshot().replies).toHaveLength(501);
+    expect(foldMessages).toHaveBeenCalledTimes(1);
+    expect(listByteSize).toHaveBeenCalledTimes(1);
+    clear();
+    thread.receive([fresh]);
+    expect(foldMessages).not.toHaveBeenCalled();
+    expect(listByteSize).not.toHaveBeenCalled();
+
+    // Pruned IDs may be received again; this is not an unbounded seen-ID set.
+    hidden = fresh.id;
+    thread.purge();
+    expect(thread.view.snapshot().replies).toHaveLength(500);
+    hidden = undefined;
+    thread.receive([fresh]);
+    expect(thread.view.snapshot().replies).toHaveLength(501);
+    expect(thread.events()).toContain(fresh);
+  } finally {
+    thread.view.dispose();
+  }
+});
 
 it("re-folds for local operations and profiles only when the thread's own change", () => {
   const agent = keypair();

@@ -104,6 +104,7 @@ html[data-keyboard-navigation] .input:focus-visible:not([aria-disabled]) {
 
 .input p {
   margin: 0;
+  line-height: inherit;
 }
 
 .input code {

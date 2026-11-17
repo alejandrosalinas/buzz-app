@@ -94,7 +94,7 @@ export interface BrowserPlatform {
 }
 
 /** A page the browser view shows in place of the website when attach fails. */
-export type BrowserViewerPage = "denied" | "unavailable";
+export type BrowserViewerPage = "denied" | "unavailable" | "sign-in";
 
 /** An attach failure. `page` names a panel page to show instead of the error bar. */
 export class BrowserAttachError extends Error {
@@ -107,7 +107,7 @@ export class BrowserAttachError extends Error {
   }
 }
 
-const VIEWER_PAGES: readonly string[] = ["denied", "unavailable"];
+const VIEWER_PAGES: readonly string[] = ["denied", "unavailable", "sign-in"];
 
 // Native attach rejects with `{ message, page? }`; older paths reject with a string.
 function attachError(error: unknown): unknown {

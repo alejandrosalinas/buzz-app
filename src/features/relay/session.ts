@@ -1878,6 +1878,20 @@ export function createRelaySession(
   const soloPreferences = createSoloPreferences(
     channelKit.capability,
     lifetime.signal,
+    (chats) => {
+      // Only a verified, uncapped roster proves a missing chat was deleted.
+      const list = channels.queries.list();
+      if (
+        channels.roster().state !== "verified" ||
+        list.status !== "ready" ||
+        list.coverage
+      )
+        return [];
+      const live = new Set(
+        list.channels.filter((c) => !c.archived).map((c) => c.id),
+      );
+      return chats.filter((chat) => !live.has(chat));
+    },
   );
   const reminders =
     transport?.reminders && writer
@@ -2785,10 +2799,17 @@ export function createRelaySession(
       ...createMessages(
         writes?.outbox,
         transport?.viewer,
-        (id) =>
-          local().find((item) => item.event.id === id)?.event ??
-          recent.peek(id)?.event ??
-          retainedEvent(id),
+        (id) => {
+          const outgoing = local().find((item) => item.event.id === id);
+          // The optimistic projection is unsigned even after publication. Use
+          // its admitted signed record when an operation needs source evidence.
+          return (
+            outgoing?.signed ??
+            recent.peek(id)?.event ??
+            retainedEvent(id) ??
+            outgoing?.event
+          );
+        },
         emoji.tags,
         validateMentions,
         (id, owner) =>
@@ -3931,6 +3952,13 @@ export function createRelaySession(
       )
         refreshRoster();
       liveSnapshot = snapshot;
+      // Only live profiles traffic keeps unwatched authors' statuses current.
+      statuses.live(
+        snapshot.status === "connected" &&
+          snapshot.routes.some(
+            (route) => route.id === "profiles" && route.status === "live",
+          ),
+      );
       // A global route that failed before it established proves nothing, so
       // the finite reads stand in for its replay on this connection.
       if (snapshot.status === "connected")

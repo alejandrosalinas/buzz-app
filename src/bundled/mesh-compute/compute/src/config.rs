@@ -3,7 +3,10 @@
 use crate::transport_policy::{
     iroh_relay_mode, sdk_iroh_relay_config, validate_advertised_endpoint,
 };
-use mesh_llm_sdk::{client, MeshDiscoveryMode, TrustPolicy};
+use mesh_llm_embedded_runtime::{
+    EmbeddedMeshDiscoveryMode as MeshDiscoveryMode, EmbeddedMeshNodeConfig,
+    EmbeddedTrustPolicy as TrustPolicy,
+};
 use std::path::PathBuf;
 use std::time::Duration;
 
@@ -20,7 +23,7 @@ pub struct ClientConfig {
 }
 
 impl ClientConfig {
-    pub fn build(self) -> anyhow::Result<client::EmbeddedClientConfig> {
+    pub fn build(self) -> anyhow::Result<EmbeddedMeshNodeConfig> {
         if self.api_port == 0 || self.console_port == 0 || self.api_port == self.console_port {
             anyhow::bail!("Mesh needs two distinct non-zero ports");
         }
@@ -42,7 +45,8 @@ impl ClientConfig {
         let owners = normalized_roster(&Some(self.trusted_owners), &self.owner_id)
             .expect("roster supplied above");
         let (disabled, relays) = sdk_iroh_relay_config(iroh_relay_mode()?);
-        let mut builder = client::EmbeddedClientConfig::builder()
+        let mut builder = EmbeddedMeshNodeConfig::builder()
+            .client()
             .api_port(self.api_port)
             .console_port(self.console_port)
             .owner_key(self.owner_key)
@@ -75,7 +79,7 @@ pub struct ServeConfig {
     pub max_vram_gb: Option<u64>,
 }
 impl ServeConfig {
-    pub fn build(self) -> anyhow::Result<mesh_llm_sdk::serve::EmbeddedServeConfig> {
+    pub fn build(self) -> anyhow::Result<EmbeddedMeshNodeConfig> {
         let model = self.model.trim();
         if model.is_empty() {
             anyhow::bail!("Choose a model before sharing compute");
@@ -84,7 +88,8 @@ impl ServeConfig {
             anyhow::bail!("Shared compute memory limit must be positive");
         }
         let node = self.node.build()?;
-        let mut config = mesh_llm_sdk::serve::EmbeddedServeConfig::builder()
+        let mut config = EmbeddedMeshNodeConfig::builder()
+            .serve()
             .model(model)
             .build();
         config.http = node.http;
@@ -146,6 +151,10 @@ mod tests {
         }
         .build()
         .unwrap();
+        assert_eq!(
+            result.mode,
+            mesh_llm_embedded_runtime::EmbeddedMeshNodeMode::Serve
+        );
         assert_eq!(result.serving.models, vec!["fixture-model"]);
         assert_eq!(result.serving.max_vram_gb, Some(16.0));
         assert_eq!(result.startup_timeout, Duration::from_secs(180));
@@ -190,6 +199,10 @@ mod tests {
     fn client_is_private_and_uses_explicit_owner_path() {
         let expected_path = config().owner_key;
         let result = config().build().unwrap();
+        assert_eq!(
+            result.mode,
+            mesh_llm_embedded_runtime::EmbeddedMeshNodeMode::Client
+        );
         assert!(!result.network.publish);
         assert!(!result.network.auto_join);
         assert!(result.network.nostr_relays.is_empty());

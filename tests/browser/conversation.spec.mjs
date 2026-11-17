@@ -369,6 +369,29 @@ test("independent packed author consumer and native-installed contribution survi
         exact: true,
       }),
     ).toBeVisible();
+    // The installed blob uses host sharing components without source imports;
+    // browser focus/portal ownership cannot be established by type tests.
+    const share = page.getByRole("button", {
+      name: "Share consumer record",
+      exact: true,
+    });
+    await share.click();
+    const memberPicker = page.getByRole("dialog", {
+      name: "Record access",
+      exact: true,
+    });
+    await expect(memberPicker).toBeVisible();
+    await expect(
+      memberPicker.getByRole("region", { name: "General access" }),
+    ).toContainText("Only record members can read.");
+    await expect(
+      memberPicker.getByRole("button", { name: "Copy link", exact: true }),
+    ).toBeVisible();
+    await memberPicker
+      .getByRole("button", { name: "Done", exact: true })
+      .click();
+    await expect(memberPicker).toBeHidden();
+    await expect(share).toBeFocused();
     // The independently built page consumes the host's registered Mentions tool.
     await page
       .getByRole("button", { name: "Mention a member", exact: true })

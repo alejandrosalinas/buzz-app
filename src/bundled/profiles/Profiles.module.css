@@ -47,6 +47,13 @@
   min-width: 0;
   overflow-wrap: anywhere;
 }
+.agentIcon {
+  display: inline-block;
+  width: 1em;
+  height: 1em;
+  margin-inline-end: var(--space-1);
+  vertical-align: -0.125em;
+}
 .root p {
   margin: 0;
 }

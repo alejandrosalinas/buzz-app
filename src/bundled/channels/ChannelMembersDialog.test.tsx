@@ -682,7 +682,11 @@ it("explains imported agents with the current community's badge and nested popov
     sync: emptySync(),
   };
   const t = await setup("stream", false, false, undefined, undefined, {
-    communities: { snapshot: () => snapshot, subscribe: () => () => {} },
+    communities: {
+      snapshot: () => snapshot,
+      subscribe: () => () => {},
+      retained: () => undefined,
+    },
   });
   const group = await screen.findByRole("region", { name: "Your agents" });
   const badge = within(group).getByRole("button", {
@@ -3761,6 +3765,44 @@ it("pages a large roster without waiting for optional names or exceeding the pro
   } finally {
     await act(async () => release());
   }
+});
+
+it("labels a large roster again only when a name input changes, not on every keystroke", async () => {
+  const t = await setup("stream", false, false, undefined, undefined, {
+    extraMembers: 120,
+  });
+  await vi.waitFor(() =>
+    expect(memberData()).toHaveAttribute("data-refreshing", "false"),
+  );
+  const search = screen.getByRole("searchbox");
+  const resolve = vi.spyOn(t.session.names, "resolve");
+  const wait = (ms: number) =>
+    act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, ms));
+    });
+  const type = async (value: string, ms: number) => {
+    fireEvent.change(search, { target: { value } });
+    await wait(ms);
+  };
+  // Until no name is resolved for a while: opening and the first filter
+  // load names, which labels the roster again, as it should.
+  const settle = async () => {
+    for (let calls = -1; calls !== resolve.mock.calls.length; await wait(100))
+      calls = resolve.mock.calls.length;
+  };
+  // One letter is too short to search the relay. A filter that changes which
+  // members are shown loads their profiles, which also relabels, so these
+  // letters are ones a fallback name (bech32) never holds: the shown members
+  // match by display name alone.
+  await type("b", 0);
+  await settle();
+  resolve.mockClear();
+  for (const value of ["i", "o", "b", "i"]) await type(value, 50);
+  expect(search).toHaveValue("i");
+  // Labelling the roster on each keystroke would resolve each of its 120
+  // members per letter; the dialog header and choices resolve a few names of
+  // their own.
+  expect(resolve.mock.calls.length).toBeLessThan(120);
 });
 
 it("keeps the current member page through live removals and clamps a shortened roster", async () => {

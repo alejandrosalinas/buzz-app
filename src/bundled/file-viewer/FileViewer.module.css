@@ -1,0 +1,226 @@
+.viewer {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  min-width: 0;
+  height: 100%;
+  min-height: 0;
+  padding: var(--space-4);
+  background: var(--surface-panel);
+  color: var(--text-standard);
+}
+.viewer > * {
+  min-height: 0;
+}
+.status {
+  display: grid;
+  place-items: center;
+  padding: var(--space-4);
+}
+.scroll {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+}
+.parts {
+  min-width: 0;
+}
+/* A part holds its children's margins, so its height is all it takes up. */
+.part {
+  display: flow-root;
+}
+.part[data-blank] {
+  min-height: 1lh;
+}
+.edge {
+  height: 1px;
+}
+.markdown {
+  max-width: 72ch;
+  overflow-wrap: anywhere;
+  font-size: var(--text-message);
+  line-height: var(--text-message--line-height);
+  letter-spacing: var(--text-message--letter-spacing);
+}
+.markdown .part + .part {
+  margin-block-start: var(--space-4);
+}
+.picture {
+  max-width: 100%;
+  height: auto;
+}
+.text {
+  margin: 0;
+  font-family: var(--font-mono);
+  font-size: var(--text-mono-lg);
+  line-height: var(--text-mono-lg--line-height);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  tab-size: 4;
+}
+.source {
+  display: flex;
+  align-items: flex-start;
+  width: max-content;
+  min-width: 100%;
+}
+.gutter,
+.code {
+  margin: 0;
+  font-family: var(--font-mono);
+  font-size: var(--text-mono-lg);
+  line-height: var(--text-mono-lg--line-height);
+  font-variant-ligatures: none;
+  white-space: pre;
+  tab-size: 4;
+}
+.gutter {
+  position: sticky;
+  left: 0;
+  flex: none;
+  margin-inline-end: var(--space-3);
+  padding-inline-end: var(--space-3);
+  border-inline-end: 1px solid var(--border-standard);
+  background: var(--surface-panel);
+  color: var(--text-metadata);
+  text-align: end;
+  user-select: none;
+}
+/* Highlighted code takes the host's neutral text roles: weight marks the
+   structure, a quieter color the values, italics the comments. Status colors
+   stay for status. Its classes come from lowlight, so they are matched as
+   written, not as module classes. */
+:is(.code, .markdown)
+:is(
+  [class~="hljs-keyword"],
+  [class~="hljs-selector-tag"],
+  [class~="hljs-built_in"],
+  [class~="hljs-doctag"],
+  [class~="hljs-title"],
+  [class~="hljs-section"],
+  [class~="hljs-name"],
+  [class~="hljs-selector-id"],
+  [class~="hljs-selector-class"]
+) {
+  color: var(--text-standard);
+  font-weight: var(--type-weight-medium);
+}
+:is(.code, .markdown)
+  :is(
+    [class~="hljs-string"],
+    [class~="hljs-regexp"],
+    [class~="hljs-addition"],
+    [class~="hljs-template-tag"],
+    [class~="hljs-number"],
+    [class~="hljs-literal"],
+    [class~="hljs-symbol"],
+    [class~="hljs-bullet"],
+    [class~="hljs-variable"],
+    [class~="hljs-template-variable"],
+    [class~="hljs-attr"],
+    [class~="hljs-attribute"],
+    [class~="hljs-type"],
+    [class~="hljs-params"],
+    [class~="hljs-property"],
+    [class~="hljs-link"]
+  ) {
+  color: var(--text-subtle);
+}
+:is(.code, .markdown)
+  :is(
+    [class~="hljs-comment"],
+    [class~="hljs-quote"],
+    [class~="hljs-meta"],
+    [class~="hljs-deletion"]
+  ) {
+  color: var(--text-metadata);
+  font-style: italic;
+}
+.outline {
+  max-height: min(24rem, calc(var(--available-height) - 2 * var(--space-1)));
+  overflow-y: auto;
+}
+.outline ul {
+  margin: 0;
+  padding-inline: 0;
+  list-style: none;
+}
+.table {
+  border-collapse: collapse;
+  font-size: var(--text-body-sm);
+  line-height: var(--text-body-sm--line-height);
+}
+.table th,
+.table td {
+  padding: var(--space-1) var(--space-2);
+  border: 1px solid var(--border-standard);
+  text-align: start;
+  vertical-align: top;
+  white-space: pre-wrap;
+}
+.table th {
+  position: sticky;
+  top: 0;
+  background: var(--surface-panel);
+  font-weight: var(--type-weight-medium);
+}
+.note {
+  margin: 0;
+  padding-block: var(--space-2);
+  color: var(--text-secondary);
+  font-size: var(--text-body-sm);
+  line-height: var(--text-body-sm--line-height);
+}
+.pdf {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  gap: var(--space-2);
+  min-height: 0;
+}
+.toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2);
+}
+.group {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+}
+.count {
+  min-width: 4ch;
+  color: var(--text-secondary);
+  font-size: var(--text-body-sm);
+  font-variant-numeric: tabular-nums;
+  text-align: center;
+  white-space: nowrap;
+}
+.stage {
+  position: relative;
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  border-radius: var(--radius-control);
+  background: var(--surface-inset);
+}
+.column {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--space-3);
+  width: max-content;
+  min-width: 100%;
+  padding: var(--space-4);
+  box-sizing: border-box;
+}
+.page {
+  flex: none;
+  background: var(--surface-panel);
+  box-shadow: 0 0 0 1px var(--border-standard);
+}
+.page canvas {
+  display: block;
+}

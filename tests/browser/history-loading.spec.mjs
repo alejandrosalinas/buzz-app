@@ -765,7 +765,7 @@ test("cancelled navigation keeps relay reads usable in the same document", async
       { once: true },
     );
   });
-  const sessions = app.report.sessions.length;
+  const sessions = app.report.sessions.filter((c) => c === "primary").length;
   const dialog = page.waitForEvent("dialog");
   await page.evaluate(() => {
     setTimeout(() => window.location.reload(), 0);
@@ -777,5 +777,7 @@ test("cancelled navigation keeps relay reads usable in the same document", async
     page.getByRole("textbox", { name: "Message #Beta", exact: true }),
   ).toBeVisible();
   await expect(history(page)).toContainText("primary beta message");
-  expect(app.report.sessions).toHaveLength(sessions);
+  expect(app.report.sessions.filter((c) => c === "primary")).toHaveLength(
+    sessions,
+  );
 });

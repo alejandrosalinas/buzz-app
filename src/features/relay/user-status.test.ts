@@ -266,6 +266,116 @@ it("reloads an author unmounted before its initial read completed", async () => 
   expect(owner.queries.snapshot().get(bob.pubkey)?.text).toBe("Remote");
 });
 
+it("keeps recently unwatched authors loaded, current from live traffic, and bounded", async () => {
+  const carol = keypair();
+  const remote = signed(bob, {
+    kind: 30315,
+    created_at: now,
+    content: "Remote",
+    tags: [["d", "general"]],
+  });
+  const read = vi.fn<RelayReader["read"]>(async ([filter]) =>
+    filter?.authors?.includes(bob.pubkey) ? [remote] : [],
+  );
+  const owner = createUserStatuses({ read });
+  owners.push(owner);
+  owner.live(true);
+  // Rows scroll out of view and back: nothing is read again.
+  const first = owner.queries.watch([bob.pubkey, carol.pubkey]);
+  await vi.advanceTimersByTimeAsync(0);
+  first();
+  expect(read).toHaveBeenCalledOnce();
+  expect(owner.queries.snapshot().get(bob.pubkey)?.text).toBe("Remote");
+  // An author read without a status takes one set while out of view.
+  owner.accept([
+    signed(carol, {
+      kind: 30315,
+      created_at: now + 1,
+      content: "Live",
+      tags: [["d", "general"]],
+    }),
+  ]);
+  const unwatch = owner.queries.watch([bob.pubkey, carol.pubkey]);
+  await vi.advanceTimersByTimeAsync(0);
+  expect(read).toHaveBeenCalledOnce();
+  expect(owner.queries.snapshot().get(carol.pubkey)?.text).toBe("Live");
+  // 499 more authors out of view keep bob, the oldest; one more evicts him.
+  unwatch();
+  const pass = (from: number, count: number) => {
+    for (let n = from; n < from + count; n++)
+      owner.queries.watch([n.toString(16).padStart(64, "0")])();
+  };
+  pass(1, 498);
+  expect(owner.queries.snapshot().has(bob.pubkey)).toBe(true);
+  pass(499, 1);
+  expect(owner.queries.snapshot().has(bob.pubkey)).toBe(false);
+  expect(owner.queries.snapshot().has(carol.pubkey)).toBe(true);
+  await vi.advanceTimersByTimeAsync(0);
+  read.mockClear();
+  owner.queries.watch([bob.pubkey]);
+  await vi.advanceTimersByTimeAsync(0);
+  expect(read).toHaveBeenCalledOnce();
+});
+
+it("reads an idle author again after a reconnect, which can miss live changes", async () => {
+  const read = vi.fn<RelayReader["read"]>(async () => []);
+  const owner = createUserStatuses({ read });
+  owners.push(owner);
+  owner.live(true);
+  const unwatch = owner.queries.watch([bob.pubkey]);
+  await vi.advanceTimersByTimeAsync(0);
+  unwatch();
+  owner.accept([
+    signed(bob, {
+      kind: 30315,
+      created_at: now,
+      content: "Live",
+      tags: [["d", "general"]],
+    }),
+  ]);
+  expect(owner.queries.snapshot().get(bob.pubkey)?.text).toBe("Live");
+  owner.reconnect();
+  await vi.advanceTimersByTimeAsync(0);
+  expect(read).toHaveBeenCalledOnce();
+  owner.queries.watch([bob.pubkey]);
+  await vi.advanceTimersByTimeAsync(0);
+  expect(read).toHaveBeenCalledTimes(2);
+});
+
+it("keeps unwatched authors loaded only while the profiles stream is live", async () => {
+  const read = vi.fn<RelayReader["read"]>(async () => [
+    signed(bob, {
+      kind: 30315,
+      created_at: now,
+      content: "Remote",
+      tags: [["d", "general"]],
+    }),
+  ]);
+  const owner = createUserStatuses({ read });
+  owners.push(owner);
+  owner.live(true);
+  const rows = () => {
+    const unwatch = owner.queries.watch([bob.pubkey]);
+    return vi.advanceTimersByTimeAsync(0).then(unwatch);
+  };
+  await rows();
+  await rows();
+  expect(read).toHaveBeenCalledOnce();
+  // The stream stops: nothing keeps bob's status current, so it is dropped
+  // and read again when his row returns, and dropped again when it leaves.
+  owner.live(false);
+  expect(owner.queries.snapshot().has(bob.pubkey)).toBe(false);
+  await rows();
+  expect(read).toHaveBeenCalledTimes(2);
+  await rows();
+  expect(read).toHaveBeenCalledTimes(3);
+  // Live again: an unwatched author stays loaded.
+  owner.live(true);
+  await rows();
+  await rows();
+  expect(read).toHaveBeenCalledTimes(4);
+});
+
 it("recovers a mounted status after a transient read failure without hot-looping", async () => {
   const read = vi
     .fn<RelayReader["read"]>()

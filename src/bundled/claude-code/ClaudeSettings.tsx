@@ -16,20 +16,34 @@ export type ClaudeConnection = {
   onOpenChange(open: boolean): void;
 };
 
+type Credentials = Readonly<{
+  /** Whether the person has a Claude setup of their own, which Claude uses
+   * over a saved key. */
+  own: boolean;
+  /** Whether a key is saved; security reviews always use it. */
+  key: boolean;
+}>;
+
 /** Credentials are independent of the installed Claude version, so a missing
  * or outdated runtime never prevents removing a saved key. */
 export function ClaudeSettings({
   setup,
   active,
+  read,
+  connect,
   clearKey,
   connection,
 }: {
   setup: ClaudeSetup;
   active(): boolean;
+  read(): Promise<Credentials>;
+  /** What to say while Claude has neither a setup of its own nor a key. */
+  connect: string;
   clearKey(): Promise<void>;
   connection?: ClaudeConnection | undefined;
 }) {
   const [configured, setConfigured] = useState<boolean>();
+  const [own, setOwn] = useState<Credentials["own"]>();
   const [checking, setChecking] = useState(true);
   const [readError, setReadError] = useState("");
   const request = useRef(0);
@@ -60,10 +74,12 @@ export function ClaudeSettings({
     setChecking(true);
     setReadError("");
     try {
-      const account = await setup.auth.check();
+      const credentials = await read();
       if (request.current === current) {
-        setConfigured(account !== undefined);
+        setConfigured(credentials.key);
+        setOwn(credentials.own);
       }
+      return credentials;
     } catch (error) {
       if (request.current === current) {
         setReadError(String(error));
@@ -71,7 +87,7 @@ export function ClaudeSettings({
     } finally {
       if (request.current === current) setChecking(false);
     }
-  }, [setup]);
+  }, [read]);
   useEffect(() => {
     const unsubscribe = setup.auth.subscribe(() => void check());
     void check();
@@ -80,6 +96,12 @@ export function ClaudeSettings({
       unsubscribe();
     };
   }, [setup, check]);
+  /** Looks again for the person's own setup, made with the Claude CLI, which
+   * ends key entry once it is found. */
+  const refresh = async () => {
+    await setup.check().catch(() => undefined);
+    if ((await check())?.own) changeConnection(false);
+  };
   useEffect(() => {
     if (connection?.open) void check();
   }, [connection?.open, check]);
@@ -132,8 +154,8 @@ export function ClaudeSettings({
         id="claude-settings-title"
         title="Claude"
         subtitle={
-          configured === false && !checking && !readError
-            ? "Claude requires an API key to connect to your account."
+          configured === false && !own && !checking && !readError
+            ? connect
             : "Manage Claude’s credentials on this computer."
         }
       />
@@ -209,6 +231,7 @@ export function ClaudeSettings({
               title="Connect Claude"
               description={
                 <>
+                  {!own && <>{connect} </>}
                   Create an API key at{" "}
                   <Button
                     variant="link"
@@ -228,7 +251,18 @@ export function ClaudeSettings({
                   and paste it below.
                 </>
               }
-              headerGap="compact"
+              actions={
+                !own && (
+                  <Button
+                    disabled={checking || saving}
+                    // Natively disabled, it would blur out of the open dialog.
+                    focusableWhenDisabled
+                    onClick={() => void refresh()}
+                  >
+                    Refresh
+                  </Button>
+                )
+              }
               preventClose={saving}
               onOpenChange={(open) => !open && changeConnection(false)}
               initialFocus={() =>
@@ -253,7 +287,7 @@ export function ClaudeSettings({
       {confirm && (
         <AlertDialog
           title="Remove Claude API key?"
-          description={`This removes the key from ${storage}. New local Claude sessions will need a key. A turn already running can finish.`}
+          description={`This removes the key from ${storage}. ${own ? "Security reviews" : "New local Claude sessions"} will need a key. A turn already running can finish.`}
           pending={clearing}
           onClose={() => setConfirm(false)}
           finalFocus={() =>

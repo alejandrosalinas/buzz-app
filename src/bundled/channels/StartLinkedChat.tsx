@@ -1,6 +1,9 @@
 import { ChatCircleIcon } from "../../shared/design-system/icons";
 import { useState } from "react";
-import type { ChannelMessage } from "../../features/relay/contracts";
+import type {
+  ChannelMessage,
+  ChannelSummary,
+} from "../../features/relay/contracts";
 import type { RelaySession } from "../../features/relay/session";
 import type { Navigation } from "../../features/navigation/controller";
 import { messageCopyLink } from "../../features/messages/message-copy";
@@ -14,10 +17,14 @@ import { MenuItem, MenuIcon } from "../../shared/design-system/ui/Menu";
 import { useToastNotification } from "../../shared/design-system/ui/Toast";
 import { soloDraftTarget } from "../../features/channel-navigation/routes";
 
-export function canStartLinkedChat(session: RelaySession, channelId: string) {
-  const channel = session.channels
-    .list()
-    .channels.find((item) => item.id === channelId);
+export function canStartLinkedChat(
+  session: RelaySession,
+  source: string | ChannelSummary,
+) {
+  const channel =
+    typeof source === "string"
+      ? session.channels.list().channels.find((item) => item.id === source)
+      : source;
   return !!(
     session.viewer &&
     channel &&

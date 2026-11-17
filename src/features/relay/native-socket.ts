@@ -126,6 +126,8 @@ export class NativeSocket implements LiveSocket {
         "grant-refused",
         "invalid-proof",
         "invalid-assertion",
+        // This computer's clock is too far behind the issuer's.
+        "clock-skew",
         "invalid-response",
         "invalid-expiry",
         "invalid-viewer",

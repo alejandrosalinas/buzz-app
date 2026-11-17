@@ -9,7 +9,6 @@ Build defaults are readable binary data, **never secret storage**.
 | Input | Consumer and boundary |
 | --- | --- |
 | `BUZZ_EXTERNAL_MCP_COMMUNITIES` | Frontend build: space-separated secure community origins allowed to authorize external MCP access. Empty disables access. See below. |
-| `BUZZ_WORKFLOW_RESTRICTED_COMMUNITIES` | Frontend build: space-separated secure community origins where workflow messages cannot start or steer local agents. Empty keeps checked workflow delegation everywhere. See below. |
 | `BUZZ_BUILDERLAB_URL` | Shared frontend/native build: the live development broker's Builderlab, and whether a build without an added sign-in server keeps the built-in one; no runtime override. See below. |
 | `BUZZ_BUILDERLAB_APPS_DOMAIN` | Shared frontend/native build: exact Apps cookie domain paired with the login origin for native viewer SSO; no runtime override. |
 | `BUZZ_BUILDERLAB_APPS_CONTROL_PLANE` | Shared frontend/native build: HTTPS origin of the Apps control plane for the configured login origin, for deployments the built-in public table does not list; no runtime override. |
@@ -18,6 +17,7 @@ Build defaults are readable binary data, **never secret storage**.
 | `BUZZ_BUILD_MANAGED_PLUGINS_URL` | Native build: `https` URL of a version 1 [managed plugin policy](managed-plugins.md#packaged-policy). The desktop app fetches it and keeps the last good copy, used when no `managed-plugins.json` exists. It only recommends. Unset in OSS builds. |
 | `BUZZ_DATABRICKS_HOST` | Frontend build and dev server: `https://` Databricks workspace URL passed as `DATABRICKS_HOST` to every bundled `goose-acp`, which then prefers it to the host in goose's config. Unset in OSS builds. See [Databricks host](#databricks-host). |
 | `BUZZ_MOBILE_APP_IOS_URL`, `BUZZ_MOBILE_APP_ANDROID_URL` | Frontend build: `https://` store listings for the build's mobile app, shown with QR codes on the mobile Settings card to people whose Builderlab account holds this device's backed-up key. Unset in OSS builds. See [Mobile app links](#mobile-app-links). |
+| `BUZZ_RECOMMENDED_AGENT` | Frontend build and dev server: JSON recommendation with optional `recommendedBy` attribution and candidates ordered best first, behind **Automatic** for new agents. Legacy candidate arrays also work. Unset in OSS builds, which don't offer the choice. See [Recommended agent](#recommended-agent). |
 | `BUZZ_RELAY_URL` | Live development broker's default community, not an agent relay override or a packaged default. |
 | `BUZZ_BUILD_AUTO_CONNECT_DEFAULT_RELAY` | Presence-only alias for fresh-viewer community selection in live development only. Saved viewer choice wins. |
 | `BUZZ_BUILD_FEDERATED_IDENTITY_CONFIG` | Native and frontend build: sign-in servers added to the built-in one, each with its adapter prefix and community hosts; empty opts out. See below. |
@@ -47,18 +47,6 @@ The distributor's release build chooses the allowed communities; this
 repository's workflow sets none. Community names do not grant access. The Agents service compares the exact canonical origin before
 opening a connection and on each tool call. Consent disables other communities,
 and Settings hides External apps there. Normal agent MCP servers are unchanged.
-
-## Workflow restriction community flag
-
-`BUZZ_WORKFLOW_RESTRICTED_COMMUNITIES` is a space-separated list of `https://`
-or `wss://` community origins, parsed as the external flag is. The default is
-empty: in every community, a workflow mention can start or steer a local Claude,
-Codex, Goose or Pi agent when its creator is the agent's owner or a sibling the
-owner attested. Each build lists its own restricted community origins. In a listed community no
-workflow-marked message authorizes a local agent request, in bundled or plugin
-harnesses; the message stays visible. While any community is listed, an agent
-whose community cannot be read is restricted too. See
-[workflows](workflows.md).
 
 ## Packaged community default
 
@@ -99,6 +87,87 @@ plugin starts receives it as `DATABRICKS_HOST`, so goose reports Databricks as
 configured and ignores a host saved in goose's config. Only the host is set:
 the model, thinking level and sign-in stay goose's own. Leave it unset for OSS
 builds.
+
+## Recommended agent
+
+Packagers can offer a recommended agent setup, which picks a harness, model and
+thinking level for new agents. `BUZZ_RECOMMENDED_AGENT` is a JSON object with a
+`candidates` array, best first, an optional `recommendedBy` display name, and an
+optional `description` explaining the recommendation. The description is plain
+text shown in the Automatic option; any rationale or update promise comes from
+the distributor. Beneath the description, one compact line shows the selected model and
+thinking level. “Recommended by [source].” precedes the description when supplied. Without a source or description, the option says “Use recommended settings.”
+A harness may have several candidates. Each one has `harness` (`goose`, `codex`
+or `claude-code`), `model`, `effort`, `label` (the model's display name) and, for
+goose only, `provider`. For example, with placeholder values:
+
+```sh
+BUZZ_RECOMMENDED_AGENT='{"recommendedBy":"Example Co","candidates":[{"harness":"goose","provider":"example","model":"model-b","effort":"high","label":"Model B"},{"harness":"codex","model":"model-a","effort":"high","label":"Model A"},{"harness":"claude-code","model":"model-c","effort":"high","label":"Model C"}]}' bin/pnpm tauri build
+```
+
+The frontend reads it from repository-root `.env.local` or the process
+environment (process wins) and compiles it in; invalid values fail the build,
+naming the candidate and field at fault, such as
+`BUZZ_RECOMMENDED_AGENT.candidates[1].model`, without echoing values.
+The original array-only format remains supported as an unnamed recommendation.
+Omitting `recommendedBy` keeps Automatic with generic copy; omitting the whole
+setting retains the existing creation form. Attribution, description and candidates
+are replaced together when a runtime recommendation is supplied. Neither attribution
+nor description is copied into an agent's saved settings.
+Set it in `.env.local` to try the feature in `just web` or `just desktop`.
+Leave it unset for OSS builds: the create form then works as before.
+
+With it set:
+
+- **Create agent** gains an **AI setup** row: **Automatic**,
+  the default, or **Custom**. Automatic uses the first candidate whose harness
+  is installed here and ready and whose model it lists now (Codex: installed,
+  signed in, model in its catalog; Claude Code: installed, signed in, model or
+  the model an alias stands for in its catalog, with the candidate's thinking
+  level; goose: provider set up, model in its live list with the candidate's
+  thinking level), and shows the model and thinking level in **Automatic**'s
+  description in the menu.
+  When a harness ahead of it isn't set up, the same option explains why the
+  fallback was chosen. The configured description wraps naturally. Beneath it,
+  “Recommended by [name].” precedes the description when a source is supplied;
+  the compact model details remain beneath it.
+  In Automatic, the row's byline shows “Currently set to” and the selected model, on one line with
+  an ellipsis when needed; hovering reveals the full name. Checking and setup
+  feedback stays visible while the recommended model is being resolved.
+  Each check may take up to 8 seconds; one that fails or takes longer skips that candidate.
+  Codex and Claude Code are not offered on Windows. When nothing is ready, a
+  row asks to set up Goose, Codex or Claude first, with a **Set up** button
+  that opens agent setup, and Create waits. **Custom** opens the
+  Harness, Model and Thinking rows in place, starting
+  from what Automatic picked, and works while the check runs. Automatic is
+  only for local harnesses: a hosted type such as Builderlab is chosen under
+  Custom's Harness and keeps its own model choices.
+- The agent saves only `preset: "recommended"` in its config, with its own
+  model, provider and thinking level cleared. Its harness is never changed for
+  it.
+- At run time it uses the first candidate for its own harness whose model is
+  still offered, checked the same way once per app launch. If none is, it runs
+  on the harness's own default instead of failing, and it asks again at a run
+  a minute or more later, so a harness set up or signed in since then is
+  picked up. A later build's recommendation reaches it the same way.
+- The agent's **Identity** tab shows the same **AI setup** row. Automatic shows
+  what it runs on, or that it fell back to the harness default; it keeps the agent's harness even when another is
+  recommended first. **Custom** opens the Harness row and the harness's model
+  rows; changing the harness there is the usual harness change. Any model,
+  provider or thinking change, on the agent's card or in Settings, takes it
+  off Automatic.
+
+On a config channel, the mark syncs with the agent's settings: its
+`buzz.agent.settings` revision (kind 45010) carries `"preset": "recommended"`
+beside `settings`, not inside it, and leaves it out otherwise. The revision also carries a matching `["preset", "recommended"]` tag, so agents on Automatic can be counted from tags alone. Versions without
+this feature ignore it there and keep it when they edit (NIP-AP "Editing"), so
+their strict settings check never rejects it. The synced revision decides on
+every device: one without the mark takes the agent off Recommended, and one
+that names a model, provider or thinking level keeps it off even with the
+mark. Synced settings carry the agent's own model settings blank or not at all
+while it is on Recommended. Without a config channel, the mark is kept in the
+agent's local settings. Which harness an agent runs on is the `runtime` tag of
+its kind 30177 record.
 
 ## Mobile app links
 
@@ -216,6 +285,15 @@ Staging is then the build's Builderlab, with the built-in production server
 after it for the public communities. A native test parses this exact
 descriptor, so keep the two in step.
 
+Remote agents follow the selected community: in a community another listed
+server covers, the bundled Builderlab plugin's agent calls carry that
+community (`relay`) and native sends them with that server's session, origin
+and API base path, under the same granted routes. Elsewhere, including
+Personal space, they use the build's Builderlab. Each saved agent and pending
+creation is kept with its server, so an agent is managed only while one of its
+server's communities is selected. Known communities, backup, hosted
+communities, Apps and decisions always use the build's Builderlab.
+
 `signIn` and `organization` are optional. `signIn` is `on-demand` by default:
 the app asks for organization sign-in only when a protected community refuses
 the viewer, or from Settings → Identity. `at-launch` signs in before the app
@@ -248,7 +326,8 @@ inputs.
 Identity backup uses the session only when its separately configured service URL
 is the build's Builderlab, at the same origin and API base path. Backup still
 requires its own service URL, namespace and user choice. The existing
-identity-binding validator accepts production Builderlab or the configured origin.
+identity-binding validator accepts production Builderlab or a configured sign-in
+server's identity origin.
 
 Native viewer SSO also needs the exact Apps domain in
 `BUZZ_BUILDERLAB_APPS_DOMAIN`, for example `apps.example.com` for a Builderlab

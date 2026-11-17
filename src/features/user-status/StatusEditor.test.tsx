@@ -53,8 +53,8 @@ it("calculates the selected preset at save time after a quick choice is edited",
   });
   await user.click(screen.getByRole("button", { name: "Duration: Today" }));
   expect(
-    screen.queryByRole("menuitemradio", { name: "Don’t clear" }),
-  ).not.toBeInTheDocument();
+    await screen.findByRole("menuitemradio", { name: "Don’t clear" }),
+  ).toBeVisible();
   await user.click(
     await screen.findByRole("menuitemradio", { name: "8 hours" }),
   );
@@ -66,6 +66,18 @@ it("calculates the selected preset at save time after a quick choice is edited",
     emoji: "🗣️",
     expiresAt: now / 1000 + 28800,
   });
+});
+it("saves a new status without an expiry when Don’t clear is chosen", async () => {
+  const user = userEvent.setup();
+  const { save, close } = setup();
+  await user.click(screen.getByRole("button", { name: "Working remotely" }));
+  await user.click(screen.getByRole("button", { name: /^Duration:/ }));
+  await user.click(
+    await screen.findByRole("menuitemradio", { name: "Don’t clear" }),
+  );
+  await user.click(screen.getByRole("button", { name: "Save status" }));
+  await waitFor(() => expect(close).toHaveBeenCalledOnce());
+  expect(save).toHaveBeenCalledWith({ text: "Working remotely", emoji: "🏠" });
 });
 it("prefills and preserves an existing deadline, and validates a custom date before saving", async () => {
   // Mid-month so the prefilled next-day deadline opens the calendar on today's month.
@@ -409,11 +421,14 @@ it.each([
           screen.getByRole("button", { name: "Choose a status emoji" }),
         );
         const choice = await waitFor(() => {
-          const button = document
-            .querySelector("em-emoji-picker")
-            ?.shadowRoot?.querySelector<HTMLButtonElement>(
-              'button[title="Grinning Face"]',
-            );
+          // The picker's preview replaces button titles; match the glyph.
+          const button = [
+            ...(document
+              .querySelector("em-emoji-picker")
+              ?.shadowRoot?.querySelectorAll<HTMLButtonElement>(
+                "button[aria-label]",
+              ) ?? []),
+          ].find((element) => element.getAttribute("aria-label") === "😀");
           if (!button) throw new Error("Emoji choice has not rendered");
           return button;
         });

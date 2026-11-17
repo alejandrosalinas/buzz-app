@@ -1,5 +1,8 @@
 import { expect, it } from "vitest";
-import { profileMentionParts } from "./profile-mentions";
+import {
+  profileMentionParts,
+  renderedProfileMentionParts,
+} from "./profile-mentions";
 import { profileTarget } from "../profiles/target";
 import type { ChannelMessage, Profile } from "../relay/contracts";
 const alice = "a".repeat(64),
@@ -210,4 +213,24 @@ it("binds a qualified span whose name differs in case to the signed key it names
     { text: `@mic (${twin})`, target: profileTarget(twin) },
   ]);
   expect(result.map((part) => part.text).join("")).toBe(content);
+});
+
+it("uses normalized Markdown offsets and suppresses bindings across stale seams", () => {
+  const content = "[Link]\\(https://example.org\\) @Mic";
+  const normalized = renderedProfileMentionParts({ ...row, content }, profiles);
+  expect(normalized.filter((part) => part.target)).toEqual([
+    { text: "@Mic", target: profileTarget(mic) },
+  ]);
+  expect(
+    renderedProfileMentionParts(
+      { ...row, content, attachmentSeams: [1] },
+      profiles,
+    ).some((part) => part.target),
+  ).toBe(false);
+});
+it("does not freeze bindings when Markdown falls back to plain text", () => {
+  const content = "> ".repeat(20000) + "@Mic";
+  expect(renderedProfileMentionParts({ ...row, content }, profiles)).toEqual([
+    { text: content },
+  ]);
 });

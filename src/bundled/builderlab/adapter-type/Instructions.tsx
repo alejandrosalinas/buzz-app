@@ -11,7 +11,7 @@ import { PreferenceRow } from "../../../shared/design-system/ui/PreferenceRow";
 import { SettingsGroup } from "../../../shared/design-system/ui/SettingsGroup";
 import inlineStyles from "../../../shared/InlineReference.module.css";
 import type { AgentClient, RemoteAgent } from "../agents/client";
-import type { BuilderlabSession } from "../session";
+import { sessionSite, type BuilderlabSession } from "../session";
 import { ModelSettings } from "./ModelSettings";
 
 /** Hosted settings belong to Builderlab, rather than Agents' local config. */
@@ -107,7 +107,7 @@ export function createSettingsTab(
                 Runs on a Builderlab machine.{" "}
                 <a
                   className={inlineStyles.link}
-                  href={import.meta.env.VITE_BUZZ_BUILDERLAB_URL}
+                  href={sessionSite(session)}
                   target="_blank"
                   rel="noopener noreferrer"
                 >
@@ -138,7 +138,7 @@ export function createSettingsTab(
                     Hosted and managed by{" "}
                     <a
                       className={inlineStyles.link}
-                      href={import.meta.env.VITE_BUZZ_BUILDERLAB_URL}
+                      href={sessionSite(session)}
                       target="_blank"
                       rel="noopener noreferrer"
                     >

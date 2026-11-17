@@ -219,8 +219,16 @@ pub(crate) async fn plugin_host_run_command(
         })
         .await
         .ok()?;
-        run_command(&command, input.as_deref(), DEADLINE).await
+        run_command(
+            &command,
+            login_shell_environment(),
+            input.as_deref(),
+            DEADLINE,
+        )
+        .await
     };
+    // Before the deadline starts: the probe keeps its own.
+    load_login_shell_environment().await;
     Ok(tokio::time::timeout(DEADLINE, operation)
         .await
         .ok()
@@ -228,44 +236,60 @@ pub(crate) async fn plugin_host_run_command(
 }
 
 #[cfg(target_os = "macos")]
-static LOGIN_SHELL_PATH: tokio::sync::OnceCell<Option<OsString>> =
+static LOGIN_SHELL_ENVIRONMENT: tokio::sync::OnceCell<Option<Vec<(OsString, OsString)>>> =
     tokio::sync::OnceCell::const_new();
 #[cfg(target_os = "macos")]
 static LOGIN_SHELL_PROBE_GROUP: AtomicI32 = AtomicI32::new(0);
 #[cfg(target_os = "macos")]
 const LOGIN_SHELL_DEADLINE: Duration = Duration::from_secs(10);
 #[cfg(target_os = "macos")]
-const LOGIN_SHELL_PATH_MARKER: &str = "__BUZZ_LOGIN_SHELL_PATH__";
+const LOGIN_SHELL_ENVIRONMENT_MARKER: &str = "__BUZZ_LOGIN_SHELL_ENVIRONMENT__";
+/// Names, in the login shell, more variables to forward: comma-separated
+/// patterns where `*` matches any run of characters and a leading `!` excludes.
+#[cfg(target_os = "macos")]
+const LOGIN_SHELL_ADDITIONAL_EXPORTS: &str = "BUZZ_LOGIN_SHELL_ADDITIONAL_EXPORTS";
 
-/// Reads PATH from the user's login shell once, so later calls to
-/// [`effective_path`] see it. Apps opened from Finder only inherit launchd's
+/// Reads the user's login-shell environment once, so later calls to
+/// [`effective_path`] see its PATH and [`login_shell_environment`] the
+/// variables it forwards. Apps opened from Finder only inherit launchd's
 /// `/usr/bin:/bin:/usr/sbin:/sbin`, which would run system tools, such as an
 /// older Apple git, instead of the ones the user's terminal finds.
-pub(crate) async fn load_login_shell_path() {
+pub(crate) async fn load_login_shell_environment() {
     #[cfg(target_os = "macos")]
-    LOGIN_SHELL_PATH
+    LOGIN_SHELL_ENVIRONMENT
         .get_or_init(|| async {
             use std::io::IsTerminal as _;
-            // Started from a terminal, Buzz already has that shell's PATH, and an
-            // interactive probe would stop on the terminal it cannot take over.
+            // Started from a terminal, Buzz already has that shell's environment,
+            // and an interactive probe would stop on the terminal it cannot take over.
             if std::io::stdin().is_terminal() {
                 return None;
             }
             let shell = crate::terminal::resolve_shell(std::env::var("SHELL").ok().as_deref());
-            let path = login_shell_path(
+            let environment = login_shell_exports(
                 Path::new(&shell),
                 LOGIN_SHELL_DEADLINE,
                 &LOGIN_SHELL_PROBE_GROUP,
             )
             .await;
-            if path.is_none() {
+            if environment.is_none() {
                 eprintln!(
-                    "Could not read PATH from login shell {shell}; agents use the app's PATH"
+                    "Could not read the environment of login shell {shell}; agents use the app's"
                 );
             }
-            path
+            environment
         })
         .await;
+}
+
+/// The login-shell variables processes get: PATH and those
+/// `BUZZ_LOGIN_SHELL_ADDITIONAL_EXPORTS` names. Empty until
+/// [`load_login_shell_environment`] has read them, or when it could not.
+pub(crate) fn login_shell_environment() -> &'static [(OsString, OsString)] {
+    #[cfg(target_os = "macos")]
+    if let Some(Some(environment)) = LOGIN_SHELL_ENVIRONMENT.get() {
+        return environment;
+    }
+    &[]
 }
 
 /// Kills a login-shell probe still running when the app exits: its async task
@@ -284,11 +308,19 @@ fn kill_published_group(group: &AtomicI32) {
 }
 
 #[cfg(target_os = "macos")]
-async fn login_shell_path(shell: &Path, deadline: Duration, group: &AtomicI32) -> Option<OsString> {
+async fn login_shell_exports(
+    shell: &Path,
+    deadline: Duration,
+    group: &AtomicI32,
+) -> Option<Vec<(OsString, OsString)>> {
+    use std::os::unix::ffi::OsStrExt as _;
+
     // External commands only, so any shell's syntax runs it and PATH arrives
     // colon-separated even from shells that keep it as a list, such as fish.
+    // `printenv PATH` is for macOS before 12.3, whose `env` has no `-0`.
+    let marker = LOGIN_SHELL_ENVIRONMENT_MARKER;
     let script = format!(
-        "/usr/bin/printf {LOGIN_SHELL_PATH_MARKER}; /usr/bin/printenv PATH; /usr/bin/printf {LOGIN_SHELL_PATH_MARKER}"
+        "/usr/bin/printf {marker}; /usr/bin/env -0; /usr/bin/printf {marker}; /usr/bin/printenv PATH; /usr/bin/printf {marker}"
     );
     // Profiles can check BUZZ_RESOLVING_ENVIRONMENT to skip slow setup, and
     // DISABLE_AUTO_UPDATE stops Oh My Zsh from prompting to update.
@@ -302,22 +334,94 @@ async fn login_shell_path(shell: &Path, deadline: Duration, group: &AtomicI32) -
         &script,
     ]
     .map(String::from);
-    // Profiles may print banners or exit non-zero after setting PATH.
+    // Profiles may print banners or exit non-zero after exporting.
     let (output, _) = run_output_with_input(
         Path::new("/usr/bin/env"),
         &args,
         deadline,
+        &[],
         OsStr::new(""),
         1 << 20,
         None,
         Some(group),
     )
     .await?;
-    let path = output
-        .split(LOGIN_SHELL_PATH_MARKER)
-        .nth(1)?
-        .trim_end_matches('\n');
-    (!path.is_empty()).then(|| path.into())
+    // Bytes, as `env -0` prints them: a value need not be UTF-8.
+    let marker = LOGIN_SHELL_ENVIRONMENT_MARKER.as_bytes();
+    let find = |bytes: &[u8]| bytes.windows(marker.len()).rposition(|w| w == marker);
+    let start = output.windows(marker.len()).position(|w| w == marker)? + marker.len();
+    let end = start + find(&output[start..])?;
+    let middle = start + find(&output[start..end])?;
+    let variables = output[start..middle]
+        .split(|byte| *byte == 0)
+        .filter_map(|entry| {
+            let separator = entry.iter().position(|byte| *byte == b'=')?;
+            Some((&entry[..separator], &entry[separator + 1..]))
+        })
+        .collect::<Vec<_>>();
+    if !variables.iter().any(|(name, _)| *name == b"PATH") {
+        // `env` could not print the environment, so only PATH is known.
+        let path = output[middle + marker.len()..end].trim_ascii_end();
+        return (!path.is_empty()).then(|| vec![("PATH".into(), OsStr::from_bytes(path).into())]);
+    }
+    let additional = variables
+        .iter()
+        .find(|(name, _)| *name == LOGIN_SHELL_ADDITIONAL_EXPORTS.as_bytes())
+        .map_or(&b""[..], |(_, value)| value);
+    Some(
+        variables
+            .iter()
+            .filter(|(name, _)| {
+                // What the probe set, and what its shell keeps about itself.
+                let probe = matches!(
+                    *name,
+                    b"PWD" | b"OLDPWD" | b"SHLVL" | b"_" | b"DISABLE_AUTO_UPDATE"
+                );
+                *name == b"PATH" || (!probe && is_additional_export(additional, name))
+            })
+            .map(|(name, value)| {
+                (
+                    OsStr::from_bytes(name).to_owned(),
+                    OsStr::from_bytes(value).to_owned(),
+                )
+            })
+            .collect(),
+    )
+}
+
+/// Whether `patterns`, comma-separated, name `name`: `*` matches any run of
+/// characters, and a pattern with a leading `!` excludes what it matches
+/// wherever it appears in the list.
+#[cfg(target_os = "macos")]
+fn is_additional_export(patterns: &[u8], name: &[u8]) -> bool {
+    let mut included = false;
+    for pattern in patterns.split(|byte| *byte == b',').map(<[u8]>::trim_ascii) {
+        match pattern.strip_prefix(b"!") {
+            Some(excluded) if matches_glob(excluded, name) => return false,
+            Some(_) => {}
+            None => included |= matches_glob(pattern, name),
+        }
+    }
+    included
+}
+
+#[cfg(target_os = "macos")]
+fn matches_glob(pattern: &[u8], name: &[u8]) -> bool {
+    let mut parts = pattern.split(|byte| *byte == b'*');
+    let first = parts.next().unwrap_or_default();
+    let Some(mut rest) = name.strip_prefix(first) else {
+        return false;
+    };
+    let Some(last) = parts.next_back() else {
+        return rest.is_empty();
+    };
+    for part in parts.filter(|part| !part.is_empty()) {
+        let Some(index) = rest.windows(part.len()).position(|w| w == part) else {
+            return false;
+        };
+        rest = &rest[index + part.len()..];
+    }
+    rest.ends_with(last)
 }
 
 pub(crate) fn effective_path() -> OsString {
@@ -329,11 +433,12 @@ pub(crate) fn effective_path() -> OsString {
         } else {
             path
         };
-        compose_path(
-            std::env::var_os("HOME").as_deref(),
-            LOGIN_SHELL_PATH.get().cloned().flatten().as_deref(),
-            &path,
-        )
+        let login_shell = login_shell_environment()
+            .iter()
+            .find(|(name, _)| name == "PATH")
+            .map(|(_, value)| value.as_os_str())
+            .filter(|value| !value.is_empty());
+        compose_path(std::env::var_os("HOME").as_deref(), login_shell, &path)
     }
     #[cfg(not(target_os = "macos"))]
     {
@@ -384,8 +489,12 @@ pub(crate) fn resolve_program(program: &str, effective_path: &OsStr) -> PathBuf 
     PathBuf::from(program)
 }
 
+/// Runs a declared host command with the app's environment, the login-shell
+/// variables `login_shell` forwards less any Buzz identity, as processes get
+/// them, and the composed PATH.
 async fn run_command(
     command: &HostCommand,
+    login_shell: &[(OsString, OsString)],
     input: Option<&str>,
     deadline: Duration,
 ) -> Option<String> {
@@ -416,10 +525,19 @@ async fn run_command(
         }
         None => resolve_program(&command.program, &path),
     };
+    let environment = login_shell
+        .iter()
+        .filter(|(name, _)| {
+            let name = name.as_encoded_bytes();
+            !name.starts_with(b"BUZZ_") && !name.starts_with(b"NOSTR_")
+        })
+        .cloned()
+        .collect::<Vec<_>>();
     run(
         &program,
         &command.args,
         deadline,
+        &environment,
         &path,
         max_output_bytes,
         input,
@@ -431,6 +549,7 @@ async fn run(
     executable: &Path,
     args: &[String],
     deadline: Duration,
+    environment: &[(OsString, OsString)],
     path: &OsStr,
     max_output_bytes: u64,
     input: Option<&str>,
@@ -439,24 +558,30 @@ async fn run(
         executable,
         args,
         deadline,
+        environment,
         path,
         max_output_bytes,
         input,
         None,
     )
     .await?;
-    status.success().then_some(output)
+    status
+        .success()
+        .then(|| String::from_utf8(output).ok())
+        .flatten()
 }
 
+#[allow(clippy::too_many_arguments)] // One spawn path for host commands and the probe.
 async fn run_output_with_input(
     executable: &Path,
     args: &[String],
     deadline: Duration,
+    environment: &[(OsString, OsString)],
     path: &OsStr,
     max_output_bytes: u64,
     input: Option<&str>,
     group: Option<&AtomicI32>,
-) -> Option<(String, std::process::ExitStatus)> {
+) -> Option<(Vec<u8>, std::process::ExitStatus)> {
     let mut command = Command::new(executable);
     command
         .args(args)
@@ -467,7 +592,8 @@ async fn run_output_with_input(
         })
         .stdout(Stdio::piped())
         .stderr(Stdio::null())
-        .kill_on_drop(true);
+        .kill_on_drop(true)
+        .envs(environment.iter().cloned());
     if !path.is_empty() {
         command.env("PATH", path);
     }
@@ -525,7 +651,7 @@ async fn run_output_with_input(
     .await;
 
     if let Ok(Some((bytes, status))) = output {
-        return Some((String::from_utf8(bytes).ok()?, status));
+        return Some((bytes, status));
     }
 
     #[cfg(unix)]
@@ -551,6 +677,7 @@ mod tests {
             executable,
             args,
             deadline,
+            &[],
             &effective_path(),
             super::DEFAULT_HOST_COMMAND_OUTPUT_BYTES,
             None,
@@ -592,20 +719,106 @@ mod tests {
 
     #[cfg(target_os = "macos")]
     #[tokio::test]
-    async fn login_shell_path_is_read_past_profile_output() {
+    async fn login_shell_exports_path_and_the_variables_it_lists() {
+        use std::os::unix::ffi::OsStrExt as _;
+
         let (_directory, shell) = executable(
             "[ \"$DISABLE_AUTO_UPDATE$BUZZ_RESOLVING_ENVIRONMENT\" = true1 ] || exit\n\
-             echo 'Last login: Tue'; PATH=/opt/homebrew/bin:/usr/bin; eval \"$4\"; exit 1",
+             echo 'Last login: Tue'; export PATH=/opt/homebrew/bin:/usr/bin\n\
+             export TOOL_FLOW='a=b\nc' TOOL_SECRET=hidden SHLVL=7 UNLISTED=dropped\n\
+             export TOOL_MARK='__BUZZ_LOGIN_SHELL_ENVIRONMENT__'\n\
+             export BUZZ_LOGIN_SHELL_ADDITIONAL_EXPORTS='!*_SECRET,TOOL_*, SHLVL'\n\
+             eval \"$4\"; echo 'Goodbye'; exit 1",
         );
+        let mut exports =
+            super::login_shell_exports(&shell, Duration::from_secs(2), &Default::default())
+                .await
+                .unwrap();
+        exports.sort();
+        let exports = exports
+            .iter()
+            .map(|(name, value)| (name.to_str().unwrap(), value.as_bytes()))
+            .collect::<Vec<_>>();
         assert_eq!(
-            super::login_shell_path(&shell, Duration::from_secs(2), &Default::default()).await,
-            Some("/opt/homebrew/bin:/usr/bin".into())
+            exports,
+            [
+                ("PATH", &b"/opt/homebrew/bin:/usr/bin"[..]),
+                ("TOOL_FLOW", b"a=b\nc"),
+                ("TOOL_MARK", b"__BUZZ_LOGIN_SHELL_ENVIRONMENT__"),
+            ]
         );
-        let (_directory, shell) = executable("echo 'no PATH here'");
+        let (_directory, shell) = executable("echo 'no environment here'");
         assert_eq!(
-            super::login_shell_path(&shell, Duration::from_secs(2), &Default::default()).await,
+            super::login_shell_exports(&shell, Duration::from_secs(2), &Default::default()).await,
             None
         );
+    }
+
+    #[cfg(target_os = "macos")]
+    #[tokio::test]
+    async fn login_shell_wildcard_leaves_out_what_describes_the_probe() {
+        let (_directory, shell) = executable(
+            "cd /; export PROFILE_SETTING=kept BUZZ_LOGIN_SHELL_ADDITIONAL_EXPORTS='*'\n\
+             eval \"$4\"",
+        );
+        let exports =
+            super::login_shell_exports(&shell, Duration::from_secs(2), &Default::default())
+                .await
+                .unwrap();
+        let names = exports
+            .iter()
+            .map(|(name, _)| name.to_str().unwrap())
+            .collect::<Vec<_>>();
+        assert!(names.contains(&"PROFILE_SETTING"), "{names:?}");
+        for probe in ["PWD", "OLDPWD", "SHLVL", "_", "DISABLE_AUTO_UPDATE"] {
+            assert!(!names.contains(&probe), "{probe} in {names:?}");
+        }
+    }
+
+    #[cfg(target_os = "macos")]
+    #[tokio::test]
+    async fn login_shell_path_survives_an_env_without_nul_output() {
+        // macOS before 12.3: `env -0` fails, but `printenv PATH` works.
+        let (_directory, shell) = executable(
+            "export PATH=/opt/homebrew/bin:/usr/bin TOOL_FLOW=a BUZZ_LOGIN_SHELL_ADDITIONAL_EXPORTS='*'\n\
+             eval \"$(/usr/bin/printf %s \"$4\" | /usr/bin/sed 's|/usr/bin/env -0|/usr/bin/false|')\"",
+        );
+        let exports =
+            super::login_shell_exports(&shell, Duration::from_secs(2), &Default::default())
+                .await
+                .unwrap();
+        assert_eq!(
+            exports,
+            [("PATH".into(), "/opt/homebrew/bin:/usr/bin".into())]
+        );
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn additional_exports_match_unless_an_exclusion_does() {
+        let exported = |patterns: &str, name: &str| {
+            super::is_additional_export(patterns.as_bytes(), name.as_bytes())
+        };
+        assert!(exported("TOOL", "TOOL"));
+        assert!(!exported("TOOL", "TOOLS"));
+        assert!(!exported("TOOL", "MY_TOOL"));
+        assert!(exported("TOOL_*", "TOOL_"));
+        assert!(!exported("TOOL_*", "MY_TOOL_FLOW"));
+        assert!(exported("*_DIR", "TOOL_CACHE_DIR"));
+        assert!(!exported("*_DIR", "TOOL_DIRS"));
+        assert!(exported("A*B*C", "AxBxC"));
+        assert!(!exported("A*B*C", "AxCxB"));
+        assert!(!exported("AB*B", "AB"));
+        assert!(exported("*", "SHLVL"));
+        assert!(!exported("*,!*_SECRET", "TOOL_SECRET"));
+        // An exclusion wins wherever it is in the list.
+        assert!(!exported("!*_SECRET,TOOL_*", "TOOL_SECRET"));
+        assert!(exported("!*_SECRET,TOOL_*", "TOOL_FLOW"));
+        assert!(!exported("!TOOL_SECRET,*", "TOOL_SECRET"));
+        assert!(!exported("*,!TOOL_*,TOOL_SECRET", "TOOL_SECRET"));
+        assert!(!exported("!TOOL", "TOOL"));
+        assert!(exported(" , TOOL ,", "TOOL"));
+        assert!(!exported("", "TOOL"));
     }
 
     #[cfg(target_os = "macos")]
@@ -615,7 +828,7 @@ mod tests {
         static GROUP: AtomicI32 = AtomicI32::new(0);
         let (_directory, shell) = executable("sleep 30");
         let probe = tokio::spawn(async move {
-            super::login_shell_path(&shell, Duration::from_secs(30), &GROUP).await
+            super::login_shell_exports(&shell, Duration::from_secs(30), &GROUP).await
         });
         let process_id = tokio::time::timeout(Duration::from_secs(2), async {
             loop {
@@ -638,6 +851,30 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn host_commands_get_forwarded_login_shell_variables_but_no_buzz_identity() {
+        let (_directory, path) =
+            executable("printf '%s|%s|%s' \"$TOOL_FLOW\" \"$BUZZ_LISTED\" \"$NOSTR_LISTED\"");
+        let command = super::HostCommand {
+            id: "status".into(),
+            program: path.to_string_lossy().into_owned(),
+            args: vec![],
+            max_output_bytes: None,
+            max_input_bytes: None,
+            artifact: None,
+        };
+        let login_shell = [
+            ("TOOL_FLOW", "forwarded"),
+            ("BUZZ_LISTED", "from-profile"),
+            ("NOSTR_LISTED", "from-profile"),
+        ]
+        .map(|(name, value)| (name.into(), value.into()));
+        assert_eq!(
+            super::run_command(&command, &login_shell, None, Duration::from_secs(2)).await,
+            Some("forwarded||".into())
+        );
+    }
+
+    #[tokio::test]
     async fn larger_output_requires_a_bounded_manifest_opt_in() {
         let (_directory, path) =
             executable("/usr/bin/head -c 5000 /dev/zero | /usr/bin/tr '\\000' x");
@@ -650,23 +887,23 @@ mod tests {
             artifact: None,
         };
         assert_eq!(
-            super::run_command(&command, None, Duration::from_secs(2)).await,
+            super::run_command(&command, &[], None, Duration::from_secs(2)).await,
             None
         );
         command.max_output_bytes = Some(5000);
         assert_eq!(
-            super::run_command(&command, None, Duration::from_secs(2)).await,
+            super::run_command(&command, &[], None, Duration::from_secs(2)).await,
             Some("x".repeat(5000))
         );
         command.max_output_bytes = Some(4999);
         assert_eq!(
-            super::run_command(&command, None, Duration::from_secs(2)).await,
+            super::run_command(&command, &[], None, Duration::from_secs(2)).await,
             None
         );
         for limit in [0, super::MAX_HOST_COMMAND_OUTPUT_BYTES + 1] {
             command.max_output_bytes = Some(limit);
             assert_eq!(
-                super::run_command(&command, None, Duration::from_secs(2)).await,
+                super::run_command(&command, &[], None, Duration::from_secs(2)).await,
                 None
             );
         }
@@ -686,12 +923,12 @@ mod tests {
         }))
         .unwrap();
         assert_eq!(
-            super::run_command(&command, None, Duration::from_secs(2)).await,
+            super::run_command(&command, &[], None, Duration::from_secs(2)).await,
             Some("verified".into())
         );
         crate::test_executable::write_executable(&path, "#!/bin/sh\nprintf planted\n");
         assert_eq!(
-            super::run_command(&command, None, Duration::from_secs(2)).await,
+            super::run_command(&command, &[], None, Duration::from_secs(2)).await,
             None
         );
     }
@@ -705,6 +942,7 @@ mod tests {
                 &path,
                 &[],
                 Duration::from_secs(1),
+                &[],
                 &effective_path(),
                 65536,
                 Some(input)
@@ -718,6 +956,7 @@ mod tests {
             &path,
             &[],
             Duration::from_secs(2),
+            &[],
             &effective_path(),
             65536,
             Some(&input),
@@ -736,12 +975,12 @@ mod tests {
         }))
         .unwrap();
         assert_eq!(
-            super::run_command(&command, Some("data"), Duration::from_secs(1)).await,
+            super::run_command(&command, &[], Some("data"), Duration::from_secs(1)).await,
             None
         );
         command.max_input_bytes = Some(1);
         assert_eq!(
-            super::run_command(&command, Some("data"), Duration::from_secs(1)).await,
+            super::run_command(&command, &[], Some("data"), Duration::from_secs(1)).await,
             None
         );
         assert!(!marker.exists());
@@ -784,6 +1023,7 @@ mod tests {
                 &tool,
                 &[],
                 Duration::from_secs(5),
+                &[],
                 &path,
                 super::DEFAULT_HOST_COMMAND_OUTPUT_BYTES,
                 None
@@ -1019,6 +1259,7 @@ mod windows_tests {
                     script.to_string_lossy().into_owned(),
                 ],
                 Duration::from_secs(10),
+                &[],
                 &effective_path(),
                 super::DEFAULT_HOST_COMMAND_OUTPUT_BYTES,
                 None,
@@ -1047,6 +1288,7 @@ mod windows_tests {
                     script.to_string_lossy().into_owned(),
                 ],
                 Duration::from_secs(5),
+                &[],
                 &effective_path(),
                 super::DEFAULT_HOST_COMMAND_OUTPUT_BYTES,
                 None,

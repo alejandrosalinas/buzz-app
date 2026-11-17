@@ -167,6 +167,9 @@ const sameKeys = (a?: readonly string[], b?: readonly string[]) =>
     (a ?? []).every((key, index) => key === b?.[index]));
 /** Relay page size, separate from discovery's retained-entry budget. */
 const DISCOVERY_LIMIT = 500;
+/** An unchanged saved roster is written again after this long, so a row
+ * pruned or cleared on disk returns and restore's one-day limit still passes. */
+const DISCOVERY_RESAVE_MS = 600_000;
 /** Channels one creator-proof filter names. Each has one creation, so a limit
  * of twice this, the relay's maximum, leaves room for strays; a filter that
  * reaches it proves only the channels whose creation arrived. */
@@ -403,6 +406,8 @@ export function createChannelStore(
   let discoveryObserved = false;
   // Catch-up bursts rewrite the whole startup record; save at most once per 500ms.
   let discoverySave: ReturnType<typeof setTimeout> | undefined;
+  // The roster last written and when; undefined when the disk copy is unknown.
+  let savedDiscovery: { key: string; at: number } | undefined;
   // Directory bursts rewrite the whole profile mirror; save at most once per second.
   let profileSave: ReturnType<typeof setTimeout> | undefined;
   // Never mirror before restore has read the saved profiles.
@@ -495,7 +500,7 @@ export function createChannelStore(
       next.status === list.status &&
       next.coverage === list.coverage &&
       next.error === list.error &&
-      next.asOf === list.asOf
+      next.rosterAsOf === list.rosterAsOf
     )
       return;
     list = Object.freeze({
@@ -1526,15 +1531,24 @@ export function createChannelStore(
     discoverySave = undefined;
     if (!persistence?.writeStartup || !discovery || !transport || disposed)
       return;
+    const events = discovery.savedEvents();
+    const key = [transport.relayAuthor, ...events.map(({ id }) => id)].join();
+    const age = now() - (savedDiscovery?.at ?? 0);
+    // Catch-up repeats lookups that change nothing: skip rewriting the same roster.
+    if (savedDiscovery?.key === key && age >= 0 && age < DISCOVERY_RESAVE_MS)
+      return;
+    savedDiscovery = { key, at: now() };
     void persistence
       .writeStartup({
         discovery: {
-          savedAt: now(),
+          savedAt: savedDiscovery.at,
           relayAuthor: transport.relayAuthor,
-          events: discovery.savedEvents(),
+          events,
         },
       })
-      .catch(() => {});
+      .catch(() => {
+        savedDiscovery = undefined;
+      });
   }
   /** Mirror the most recently used profiles so the next session starts with
    * their names. Like the directory, only a full cache clear empties it. */
@@ -1886,14 +1900,20 @@ export function createChannelStore(
       for (const id of tails.keys()) if (!authorized(id)) tails.delete(id);
       if (complete) void persistence?.retain([...nextAllowed]).catch(() => {});
       appliedEpoch = epoch;
+      const asOf = now();
+      const rosterAsOf = complete ? asOf : list.rosterAsOf;
       setList(
         {
           status: "ready",
           channels,
           ...(coverage ? { coverage } : {}),
-          asOf: now(),
+          asOf,
+          ...(rosterAsOf !== undefined ? { rosterAsOf } : {}),
         },
-        discoveryChanged,
+        // Subscribers take a new `asOf` as a discovery revision. A lookup that
+        // changed nothing, as searches and catch-up repeat for open channels
+        // the viewer has not joined, publishes nothing.
+        discoveryChanged || !!complete || cached || revoked,
       );
     };
     // Commit the final channel list before any projection subscriber runs.
@@ -2327,6 +2347,7 @@ export function createChannelStore(
           // The kept directory is saved again after the clear.
           mirrored = undefined;
           savedAuthority = undefined;
+          savedDiscovery = undefined;
           profileSave ??= setTimeout(saveProfiles, 1000);
           void persistence?.clear().catch(() => {});
           setList({
@@ -3420,6 +3441,7 @@ export function createChannelStore(
     mirrored = undefined;
     savedVerified = [];
     savedAuthority = undefined;
+    savedDiscovery = undefined;
     await persistence?.clear().catch(() => {});
   }
   /** One background head read at a time; warm never competes with demand reads

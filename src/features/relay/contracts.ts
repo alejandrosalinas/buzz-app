@@ -1,3 +1,4 @@
+import type { ForwardSnapshot } from "./forwarded-message";
 import type { VerifiedProfile } from "./verified-profile";
 import type { ReadFilter } from "./events";
 import type { CustomEmoji } from "./emoji";
@@ -137,6 +138,8 @@ export type ChannelMessage = Readonly<{
   content: string;
   /** Unprojected current body when attachment presentation removed Markdown. */
   sourceContent?: string;
+  /** Unverified forwarded copy; the ordinary content remains readable on older clients. */
+  forward?: Readonly<{ snapshot: ForwardSnapshot; note: string }>;
   /** Original kind 40002, regardless of edits; self-declared display evidence, not authority. */
   agentEnvelope?: true;
   /** Signed `audience` tag of the original event: `agents` is coordination
@@ -173,6 +176,8 @@ export type ChannelMessage = Readonly<{
   mentions: readonly string[];
   /** Signed two-field mention tags bind display only; never notification recipients. */
   mentionReferences?: readonly string[];
+  /** Frozen display labels inside a forwarded copy; never notification intent. */
+  mentionLabels?: readonly { id: string; names: readonly string[] }[];
   /** Authorized edit supplying current imeta; absent when sourced from the original. */
   attachmentSourceId?: string;
   attachments: readonly Attachment[];
@@ -205,7 +210,12 @@ export type ChannelList = Readonly<{
   status: ListStatus;
   /** Set when the viewer's roster read hit its cap; omitted channels are then not evidence of removal. */
   coverage?: "partial";
+  /** When discovery last committed: live roster and metadata events, exact
+   * reads and complete roster reads all move it. */
   asOf?: number;
+  /** When a complete viewer-scoped roster read last committed, the only read
+   * whose omissions prove absence; `asOf` of that commit. */
+  rosterAsOf?: number;
   /** Initial Recent ordering observation, independent of roster/access readiness. */
   activityStatus?: "idle" | "loading" | "ready" | "error" | "unavailable";
   channels: readonly ChannelSummary[];

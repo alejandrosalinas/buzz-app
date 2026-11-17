@@ -20,6 +20,9 @@ export type MessageList = Readonly<{
   markUnread(row: ChannelMessage): void;
   /** Where Escape and Down past the newest message return focus. */
   composer(): HTMLElement | null;
+  /** Append copied message HTML to this list's own composer as a quote. */
+  quote(html: string): boolean;
+  canQuote(): boolean;
 }>;
 
 const ROW = "[data-message-id]";
@@ -48,13 +51,20 @@ function rowsIn(list: HTMLElement) {
   );
 }
 
-/** The innermost registered list containing this element. */
-function listFor(element: Element) {
+/** The innermost registered list containing this node. */
+function listFor(element: Node) {
   let found: HTMLElement | undefined;
   for (const list of lists.keys())
     if (list.contains(element) && (!found || found.contains(list)))
       found = list;
   return found;
+}
+
+/** The innermost registered list containing this node, with its controller. */
+export function messageListOf(node: Node) {
+  const element = listFor(node);
+  const list = element && lists.get(element);
+  return element && list ? { element, list } : undefined;
 }
 
 export function selectMessage(row: HTMLElement) {

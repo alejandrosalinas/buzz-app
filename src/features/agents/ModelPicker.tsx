@@ -102,7 +102,6 @@ export function CustomModelDialog({
         if (!open) onClose();
       }}
       title="Custom model"
-      headerGap="compact"
       initialFocus={input}
       finalFocus={finalFocus}
       actions={

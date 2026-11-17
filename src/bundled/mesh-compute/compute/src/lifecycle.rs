@@ -23,7 +23,7 @@ fn isolated_config() -> anyhow::Result<tempfile::NamedTempFile> {
 }
 
 /// SDK status returned by the owned worker; payload remains untyped JSON.
-pub use mesh_llm_sdk::EmbeddedNodeStatus as NodeStatus;
+pub use mesh_llm_embedded_runtime::EmbeddedMeshNodeStatus as NodeStatus;
 
 #[derive(Debug)]
 struct BeforeNode(anyhow::Error);
@@ -40,14 +40,14 @@ type Operation<'a, T> = Pin<Box<dyn Future<Output = anyhow::Result<T>> + Send + 
 
 trait Node: Send + Sync + 'static {
     fn join(&self, token: String) -> Operation<'_, ()>;
-    fn status(&self) -> Operation<'_, mesh_llm_sdk::EmbeddedNodeStatus>;
+    fn status(&self) -> Operation<'_, NodeStatus>;
     fn stop(self) -> Operation<'static, ()>;
 }
-impl Node for mesh_llm_sdk::EmbeddedNodeHandle {
+impl Node for mesh_llm_embedded_runtime::EmbeddedMeshNodeHandle {
     fn join(&self, token: String) -> Operation<'_, ()> {
         Box::pin(self.join_token(token))
     }
-    fn status(&self) -> Operation<'_, mesh_llm_sdk::EmbeddedNodeStatus> {
+    fn status(&self) -> Operation<'_, NodeStatus> {
         Box::pin(self.status())
     }
     fn stop(self) -> Operation<'static, ()> {
@@ -75,7 +75,7 @@ struct Slot {
     retryable: bool,
     dial: Option<mpsc::Sender<String>>,
     stop: Option<watch::Sender<bool>>,
-    status: Option<mpsc::Sender<oneshot::Sender<anyhow::Result<mesh_llm_sdk::EmbeddedNodeStatus>>>>,
+    status: Option<mpsc::Sender<oneshot::Sender<anyhow::Result<NodeStatus>>>>,
 }
 
 /// The Mesh node runs on its own process-wide runtime, so the app keeps its
@@ -138,7 +138,7 @@ impl Lifecycle {
     }
 
     /// Ask the owned SDK handle for status; never discover a node by a guessed port.
-    pub async fn status(&self) -> anyhow::Result<mesh_llm_sdk::EmbeddedNodeStatus> {
+    pub async fn status(&self) -> anyhow::Result<NodeStatus> {
         let (reply, result) = oneshot::channel();
         {
             let slot = self
@@ -169,7 +169,7 @@ impl Lifecycle {
 
     pub fn start(&self, request: ClientConfig) -> anyhow::Result<()> {
         let config = request.build()?;
-        self.launch(async move { mesh_llm_sdk::client::start(config).await })
+        self.launch(async move { mesh_llm_embedded_runtime::start_embedded_node(config).await })
     }
 
     /// Share a local model through the same exclusive SDK slot as consumers.
@@ -196,7 +196,7 @@ impl Lifecycle {
                     .map_err(BeforeNode)?;
                 // Serving resolves and acquires its own artifacts (including layer packages).
                 // A separate GGUF download here duplicates acquisition.
-                mesh_llm_sdk::serve::start(config).await
+                mesh_llm_embedded_runtime::start_embedded_node(config).await
             },
             true,
             Arc::new(observe),
@@ -246,8 +246,7 @@ impl Lifecycle {
             .store(true, std::sync::atomic::Ordering::SeqCst);
         self.progress.clear();
         let (dial, mut pending) = mpsc::channel::<String>(64);
-        let (status, mut reads) =
-            mpsc::channel::<oneshot::Sender<anyhow::Result<mesh_llm_sdk::EmbeddedNodeStatus>>>(1);
+        let (status, mut reads) = mpsc::channel::<oneshot::Sender<anyhow::Result<NodeStatus>>>(1);
         let (stop, mut stopping) = watch::channel(false);
         slot.retryable = false;
         slot.pending_tokens.clear();
@@ -453,9 +452,9 @@ mod tests {
                 Ok(())
             })
         }
-        fn status(&self) -> Operation<'_, mesh_llm_sdk::EmbeddedNodeStatus> {
+        fn status(&self) -> Operation<'_, NodeStatus> {
             Box::pin(async {
-                Ok(mesh_llm_sdk::EmbeddedNodeStatus {
+                Ok(NodeStatus {
                     api_base_url: "fixture".into(),
                     console_url: "fixture".into(),
                     invite_token: None,

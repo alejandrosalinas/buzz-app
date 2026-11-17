@@ -1767,7 +1767,31 @@ it("skips the reads a continuous global replay covers, and keeps them after a cu
     establish(false, false);
     expect(covered(await drain())).toEqual(once);
     ready();
+    // Unwatched authors stay loaded only while the profiles route is live.
+    const profiles = (status: "live" | "error") =>
+      ({
+        status: "connected",
+        routes: [{ id: "profiles", status, replay: "unknown" }],
+      }) as const;
+    const rows = async () => {
+      const unwatch = owner.session.statuses.watch([alice.pubkey]);
+      const reads = covered(await drain()).statuses;
+      unwatch();
+      return reads;
+    };
+    live.state(profiles("live"));
     stop();
+    expect(await rows()).toBe(0);
+    // The route closes after its EOSE, on the same connection: a returning
+    // row reads again, since nothing kept its status current.
+    live.state(profiles("error"));
+    expect(await rows()).toBe(1);
+    expect(await rows()).toBe(1);
+    // Re-established: loaded again once, then kept while out of view.
+    live.state(profiles("live"));
+    establish(true, true);
+    expect(await rows()).toBe(1);
+    expect(await rows()).toBe(0);
   } finally {
     owner.dispose();
   }

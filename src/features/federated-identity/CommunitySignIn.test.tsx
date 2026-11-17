@@ -339,3 +339,38 @@ it("keeps an explained refusal hidden until its error clears, so a resolving sig
   rerender({ error: refusal });
   expect(result.current).toBe(false);
 });
+it.each([
+  [130, "about 2 minutes off"],
+  [-130, "about 2 minutes off"],
+])(
+  "keeps a refusal's own copy and adds a clock hint at %s s",
+  (clockOffset, hint) => {
+    const h = federatedFixture();
+    h.publish({ failure: "adapter-refused", clockOffset });
+    render(
+      <CommunitySignIn
+        identity={h.service}
+        error="adapter-refused"
+        retry={vi.fn()}
+      />,
+    );
+    expect(screen.getByRole("alert")).toHaveTextContent(
+      "Buzz couldn’t confirm your organization sign-in for this community.",
+    );
+    expect(screen.getByText(new RegExp(hint))).toHaveTextContent(
+      "Check your date and time settings.",
+    );
+  },
+);
+it("adds no clock hint without a measured offset", () => {
+  const h = federatedFixture();
+  h.publish({ failure: "adapter-refused", clockOffset: null });
+  render(
+    <CommunitySignIn
+      identity={h.service}
+      error="adapter-refused"
+      retry={vi.fn()}
+    />,
+  );
+  expect(screen.queryByText(/clock looks about/)).toBeNull();
+});

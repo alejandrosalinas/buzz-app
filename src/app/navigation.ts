@@ -1,4 +1,5 @@
 import {
+  useCallback,
   useEffect,
   useLayoutEffect,
   useMemo,
@@ -8,7 +9,13 @@ import {
 } from "react";
 import type { AppServices } from "./services";
 import { communityDestination } from "../features/communities/destination";
-import { targetKey, type OpenTarget } from "../features/navigation/targets";
+import {
+  joinBeneath,
+  targetKey,
+  type NavigationScope,
+  withoutJoin,
+  type OpenTarget,
+} from "../features/navigation/targets";
 import type { PageNavigation } from "../features/navigation/service";
 import type {
   OpenAttempt,
@@ -80,7 +87,16 @@ export function useAppNavigation(
   );
 
   const startup = plugins.configuration.status;
-  const target = state.entry.target;
+  // The join dialog is presentation over a visit; routing sees the visit. A
+  // join for another viewer is not shown, so it covers nothing.
+  const join =
+    state.entry.target.join?.viewer === client.viewer
+      ? state.entry.target.join
+      : undefined;
+  const target = useMemo(
+    () => withoutJoin(state.entry.target),
+    [state.entry.target],
+  );
   const settings = target.kind === "settings";
   const provider = settings ? target.provider : undefined;
   const providerAvailable = useSyncExternalStore(
@@ -187,26 +203,20 @@ export function useAppNavigation(
     )
       failure = "unavailable";
   }
-  if (
-    target.kind === "settings" &&
-    !failure &&
-    !waiting &&
-    target.section &&
-    !isBuiltInSettingsSection(target.section)
-  ) {
-    // Plugin cards are addressed by contribution key.
-    const section = target.section;
-    const owner = section.split("/")[0] ?? "";
-    if (visibility !== true) {
-      if (
-        retainedAttempt !== state.attempt ||
-        startup === "loading" ||
-        plugins.activation[owner]?.status === "starting" ||
-        visibility === "pending"
-      )
-        waiting = true;
-      else failure = "unavailable";
-    }
+  // Plugin cards are addressed by contribution key, prefixed by their plugin.
+  const cardOwner =
+    settings && target.section && !isBuiltInSettingsSection(target.section)
+      ? target.section.split("/")[0]
+      : undefined;
+  if (cardOwner !== undefined && !failure && !waiting && visibility !== true) {
+    if (
+      retainedAttempt !== state.attempt ||
+      startup === "loading" ||
+      plugins.activation[cardOwner]?.status === "starting" ||
+      visibility === "pending"
+    )
+      waiting = true;
+    else failure = "unavailable";
   }
   if (provider && !failure && !waiting) {
     const owner = provider.split("/")[0] ?? "";
@@ -217,16 +227,24 @@ export function useAppNavigation(
       waiting = true;
     else if (!providerAvailable) failure = "unavailable";
   }
-  // An installed plugin that is turned off has no pages: say so, not "removed".
-  // Paused external plugins can't start this launch, so Enable wouldn't help.
+  // An installed plugin that is turned off has no pages or Settings cards:
+  // say so, not "removed". Paused external plugins can't start this launch,
+  // so Enable wouldn't help. A card key is "<plugin>/<card>"; a bare section
+  // id names no plugin, so it keeps the not-available card.
   const configuration = plugins.configuration;
+  const pluginId =
+    target.kind === "page" || target.kind === "plugin"
+      ? target.pluginId
+      : settings && target.section?.includes("/")
+        ? cardOwner
+        : undefined;
   const turnedOff =
     failure === "unavailable" &&
-    (target.kind === "page" || target.kind === "plugin") &&
+    pluginId !== undefined &&
     configuration.status === "ready"
       ? configuration.catalog.plugins.find(
           (plugin) =>
-            plugin.manifest.id === target.pluginId &&
+            plugin.manifest.id === pluginId &&
             !plugin.enabled &&
             !(
               configuration.externalPluginsPaused &&
@@ -293,13 +311,50 @@ export function useAppNavigation(
     owner: typeof owner;
     presentation: ReturnType<AppServices["navigationHost"]["request"]>;
   }>(undefined);
-  useEffect(() => () => workspace.current?.presentation.dispose(), []);
+  // Settings' own visit, kept while a join dialog presents over it.
+  const settingsView = useRef<{
+    attempt: OpenAttempt;
+    presentation: ReturnType<AppServices["navigationHost"]["request"]>;
+  }>(undefined);
+  useEffect(
+    () => () => {
+      workspace.current?.presentation.dispose();
+      settingsView.current?.presentation.dispose();
+    },
+    [],
+  );
   useLayoutEffect(() => {
+    // A join dialog over Settings: Settings keeps its own visit beneath, as a
+    // page does, so what it presents is not reopened by the dialog's visit.
+    const beneath =
+      join && settings && !owner.waiting && !owner.failure
+        ? settingsBeneath(settingsView.current, owner.attempt)
+        : undefined;
+    if (beneath) {
+      services.navigationHost.complete(owner.attempt, { status: "opened" });
+      presented.set({ owner, request: beneath });
+      return;
+    }
+    settingsView.current?.presentation.dispose();
+    settingsView.current = undefined;
     if (owner.waiting || owner.failure) return;
     const previous = workspace.current;
     if (!settings && previous?.presentation.resume(owner.attempt)) {
       presented.set({ owner, request: previous.presentation.request });
       previous.owner = owner;
+      return;
+    }
+    // A join dialog over a retained page: the page keeps its own visit beneath,
+    // so the dialog's visit is acknowledged here, not by the page.
+    if (
+      join &&
+      !settings &&
+      previous &&
+      !previous.presentation.request.signal.aborted &&
+      previous.owner.attempt.entry.id !== owner.attempt.entry.id &&
+      sameVisitBeneath(previous.owner.attempt, owner.attempt)
+    ) {
+      services.navigationHost.complete(owner.attempt, { status: "opened" });
       return;
     }
     if (!settings) {
@@ -339,17 +394,29 @@ export function useAppNavigation(
           };
         },
       },
-      !settings && !!owner.page,
+      settings || !!owner.page,
     );
     presented.set({ owner, request: next.request });
-    if (settings) return next.dispose;
+    if (settings) {
+      settingsView.current = { attempt: owner.attempt, presentation: next };
+      return;
+    }
     workspace.current = { owner, presentation: next };
-  }, [services, owner, settings, presented]);
+  }, [services, owner, settings, presented, join]);
   const retained = workspace.current;
+  // Join over a page retained from its own visit: present that page beneath.
+  const covered =
+    settings ||
+    (!!join &&
+      !!retained &&
+      !retained.presentation.request.signal.aborted &&
+      retained.owner.attempt.entry.id !== state.entry.id &&
+      sameVisitBeneath(retained.owner.attempt, state.attempt));
   const sameWorkspaceVisit =
     retained &&
     retained.owner.attempt.entry.id === state.entry.id &&
-    targetKey(retained.owner.attempt.entry.target) === targetKey(target);
+    targetKey(retained.owner.attempt.entry.target) ===
+      targetKey(state.entry.target);
   const retainedRequest =
     retained && !retained.presentation.request.signal.aborted
       ? retained.presentation.request
@@ -357,19 +424,21 @@ export function useAppNavigation(
   const requestFor = (presentation: ReturnType<typeof presented.get>) =>
     presentation?.owner === owner
       ? presentation.request
-      : !settings && sameWorkspaceVisit
-        ? retainedRequest
-        : undefined;
-  const workspacePage = settings
+      : join && settings && !waiting && !failure
+        ? settingsBeneath(settingsView.current, state.attempt)
+        : !settings && sameWorkspaceVisit
+          ? retainedRequest
+          : undefined;
+  const workspacePage = covered
     ? retainedRequest && retained?.owner.page
     : page;
   const workspaceTarget =
-    settings && retainedRequest && retained
-      ? retained.owner.attempt.entry.target
+    covered && retainedRequest && retained
+      ? withoutJoin(retained.owner.attempt.entry.target)
       : target;
   const workspaceRequestFor = (
     presentation: ReturnType<typeof presented.get>,
-  ) => (settings ? retainedRequest : requestFor(presentation));
+  ) => (covered ? retainedRequest : requestFor(presentation));
   useEffect(() => {
     if (state.attempt.signal.aborted) return;
     if (failure) {
@@ -420,54 +489,63 @@ export function useAppNavigation(
       void navigation.retry();
     }
   }, [navigation, state, failure, offline, relay.status]);
-  const select = (
-    key: string,
-    options?: Pick<NavigationOpenOptions, "focus"> & {
-      /** Settings only: open at this section. */
-      section?: string;
+  // Stable, so the shell's page navigation renders only when pages change.
+  const select = useCallback(
+    (
+      key: string,
+      options?: Pick<NavigationOpenOptions, "focus" | "replace"> & {
+        /** Settings only: open at this section. */
+        section?: string;
+      },
+    ) => {
+      const selectedClient = services.communities.snapshot();
+      let destination: OpenTarget;
+      if (key === "settings")
+        destination = {
+          version: 1,
+          kind: "settings",
+          ...(options?.section ? { section: options.section } : {}),
+          ...(selectedClient.viewer && selectedClient.selected
+            ? {
+                scope: {
+                  viewer: selectedClient.viewer,
+                  communityOrigin: communityDestination(selectedClient.selected)
+                    .url,
+                },
+              }
+            : { scope: null }),
+        };
+      else {
+        const selected = pages.find((page) => page.key === key);
+        if (!selected) return;
+        destination = {
+          version: 1,
+          kind: "page",
+          pluginId: selected.pluginId,
+          pageId: selected.id,
+          ...(selectedClient.viewer && selectedClient.selected
+            ? {
+                scope: {
+                  viewer: selectedClient.viewer,
+                  communityOrigin: communityDestination(selectedClient.selected)
+                    .url,
+                },
+              }
+            : { scope: null }),
+        };
+      }
+      void navigation.open(
+        destination,
+        options?.focus || options?.replace
+          ? {
+              ...(options.focus ? { focus: options.focus } : {}),
+              ...(options.replace ? { replace: true } : {}),
+            }
+          : undefined,
+      );
     },
-  ) => {
-    const selectedClient = services.communities.snapshot();
-    let destination: OpenTarget;
-    if (key === "settings")
-      destination = {
-        version: 1,
-        kind: "settings",
-        ...(options?.section ? { section: options.section } : {}),
-        ...(selectedClient.viewer && selectedClient.selected
-          ? {
-              scope: {
-                viewer: selectedClient.viewer,
-                communityOrigin: communityDestination(selectedClient.selected)
-                  .url,
-              },
-            }
-          : { scope: null }),
-      };
-    else {
-      const selected = pages.find((page) => page.key === key);
-      if (!selected) return;
-      destination = {
-        version: 1,
-        kind: "page",
-        pluginId: selected.pluginId,
-        pageId: selected.id,
-        ...(selectedClient.viewer && selectedClient.selected
-          ? {
-              scope: {
-                viewer: selectedClient.viewer,
-                communityOrigin: communityDestination(selectedClient.selected)
-                  .url,
-              },
-            }
-          : { scope: null }),
-      };
-    }
-    void navigation.open(
-      destination,
-      options?.focus ? { focus: options.focus } : undefined,
-    );
-  };
+    [services, pages, navigation],
+  );
   return {
     state,
     target,
@@ -497,7 +575,7 @@ export function useAppNavigation(
       selected:
         workspacePage?.key ?? (settings ? "home" : (pageKey ?? target.kind)),
       attempt:
-        settings && retainedRequest && retained
+        covered && retainedRequest && retained
           ? retained.owner.attempt.id
           : state.attempt.id,
     },
@@ -539,47 +617,35 @@ export function useAppNavigation(
     leaveSettings() {
       const current = navigation.snapshot().entry.target;
       if (current.kind !== "settings") return;
-      const {
-        route: _route,
-        section: _section,
-        provider: _provider,
-        pluginId: _pluginId,
-        ...dialog
-      } = current;
-      const dialogKey = targetKey(dialog);
+      const selectedClient = services.communities.snapshot();
+      const here =
+        selectedClient.viewer && selectedClient.selected
+          ? {
+              viewer: selectedClient.viewer,
+              communityOrigin: communityDestination(selectedClient.selected)
+                .url,
+            }
+          : null;
+      const dialogKey = settingsDialogKey(current, here);
       const dismiss = (fallback: OpenTarget) =>
-        navigation.dismiss((target) => {
-          if (target.kind !== "settings") return false;
-          const {
-            route: _route,
-            section: _section,
-            provider: _provider,
-            pluginId: _pluginId,
-            ...dialog
-          } = target;
-          return targetKey(dialog) === dialogKey;
-        }, fallback);
+        navigation.dismiss(
+          (target) =>
+            target.kind === "settings" &&
+            settingsDialogKey(target, here) === dialogKey,
+          fallback,
+        );
       const previous = lastNonSettings.current;
       if (previous) {
         dismiss(previous.target);
         return;
       }
-      const selectedClient = services.communities.snapshot();
       if (!selectedClient.viewer) return;
       dismiss({
         version: 1,
         kind: "page",
         pluginId: "buzz.channels",
         pageId: "channels",
-        ...(selectedClient.selected
-          ? {
-              scope: {
-                viewer: selectedClient.viewer,
-                communityOrigin: communityDestination(selectedClient.selected)
-                  .url,
-              },
-            }
-          : { scope: null }),
+        scope: here,
       });
     },
     retry() {
@@ -602,6 +668,17 @@ export function useAppNavigation(
       void navigation.retry();
     },
   };
+}
+
+/** Which Settings dialog `target` shows: Settings for its community, or for
+ * Personal space, whatever section or part within. A visit that names no
+ * community, as every link to Settings does, shows the one selected, `here`. */
+function settingsDialogKey(
+  target: Extract<OpenTarget, { kind: "settings" }>,
+  here: NavigationScope | null,
+) {
+  const scope = target.scope === undefined ? here : target.scope;
+  return targetKey({ version: 1, kind: "settings", ...(scope && { scope }) });
 }
 
 /** Retired page addresses resolve in place, retaining their account/community scope. */
@@ -647,4 +724,32 @@ function legacyPageTarget(
       ...scope,
     };
   }
+}
+
+/** Settings' request kept beneath this join dialog's visit, if it was opened
+ * over that Settings visit. */
+function settingsBeneath(
+  shown:
+    | { attempt: OpenAttempt; presentation: { request: PageNavigation } }
+    | undefined,
+  join: OpenAttempt,
+) {
+  return shown &&
+    !shown.presentation.request.signal.aborted &&
+    shown.attempt.entry.id !== join.entry.id &&
+    sameVisitBeneath(shown.attempt, join)
+    ? shown.presentation.request
+    : undefined;
+}
+
+/** Whether a retained page is the visit this join dialog was opened over: a
+ * multi-step traversal can land on a join whose page was never presented. */
+function sameVisitBeneath(
+  retained: { entry: { target: OpenTarget } },
+  join: { entry: { target: OpenTarget } },
+) {
+  return (
+    targetKey(joinBeneath(retained.entry.target)) ===
+    targetKey(joinBeneath(join.entry.target))
+  );
 }

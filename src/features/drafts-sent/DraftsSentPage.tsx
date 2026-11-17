@@ -23,7 +23,7 @@ import { avatarMedia } from "../../shared/avatar-source";
 import { relativeTimestamp } from "../../shared/relative-timestamp";
 import {
   ArrowsClockwiseIcon,
-  MessageReplyIcon,
+  ThreadIcon,
   SendIcon,
   CheckIcon,
   TrashIcon,
@@ -617,7 +617,7 @@ function ScopedPage({
                   title={status.detail}
                 >
                   {status.icon === "reply" ? (
-                    <MessageReplyIcon size={12} />
+                    <ThreadIcon size={12} />
                   ) : status.icon === "check" ? (
                     <CheckIcon size={12} />
                   ) : (

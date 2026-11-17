@@ -10,9 +10,16 @@ import {
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
+import type { SessionUsage } from "../../features/agents/service";
 import type { HostProcessOptions } from "../../features/host/service";
 import { manifestProcesses } from "./claude-testing";
 import { readUsage, sessionUsage } from "./usage";
+
+// A line larger than this is left unread; small enough for test files.
+vi.mock("../../buzz-mcp/app-client", async (original) => ({
+  ...(await original<typeof import("../../buzz-mcp/app-client")>()),
+  READ_LIMIT: 12 << 20,
+}));
 
 const agent = "a".repeat(64);
 const other = "b".repeat(64);
@@ -217,6 +224,23 @@ it("keeps only sessions Buzz started for this agent", () => {
   ).not.toHaveProperty("root");
 });
 
+/** The first prompt of a watch's or timer's one-off turn: it opens with no
+ * context, so nothing in the file says whose it is. */
+const timerPrompt = JSON.stringify({
+  type: "user",
+  timestamp: at(0),
+  message: { role: "user", content: "Timer: daily\n\nReport ops in #ops." },
+});
+
+it("counts a one-off turn's session only when it is recorded as the agent's", () => {
+  const file = `${timerPrompt}\n${reply(1000, "m1", usage(1, 1))}`;
+  expect(sessionUsage("s", file, new Map(), agent, false)).toBeUndefined();
+  const session = sessionUsage("s", file, new Map(), agent, false, true);
+  expect(session).toMatchObject({ id: "s", gaps: [] });
+  expect(session).not.toHaveProperty("channelId");
+  expect(session?.observations).toHaveLength(1);
+});
+
 let home: string | undefined;
 afterEach(() => {
   if (home) rmSync(home, { recursive: true, force: true });
@@ -274,6 +298,168 @@ it("finds the agent's sessions with the manifest's processes", async () => {
       new AbortController().signal,
     ),
   ).toEqual([]);
+});
+
+it("reads the one-off turns recorded for the agent", async () => {
+  home = mkdtempSync(join(tmpdir(), "claude-usage-"));
+  const project = join(home, ".claude/projects/-Users-me--buzz");
+  mkdirSync(project, { recursive: true });
+  const work = reply(1000, "m1", usage(1, 2));
+  writeFileSync(join(project, "once.jsonl"), `${timerPrompt}\n${work}`);
+  // Another agent's one-off turn in the same workspace, never recorded here.
+  writeFileSync(join(project, "theirs.jsonl"), `${timerPrompt}\n${work}`);
+  const sessions = await readUsage(
+    desktop(home),
+    "~/.buzz",
+    agent,
+    [],
+    0,
+    new AbortController().signal,
+    ["once", "gone"],
+  );
+  expect(sessions.map((session) => session.id)).toEqual(["once"]);
+  expect(sessions[0]).not.toHaveProperty("channelId");
+});
+
+/** A subagent's reply padded with `char` to about `bytes` in its file. */
+const padded = (
+  ms: number,
+  id: string,
+  counts: Record<string, unknown>,
+  bytes: number,
+  char = "x",
+) =>
+  JSON.stringify({
+    type: "assistant",
+    timestamp: at(ms),
+    requestId: `req-${id}`,
+    isSidechain: true,
+    message: {
+      id,
+      model: "claude-opus-5-5",
+      role: "assistant",
+      content: [
+        { type: "text", text: char.repeat(bytes / Buffer.byteLength(char)) },
+      ],
+      usage: counts,
+    },
+  });
+const sidechain = (ms: number, id: string, counts: Record<string, unknown>) =>
+  reply(ms, id, counts, "claude-opus-5-5", { isSidechain: true });
+
+/** The session with one subagent whose transcript is `text`, read as the app
+ * reads, refusing whole files over 1 MiB. */
+async function readLarge(text: string) {
+  home = mkdtempSync(join(tmpdir(), "claude-usage-"));
+  const project = join(home, ".claude/projects/-Users-me--buzz");
+  mkdirSync(join(project, "one/subagents"), { recursive: true });
+  writeFileSync(
+    join(project, "one.jsonl"),
+    `${threadPrompt()}\n${reply(1000, "m1", usage(1, 2))}`,
+  );
+  writeFileSync(join(project, "one/subagents/agent-big.jsonl"), text);
+  const host = desktop(home);
+  const sessions = await readUsage(
+    {
+      ...host,
+      readFile: async (path) => {
+        const file = await host.readFile(path);
+        if (file.length > 1 << 20)
+          throw new Error(`${path} is larger than 50 MB`);
+        return file;
+      },
+    },
+    "~/.buzz",
+    agent,
+    [],
+    0,
+    new AbortController().signal,
+  );
+  expect(sessions).toHaveLength(1);
+  return sessions[0];
+}
+const inputs = (session?: SessionUsage) =>
+  session?.observations.map((entry) => entry.tokens.input);
+
+it("reads a transcript too large for the app's read a page at a time", async () => {
+  const text = [
+    sidechain(1500, "s1", usage(3, 4)),
+    // Two-byte characters across the first page's end.
+    padded(1600, "s2", usage(5, 6), 10 << 20, "é"),
+    sidechain(1700, "s3", usage(7, 8)),
+    // A streamed response's usage again, on a later page: counted once.
+    sidechain(1800, "s1", usage(9, 10)),
+  ].join("\n");
+  const session = await readLarge(`${text}\n`);
+  expect(session?.gaps).toEqual([]);
+  expect(session?.observations.map((entry) => entry.tokens)).toEqual([
+    { input: 1, output: 2, cacheRead: 0, cacheWrite: 0 },
+    { input: 9, output: 10, cacheRead: 0, cacheWrite: 0 },
+    { input: 5, output: 6, cacheRead: 0, cacheWrite: 0 },
+    { input: 7, output: 8, cacheRead: 0, cacheWrite: 0 },
+  ]);
+  expect(session?.lastAt).toBe(Date.parse(at(1800)));
+});
+
+it("leaves a line larger than the app's read unread, and reads the rest", async () => {
+  const unread = ["1 transcript line unreadable"];
+  // Completed within a full page, with a full page after it.
+  const completed = await readLarge(
+    [
+      sidechain(1500, "s1", usage(3, 4)),
+      padded(1600, "huge", usage(50, 50), 13 << 20),
+      padded(1700, "s2", usage(5, 6), 5 << 20),
+      sidechain(1800, "s3", usage(7, 8)),
+    ].join("\n"),
+  );
+  expect(completed?.gaps).toEqual(unread);
+  expect(inputs(completed)).toEqual([1, 3, 5, 7]);
+  // Unfinished at the end of the file.
+  const unfinished = await readLarge(
+    `${sidechain(1500, "s1", usage(3, 4))}\n${padded(1600, "huge", usage(50, 50), 13 << 20)}`,
+  );
+  expect(unfinished?.gaps).toEqual(unread);
+  expect(inputs(unfinished)).toEqual([1, 3]);
+  // Longer than the limit and a page together: dropped as it is read.
+  const longer = await readLarge(
+    [
+      sidechain(1500, "s1", usage(3, 4)),
+      padded(1600, "huge", usage(50, 50), 30 << 20),
+      sidechain(1800, "s3", usage(7, 8)),
+    ].join("\n"),
+  );
+  expect(longer?.gaps).toEqual(unread);
+  expect(inputs(longer)).toEqual([1, 3, 7]);
+});
+
+it("reports a too-large transcript gone before its pages are read", async () => {
+  home = mkdtempSync(join(tmpdir(), "claude-usage-"));
+  const project = join(home, ".claude/projects/-Users-me--buzz");
+  mkdirSync(join(project, "one/subagents"), { recursive: true });
+  writeFileSync(
+    join(project, "one.jsonl"),
+    `${threadPrompt()}\n${reply(1000, "m1", usage(1, 2))}`,
+  );
+  const big = join(project, "one/subagents/agent-big.jsonl");
+  writeFileSync(big, reply(1500, "s1", usage(3, 4)));
+  const host = desktop(home);
+  const [session] = await readUsage(
+    {
+      ...host,
+      readFile: async (path) => {
+        if (!path.includes("/subagents/")) return host.readFile(path);
+        rmSync(big);
+        throw new Error(`${path} is larger than 50 MB`);
+      },
+    },
+    "~/.buzz",
+    agent,
+    [],
+    0,
+    new AbortController().signal,
+  );
+  expect(session?.gaps).toEqual(["A subagent’s transcript is gone"]);
+  expect(session?.observations).toHaveLength(1);
 });
 
 it("reads again only the files changed since the last read", async () => {

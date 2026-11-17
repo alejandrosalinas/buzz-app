@@ -75,3 +75,52 @@ for (const startingScope of ["Primary", "Personal space"]) {
     expect(await entry(page)).toEqual(joined);
   });
 }
+
+test("Join a community is a visit: Go back closes it, Go forward reopens it with the typed address, Close retires it", async ({
+  page,
+  app,
+}) => {
+  await open(page, app);
+  const before = await entry(page);
+  const dialog = page.getByRole("dialog", { name: "Join a community" });
+  await (await openCommunityPicker(page))
+    .getByRole("button", { name: "Join a community", exact: true })
+    .click();
+  await expect(dialog).toBeVisible();
+  const joining = await entry(page);
+  expect(joining.id).not.toBe(before.id);
+  expect(joining.target).toEqual({
+    ...before.target,
+    join: { viewer: app.viewer, visit: expect.any(String) },
+  });
+  const field = dialog.getByRole("textbox", {
+    name: "Community URL",
+    exact: true,
+  });
+  await field.fill("wss://typed.example");
+
+  // Real browser traversal: the dialog closes over the same visit beneath.
+  await page.goBack();
+  await expect(dialog).toBeHidden();
+  expect(await entry(page)).toEqual(before);
+  await expect(
+    page.getByText("primary alpha message 639", { exact: false }),
+  ).toBeVisible();
+  await page.goForward();
+  await expect(dialog).toBeVisible();
+  expect(await entry(page)).toEqual(joining);
+  // The running app keeps what was typed; it is not looked up by itself.
+  await expect(field).toHaveValue("wss://typed.example");
+
+  // Reload restores the dialog, but a draft lives in memory only.
+  await page.reload();
+  await expect(dialog).toBeVisible();
+  expect(await entry(page)).toEqual(joining);
+  await expect(field).toHaveValue("");
+
+  // Close retires the visit: Go forward no longer reaches it.
+  await dialog.getByRole("button", { name: "Close", exact: true }).click();
+  await expect(dialog).toBeHidden();
+  expect(await entry(page)).toEqual(before);
+  await expect(button(page, "Go forward")).toBeDisabled();
+});

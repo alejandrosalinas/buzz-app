@@ -221,6 +221,7 @@ if (thinkingHarness === "claude") {
   };
   const provider = {
     ...staticStore(providerState),
+    recommended: () => null,
     resolve: (value: unknown) => ({
       ...codexDefaults,
       ...(value as Partial<typeof codexDefaults>),

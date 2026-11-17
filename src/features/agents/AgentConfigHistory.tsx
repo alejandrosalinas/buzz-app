@@ -300,7 +300,6 @@ export function AgentConfigHistory({
             : undefined
         }
         size="default"
-        headerGap="compact"
         footerGap="compact"
         chromeSpacing="padded"
         preventClose={reverting !== undefined}

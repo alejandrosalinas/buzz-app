@@ -1,7 +1,7 @@
 //! NIP-FA issuance and local JWT misuse checks; the relay verifies JWT signatures.
 use super::{
     config::canonical_relay,
-    protocol::{self, expiry, now, Failure},
+    protocol::{self, expiry, now, numeric_date, Failure, CLOCK_SKEW_SECS},
     FederatedIdentity, Status,
 };
 use crate::identity::{EventTemplate, IdentityHost};
@@ -46,6 +46,27 @@ fn refresh_margin(lifetime: std::time::Duration) -> std::time::Duration {
     (lifetime / 2).min(std::time::Duration::from_secs(15))
 }
 
+/// The shared client lifetime rule: a fresh token's local deadline is the
+/// earlier of its issued lifetime (`exp − iat`) counted from `request_start`,
+/// sampled before the attempt that returned it was sent, and its remaining wall-clock
+/// life at receipt. Time in flight thus counts against the token whichever
+/// way this clock is off. Only a fresh mint sets a deadline; a cached token
+/// keeps the one it was minted with.
+pub(super) fn token_deadline(
+    request_start: Instant,
+    minted: u64,
+    expires_at: u64,
+    wall_now: std::time::SystemTime,
+    monotonic_now: Instant,
+) -> Option<(Instant, std::time::Duration)> {
+    let (received, _) = monotonic_expiry(expires_at, wall_now, monotonic_now)?;
+    let issued = request_start.checked_add(std::time::Duration::from_secs(
+        expires_at.checked_sub(minted)?,
+    ))?;
+    let deadline = received.min(issued);
+    Some((deadline, deadline.saturating_duration_since(monotonic_now)))
+}
+
 pub(super) fn monotonic_expiry(
     expires_at: u64,
     wall_now: std::time::SystemTime,
@@ -57,6 +78,32 @@ pub(super) fn monotonic_expiry(
     Some((monotonic_now.checked_add(remaining)?, remaining))
 }
 
+/// When a token arrived, on both clocks. It ages by the larger of their
+/// elapsed times: the monotonic clock stops while the device sleeps, and a
+/// wall clock set back counts as no time passing.
+#[derive(Clone, Copy)]
+pub(super) struct Received {
+    at: Instant,
+    wall: std::time::SystemTime,
+}
+impl Received {
+    #[cfg(test)]
+    pub(super) fn sample() -> Self {
+        Self::at(Instant::now(), protocol::wall_now())
+    }
+    pub(super) fn at(at: Instant, wall: std::time::SystemTime) -> Self {
+        Self { at, wall }
+    }
+    /// The monotonic instant this token has aged to, for comparing with its deadlines.
+    pub(super) fn now(&self) -> Instant {
+        let now = Instant::now();
+        let wall = protocol::wall_now()
+            .duration_since(self.wall)
+            .unwrap_or_default();
+        self.at.checked_add(wall).map_or(now, |aged| aged.max(now))
+    }
+}
+
 #[derive(Clone)]
 pub(crate) struct Assertion {
     pub(crate) header: Zeroizing<String>,
@@ -65,6 +112,7 @@ pub(crate) struct Assertion {
     pub(crate) viewer: String,
     pub(crate) relay: String,
     refresh_at: Instant,
+    received: Received,
     /// The server that issued it; every later check asks that server.
     server: Weak<super::Inner>,
 }
@@ -132,6 +180,7 @@ pub(crate) async fn test_live_authorization(
             viewer: identity.viewer().await.unwrap(),
             relay: relay.into(),
             refresh_at: Instant::now(),
+            received: Received::sample(),
             server: Arc::downgrade(&host.0),
         }),
         unsigned: None,
@@ -157,12 +206,14 @@ impl Assertion {
             .cancellation_for(&self.revision)
     }
     pub(crate) fn remaining(&self) -> std::time::Duration {
-        self.expires_at.saturating_duration_since(Instant::now())
+        self.expires_at
+            .saturating_duration_since(self.received.now())
     }
     /// Time until a socket should renew: past this point a new connection
     /// mints a fresh assertion rather than reusing this one.
     pub(crate) fn renew_in(&self) -> std::time::Duration {
-        self.refresh_at.saturating_duration_since(Instant::now())
+        self.refresh_at
+            .saturating_duration_since(self.received.now())
     }
 }
 #[derive(Default)]
@@ -494,6 +545,7 @@ impl FederatedIdentity {
         }
         if entry.completed.load(Ordering::Acquire) != observed {
             let result = cached.as_ref().ok_or("Federated acquisition unavailable")?;
+            self.note_clock_offset(result.as_ref().err().and_then(|f| f.clock_offset));
             let assertion = result.as_ref().map_err(|failure| failure.code.to_owned())?;
             authorization.assertion = Some(assertion.clone());
             self.admit_authorization(identity, &authorization).await?;
@@ -503,23 +555,28 @@ impl FederatedIdentity {
             .as_ref()
             .filter(|result| matches!(result, Err(f) if refused(f)))
         {
+            // A cached refusal brings back the hint measured with it.
+            self.note_clock_offset(failure.clock_offset);
             return Err(failure.code.into());
         }
         if let Some(assertion) = cached
             .as_ref()
             .and_then(|result| result.as_ref().ok())
-            .filter(|assertion| Instant::now() < assertion.refresh_at)
+            .filter(|assertion| assertion.received.now() < assertion.refresh_at)
         {
+            self.note_clock_offset(None);
             authorization.assertion = Some(assertion.clone());
             self.admit_authorization(identity, &authorization).await?;
             return Ok(authorization);
         }
         if let Some(Err(failure)) = cached.as_ref() {
             if !transient_acquisition_failure(failure.code) {
+                self.note_clock_offset(failure.clock_offset);
                 return Err(failure.code.into());
             }
             let mut retry_at = entry.retry_at.lock().await;
             if retry_at.is_some_and(|deadline| Instant::now() < deadline) {
+                self.note_clock_offset(failure.clock_offset);
                 return Err(failure.code.into());
             }
             *retry_at = None;
@@ -536,6 +593,7 @@ impl FederatedIdentity {
         {
             *entry.retry_at.lock().await = Some(Instant::now() + ACQUISITION_RETRY_COOLDOWN);
         }
+        self.note_clock_offset(result.as_ref().err().and_then(|f| f.clock_offset));
         match result {
             Ok(assertion) => {
                 authorization.assertion = Some(assertion);
@@ -548,12 +606,18 @@ impl FederatedIdentity {
                     if !state.closed && state.snapshot.revision == revision {
                         if failure.session_denied {
                             self.signal(super::SessionChange::Expired);
-                            self.retire_state(
+                            let retired = self.retire_state(
                                 &mut state,
                                 Status::ReauthenticationRequired,
                                 Some(failure.code),
-                            )
-                            .map(|session| (session, state.snapshot.revision.clone()))
+                            );
+                            // Retiring clears the last session's hint; this
+                            // refusal's own hint stays with it.
+                            if failure.clock_offset.is_some() {
+                                state.snapshot.clock_offset = failure.clock_offset;
+                                self.publish(&state);
+                            }
+                            retired.map(|session| (session, state.snapshot.revision.clone()))
                         } else {
                             state.snapshot.failure = Some(failure.code);
                             self.publish(&state);
@@ -762,43 +826,53 @@ impl FederatedIdentity {
             .ok_or("unconfigured")?
             .endpoint("/v1/identity/assertions");
         let client = protocol::client()?;
-        let timestamp = now()? as u64;
-        let proof = identity
-            .sign(EventTemplate {
-                kind: 27235,
-                created_at: timestamp,
-                content: String::new(),
-                tags: vec![
-                    vec!["u".into(), endpoint.to_string()],
-                    vec!["method".into(), "POST".into()],
-                    vec![
-                        "payload".into(),
-                        format!("{:x}", Sha256::digest(body.as_bytes())),
+        let payload = format!("{:x}", Sha256::digest(body.as_bytes()));
+        // Every transmitted attempt carries its own proof: the issuer accepts
+        // each proof once, so a retry resending one would be refused as a
+        // replay. The nonce keeps two attempts in one second distinct.
+        let (payload, endpoint, body, client) = (&payload, &endpoint, &body, &client);
+        let proof = move || async move {
+            let mut nonce = [0u8; 16];
+            getrandom::fill(&mut nonce).map_err(|_| "identity-unavailable")?;
+            let proof = identity
+                .sign(EventTemplate {
+                    kind: 27235,
+                    created_at: now()? as u64,
+                    content: String::new(),
+                    tags: vec![
+                        vec!["u".into(), endpoint.to_string()],
+                        vec!["method".into(), "POST".into()],
+                        vec!["payload".into(), payload.clone()],
+                        vec![
+                            "nonce".into(),
+                            nonce.iter().map(|b| format!("{b:02x}")).collect(),
+                        ],
                     ],
-                ],
-            })
-            .await
-            .map_err(|_| "identity-unavailable")?;
-        if proof.get("pubkey").and_then(|v| v.as_str()) != Some(viewer) {
-            return Err("invalid-viewer".into());
-        }
-        let proof = format!(
-            "Nostr {}",
-            STANDARD.encode(serde_json::to_vec(&proof).map_err(|_| "invalid-proof")?)
-        );
+                })
+                .await
+                .map_err(|_| "identity-unavailable")?;
+            if proof.get("pubkey").and_then(|v| v.as_str()) != Some(viewer) {
+                return Err(Failure::from("invalid-viewer"));
+            }
+            Ok::<_, Failure>(format!(
+                "Nostr {}",
+                STANDARD.encode(serde_json::to_vec(&proof).map_err(|_| "invalid-proof")?)
+            ))
+        };
         #[derive(Deserialize)]
         struct Issued {
             assertion: String,
             nostr_pubkey: String,
             expires_at: u64,
         }
-        let issued: Issued = protocol::json(|| {
-            client
+        let proof = &proof;
+        let (issued, request_start): (Issued, _) = protocol::json_with(move || async move {
+            Ok(client
                 .post(endpoint.clone())
                 .bearer_auth(token)
-                .header("Nostr-Authorization", &proof)
+                .header("Nostr-Authorization", proof().await?)
                 .header("Content-Type", "application/json")
-                .body(body.clone())
+                .body(body.clone()))
         })
         .await?;
         let assertion = Zeroizing::new(issued.assertion);
@@ -806,12 +880,12 @@ impl FederatedIdentity {
         // conversion to a monotonic deadline. Sampling the monotonic clock first
         // keeps the derived deadline at or before the issuer's whole-second exp.
         let monotonic_now = Instant::now();
-        let wall_now = std::time::SystemTime::now();
+        let wall_now = protocol::wall_now();
         let now = wall_now
             .duration_since(std::time::UNIX_EPOCH)
             .map_err(|_| "clock-unavailable")?
             .as_secs();
-        validate_jwt(
+        let minted = validate_jwt(
             &assertion,
             &issued.nostr_pubkey,
             issued.expires_at,
@@ -820,8 +894,14 @@ impl FederatedIdentity {
             session_expiry,
             now,
         )?;
-        let (expires_at, lifetime) = monotonic_expiry(issued.expires_at, wall_now, monotonic_now)
-            .ok_or("invalid-assertion")?;
+        let (expires_at, lifetime) = token_deadline(
+            request_start,
+            minted,
+            issued.expires_at,
+            wall_now,
+            monotonic_now,
+        )
+        .ok_or("invalid-assertion")?;
         diagnostic.ok = true;
         Ok(Assertion {
             header: Zeroizing::new(format!("Bearer {}", assertion.as_str())),
@@ -830,6 +910,7 @@ impl FederatedIdentity {
             viewer: viewer.into(),
             relay: relay.into(),
             refresh_at: expires_at - refresh_margin(lifetime),
+            received: Received::at(monotonic_now, wall_now),
             server: Arc::downgrade(&self.0),
         })
     }
@@ -846,6 +927,7 @@ fn refused(failure: &Failure) -> bool {
         "adapter-refused"
             | "authorization-denied"
             | "binding-mismatch"
+            | "clock-skew"
             | "grant-refused"
             | "invalid-proof"
             | "invalid-response"
@@ -879,32 +961,131 @@ fn validate_jwt(
     };
     let header = decode(parts[0])?;
     let claims = decode(parts[1])?;
-    let minted = claims
-        .get("iat")
-        .and_then(|v| v.as_u64())
+    let minted = numeric_date(&claims, "iat")
+        .map(|iat| iat.ceil() as u64)
         .ok_or("invalid-assertion")?;
-    let expiry = claims
-        .get("exp")
-        .and_then(|v| v.as_u64())
-        .ok_or("invalid-assertion")?;
+    // The raw `exp` must equal the returned expiry exactly, so a fractional
+    // `exp` past it is refused rather than rounded into agreement.
+    if numeric_date(&claims, "exp") != Some(returned_expiry as f64) {
+        return Err("invalid-assertion".into());
+    }
+    let expiry = returned_expiry;
     if header.get("typ").and_then(|v| v.as_str()) != Some("nip-fi+jwt")
         || claims.get("aud").and_then(|v| v.as_str())
             != Some(format!("https://{}", &relay[6..]).as_str())
         || claims.get("nostr_pubkey").and_then(|v| v.as_str()) != Some(viewer)
-        || expiry != returned_expiry
         || expiry <= now
         || expiry > session_expiry
-        || minted > now.saturating_add(5)
         || minted > expiry
     {
         return Err("invalid-assertion".into());
+    }
+    // Checked last: only a token sound in every other claim is refused
+    // definitively for this clock. `clock-skew` is the human sign-in's
+    // diagnosis, which CommunitySignIn explains; the agent path's same bound
+    // (`agent::validate`) keeps `invalid-assertion` on purpose, since agent
+    // failures have no such recovery copy.
+    if minted > now.saturating_add(CLOCK_SKEW_SECS) {
+        return Err("clock-skew".into());
     }
     Ok(minted)
 }
 
 #[cfg(test)]
 mod tests {
+    use super::super::testing::{raw, scripted_issuer};
     use super::*;
+
+    #[test]
+    fn sign_in_accepts_iat_120_s_ahead_and_names_clock_skew_at_121() {
+        let (viewer, relay, now) = ("a".repeat(64), "wss://relay.example", 1_000_000);
+        let check = |minted| {
+            let token = jwt(&viewer, relay, minted, now + 600);
+            validate_jwt(&token, &viewer, now + 600, &viewer, relay, now + 3600, now)
+        };
+        assert_eq!(check(now + 120), Ok(now + 120));
+        assert_eq!(check(now + 121).unwrap_err().code, "clock-skew");
+        // A fractional NumericDate `iat` is valid; it rounds up, so the
+        // lifetime against the integer `exp` floors to whole seconds.
+        let token = jwt_claims(
+            &viewer,
+            relay,
+            serde_json::json!(now as f64 + 0.5),
+            now + 600,
+        );
+        let minted = validate_jwt(&token, &viewer, now + 600, &viewer, relay, now + 3600, now);
+        assert_eq!(minted, Ok(now + 1)); // lifetime 599 s, floor(599.5)
+
+        // A fractional `exp` past the returned expiry is not rounded to match.
+        let token = format!("{}.{}.eA", URL_SAFE_NO_PAD.encode(br#"{"typ":"nip-fi+jwt"}"#), URL_SAFE_NO_PAD.encode(serde_json::json!({"nostr_pubkey":viewer,"aud":"https://relay.example","iat":now,"exp":now as f64 + 600.5}).to_string()));
+        let late = validate_jwt(&token, &viewer, now + 600, &viewer, relay, now + 600, now);
+        assert_eq!(late.unwrap_err().code, "invalid-assertion");
+    }
+
+    #[test]
+    fn token_deadline_counts_time_in_flight_whichever_way_the_clock_is_off() {
+        let secs = std::time::Duration::from_secs;
+        let start = Instant::now();
+        let received = start + secs(20); // the issuer's reply took 20 s
+        let real = 1_000_000u64;
+        let (minted, exp) = (real + 10, real + 310); // 300 s issued
+        let at = |offset: i64| std::time::UNIX_EPOCH + secs((real as i64 + 20 + offset) as u64);
+        // Slow clock: bounded by request start + issued lifetime.
+        let slow = token_deadline(start, minted, exp, at(-120), received).unwrap();
+        assert_eq!(slow.0, start + secs(300));
+        // Fast clock: bounded by its own wall-clock remainder.
+        let fast = token_deadline(start, minted, exp, at(120), received).unwrap();
+        assert_eq!(fast, (received + secs(170), secs(170)));
+        // A short token spent in flight has no budget left.
+        let (_, spent) = token_deadline(start, real, real + 15, at(-120), received).unwrap();
+        assert!(spent.is_zero());
+    }
+
+    fn issued(viewer: &str, relay: &str, minted: u64, expires: u64) -> String {
+        serde_json::json!({"assertion": jwt(viewer, relay, minted, expires), "nostr_pubkey": viewer, "expires_at": expires}).to_string()
+    }
+
+    #[tokio::test]
+    async fn a_cached_token_handed_out_again_keeps_its_original_deadline() {
+        let relay = "wss://relay.example";
+        let url = Url::parse("https://relay.example").unwrap();
+        let identity = IdentityHost::fixture();
+        let viewer = identity.viewer().await.unwrap();
+        let (base, _, bodies) = super::super::testing::issuer(&viewer, relay).await;
+        let host = super::super::testing::signed_in(base, relay, true);
+        let first = host.assertion_for_relay(&identity, &url).await.unwrap();
+        let again = host.assertion_for_relay(&identity, &url).await.unwrap();
+        let (first, again) = (first.assertion.unwrap(), again.assertion.unwrap());
+        assert_eq!(first.expires_at, again.expires_at);
+        assert_eq!(first.header.as_str(), again.header.as_str());
+        // After an hour of sleep the monotonic clock hasn't moved, but the token is not reused.
+        let woke = protocol::wall_now() + std::time::Duration::from_secs(3600);
+        let slept = protocol::WALL_NOW.scope(woke, host.assertion_for_relay(&identity, &url));
+        assert!(slept.await.is_err());
+        drop(host);
+        assert_eq!(bodies.await.unwrap().len(), 1);
+    }
+
+    #[tokio::test]
+    async fn a_token_with_no_lifetime_left_is_reported_and_then_fetched_again() {
+        let relay = "wss://relay.example";
+        let url = Url::parse("https://relay.example").unwrap();
+        let identity = IdentityHost::fixture();
+        let viewer = identity.viewer().await.unwrap();
+        // A slow clock: the 1 s token still looks current here on arrival.
+        let minted = now().unwrap() as u64 + 60;
+        let reply = |life| raw("200 OK", "", &issued(&viewer, relay, minted, minted + life));
+        let (base, server) = scripted_issuer(vec![
+            (std::time::Duration::from_secs(2), reply(1)),
+            (std::time::Duration::ZERO, reply(60)),
+        ])
+        .await;
+        let host = super::super::testing::signed_in(base, relay, true);
+        assert!(host.assertion_for_relay(&identity, &url).await.is_err());
+        let next = host.assertion_for_relay(&identity, &url).await.unwrap();
+        assert!(next.assertion.unwrap().remaining() > std::time::Duration::from_secs(55));
+        assert_eq!(server.await.unwrap().len(), 2);
+    }
 
     #[test]
     fn refresh_margin_leaves_short_lifetimes_half_their_time() {
@@ -956,6 +1137,7 @@ mod tests {
                 viewer: identity.viewer().await.unwrap(),
                 relay: relay.into(),
                 refresh_at: Instant::now(),
+                received: Received::sample(),
                 server: Arc::downgrade(&host.0),
             }),
             relay: relay.into(),
@@ -984,6 +1166,7 @@ mod tests {
                 viewer: identity.viewer().await.unwrap(),
                 relay: relay.into(),
                 refresh_at: Instant::now(),
+                received: Received::sample(),
                 server: Arc::downgrade(&host.0),
             }),
             relay: relay.into(),
@@ -1251,6 +1434,7 @@ mod tests {
             viewer: identity.viewer().await.unwrap(),
             relay: relay.into(),
             refresh_at: Instant::now(),
+            received: Received::sample(),
             server: Arc::downgrade(&host.0),
         };
         let authorization = Authorization {
@@ -1282,6 +1466,9 @@ mod tests {
         assert!(next.stop.is_cancelled());
     }
     fn jwt(viewer: &str, relay: &str, minted: u64, expires: u64) -> String {
+        jwt_claims(viewer, relay, minted.into(), expires)
+    }
+    fn jwt_claims(viewer: &str, relay: &str, minted: serde_json::Value, expires: u64) -> String {
         format!("{}.{}.eA", URL_SAFE_NO_PAD.encode(br#"{"typ":"nip-fi+jwt","alg":"ES256"}"#), URL_SAFE_NO_PAD.encode(serde_json::json!({"nostr_pubkey":viewer,"aud":format!("https://{}",&relay[6..]),"iat":minted,"exp":expires}).to_string()))
     }
     #[test]
@@ -1357,12 +1544,12 @@ mod tests {
                 98,
             ),
             (
-                jwt(&viewer, relay, 107, 200),
+                jwt(&viewer, relay, 222, 300),
                 viewer.clone(),
-                200,
+                300,
                 viewer.clone(),
                 relay,
-                250,
+                350,
                 101,
             ),
             (
@@ -1530,8 +1717,9 @@ mod tests {
         let proof = serde_json::to_value(proof).unwrap();
         assert_eq!(proof["pubkey"], viewer);
         assert_eq!(proof["kind"], 27235);
+        let tags = proof["tags"].as_array().unwrap();
         assert_eq!(
-            proof["tags"],
+            tags[..3],
             serde_json::json!([
                 ["u", endpoint],
                 ["method", "POST"],
@@ -1540,7 +1728,12 @@ mod tests {
                     format!("{:x}", Sha256::digest(expected.as_bytes()))
                 ]
             ])
+            .as_array()
+            .unwrap()[..]
         );
+        assert_eq!(tags.len(), 4);
+        assert_eq!(tags[3][0], "nonce");
+        assert_eq!(tags[3][1].as_str().unwrap().len(), 32);
         assert!(
             assertion.remaining()
                 <= std::time::UNIX_EPOCH
@@ -1563,6 +1756,7 @@ mod tests {
             viewer: identity.viewer().await.unwrap(),
             relay: "wss://relay.example".into(),
             refresh_at: Instant::now(),
+            received: Received::sample(),
             server: Arc::downgrade(&host.0),
         };
         {
@@ -1883,7 +2077,10 @@ mod tests {
                         "held" => "Content-Length: 20\r\nConnection: close\r\n\r\n",
                         _ => "Content-Length: 20\r\nConnection: close\r\n\r\n{",
                     };
-                    let response = format!("HTTP/1.1 {status} Refused\r\n{body}");
+                    // A clock 130 s behind: every refusal keeps that hint,
+                    // including one whose body outlasts the deadline.
+                    let date = (chrono::Utc::now() + chrono::Duration::seconds(130)).to_rfc2822();
+                    let response = format!("HTTP/1.1 {status} Refused\r\nDate: {date}\r\n{body}");
                     socket.write_all(response.as_bytes()).await.unwrap();
                     if kind == "held" {
                         held_bodies.spawn(async move {
@@ -1935,6 +2132,12 @@ mod tests {
             );
             assert_eq!(first.as_deref(), Some("adapter-refused"));
             assert_eq!(second.as_deref(), Some("adapter-refused"));
+            assert!(
+                host.snapshot()
+                    .clock_offset
+                    .is_some_and(|offset| offset >= 129),
+                "{status}/{kind} lost its clock hint"
+            );
             assert!(
                 host.snapshot().status == Status::SignedIn,
                 "an unreadable 401 cannot establish session invalidation"
@@ -2001,6 +2204,7 @@ mod tests {
             viewer,
             relay: "wss://relay.example".into(),
             refresh_at: Instant::now(),
+            received: Received::sample(),
             server: Arc::downgrade(&host.0),
         };
         let (started, observed) = tokio::sync::oneshot::channel();

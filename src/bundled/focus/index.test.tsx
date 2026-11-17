@@ -8,6 +8,9 @@ import { AccountActionsService } from "../../features/account-actions/service";
 import { SidebarScopeService } from "../../features/channel-navigation/sidebar-scope-service";
 import { provideNavigation } from "../../features/navigation/service";
 import type { OpenTarget } from "../../features/navigation/targets";
+import type { Communities } from "../../features/communities/service";
+import { communityDestination } from "../../features/communities/destination";
+import { createCommunityUnreads } from "../../features/notifications/community-unread";
 import { createNotificationPreferences } from "../../features/notifications/preferences";
 import { NotificationsService } from "../../features/notifications/service";
 import type { StatusInput, UserStatus } from "../../features/relay/user-status";
@@ -32,7 +35,7 @@ const conversation = (channelId: string): OpenTarget => ({
   channelId,
 });
 
-function setup(initial?: StatusInput) {
+function setup(initial?: StatusInput, others = new Map<string, unknown>()) {
   const ctx = new Context();
   contexts.push(ctx);
   const runtime = new PluginRuntime(ctx, async () => focusPlugin);
@@ -70,7 +73,7 @@ function setup(initial?: StatusInput) {
   const relayListeners = new Set<() => void>();
   const sidebarScope = new SidebarScopeService(ctx);
   const accountActions = new AccountActionsService(ctx);
-  ctx.provide("relay", {
+  const relay = {
     snapshot: () => ({
       status: "ready",
       cached: false,
@@ -98,6 +101,15 @@ function setup(initial?: StatusInput) {
       relayListeners.add(listener);
       return () => relayListeners.delete(listener);
     },
+  };
+  ctx.provide("relay", relay);
+  // Focus judges a conversation in its own community's retained session.
+  ctx.provide("communityReader", {
+    retained: (target: typeof scope) =>
+      target.communityOrigin === scope.communityOrigin &&
+      target.viewer === scope.viewer
+        ? relay.snapshot()
+        : others.get(target.communityOrigin),
   });
   const plugin = {
     manifest: { id: "buzz.focus", name: "Focus", apiVersion: 1 as const },
@@ -234,3 +246,106 @@ it("closing the app keeps Focus and its status for next time", async () => {
 function focusUntil(): number {
   return JSON.parse(localStorage.getItem(FOCUS_KEY) ?? "{}").until ?? 0;
 }
+
+it("Focus badges a Solo chat in a community that isn't selected, whatever is selected", async () => {
+  localStorage.setItem(
+    FOCUS_KEY,
+    JSON.stringify({ until: Math.floor(Date.now() / 1000) + 600 }),
+  );
+  const [one, two] = ["https://one.example", "https://two.example"];
+  // Only two has the Solo chat "x"; the selected relay (one) has no "x".
+  const fakeSession = (channels: object[]) => ({
+    live: {
+      snapshot: () => ({ status: "connected" }),
+      subscribe: () => () => {},
+    },
+    sidebarPreferences: {
+      snapshot: () => ({ status: "ready", data: { muted: [] } }),
+      subscribe: () => () => {},
+    },
+    channels: {
+      list: () => ({
+        status: "ready",
+        channels,
+      }),
+      subscribeList: () => () => {},
+    },
+    unread: {
+      snapshot: () => ({
+        manual: "none",
+        observedCount: 1,
+        attentionCount: 1,
+        coverage: "observed",
+        freshness: "observed",
+      }),
+      subscribe: () => () => {},
+      ensure: async () => {},
+    },
+  });
+  const ready = {
+    status: "ready",
+    viewer: scope.viewer,
+    session: fakeSession([
+      { id: "x", channelType: "solo", members: [scope.viewer] },
+    ]),
+  };
+  const empty = {
+    status: "ready",
+    viewer: scope.viewer,
+    session: fakeSession([]),
+  };
+  const t = setup(undefined, new Map([[communityDestination(two).url, ready]]));
+  t.enable();
+  await vi.waitFor(() => expect(t.sidebarScope.snapshot()).toHaveLength(1));
+  const target = (channelId: string): OpenTarget => ({
+    version: 1,
+    kind: "conversation",
+    scope: {
+      viewer: scope.viewer,
+      communityOrigin: communityDestination(two).url,
+    },
+    channelId,
+  });
+  const listeners = new Set<() => void>();
+  let selected: string | null = one;
+  const communities = {
+    snapshot: () => ({
+      viewer: scope.viewer,
+      selected,
+      status: "ready",
+      memberships: [{ id: one }, { id: two }],
+    }),
+    subscribe: (listener: () => void) => {
+      listeners.add(listener);
+      return () => listeners.delete(listener);
+    },
+    open: (id: string) => ({
+      snapshot: () => (id === two ? ready : empty),
+      subscribe: () => () => {},
+    }),
+    relay: { snapshot: () => ({ status: "ready" }), subscribe: () => () => {} },
+  } as unknown as Communities;
+  // Badge communities open after a random start delay; start this one at once.
+  const random = vi.spyOn(Math, "random").mockReturnValue(0);
+  const unreads = createCommunityUnreads(communities, {
+    allows: (item) => t.notifications.gated(item),
+    subscribe: t.notifications.subscribeGates,
+  });
+  try {
+    for (const next of [one, two, one, null]) {
+      selected = next;
+      for (const listener of [...listeners]) listener();
+      expect(t.notifications.gated(target("x"))).toBe(true);
+      expect(t.notifications.gated(target("team"))).toBe(false);
+      await vi.waitFor(() =>
+        expect(unreads.snapshot().get(two)).toEqual({
+          unread: true,
+          attention: 1,
+        }),
+      );
+    }
+  } finally {
+    unreads.dispose();
+    random.mockRestore();
+  }
+});

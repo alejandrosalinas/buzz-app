@@ -29,9 +29,13 @@ import {
 } from "../../features/agent-harness/core-memory";
 import { readAuthorNames } from "../../features/agent-harness/author-names";
 import { readProject } from "../../features/agent-harness/project";
-import { fromOwner, workflowOf } from "../../features/agents/owner-attestation";
+import {
+  mentionAuthority,
+  workflowOf,
+} from "../../features/agents/owner-attestation";
 import { type AgentKey, pubkeyOf } from "../../features/agents/membership";
 import { sessionPrompts } from "../../features/agents/session-prompts";
+import { standaloneSessions } from "../../features/agents/standalone-sessions";
 import { localStore, type AgentStore } from "../../features/agents/store";
 import type { AgentReads } from "../../features/agents/reads";
 import type {
@@ -407,11 +411,23 @@ export class PiRuntime {
         };
       });
   }
-  /** The usage of the agent's Buzz conversations since `since`. */
+  /** The usage of the agent's Buzz conversations and standalone turns'
+   * conversations since `since`. */
   async usage(agent: AgentKey, since: number, signal: AbortSignal) {
     // Reading opens its storage, which only an agent running here may hold.
     if (!this.running.has(agent)) return [];
-    return readUsage(this.pi, agent, await this.places(agent), since, signal);
+    // A standalone turn's conversation is in no place: `runOnce` recorded
+    // it, and it is read whenever it last answered.
+    const standalone = standaloneSessions(this.storage, "pi", agent)
+      .list()
+      .map(({ id }) => ({ conversation: Number(id) }));
+    return readUsage(
+      this.pi,
+      agent,
+      [...(await this.places(agent)), ...standalone],
+      since,
+      signal,
+    );
   }
   /** The conversations a Buzz request of the agent's is working in. */
   working(agent: AgentKey) {
@@ -545,15 +561,14 @@ export class PiRuntime {
     // it, and keeps its own destination for a failure recovered after a stop.
     const attention = wake?.type === "attention";
     // Pi runs commands as you; mentions need owner or delegated authority.
-    if (
-      trigger.type === "mention" &&
-      !(await fromOwner(
+    if (trigger.type === "mention") {
+      const authority = await mentionAuthority(
         trigger.event,
         agent.owner,
         workflowOf(this.reads(agent.key), agent.pubkey),
-      ))
-    )
-      return ignored?.();
+      );
+      if (authority !== "owner") return ignored?.(authority);
+    }
     signal.throwIfAborted();
     const entry = this.entry(agent, config(raw));
     entry.handle = agent;
@@ -786,6 +801,10 @@ export class PiRuntime {
         submission: number;
         conversation: number;
       }>("once", { agent: agent.key, text, request, ...turn });
+      // Outside any conversation, so no place lists it for its usage.
+      void standaloneSessions(this.storage, "pi", agent.key).add(
+        String(conversation),
+      );
       // A removed agent's storage is closed, and stays so.
       stop = () => {
         if (!entry.closed)

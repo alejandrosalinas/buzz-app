@@ -312,24 +312,59 @@ fn proc_net_tcp(table: &str, deadline: Instant) -> impl Iterator<Item = (Connect
         })
 }
 
-/// The inode of the one socket for `want` in `table`; none for several, or
-/// once `deadline` has passed.
+/// A table with no row for the connection. The kernel writes `/proc/net/tcp`
+/// in pieces, and a read across a piece boundary can miss a row, or print
+/// one twice, so a fresh read may show it.
 #[cfg(any(target_os = "linux", test))]
-fn inode(table: &str, want: Connection, deadline: Instant) -> Option<&str> {
+#[derive(Debug, PartialEq, Eq)]
+struct Missing;
+
+/// The inode of the one socket for `want` in `table`, a row the kernel
+/// printed twice being that one socket; none for several sockets, or once
+/// `deadline` has passed; [`Missing`] when no row matches.
+#[cfg(any(target_os = "linux", test))]
+fn inode(table: &str, want: Connection, deadline: Instant) -> Result<Option<&str>, Missing> {
     let mut matches = proc_net_tcp(table, deadline).filter(|(connection, _)| *connection == want);
-    let (_, inode) = matches.next()?;
-    (matches.next().is_none() && Instant::now() < deadline).then_some(inode)
+    let Some((_, inode)) = matches.next() else {
+        // Once the deadline has passed, the rows not read may have held it.
+        return if Instant::now() < deadline {
+            Err(Missing)
+        } else {
+            Ok(None)
+        };
+    };
+    Ok((matches.all(|(_, other)| other == inode) && Instant::now() < deadline).then_some(inode))
+}
+
+/// The inode of the one socket for `want` in the `/proc/net/tcp` text `read`
+/// returns, reading again while it has no row and `deadline` has not passed.
+#[cfg(any(target_os = "linux", test))]
+fn inode_of(
+    mut read: impl FnMut() -> Option<String>,
+    want: Connection,
+    deadline: Instant,
+) -> Option<String> {
+    loop {
+        let table = read()?;
+        match inode(&table, want, deadline) {
+            Ok(inode) => return inode.map(str::to_owned),
+            Err(Missing) if Instant::now() < deadline => {
+                std::thread::sleep(Duration::from_millis(1));
+            }
+            Err(Missing) => return None,
+        }
+    }
 }
 
 #[cfg(target_os = "linux")]
 mod imp {
-    use super::{inode, scan, unique, Connection};
+    use super::{inode_of, scan, unique, Connection};
     use std::path::PathBuf;
     use std::time::Instant;
 
     pub(super) fn owner(want: Connection, deadline: Instant) -> Option<u32> {
-        let table = std::fs::read_to_string("/proc/net/tcp").ok()?;
-        let socket = PathBuf::from(format!("socket:[{}]", inode(&table, want, deadline)?));
+        let table = || std::fs::read_to_string("/proc/net/tcp").ok();
+        let socket = PathBuf::from(format!("socket:[{}]", inode_of(table, want, deadline)?));
         let holders = std::fs::read_dir("/proc")
             .ok()?
             .flatten()
@@ -378,11 +413,11 @@ mod tests {
         raw.parse().unwrap()
     }
 
-    /// Run by [`names_a_separate_process`]: connects, then holds the
+    /// Run by [`names_a_separate_process_inner`]: connects, then holds the
     /// connection until the other end closes it.
     #[cfg(any(target_os = "macos", target_os = "linux"))]
     #[test]
-    #[ignore = "a helper process, run by names_a_separate_process"]
+    #[ignore = "a helper process, run by names_a_separate_process_inner"]
     fn connect_and_wait() {
         let Ok(address) = std::env::var(CONNECT) else {
             return;
@@ -403,9 +438,33 @@ mod tests {
         }
     }
 
+    /// Runs [`names_a_separate_process_inner`] in a process of its own, as
+    /// the only test there. A child that a sibling test spawns holds copies
+    /// of every descriptor in this process until it execs, so a scan here
+    /// could find two holders of a socket, and two holders name nobody.
     #[cfg(any(target_os = "macos", target_os = "linux"))]
     #[test]
     fn names_a_separate_process() {
+        let out = std::process::Command::new(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                "credential_service::peer::tests::names_a_separate_process_inner",
+            ])
+            .args(["--ignored", "--test-threads=1", "--nocapture"])
+            .output()
+            .unwrap();
+        let stdout = String::from_utf8_lossy(&out.stdout);
+        let stderr = String::from_utf8_lossy(&out.stderr);
+        assert!(out.status.success(), "{stdout}\n{stderr}");
+        assert!(stdout.contains("test result: ok. 1 passed"), "{stdout}");
+    }
+
+    /// Names the helper from its socket, and this process from the other
+    /// end, with nothing else running in this process.
+    #[cfg(any(target_os = "macos", target_os = "linux"))]
+    #[test]
+    #[ignore = "run by names_a_separate_process, in a process of its own"]
+    fn names_a_separate_process_inner() {
         let limit = Instant::now() + Duration::from_secs(30);
         let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
         listener.set_nonblocking(true).unwrap();
@@ -592,6 +651,12 @@ int main(void) {
         assert!(started.elapsed() < Duration::from_secs(1));
     }
 
+    /// A `/proc/net/tcp` header, and one of its rows.
+    const HEADER: &str = "  sl  local_address rem_address   st tx_queue rx_queue tr tm->when retrnsmt   uid  timeout inode\n";
+    fn line(local: &str, remote: &str, state: &str, inode: &str) -> String {
+        format!("   0: {local} {remote} {state} 00000000:00000000 00:00000000 00000000  1000        0 {inode}\n")
+    }
+
     /// Only the socket whose addresses and ports all match is chosen; one
     /// with the same ports and another address is not, nor one not
     /// established.
@@ -601,27 +666,74 @@ int main(void) {
             local: v4("127.0.0.1:50000"),
             remote: v4("127.0.0.1:40000"),
         };
-        let header = "  sl  local_address rem_address   st tx_queue rx_queue tr tm->when retrnsmt   uid  timeout inode\n";
-        let line = |local: &str, remote: &str, state: &str, inode: &str| {
-            format!("   0: {local} {remote} {state} 00000000:00000000 00:00000000 00000000  1000        0 {inode}\n")
-        };
         let exact = line("0100007F:C350", "0100007F:9C40", "01", "111");
         let other_address = line("0200007F:C350", "0100007F:9C40", "01", "222");
         let listening = line("0100007F:C350", "0100007F:9C40", "0A", "333");
-        let table = format!("{header}{other_address}{listening}{exact}");
+        let table = format!("{HEADER}{other_address}{listening}{exact}");
         let later = Instant::now() + Duration::from_secs(10);
-        assert_eq!(inode(&table, want, later), Some("111"));
+        assert_eq!(inode(&table, want, later), Ok(Some("111")));
         assert_eq!(
-            inode(&format!("{header}{other_address}{listening}"), want, later),
-            None
+            inode(&format!("{HEADER}{other_address}{listening}"), want, later),
+            Err(Missing)
         );
-        assert_eq!(inode(&table, want, Instant::now()), None);
-        // Two exact matches are ambiguous.
+        assert_eq!(inode(&table, want, Instant::now()), Ok(None));
+        // Two sockets are ambiguous; the one socket printed twice is not.
         let twice = format!(
-            "{header}{exact}{}",
+            "{HEADER}{exact}{}",
             line("0100007F:C350", "0100007F:9C40", "01", "444")
         );
-        assert_eq!(inode(&twice, want, later), None);
+        assert_eq!(inode(&twice, want, later), Ok(None));
+        let repeated = format!("{HEADER}{exact}{listening}{exact}");
+        assert_eq!(inode(&repeated, want, later), Ok(Some("111")));
+    }
+
+    /// A table read while the kernel writes it can miss the row, so the
+    /// table is read again until one has it or the deadline passes; two
+    /// sockets are not read again.
+    #[test]
+    fn a_missing_row_is_read_again() {
+        let want = Connection {
+            local: v4("127.0.0.1:50000"),
+            remote: v4("127.0.0.1:40000"),
+        };
+        let exact = line("0100007F:C350", "0100007F:9C40", "01", "111");
+        let later = Instant::now() + Duration::from_secs(10);
+        let mut reads = 0;
+        let found = inode_of(
+            || {
+                reads += 1;
+                Some(if reads < 3 {
+                    HEADER.to_owned()
+                } else {
+                    format!("{HEADER}{exact}")
+                })
+            },
+            want,
+            later,
+        );
+        assert_eq!(found.as_deref(), Some("111"));
+        assert_eq!(reads, 3);
+        // Descheduling can put the first read past the deadline, so only the
+        // outcome is asserted here; the reads above prove the re-read.
+        let soon = Instant::now() + Duration::from_millis(50);
+        let found = inode_of(|| Some(HEADER.to_owned()), want, soon);
+        assert_eq!(found, None);
+        assert!(Instant::now() >= soon);
+        let twice = format!(
+            "{HEADER}{exact}{}",
+            line("0100007F:C350", "0100007F:9C40", "01", "444")
+        );
+        let mut reads = 0;
+        let found = inode_of(
+            || {
+                reads += 1;
+                Some(twice.clone())
+            },
+            want,
+            later,
+        );
+        assert_eq!(found, None);
+        assert_eq!(reads, 1);
     }
 
     /// The same, for libproc's socket records.

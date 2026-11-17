@@ -4,6 +4,7 @@ import { open } from "./timeline.mjs";
 import { settlePanelMotion } from "./navigation.mjs";
 import { generateSecretKey, getPublicKey } from "nostr-tools";
 import { animationsSettled } from "./animations.mjs";
+import { chooseDefaultSkinTone } from "./skin-tone.mjs";
 
 test.use({
   productionBroker: true,
@@ -479,6 +480,7 @@ test("branch hooks land on each reply's avatar across sides and row shapes", asy
   );
   const emoji = post("Emoji branch", false);
   const emojiReply = post("🎉", false, emoji.id);
+  await chooseDefaultSkinTone(page);
   await open(page, app);
   app.serveProfile(agent, { name: "Hook Agent", is_agent: true });
   await page.setViewportSize({ width: 1280, height: 1600 });
@@ -959,20 +961,22 @@ for (const width of [1492, 1280, 1024, 700, 390])
       await animationsSettled(actions);
       if (width >= 640) {
         // Headers and continuations both lift the bar over the bubble's top
-        // corner by the same token-sized overlap.
-        const placement = await row.evaluate((node) => {
-          const bar = node.querySelector('[aria-label="Message actions"]');
-          const body = node.querySelector('[class*="_messageBubble_"]');
-          const rect = bar.getBoundingClientRect();
-          const anchor = body.getBoundingClientRect();
-          return {
-            actual: rect.bottom,
-            expected:
-              anchor.top +
-              parseFloat(getComputedStyle(bar).scrollMarginBlockStart),
-          };
-        });
-        expect(placement.actual).toBeCloseTo(placement.expected, 1);
+        // corner by the same token-sized overlap. Linux WebKit can report the
+        // entrance animation settled while its transform is still a fraction of
+        // a pixel from rest, so poll for the resting placement.
+        await expect
+          .poll(() =>
+            row.evaluate((node) => {
+              const bar = node.querySelector('[aria-label="Message actions"]');
+              const body = node.querySelector('[class*="_messageBubble_"]');
+              return (
+                bar.getBoundingClientRect().bottom -
+                body.getBoundingClientRect().top -
+                parseFloat(getComputedStyle(bar).scrollMarginBlockStart)
+              );
+            }),
+          )
+          .toBeCloseTo(0, 1);
         // Header anchoring must not wrap a full toolbar inside the narrower
         // body column before the row-width action reductions take effect.
         const centres = await actions.evaluate((bar) =>

@@ -1,0 +1,41 @@
+.mark > span {
+  grid-area: 1 / 1;
+}
+
+.ai {
+  opacity: 0;
+}
+
+/* A six-second cycle leaves a quiet hold on each mark between crossfades. */
+@media (prefers-reduced-motion: no-preference) {
+  .mark[data-cycling="true"] .ai {
+    animation: ai 6s var(--ease-state) infinite;
+  }
+  .mark[data-cycling="true"] .harness {
+    animation: harness 6s var(--ease-state) infinite;
+  }
+}
+
+@keyframes ai {
+  0%,
+  42%,
+  100% {
+    opacity: 1;
+  }
+  50%,
+  92% {
+    opacity: 0;
+  }
+}
+
+@keyframes harness {
+  0%,
+  42%,
+  100% {
+    opacity: 0;
+  }
+  50%,
+  92% {
+    opacity: 1;
+  }
+}

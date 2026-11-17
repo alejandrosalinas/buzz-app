@@ -1,3 +1,4 @@
+import { onAutomatic } from "./recommended";
 import {
   createContext,
   useCallback,
@@ -120,6 +121,8 @@ export type MentionModelChoice = Models &
     failed?: boolean;
     /** Its type offers immediate controls for sessions of this scope. */
     session?: "thread" | "channel";
+    /** On Automatic (Recommended): only its session controls are offered. */
+    automatic?: true;
   }>;
 /** Model catalogs and session actions for the viewer's mentioned agents.
  * A single model still validates saved picks even when no control is needed. */
@@ -165,6 +168,21 @@ export function useMentionModels(
                   agent && types?.find((item) => item.key === agent.type);
                 if (!agent || !type) return [];
                 const session = type.sessionControls?.scope(agent);
+                // It runs on the recommendation: no model or effort to pick,
+                // only its session controls, if any.
+                if (onAutomatic(agent.config, type.id))
+                  return session
+                    ? [
+                        {
+                          pubkey,
+                          name: agent.name,
+                          current: "",
+                          models: [],
+                          automatic: true,
+                          session,
+                        },
+                      ]
+                    : [];
                 let found: Models = { current: "", models: [] };
                 let failed = false;
                 try {

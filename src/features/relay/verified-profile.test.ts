@@ -261,6 +261,61 @@ it("notifies once per replay, then once per live change", async () => {
   }
 });
 
+it.each(["empty", "checked", "pending", "revoked"] as const)(
+  "publishes only evidence revisions after a refused %s sync",
+  async (state) => {
+    const { createProfileDirectory } = await import("./profile-directory");
+    let sink: VerifiedProfileSink | undefined;
+    const directory = createProfileDirectory(
+      { read: async () => [] },
+      undefined,
+      undefined,
+      {
+        authority,
+        subscribe(_filter, next) {
+          sink = next;
+          return () => {};
+        },
+      },
+    );
+    try {
+      await directory.ensure([alice.pubkey]);
+      assert(sink);
+      if (state !== "empty")
+        sink.event(state === "revoked" ? retract(11) : projection(11));
+      if (state === "checked") {
+        sink.eose();
+        await tick();
+      }
+      const before = directory.queries.verifiedRevision?.() ?? 0;
+      const changed = vi.fn();
+      directory.queries.subscribe(changed);
+      sink.closed("error: relay refused verification");
+      await tick();
+      if (state === "pending" || state === "revoked") {
+        expect(directory.queries.verifiedRevision?.()).toBeGreaterThan(before);
+        expect(directory.queries.verifiedSince?.(alice.pubkey, before)).toBe(
+          true,
+        );
+      } else expect(directory.queries.verifiedRevision?.()).toBe(before);
+      if (state === "empty") expect(changed).not.toHaveBeenCalled();
+      else expect(changed).toHaveBeenCalledTimes(1);
+      if (state === "checked" || state === "pending")
+        expect(
+          directory.queries.snapshot().get(alice.pubkey)?.verified?.status,
+        ).toBe("cached");
+      if (state === "revoked") {
+        expect(directory.queries.verifiedHeld?.(alice.pubkey)).toBe(true);
+        expect(
+          directory.queries.snapshot().get(alice.pubkey)?.verified,
+        ).toBeUndefined();
+      }
+    } finally {
+      directory.dispose();
+    }
+  },
+);
+
 it("a newer malformed projection invalidates an older valid name", async () => {
   const h = harness();
   try {

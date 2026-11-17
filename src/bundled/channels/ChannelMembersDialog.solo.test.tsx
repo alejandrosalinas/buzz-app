@@ -445,7 +445,7 @@ function fixture(
   };
 }
 
-it("shows Public (existing) without offering Public and changes its admission to Guest", async () => {
+it("shows Public without offering Public and changes its admission to Guest", async () => {
   const t = fixture(true, { visibility: "public", joinRole: "member" });
   await t.ready();
   t.mount();
@@ -455,7 +455,7 @@ it("shows Public (existing) without offering Public and changes its admission to
     name: "General access",
   });
   await waitFor(() => expect(audience).toBeEnabled());
-  expect(audience).toHaveTextContent("Public (existing)");
+  expect(audience).toHaveTextContent("Public");
   await user.click(audience);
   expect(
     (await screen.findAllByRole("option")).map((option) =>
@@ -464,7 +464,7 @@ it("shows Public (existing) without offering Public and changes its admission to
   ).toEqual(["View only", "Private"]);
   await user.click(screen.getByRole("option", { name: "View only" }));
   expect(screen.getByRole("alertdialog")).toHaveAccessibleDescription(
-    "Everyone in this community will be able to read this chat’s full history and Canvas, including its workspace folders and agent instructions. People already in the chat keep their access.",
+    "Everyone in this community will be able to read this chat’s full history and Canvas, including its workspace folders and agent instructions. People already in the chat keep their access. You won’t be able to switch back to Public here.",
   );
   expect(t.published).toEqual([]);
   await user.click(screen.getByRole("button", { name: "Change access" }));

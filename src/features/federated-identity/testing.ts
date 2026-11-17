@@ -64,6 +64,7 @@ export function federatedFixture(
     }),
     recheck: vi.fn(async () => state),
     askAgain: vi.fn(async (_relay: string) => {}),
+    signInLink: vi.fn(async () => "https://builderlab.example/v1/login/start"),
     signOut: vi.fn(async (options?: { revision?: string }) => {
       if (!options?.revision || options.revision === state.revision)
         publish({

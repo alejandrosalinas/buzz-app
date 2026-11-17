@@ -103,12 +103,16 @@ test("Cmd+Up edits in the existing composer and restores native focus, draft his
       source.replace("Original caption", "Revised caption reject"),
     );
     await editor.press("Enter");
-    await expect(
-      page.getByRole("button", { name: "Retry edit", exact: true }),
-    ).toBeVisible();
-    await page.getByRole("button", { name: "Retry edit", exact: true }).click();
+    // The editor closes on submit; the rejection is reported outside it.
     await expect(input).toBeFocused();
     await expect(input).toHaveJSProperty("value", "");
+    const retry = page.getByRole("button", {
+      name: "Retry message update",
+      exact: true,
+    });
+    await expect(retry).toBeVisible();
+    await retry.click();
+    await expect(retry).toBeHidden();
     // The applied edit replaces the caption and marks it as edited.
     const revised = page.getByText("Revised caption reject (edited)", {
       exact: true,
@@ -127,7 +131,11 @@ test("Cmd+Up edits in the existing composer and restores native focus, draft his
     await expect(
       page.getByRole("link", { name: "Download report.txt", exact: true }),
     ).toBeVisible();
-    await input.press("Meta+ArrowUp");
+    // Cmd+Up skips a message whose retried edit is still sending.
+    await expect(async () => {
+      await input.press("Meta+ArrowUp");
+      await expect(editor).toBeVisible({ timeout: 500 });
+    }).toPass();
     await expect(editor).toHaveJSProperty(
       "value",
       source.replace("Original caption", "Revised caption reject"),

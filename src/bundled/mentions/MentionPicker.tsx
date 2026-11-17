@@ -25,6 +25,10 @@ import {
   outsideMentionDetail,
   remoteMentionDetail,
 } from "./mention-candidates";
+import {
+  allowsOutsideMentions,
+  outsideMentionReferences,
+} from "../../features/messages/mention-admission";
 import { matchPerson } from "../../features/search/person-match";
 import { MatchedLabel } from "../../features/search/MatchedLabel";
 import { useSearchHighlight } from "../../features/search/use-search-highlight";
@@ -77,6 +81,7 @@ export function MentionPicker({
     lifetime,
     open && !disabled,
     addressed,
+    !audience,
   );
   const {
     profiles,
@@ -303,11 +308,12 @@ export function MentionPicker({
               variant="capsule"
               inputRef={searchInput}
               label={
-                draftRoster
-                  ? "Search recipients"
-                  : inviteAgents
-                    ? "Search members and agents"
-                    : "Search community people and agents"
+                !audience &&
+                allowsOutsideMentions(channel, draftRoster, inviteAgents)
+                  ? "Search community people and agents"
+                  : draftRoster
+                    ? "Search recipients"
+                    : "Search members and agents"
               }
               value={search}
               onValueChange={setSearch}
@@ -457,7 +463,12 @@ export function MentionPicker({
                                 managedBy,
                                 members?.includes(recipient.pubkey)
                                   ? undefined
-                                  : inviteAgents
+                                  : inviteAgents &&
+                                      !outsideMentionReferences(
+                                        channel,
+                                        agents.identities,
+                                        recipient.pubkey,
+                                      )
                                     ? parentAdmission
                                       ? "Adds to channel when you send"
                                       : "Adds to chat when you send"
@@ -484,11 +495,7 @@ export function MentionPicker({
                             session.media,
                           )}
                           size="large"
-                          shape={
-                            agent || !members?.includes(recipient.pubkey)
-                              ? "squircle"
-                              : "circle"
-                          }
+                          shape={agent ? "squircle" : "circle"}
                         />
                       }
                     />

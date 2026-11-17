@@ -335,6 +335,20 @@ test.each(["main", "side"] as const)(
   },
 );
 
+test("an opening at a read time asks for its line instead of an earlier reveal", () => {
+  const session = {} as RelaySession;
+  const h = renderHook(() => useChannelTabState(session, "alpha"));
+  act(() => h.result.current.openThreadTab("alpha", "reply", "root", "reveal"));
+  expect(h.result.current.tabs[0]).toMatchObject({ revealRequest: 1 });
+  act(() =>
+    h.result.current.openThreadTab("alpha", "root", "root", "focus", "side", 5),
+  );
+  expect(h.result.current.tabs[0]).toMatchObject({
+    revealRequest: undefined,
+    unreadRequest: { readThrough: 5 },
+  });
+});
+
 // Placement is one channel-owned list: a move reorders or crosses panes
 // without changing the tab's identity, and selection follows it.
 test("moving a thread reorders it within a pane and across panes", () => {

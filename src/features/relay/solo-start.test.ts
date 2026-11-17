@@ -574,3 +574,47 @@ it("lists a labeled region start only with the same labels as its single create"
   }
   await start.ready;
 });
+
+it("a held first message reaches a starting chat's local agents only after its hold", async () => {
+  const id = "cccccccc-cccc-4ccc-8ccc-cccccccccccc";
+  const h = setup(id);
+  await h.established();
+  const heard: RelayEvent[] = [];
+  h.session.subscribeLive((batch) => heard.push(...batch.events), {
+    replay: true,
+  });
+  const { ready } = h.session.channelWrites.start(id, "Start", [
+    h.agent.pubkey,
+  ]);
+  let release = () => {};
+  const hold = vi.fn(
+    (_id: string) =>
+      new Promise<void>((resolve) => {
+        release = resolve;
+      }),
+  );
+  assert.exists(h.session.outbox?.sendHeld);
+  const message = h.session.outbox.sendHeld(
+    {
+      kind: 9,
+      content: "@Agent go",
+      tags: [
+        ["h", id],
+        ["p", h.agent.pubkey],
+      ],
+    },
+    hold,
+  );
+  await vi.advanceTimersByTimeAsync(0);
+  expect(hold).toHaveBeenCalledExactlyOnceWith(message);
+  // An agent's first turn cannot start before the plugin's work ends.
+  expect(heard).toEqual([]);
+  release();
+  await vi.advanceTimersByTimeAsync(0);
+  expect(heard.map((event) => event.id)).toEqual([message]);
+  expect(h.publish.mock.calls.map(([event]) => event.kind)).toEqual([9007]);
+  h.release();
+  await settle(ready);
+  await vi.advanceTimersByTimeAsync(0);
+  expect(h.publish.mock.calls.at(-1)?.[0].id).toBe(message);
+});

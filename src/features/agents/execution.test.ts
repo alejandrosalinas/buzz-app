@@ -381,3 +381,17 @@ it("waits for authoritative selection and rejects an unreadable selection", asyn
   ).rejects.toThrow("Saved state is unavailable");
   expect(failed.connect).not.toHaveBeenCalled();
 });
+
+it("reuses a parsed binding until its saved text changes", async () => {
+  const storage = memoryStorage();
+  const f = await setup(storage);
+  expect(() => f.registry.read("bad")).toThrow("Invalid agent membership key");
+  const key = `buzz.agent.execution.v1:${agent}`;
+  storage.setItem(key, JSON.stringify({ provider: "internal/remote" }));
+  const first = f.registry.read(agent);
+  expect(f.registry.read(agent)).toBe(first);
+  storage.setItem(key, JSON.stringify({ provider: "internal/other" }));
+  expect(f.registry.read(agent)?.provider).toBe("internal/other");
+  storage.removeItem(key);
+  expect(f.registry.read(agent)).toBeUndefined();
+});

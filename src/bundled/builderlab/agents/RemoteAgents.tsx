@@ -25,7 +25,7 @@ import { ManagementRow } from "../ManagementRow";
 import { ManagementSection } from "../ManagementSection";
 import agentsHero from "../assets/agents-hero.png";
 import type { OverviewObserver } from "../overview";
-import type { BuilderlabSession } from "../session";
+import { sessionTarget, type BuilderlabSession } from "../session";
 import type { AgentClient, RemoteAgent } from "./client";
 
 export function RemoteAgents({
@@ -37,9 +37,13 @@ export function RemoteAgents({
   openAgents,
   savedAgents = [],
   openAgent,
+  signIn,
 }: {
   client: AgentClient;
   session: BuilderlabSession;
+  /** Sign-in for `session` when the account controls beside this section are
+   * another server's. */
+  signIn?: ReactNode;
   active(): boolean;
   onOverview?: OverviewObserver | undefined;
   showHeading?: boolean;
@@ -73,11 +77,13 @@ export function RemoteAgents({
       </AgentSection>
     );
   // A sign-in in progress or being checked shows its state in the account
-  // notice beside this section, so this section says nothing yet.
-  if (login.status === "pending") return null;
+  // notice beside this section, so this section says nothing yet; a sign-in
+  // of its own stays mounted here with its status and Cancel.
+  if (login.status === "pending" && !signIn) return null;
   return login.status === "signed-in" ? (
     <AgentList
-      key={login.account?.subject}
+      // Another server's list may belong to the same subject.
+      key={`${sessionTarget(session)}:${login.account?.subject}`}
       client={client}
       active={active}
       onOverview={onOverview}
@@ -88,9 +94,13 @@ export function RemoteAgents({
     />
   ) : (
     <AgentSection>
-      <p className="text-body-sm text-secondary">
-        Sign in to view your remote agents.
-      </p>
+      {login.status !== "pending" && (
+        <p className="text-body-sm text-secondary">
+          Sign in{session.providerName ? ` to ${session.providerName}` : ""} to
+          view your remote agents.
+        </p>
+      )}
+      {signIn}
     </AgentSection>
   );
 }

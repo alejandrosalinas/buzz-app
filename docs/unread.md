@@ -379,7 +379,8 @@ channel-mute mention exception. Ordinary unread, DM and participating-thread
 rules still apply. No message or read marker is rewritten.
 
 The relay currently emits `buzz:workflow-mention` only for recipients named in
-the stored template as well as the rendered output. If substituted input alone
+the stored template as well as the rendered output, and a relay running
+[owner-only agent mentions](https://github.com/block/buzz/blob/main/docs/operator-workflow-agent-mentions.md) may leave it off, so no agent acts on the message. If substituted input alone
 names the owner, its single `p` tag cannot distinguish that mention from owner
 attribution and does not create mention attention. Put the owner's explicit
 `@Name` in the template when they should be alerted. Distinguishing substituted

@@ -21,7 +21,7 @@ import {
   validInstructions,
 } from "../agents/client";
 import { oauthTarget } from "../oauth/browser";
-import type { BuilderlabSession } from "../session";
+import { sessionSite, type BuilderlabSession } from "../session";
 import { SignInAction } from "./SignInAction";
 import { effortLabel, modelChoice } from "./models";
 
@@ -84,10 +84,10 @@ export function createCreationFields(
     const [error, setError] = useState("");
     const [revision, setRevision] = useState(0);
     const controls = useRef<HTMLDivElement>(null);
-    // The account's own site: the configured Builderlab server, deployment
-    // path kept. oauthTarget validates it as the server creation signs in to.
+    // The account's own site: its Builderlab server's, deployment path kept.
+    // oauthTarget validates the build's as the server creation signs in to.
     oauthTarget();
-    const portal = new URL(import.meta.env.VITE_BUZZ_BUILDERLAB_URL ?? "");
+    const portal = new URL(sessionSite(session));
     // biome-ignore lint/correctness/useExhaustiveDependencies: revision retries catalog loading without changing the draft.
     useEffect(() => {
       if (login.status !== "signed-in") return;

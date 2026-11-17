@@ -353,7 +353,6 @@ export function DecisionsSettings({
         <Dialog
           open
           visit
-          headerGap="compact"
           title={
             selected.key === ownKey.key
               ? "Connect TypeSafe"

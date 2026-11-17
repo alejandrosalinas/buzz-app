@@ -334,8 +334,11 @@ function ReactionEmoji({
         authorId.slice(0, 10));
   const revealName = () => {
     if (reaction.emoji) return;
-    void import("./reaction-name").then(({ reactionName }) =>
-      setName(reactionName(reaction.content)),
+    // A failed load keeps the raw content; the next hover or focus tries
+    // again (see use-reaction-name.ts: only a new document refetches).
+    void import("./reaction-name").then(
+      ({ reactionName }) => setName(reactionName(reaction.content)),
+      (error) => console.warn("The reaction name table didn't load", error),
     );
   };
   return (

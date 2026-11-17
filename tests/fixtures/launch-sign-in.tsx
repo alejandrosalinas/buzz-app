@@ -71,6 +71,11 @@ const identity: FederatedIdentity = {
     }
     publish({ status: "signed-out", failure: null });
   },
+  async signInLink() {
+    return state.status === "signing-in"
+      ? "https://identity.example/v1/login/start"
+      : null;
+  },
   async signOut() {
     publish({ status: "signed-out", email: null, failure: null });
   },

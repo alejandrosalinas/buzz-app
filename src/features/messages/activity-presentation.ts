@@ -1,4 +1,10 @@
-import { useMemo, useRef, useState, useSyncExternalStore } from "react";
+import {
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  useSyncExternalStore,
+} from "react";
 import type { ChannelMessage } from "../relay/contracts";
 import type { RelaySession } from "../relay/session";
 import { requestWork, isSettledWork } from "../agents/request-work";
@@ -424,8 +430,9 @@ export function useActivityPresentation(
 }
 
 /** Each activity projection allocates fresh row values. Reuse the previous ones
- * while they are equal, so memoized rows skip unrelated activity updates. */
-export function useStableRowActivity() {
+ * while they are equal, so memoized rows skip unrelated activity updates. Once
+ * `rows` changes, values for rows it no longer has (trimmed from history) go. */
+export function useStableRowActivity(rows?: readonly { id: string }[]) {
   const [stable] = useState(() => {
     const activities = new Map<string, ActivityRowPresentation>();
     const agents = new Map<string, readonly string[]>();
@@ -469,7 +476,15 @@ export function useStableRowActivity() {
         agents.set(id, next);
         return next;
       },
+      keep(ids: ReadonlySet<string>) {
+        for (const values of [activities, agents])
+          for (const id of values.keys())
+            if (!ids.has(id.replace(/^replied:/, ""))) values.delete(id);
+      },
     };
   });
+  useEffect(() => {
+    if (rows) stable.keep(new Set(rows.map((row) => row.id)));
+  }, [rows, stable]);
   return stable;
 }

@@ -154,6 +154,22 @@ without them), whether they sync and the current instructions revision. A
 hosted agent or one on another device gives its synced instructions when the
 owner can read them here (read only, never creating or moving its config),
 and otherwise `unavailable` saying why.
+
+Each named or listed agent also has `modelSettings`. Codex, Claude Code, goose
+and Pi expose `model` and `effort`; goose and Pi also expose `provider`.
+Each field has a `source`: `configured` includes the saved string `value`,
+`default` inherits the type's defaults, and `recommended` follows
+Buzz's Recommended policy. Defaults and recommendations have no `value`: this
+read does not discover models, resolve aliases, inspect harness files or start
+a process. A type can inherit device preferences before the harness default.
+These are saved agent selections, not proof of an active turn's
+model or effort. Per-conversation choices can differ.
+An invalid field has `source: "unavailable"`. A type without this read contract,
+an unreadable synced config, or an agent hosted elsewhere has
+`modelSettings: { unavailable: "…" }`, even when its instructions are readable.
+The type owns the projection through `AgentType.readModelSettings`; the service
+does not expose its config or infer settings from the type's name or summary.
+
 `team_read` returns the teams Your teams shows in that community, by id or
 exact name, or all of them: name, instructions, members, whether the team syncs
 and its revision. `team_update` submits an unsaved draft of a team's new name
@@ -505,17 +521,30 @@ Interest through the same attention tool code, and refuses an Interest that does
 not exist. The plugin never writes an Interest. While the app is open the watch asks the store to
 follow the pull request's feedback, which it reads through the signed-in `gh`
 CLI once a minute, also while the window is hidden. It wakes the agent when CI
-settles on the head commit, once per commit and result, or when new feedback has
-been quiet for 90 seconds, and once more when the pull request merges or closes,
-so the agent can finish and retire its Interest. Attention delivers the wake
+settles on the head commit, once per commit and result and again when a failure
+is run again, or when new feedback has been quiet for 90 seconds, and once more
+when the pull request merges or closes, so the agent can finish and retire its
+Interest. It also wakes for what nothing else would on the way to merging:
+merge conflicts; checks pending on one commit for 3 hours; an approved, green
+pull request that must catch up with its base; auto-merge turned off, or the
+pull request leaving the merge queue, while it is open; and looking ready to
+merge (approved, checks that block merging passed, no conflicts or unresolved
+review threads, not a draft, auto-merge off). Recovering wakes nothing, a merge
+state GitHub is still working out keeps the last one known, and checks run
+again on the same commit do not make it ready anew. A pull request with no
+checks, or in a repository that requires no review, never looks ready. Wakes
+come at least 5 minutes apart, with news in between joining the next, and at
+most 48 a day; each wake about the open pull request ends with where it
+stands. Attention delivers the wake
 in the conversation where it called the tool: no message is sent, and the agent
 is told its text is data. It quotes the failed checks' names and the new
 comments, line by line, each clipped, with GitHub's links. Agents comment as the
 `gh` account, as their owner does, so GitHub cannot tell them apart: by default
 a comment of that account that starts with 🤖, as an agent's do, wakes nobody,
 and the owner's other comments wake the agent. A watch is saved in Attention on the device and respects its on/off switch. Device-local GitHub watches saved before Attention are dropped, not imported: they name no Interest. It ends when the
-pull request merges or closes, after 20 wakes, after 30 minutes without a
-successful read, or when the agent calls it with `stop: true`.
+pull request merges or closes, after a day without a successful read, or when
+the agent calls it with `stop: true`. After an hour without one, it tells the
+agent once that it keeps trying.
 
 Settings → Plugins → GitHub decides whose feedback wakes agents,
 since anyone can comment on a public pull request. It holds rules, one per
@@ -606,7 +635,11 @@ channel-scoped session. It is the same `plugin` trigger with `from`, the
 conversation it came from, in place of `plugin`, shown in a `<self-handoff>`
 section that names that conversation, says nobody wrote it as a message and that
 its text is data, and that the agent acts only on what its owner asked. Only a
-run's handle hands off.
+run's handle hands off. Message tools refuse self-mentions because the runner
+suppresses the agent's own relay events. The self-handoff receipt confirms
+local queue admission only, not execution or completion. A busy runner queues
+the wake behind its active mention turn; a full queue or unavailable local
+runner returns an error. The wake is not durable across host shutdown.
 
 A plugin gives standing instructions to every turn with
 `ctx.agents.addInstructions({ id, text, when? })` (see
@@ -837,7 +870,11 @@ those agents as `interrupted` and `InterruptedNotice` asks the owner: **Resume**
 reads each mention again and gives it to `run` marked `resumed`, which tells the
 agent to carry on in its saved session; **Don’t resume** forgets them. Either
 answer covers only the agents the notice names, and only Resume gives those
-mentions again: a replay or live delivery of one never does. A turn
+mentions again: a replay or live delivery of one never does. Opening the
+notice's mention count reads each agent's mentions once, the way Resume does
+(`readInterrupted`), and lists them by channel and thread root; one that read
+does not return shows "Details unavailable", and a read that fails is read again
+when the count is next opened. It is a preview: Resume reads them again. A turn
 stays saved until its resumed turn settles, so closing again first loses none.
 goose sessions end with the app, so a resumed goose turn opens a new one and is
 shown the mention's thread, including what it already posted there.
@@ -953,8 +990,9 @@ In streams and forums, nonmember mentions also offer people from the selected
 community directory and, when the viewer can add members, the viewer's own agents
 (`managed` or not) that are not in the channel. Send asks before adding them; selection grants
 no access. A pasted mention of a known profile is offered the same way. A DM can
-name outsiders but never notifies them. Solo chat invitations keep their existing
-rules, including library choices. Shared choice visibility is not permission to
+name outsiders but never notifies them. A Solo chat can too; Solo chat
+invitations keep their existing rules, including library choices, so only the
+viewer's agents are added. Shared choice visibility is not permission to
 grant access.
 
 Regression source: `features/agents/choices.test.ts`, plus the chooser, composer
@@ -1026,13 +1064,13 @@ Two parts of the app decide who you can mention:
 
 The composer accepts these people:
 
-| Where you write               | Who you can mention                                                                      |
-| ----------------------------- | ---------------------------------------------------------------------------------------- |
-| Channel or forum              | Anyone. Before sending, the app asks what to do about people who are not in the channel. |
-| DM                            | Anyone. People outside the DM are named but not notified.                                |
-| Solo chat                     | Chat members, plus your agents (a send adds the tagged ones).                            |
-| New DM, before it is created  | Only the people you chose for the DM.                                                    |
-| Archived or read-only channel | Nobody.                                                                                  |
+| Where you write               | Who you can mention                                                                                                                                 |
+| ----------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Channel or forum              | Anyone. Before sending, the app asks what to do about people who are not in the channel.                                                            |
+| DM                            | Anyone. People outside the DM are named but not notified.                                                                                           |
+| Solo chat                     | Anyone. A send adds your tagged agents; other people outside the chat are named but not notified. Media comments and edits offer chat members only. |
+| New DM, before it is created  | Only the people you chose for the DM.                                                                                                               |
+| Archived or read-only channel | Nobody.                                                                                                                                             |
 
 Everywhere, the composer refuses invalid keys and people known to be archived.
 You can always mention yourself. If archive state is unknown, the mention is
@@ -1142,8 +1180,8 @@ with up to four cached avatar thumbnails and a remainder count. Empty, oversized
 is no partial expansion. Reopen or change the query to refresh changed team
 choices. The resulting draft must fit the existing 32-mention and message-length
 limits. Selection never adds members: ordinary channels retain invite-on-send
-consent, DMs retain reference-only outsiders, and Solo chat admission remains
-unchanged.
+consent, DMs retain reference-only outsiders, and Solo chats add only the
+viewer's available agents.
 
 The picker supports Up/Down navigation, Enter selection and Escape dismissal.
 
@@ -1890,17 +1928,27 @@ Claude implements it from the transcripts Claude Code keeps for the agent's
 workspace: sessions whose first prompt names the agent, plus those this app saved
 for it (prompts from before agents were named), with their subagents' requests.
 Streamed responses repeat their usage on each line, so each request is counted
-once.
+once. A watch's or timer's standalone turn opens with no context, so only the
+app's record of the session it started says it is the agent's. That record is
+kept apart from saved prompts, for 32 days from the session's start, longer than
+Usage reads back, with no limit on how many sessions it holds. Each day's starts
+are saved as one value, and a day's value is removed once all of it is past
+keeping. The snapshot has no `channelId`, and a session from before that
+record was kept is not counted.
 
 Codex finds the agent's threads through app-server by the agent's name in their
 thread names, keeps those whose rollout's developer instructions name the agent's
 pubkey, and reads each rollout's per-response `token_usage_record` entries, adding
-the subagent threads each one spawned. Codex records no cost.
+the subagent threads each one spawned. Codex records no cost. A standalone turn
+runs on an ephemeral thread, which Codex keeps no rollout for, so Usage does not
+count it.
 
 Goose lists the agent's sessions in its workspace through `goose-acp`, as its
 Activity tab does, and reads the usage goose saves on each reply, with goose's
 own cost estimate where it has one. Both count a request's cached tokens in its
-input, which the readers subtract.
+input, which the readers subtract. Goose and Pi also count a standalone turn's
+session, which has no `channelId`; Pi finds it by the same kept record and
+counts it by when it last answered.
 
 All three read only the harness's own session history; none reads Buzz's saved
 agent activity or turn metrics.

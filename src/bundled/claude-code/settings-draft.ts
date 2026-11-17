@@ -2,7 +2,8 @@ import { useState } from "react";
 import type { Config } from "./runtime";
 
 const groups = {
-  model: ["model", "effort"],
+  // Automatic (Recommended) is a model choice too.
+  model: ["model", "effort", "preset"],
   instructions: ["instructions"],
   workspace: ["workspace"],
   scope: ["scope"],

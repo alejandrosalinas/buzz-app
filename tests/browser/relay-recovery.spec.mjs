@@ -16,6 +16,8 @@ test("relay reads recover automatically after the network returns", async ({
   // refused by the broker (503), so saves stay behind the edge page from the
   // outage on.
   let slept = false;
+  // The open channel's own catch-up read was refused.
+  let headRefused = false;
   app.report.relayFailures = [];
   await page.route("**/api/relay/**", async (route) => {
     const url = route.request().url();
@@ -24,6 +26,22 @@ test("relay reads recover automatically after the network returns", async ({
       offline || (slept && pathname.endsWith("/read-state-publish"));
     if (!refused || pathname.endsWith("/session")) return route.fallback();
     app.report.relayFailures.push(url);
+    // The same shape the session treats as a channel's timeline head.
+    if (
+      pathname.endsWith("/primary/query") &&
+      route
+        .request()
+        .postDataJSON()
+        .some(
+          (filter) =>
+            filter["#h"]?.includes("alpha") &&
+            filter.top_level === true &&
+            filter.until === undefined &&
+            filter.depth_limit === undefined &&
+            filter.kinds?.includes(9),
+        )
+    )
+      headRefused = true;
     await route.fulfill({
       status: 403,
       contentType: "text/html",
@@ -56,12 +74,10 @@ test("relay reads recover automatically after the network returns", async ({
     exact: true,
   });
   // Wait for the channel's catch-up read to meet the outage. An earlier
-  // failure, such as presence, can recover once the broker's own relay
-  // socket returns, and jumping the clock on it would leave the notice to
-  // clear while the network is still down.
-  await expect
-    .poll(() => app.report.relayFailures.some((url) => url.endsWith("/query")))
-    .toBe(true);
+  // failure, such as presence or another community's read, can recover once
+  // the broker's own relay socket returns, and jumping the clock on it would
+  // leave the notice to clear while the network is still down.
+  await expect.poll(() => headRefused).toBe(true);
   // A short outage, like waking from sleep, says nothing.
   await expect(notice).toHaveCount(0);
   await page.clock.fastForward(30_000);

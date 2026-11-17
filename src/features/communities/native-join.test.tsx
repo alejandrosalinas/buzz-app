@@ -16,6 +16,7 @@ import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { CommunityDialog } from "./CommunityDialog";
 import { createCommunities } from "./service";
 import { createJoinJournal } from "./join-journal";
+import type { JoinForm } from "./invite-intent";
 import { connectNativeTransport } from "../relay/native";
 import { keypair, nativeSignatureChecks, signed } from "../relay/testing";
 import type { RelayEvent } from "../relay/events";
@@ -148,7 +149,10 @@ afterEach(async () => {
   vi.unstubAllGlobals();
   vi.unstubAllEnvs();
 });
-async function open(invite?: { community: string; code: string }) {
+async function open(
+  invite?: { community: string; code: string; profile?: JoinForm["profile"] },
+  onFormChange?: (form: JoinForm) => void,
+) {
   const ctx = new Context();
   roots.push(ctx);
   const communities = createCommunities(
@@ -168,6 +172,7 @@ async function open(invite?: { community: string; code: string }) {
       mode="join"
       close={close}
       invite={invite}
+      onFormChange={onFormChange}
     />,
   );
   return {
@@ -704,4 +709,77 @@ it("leaves a native lookup the relay never answers, then names a relay it couldn
   );
   expect(field).toHaveAttribute("aria-invalid", "true");
   expect(discovered).toBe(2);
+});
+
+/** A failed publish journals "Alice"; the dialog is left (Back) and returns. */
+async function editedAfterFailedPublish(
+  user: ReturnType<typeof userEvent.setup>,
+) {
+  admitted = true;
+  journal().begin(community);
+  const forms: JoinForm[] = [];
+  const first = await open(undefined, (form) => forms.push(form));
+  // The journal's recovery prefills the address.
+  expect(screen.getByLabelText("Community URL")).toHaveValue(community);
+  await user.click(screen.getByRole("button", { name: "Continue" }));
+  const name = await screen.findByLabelText("Display name");
+  await user.clear(name);
+  await user.type(name, "Alice");
+  publish = async () => {
+    throw new Error("Profile receipt lost");
+  };
+  await user.click(
+    screen.getByRole("button", { name: "Publish profile & open" }),
+  );
+  expect(await screen.findByRole("alert")).toHaveTextContent(
+    "Profile receipt lost",
+  );
+  expect(journal().get(community)?.profile?.name).toBe("Alice");
+  await user.clear(screen.getByLabelText("Display name"));
+  await user.type(screen.getByLabelText("Display name"), "Grace");
+  await first.stop();
+  const form = forms.at(-1);
+  if (!form) throw new Error("No form reported");
+  publish = async () => {};
+  return form;
+}
+
+it("restores a profile edited after a failed publish over the journal's older one", async () => {
+  const user = userEvent.setup();
+  const form = await editedAfterFailedPublish(user);
+  const second = await open({
+    community: form.address,
+    code: form.code,
+    profile: form.profile,
+  });
+  await user.click(screen.getByRole("button", { name: "Continue" }));
+  expect(await screen.findByLabelText("Display name")).toHaveValue("Grace");
+  // Restoring waits for an explicit publish.
+  expect(calls.filter((call) => call.path === "/events")).toHaveLength(1);
+  await user.click(
+    screen.getByRole("button", { name: "Publish profile & open" }),
+  );
+  // The retry publishes the newer edit, not the journal's stale profile.
+  await waitFor(() =>
+    expect(calls.filter((call) => call.path === "/events")).toHaveLength(2),
+  );
+  const retry = calls.filter((call) => call.path === "/events").at(-1)
+    ?.body as { content: string };
+  expect(JSON.parse(retry.content)).toMatchObject({ name: "Grace" });
+  await second.stop();
+});
+
+it("restores the journal's profile when it was recorded after the edit", async () => {
+  const user = userEvent.setup();
+  const form = await editedAfterFailedPublish(user);
+  // A later publish attempt elsewhere recorded a newer profile.
+  journal().begin(community, { name: "Newer", picture: "" });
+  const second = await open({
+    community: form.address,
+    code: form.code,
+    profile: form.profile,
+  });
+  await user.click(screen.getByRole("button", { name: "Continue" }));
+  expect(await screen.findByLabelText("Display name")).toHaveValue("Newer");
+  await second.stop();
 });

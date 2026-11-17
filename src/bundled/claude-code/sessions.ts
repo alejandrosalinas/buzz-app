@@ -56,8 +56,8 @@ export type SessionsOptions = Readonly<{
   now?(): number;
   newId?(): string;
   /** Told of each new session, never a resumed one, with the prompt it was
-   * started with. */
-  started?(sessionId: string, systemPrompt: string): void;
+   * started with, and the label of the one-off turn it was started for. */
+  started?(sessionId: string, systemPrompt: string, once?: string): void;
   /** Called when a conversation's process starts, is sent a message, or
    * stops. */
   onChange?(): void;
@@ -449,10 +449,15 @@ export class AgentSessions {
     let over = false;
     try {
       const live = await abortable(
-        this.start(undefined, undefined, (process) => {
-          spawned = process;
-          if (over) void process.kill();
-        }),
+        this.start(
+          undefined,
+          undefined,
+          (process) => {
+            spawned = process;
+            if (over) void process.kill();
+          },
+          label,
+        ),
         signal,
       );
       if (this.disposed) return { ok: false, error: "Claude was stopped" };
@@ -561,6 +566,7 @@ export class AgentSessions {
     resume: string | undefined,
     key?: string,
     spawned?: (process: ClaudeProcess) => void,
+    once?: string,
   ): Promise<Live> {
     // Read before `launch` reads the settings, so it never describes newer ones.
     const fingerprint = this.options.fingerprint(key);
@@ -570,12 +576,12 @@ export class AgentSessions {
       : await this.fresh(launch, spawned);
     if (fingerprint === this.options.fingerprint(key) || this.disposed) {
       if (!resume && process.sessionId)
-        this.options.started?.(process.sessionId, launch.systemPrompt);
+        this.options.started?.(process.sessionId, launch.systemPrompt, once);
       return { process, fingerprint, used: this.now() };
     }
     // Settings saved while it started: it would work with the old ones.
     void process.kill();
-    return this.start(resume, key, spawned);
+    return this.start(resume, key, spawned, once);
   }
   /** A process for a new session: the spare when it fits, else a new one. */
   private async fresh(

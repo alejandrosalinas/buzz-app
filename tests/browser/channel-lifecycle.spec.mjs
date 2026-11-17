@@ -52,7 +52,7 @@ test("archive confirmation returns focus on cancel and retains the conversation 
       permissionReads.push(filters);
     await route.continue();
   };
-  await page.route("**/api/relay/**/query", permissionRoute);
+  await page.route("**/api/relay/primary/query", permissionRoute);
   const menu = page.getByRole("menu", {
     name: "Actions for Lifecycle channel",
   });
@@ -80,7 +80,7 @@ test("archive confirmation returns focus on cancel and retains the conversation 
         .locator(".buzz-menu-icon svg"),
     ).toHaveCount(1);
   }
-  await page.unroute("**/api/relay/**/query", permissionRoute);
+  await page.unroute("**/api/relay/primary/query", permissionRoute);
   await expect(
     menu.getByRole("menuitem", { name: /^Leave channel/ }),
   ).toHaveCount(0);
@@ -137,6 +137,12 @@ test("archive confirmation returns focus on cancel and retains the conversation 
   await expect(dialog).toHaveCount(0);
   await expect(row).toHaveCount(0);
   await expect(page).toHaveURL(conversationUrl);
+  // The pane names the archived state above its history, with its restore.
+  await expect(
+    page
+      .getByRole("region", { name: "Archived · view only", exact: true })
+      .getByRole("button", { name: "Unarchive", exact: true }),
+  ).toBeVisible();
   await openChannelDetails(page);
   await expect(
     page.getByRole("button", { name: "Unarchive channel", exact: true }),

@@ -36,7 +36,8 @@ const count = (value: unknown) =>
     : undefined;
 
 /** Where Buzz started the session, and what was asked, from its first
- * prompt's context and event. */
+ * prompt's context and event. A watch's or timer's one-off session has no
+ * channel. */
 function buzzStart(messages: readonly Message[]) {
   const first = messages.find(
     (message) =>
@@ -51,11 +52,11 @@ function buzzStart(messages: readonly Message[]) {
       ?.body.match(new RegExp(`^${name}: (.*)$`, "m"))?.[1]
       ?.trim();
   const channelId = field("Channel")?.match(/\(#([^)]+)\)$/)?.[1];
-  if (!channelId) return undefined;
+  if (!channelId && field("Scope") !== "standalone") return undefined;
   const root = field("Session scope") === "thread" && field("Thread root");
   const title = promptMessage(sections).text.split("\n", 1)[0]?.trim();
   return {
-    channelId,
+    ...(channelId ? { channelId } : {}),
     ...(root ? { root } : {}),
     ...(title ? { title } : {}),
   };

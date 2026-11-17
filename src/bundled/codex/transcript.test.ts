@@ -57,7 +57,7 @@ const turn = (patch: Record<string, unknown> = {}) => ({
       tool: "send",
       arguments: { text: "Done" },
       status: "completed",
-      contentItems: [{ type: "inputText", text: "sent" }],
+      contentItems: [{ type: "inputText", text: `sent ${"d".repeat(64)}` }],
       success: true,
     },
     { type: "agentMessage", id: "a1", text: "Fixed." },
@@ -107,7 +107,12 @@ it("shows a Codex turn's request, steering, tools and reply in the shared transc
       paths: ["a.ts"],
       output: "-a\n+b",
     }),
-    expect.objectContaining({ type: "message", text: "Done", posted: true }),
+    expect.objectContaining({
+      type: "message",
+      text: "Done",
+      posted: true,
+      messageId: "d".repeat(64),
+    }),
     expect.objectContaining({ type: "message", text: "Fixed." }),
     expect.objectContaining({ type: "status", text: "Context compaction" }),
   ]);

@@ -38,6 +38,18 @@ explicit dictionary cleanup, and lazy loading for the session-owned catalog.
 The chart grammar, option sanitizer and data-row tables in `src/bundled/charts`
 are adapted from a Charts plugin by Alessandro Joabar (GitHub `sandro-sq`).
 
+The file viewer in `src/bundled/file-viewer` is adapted from a Media viewer
+plugin by Krish Ray (GitHub `LordMelkor`), and its PDF view from a PDF viewer
+plugin by Eric Morgan (GitHub `ericm-square`). PDF pages are drawn with PDF.js
+(`pdfjs-dist`), Copyright Mozilla Foundation, under the Apache License 2.0.
+Code is highlighted with highlight.js (`highlight.js` 11.11.2), Copyright Ivan
+Sagalaev, under the BSD 3-Clause License, through lowlight (`lowlight` 3.3.0),
+Copyright Titus Wormer, under the MIT License. Heading IDs come from
+github-slugger (`github-slugger` 2.0.0), Copyright Dan Flettre, under the ISC
+License. Markdown parts are parsed with `unified` 11.0.5, `remark-parse` 11.0.0
+and `micromark-util-decode-string` 2.0.1, Copyright Titus Wormer and
+contributors, under the MIT License.
+
 OneDrive is a trademark of Microsoft.
 
 ## Harness brand marks

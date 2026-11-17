@@ -13,7 +13,9 @@ import userEvent from "@testing-library/user-event";
 import { afterEach, expect, test, vi } from "vitest";
 import closeRequest from "../../../src-tauri/src/close-request.js?raw";
 import switchTabRequest from "../../../src-tauri/src/switch-tab-request.js?raw";
+import { Context } from "@deepseek-ai/cordis";
 import { PanelWorkspace, usePanelTabTitle } from "./PanelWorkspace";
+import { PanelsService } from "./service";
 import { PanelSubview } from "./PanelSubview";
 import { PanelDock } from "./PanelDock";
 
@@ -102,6 +104,38 @@ function Fixture({
 const tabs = () => screen.getByRole("tablist", { name: "Panel tabs" });
 const tab = (name: string) => within(tabs()).getByRole("tab", { name });
 
+test("a plugin panel names its tab with panels.useTabTitle, and renders without one outside a tab", () => {
+  const ctx = new Context();
+  ctx.provide("pluginStatus", {
+    isActive: () => true,
+    subscribe: () => () => {},
+  });
+  const { useTabTitle } = new PanelsService(ctx);
+  function Build({ id }: { id: string }) {
+    useTabTitle?.(`#${id}`);
+    return <p>Build {id}</p>;
+  }
+  const { rerender } = render(
+    <PanelWorkspace
+      value="ci"
+      select={() => {}}
+      items={[{ id: "ci", label: "CI", content: <Build id="1" /> }]}
+    />,
+  );
+  expect(tab("#1")).toBeInTheDocument();
+  rerender(
+    <PanelWorkspace
+      value="ci"
+      select={() => {}}
+      items={[{ id: "ci", label: "CI", content: <Build id="2" /> }]}
+    />,
+  );
+  expect(tab("#2")).toBeInTheDocument();
+  expect(within(tabs()).queryByRole("tab", { name: "CI" })).toBeNull();
+  cleanup();
+  render(<Build id="3" />);
+  expect(screen.getByText("Build 3")).toBeInTheDocument();
+});
 test("switches retained panels, associates their tabs, and closes inactive or active tabs with focus recovery", async () => {
   const user = userEvent.setup();
   render(

@@ -2,6 +2,7 @@ import { test, expect } from "./fixture.mjs";
 import { frames, open, settle, wheel } from "./timeline.mjs";
 import { generateSecretKey, getPublicKey, finalizeEvent } from "nostr-tools";
 import { animationsSettled } from "./animations.mjs";
+import { markAllRead } from "./reading.mjs";
 
 test.use({
   productionBroker: true,
@@ -118,6 +119,7 @@ test("thread preserves bottom and reading position through activity and composer
     .find((row) => row.content.startsWith("Thread root"));
   for (let i = 0; i < 30; i++) app.reply(root.id, false, false);
   await open(page, app);
+  await markAllRead(page);
   await expect.poll(() => app.relay.hasRoute("primary", "observer")).toBe(true);
   app.serveProfile(key, { name: "Diagnostic Agent", is_agent: true });
   const rootRow = page.locator(
@@ -349,7 +351,7 @@ test.describe("exact history resize ownership", () => {
     const held = new Promise((r) => (release = r)),
       seen = new Promise((r) => (intercepted = r));
     let first = true;
-    await page.route("**/api/relay/**/query", async (route) => {
+    await page.route("**/api/relay/primary/query", async (route) => {
       if (
         !first ||
         !route

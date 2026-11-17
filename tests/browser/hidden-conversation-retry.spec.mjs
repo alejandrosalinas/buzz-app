@@ -33,7 +33,7 @@ test("hidden-conversation exhaustion exposes the existing action and manual retr
       }),
     )
     .toEqual(["connected", "ready", "ready"]);
-  await page.route("**/api/relay/**/query", async (route) => {
+  await page.route("**/api/relay/primary/query", async (route) => {
     if (
       !route
         .request()

@@ -1,4 +1,5 @@
 import { createGifShortcut } from "./gif-shortcut";
+import { createAddEmoji } from "./add-emoji";
 import { EmojiCompletion } from "./EmojiCompletion";
 import { emojiQuery } from "./emoji-query";
 import type { PluginModule } from "../../plugins/api";
@@ -23,6 +24,7 @@ const entries = (content: InlineContent) =>
     : (content.message.emoji ?? []);
 export const apply: PluginModule["apply"] = (ctx) => {
   const gifShortcut = createGifShortcut();
+  const addEmoji = createAddEmoji();
   ctx.inject(["shortcuts"], (scope) => {
     scope.shortcuts.register({
       id: "gif-picker",
@@ -45,6 +47,16 @@ export const apply: PluginModule["apply"] = (ctx) => {
       ),
     });
   });
+  // The pickers link to that card only where it exists and can be opened.
+  ctx.inject(["relay", "settingsCards", "navigation"], (scope) => {
+    const section = `${ctx.pluginOwner?.id ?? "buzz.emoji"}/custom-emoji`;
+    scope.effect(() =>
+      addEmoji.provide(
+        () =>
+          void scope.navigation.open({ version: 1, kind: "settings", section }),
+      ),
+    );
+  });
   ctx.effect(() => {
     if (typeof document === "undefined") return () => {};
     document.addEventListener("copy", copyEmoji);
@@ -60,7 +72,7 @@ export const apply: PluginModule["apply"] = (ctx) => {
   ctx.conversation.registerTool({
     id: "picker",
     title: "Emoji",
-    reactionComponent: createReactionPicker(),
+    reactionComponent: createReactionPicker(addEmoji),
     component: ({
       session,
       scope,
@@ -69,6 +81,7 @@ export const apply: PluginModule["apply"] = (ctx) => {
     }: ComposerToolProps) => (
       <EmojiPicker
         gifShortcut={gifShortcut}
+        addEmoji={addEmoji}
         session={session}
         scope={scope}
         disabled={disabled}

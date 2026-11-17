@@ -711,11 +711,18 @@ export function createSidebarPreferencesStore({
       get sectionRenameWritable() {
         return renameWritable();
       },
-      renameSection(sectionId: string, name: string) {
+      renameSection(sectionId: string, name: string, expectedName?: string) {
         if (!renameWritable() || !renameSection)
           return Promise.reject(new Error("Section rename is unavailable"));
         return writeGroups("Section rename is unavailable", (signal) =>
-          renameSection({ sectionId, name }, signal),
+          renameSection(
+            {
+              sectionId,
+              name,
+              ...(expectedName === undefined ? {} : { expectedName }),
+            },
+            signal,
+          ),
         );
       },
       get sectionCreationWritable() {

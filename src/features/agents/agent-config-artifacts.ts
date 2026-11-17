@@ -153,8 +153,21 @@ export const checkedHead = (event: RelayEvent, expected: Expected) => {
     : ({ kind: "head", event } as const);
 };
 
+/** The preset an agent settings snapshot names, such as "recommended". */
+function settingsPreset(type: string, content: string) {
+  if (type !== "buzz.agent.settings") return undefined;
+  try {
+    const { preset } = JSON.parse(content) as { preset?: unknown };
+    return typeof preset === "string" && preset ? preset : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 /** One revision to sign. `content` is the complete snapshot; `extra` carries
- * preserved client tags (e.g. `team`). */
+ * preserved client tags (e.g. `team`). Agent settings also get a `preset` tag
+ * matching their content, so who is on Automatic can be counted from tags
+ * without reading content; a carried one is never kept. */
 export function artifactTemplate(
   input: Expected & {
     op: "create" | "update" | "restore";
@@ -166,6 +179,7 @@ export function artifactTemplate(
 ) {
   if ((input.op === "create") !== (input.prev === undefined))
     throw new Error("Only a create has no previous revision");
+  const preset = settingsPreset(input.type, input.content);
   return {
     kind: ARTIFACT_KIND,
     created_at: Math.floor(Date.now() / 1000),
@@ -178,7 +192,10 @@ export function artifactTemplate(
       ["title", input.title],
       ["op", input.op],
       ...(input.prev ? [["prev", input.prev]] : []),
-      ...(input.extra ?? []).map((t) => [...t]),
+      ...(preset ? [["preset", preset]] : []),
+      ...(input.extra ?? [])
+        .filter(([name]) => name !== "preset")
+        .map((t) => [...t]),
     ],
   };
 }

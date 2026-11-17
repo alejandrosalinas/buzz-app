@@ -200,7 +200,11 @@ export function useTeamMentions(
         channelId,
         inviteAgents,
         roster,
-        session.agentChoices.snapshot().identities,
+        // A Solo chat already offers the agents it can add; any other agent
+        // would only be a reference, and a team addresses its agents.
+        model.channel?.channelType === "solo"
+          ? []
+          : session.agentChoices.snapshot().identities,
         owner?.joinable(),
       );
     // Only shown team rows read eligibility; a closed chooser builds none.

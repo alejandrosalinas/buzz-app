@@ -125,6 +125,14 @@ test("avatar editing shares the creation picker in responsive dialogs", async ({
       page.getByRole("dialog", { name: "Choose emoji", exact: true }),
     ).toBeVisible();
     await expect(page.locator("em-emoji-picker input")).toBeFocused();
+    // This picker sets no height of its own, so it keeps the default bound
+    // rather than growing to fit every emoji.
+    const pickerHeight = await page
+      .locator("em-emoji-picker")
+      .evaluate((node) => node.getBoundingClientRect().height);
+    expect(pickerHeight).toBeLessThanOrEqual(
+      Math.min(21.75 * Number.parseFloat(fontSize), 950 * 0.4) + 1,
+    );
     await page.keyboard.press("Escape");
     await expect(emoji).toBeFocused();
     await expect(dialog).toBeVisible();

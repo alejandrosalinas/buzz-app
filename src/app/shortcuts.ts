@@ -11,6 +11,10 @@ import {
   selectNewestMessage,
 } from "../features/messages/message-selection";
 import {
+  quotableSelection,
+  quoteSelection,
+} from "../features/messages/selection-quote";
+import {
   composerFocusTarget,
   focusKeyboardTarget,
   paneFocusTarget,
@@ -40,6 +44,7 @@ export const HOST_SHORTCUT_ORDER = {
   replyToMessage: 91,
   markMessageUnread: 92,
   deleteMessage: 93,
+  quoteSelection: 94,
   reload: 95,
 } as const;
 
@@ -297,6 +302,16 @@ function registerMessageShortcuts(shortcuts: ShortcutsService) {
         const selected = selectedMessage();
         if (selected?.list.canDelete(selected.row))
           selected.list.remove(selected.row);
+      },
+    }),
+    shortcuts.registerHost({
+      id: "quote-selection",
+      title: "Quote selected text",
+      binding: { key: "q" },
+      order: HOST_SHORTCUT_ORDER.quoteSelection,
+      when: () => !!quotableSelection(),
+      run: () => {
+        quoteSelection();
       },
     }),
     shortcuts.registerHost({

@@ -112,7 +112,7 @@ export type SidebarSectionRemovalMutator = (
   signal: AbortSignal,
 ) => Promise<SidebarGroups>;
 export type SidebarSectionRenameMutator = (
-  intent: Readonly<{ sectionId: string; name: string }>,
+  intent: Readonly<{ sectionId: string; name: string; expectedName?: string }>,
   signal: AbortSignal,
 ) => Promise<SidebarGroups>;
 export type SidebarSectionOrderMutator = (

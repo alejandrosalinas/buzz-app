@@ -12,15 +12,17 @@ use claude_hooks::ClaudeHooks;
 use protection::ProcessProtection;
 
 use crate::credential_service::{CredentialService, Issued, ProtectedLaunch};
-use crate::host_command::{effective_path, load_login_shell_path, resolve_program};
+use crate::host_command::{
+    effective_path, load_login_shell_environment, login_shell_environment, resolve_program,
+};
 use crate::{with_manager, PluginManager};
 use buzzodz_plugins::{HostProcess, ProcessArtifact};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-use std::ffi::OsStr;
+use std::ffi::{OsStr, OsString};
 #[cfg(unix)]
 use std::os::unix::process::CommandExt as _;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -442,7 +444,7 @@ pub(crate) async fn plugin_host_process_spawn<R: tauri::Runtime>(
             return Err("Use a packaged Buzz build for protected workers; development frontends are mutable".into());
         }
     }
-    load_login_shell_path().await;
+    load_login_shell_environment().await;
     let path = effective_path();
     let controls = if protected {
         Some(
@@ -513,6 +515,7 @@ pub(crate) async fn plugin_host_process_spawn<R: tauri::Runtime>(
     let environment = env.unwrap_or_default();
     set_environment(
         &mut command,
+        login_shell_environment(),
         &path,
         &environment,
         &app.package_info().version.to_string(),
@@ -521,6 +524,11 @@ pub(crate) async fn plugin_host_process_spawn<R: tauri::Runtime>(
         for name in std::env::vars_os()
             .map(|(name, _)| name)
             .chain(environment.keys().map(std::ffi::OsString::from))
+            .chain(
+                login_shell_environment()
+                    .iter()
+                    .map(|(name, _)| name.clone()),
+            )
         {
             let text = name.to_string_lossy();
             if matches!(
@@ -593,24 +601,47 @@ pub(crate) async fn plugin_host_process_spawn<R: tauri::Runtime>(
     )
 }
 
-/// Sets a process's environment: the app's own, less any Buzz identity it was
-/// started with, plus the plugin's `environment` (`None` removes a variable).
+/// Sets a process's environment: the app's own, less any AppImage bundle
+/// paths, plus the `login_shell` variables it forwards, less any Buzz identity
+/// either holds, plus the plugin's `environment` (`None` removes a variable).
 /// `BUZZ_VERSION` is always this app's version, so a command can tell it runs
 /// under Buzz.
 fn set_environment(
     command: &mut Command,
+    login_shell: &[(std::ffi::OsString, std::ffi::OsString)],
     path: &OsStr,
     environment: &HashMap<String, Option<String>>,
     version: &str,
 ) -> Result<(), String> {
-    // Never pass on an identity the app itself was started with.
-    for (name, _) in std::env::vars_os() {
+    // An AppImage's launcher points library, data and program paths into its
+    // bundle for the app alone; a host program loading the bundle's older
+    // OpenSSL fails. First, so nothing below can be undone by it.
+    let bundle = appimage_bundle();
+    if let Some(bundle) = &bundle {
+        for (name, value) in std::env::vars_os() {
+            match without_bundle_paths(&value, bundle) {
+                Some(Some(kept)) => command.env(&name, kept),
+                Some(None) => command.env_remove(&name),
+                None => command,
+            };
+        }
+    }
+    command.envs(login_shell.iter().cloned());
+    // Never pass on an identity the app was started with, even one the user
+    // asked their login shell to forward.
+    for name in std::env::vars_os()
+        .map(|(name, _)| name)
+        .chain(login_shell.iter().map(|(name, _)| name.clone()))
+    {
         let text = name.to_string_lossy();
         if text.starts_with("BUZZ_") || text.starts_with("NOSTR_") {
             command.env_remove(&name);
         }
     }
-    command.env("PATH", path);
+    match bundle.and_then(|bundle| without_bundle_paths(path, &bundle)) {
+        Some(Some(kept)) => command.env("PATH", kept),
+        _ => command.env("PATH", path),
+    };
     for (name, value) in environment {
         if name.is_empty() || name.contains(['=', '\0']) {
             return Err("Invalid environment variable".into());
@@ -622,6 +653,37 @@ fn set_environment(
     }
     command.env("BUZZ_VERSION", version);
     Ok(())
+}
+
+/// The mounted or extracted AppImage this app runs from: `APPDIR` only when
+/// it holds this executable, not one inherited from another AppImage.
+fn appimage_bundle() -> Option<PathBuf> {
+    if !cfg!(target_os = "linux") {
+        return None;
+    }
+    let bundle = PathBuf::from(std::env::var_os("APPDIR")?);
+    // A root `APPDIR` would hold every path, so it names no bundle.
+    (bundle.is_absolute()
+        && bundle.parent().is_some()
+        && std::env::current_exe().ok()?.starts_with(&bundle))
+    .then_some(bundle)
+}
+
+/// `value`'s path list less its entries in the bundle at `appdir`, when it
+/// has any there: `Some(None)` when none of the person's own are left.
+fn without_bundle_paths(value: &OsStr, appdir: &Path) -> Option<Option<OsString>> {
+    let paths: Vec<PathBuf> = std::env::split_paths(value).collect();
+    if !paths.iter().any(|path| path.starts_with(appdir)) {
+        return None;
+    }
+    // Also drops an empty entry, which a launcher's `$APPDIR/usr/lib:$LD_LIBRARY_PATH`
+    // leaves and which would mean the current folder.
+    let kept: Vec<PathBuf> = paths
+        .into_iter()
+        .filter(|path| !path.as_os_str().is_empty() && !path.starts_with(appdir))
+        .collect();
+    let joined = std::env::join_paths(kept).ok()?;
+    Some((!joined.is_empty()).then_some(joined))
 }
 
 /// The verified target stays inside the MCP prefix and the same containment.

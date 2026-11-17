@@ -1639,3 +1639,19 @@ it("opens a plugin page link in message content through the host opener", () => 
   fireEvent.click(screen.getByRole("link", { name: "the entry" }));
   expect(onOpenLink).toHaveBeenCalledWith(href);
 });
+
+it("renders frozen forwarded mention labels without source profiles or notifications", () => {
+  const content = `@A*B* (${other}) and @A*B*`;
+  const html = render(content, {
+    participantProfiles: new Map(),
+    patch: {
+      mentions: [],
+      mentionReferences: [other],
+      mentionLabels: [{ id: other, names: ["A*B*"] }],
+    },
+  });
+  expect(html).toContain("A*B*");
+  expect(html).not.toContain("<em>");
+  expect(html).not.toContain(`(${other})`);
+  expect(html).toContain("data-mention-kind");
+});

@@ -121,6 +121,32 @@ it("leaves the choice to the person after a cancel, and lets them continue", asy
   expect(h.service.signIn).toHaveBeenCalledOnce();
 });
 
+it("copies the sign-in link when the browser didn't open", async () => {
+  const user = userEvent.setup();
+  const h = launchFixture();
+  render(
+    <LaunchSignIn identity={h.service}>
+      <Workspace />
+    </LaunchSignIn>,
+  );
+  h.set({ status: "signed-out" });
+  const copy = await screen.findByRole("button", { name: "Copy sign-in link" });
+  vi.mocked(h.service.signInLink).mockResolvedValueOnce(null);
+  await user.click(copy);
+  expect(await screen.findByRole("alert")).toHaveTextContent(
+    "Couldn’t copy the sign-in link. Try again.",
+  );
+
+  await user.click(copy);
+  expect(
+    await screen.findByText("Sign-in link copied. Paste it into your browser."),
+  ).toBeVisible();
+  expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+  expect(await navigator.clipboard.readText()).toBe(
+    "https://builderlab.example/v1/login/start",
+  );
+});
+
 it("signs in again when a session ends, keeping the app and its focus", async () => {
   const user = userEvent.setup();
   mounts.mockClear();

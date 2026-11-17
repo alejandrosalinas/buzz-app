@@ -50,6 +50,7 @@
     "allow-federated-identity-ask-again",
     "allow-federated-identity-sign-in",
     "allow-federated-identity-cancel-sign-in",
+    "allow-federated-identity-sign-in-link",
     "allow-federated-identity-sign-out",
     "allow-credential-pair-answer",
     "allow-credential-pair-prompt",

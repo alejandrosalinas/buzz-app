@@ -8,6 +8,7 @@ import { bindFocusStatus, soloConversation } from "./status";
 
 export const inject = [
   "accountActions",
+  "communityReader",
   "notifications",
   "sidebarScope",
   "relay",
@@ -42,7 +43,13 @@ export const apply: PluginModule["apply"] = (ctx) => {
       } else if (!release) {
         const ungate = ctx.notifications.gate({
           id: "solo",
-          allows: (target) => soloConversation(relay, target),
+          allows: (target) =>
+            soloConversation(
+              target.kind === "conversation"
+                ? ctx.communityReader.retained(target.scope)
+                : undefined,
+              target,
+            ),
         });
         const unrestrict = ctx.sidebarScope.restrict({
           id: "focus",

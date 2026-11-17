@@ -106,7 +106,11 @@ function pairing() {
   return {
     native,
     props: {
-      communities: { snapshot: () => snapshot, subscribe: () => () => {} },
+      communities: {
+        snapshot: () => snapshot,
+        subscribe: () => () => {},
+        retained: () => undefined,
+      },
       active: () => true,
     },
   };

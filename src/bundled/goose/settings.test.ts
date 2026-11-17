@@ -11,7 +11,15 @@ import {
   syncedSettings as codex,
   syncedSettingsSchema as codexSchema,
 } from "../codex/settings";
-import { DEFAULT_CONFIG as gooseDefaults } from "./runtime";
+import {
+  onRecommended,
+  withRecommended,
+} from "../../features/agents/recommended";
+import { config as readCodex } from "../codex/config";
+import {
+  DEFAULT_CONFIG as gooseDefaults,
+  config as readGoose,
+} from "./runtime";
 import {
   syncedSettings as goose,
   syncedSettingsSchema as gooseSchema,
@@ -78,4 +86,46 @@ it("rejects a remote workspace setting as an unknown key for every agent type", 
       problem: 'Unknown setting "workspace"',
     });
   }
+});
+
+it("keeps Recommended out of synced settings, so older versions never see an unknown key", () => {
+  const recommended = readGoose(
+    withRecommended({ ...gooseDefaults, model: "m", effort: "high" }),
+  );
+  const codexRecommended = readCodex(
+    withRecommended({
+      model: "m",
+      effort: "high",
+      instructions: "",
+      workspace: "~/.buzz",
+      scope: "thread",
+    }),
+  );
+  expect(recommended).toMatchObject({ preset: "recommended" });
+  expect(codexRecommended).toMatchObject({ preset: "recommended" });
+  // What it publishes is what any version accepts: no new key, and no model
+  // settings of its own a synced-level check could hold against it.
+  expect(goose(recommended)).toEqual({
+    model: "",
+    provider: "",
+    effort: "",
+    scope: "thread",
+  });
+  expect(codex(codexRecommended)).toEqual({
+    model: "",
+    effort: "",
+    scope: "thread",
+  });
+  expect(settingsProblem(gooseSchema, goose(recommended))).toBeUndefined();
+  expect(settingsProblem(codexSchema, codex(codexRecommended))).toBeUndefined();
+});
+
+it("keeps this device's mark through a synced revision until one names a model", () => {
+  const local = readGoose(withRecommended(gooseDefaults));
+  const kept = withSyncedSettings(local, goose(local));
+  expect(onRecommended(kept)).toBe(true);
+  // A model chosen elsewhere, or restored from History, takes it off.
+  const chosen = withSyncedSettings(local, { ...goose(local), model: "m" });
+  expect(onRecommended(chosen)).toBe(false);
+  expect(chosen.model).toBe("m");
 });

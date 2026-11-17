@@ -13,6 +13,10 @@ import {
 import { pubkeyOf } from "../../features/agents/membership";
 import { ownerReads } from "../../features/agents/reads";
 import { localStore } from "../../features/agents/state";
+import {
+  PROMPTS_BUDGET,
+  sessionPrompts,
+} from "../../features/agents/session-prompts";
 import type {
   Agent,
   AgentHandle,
@@ -215,7 +219,6 @@ function setup(
       status: "ready",
       session,
       viewer: alice,
-      origin: "https://agent.example",
       scope: `https://agent.example:${alice}`,
     }),
   } as unknown as RelayData;
@@ -359,6 +362,7 @@ function setup(
     memoryRead,
     core,
     data,
+    storage,
     agent,
     workingUntil,
     interruptible,
@@ -2247,47 +2251,30 @@ it.each([true, false])(
   },
 );
 
-it.each([
-  ["https://agent.example", false],
-  ["https://other.example", true],
-])(
-  "refuses an owner's workflow mention where the build restricts %s",
-  async (restricted, runs) => {
-    vi.stubEnv("VITE_BUZZ_WORKFLOW_RESTRICTED_COMMUNITIES", restricted);
-    const relay = keypair();
-    const event = eventDto(
-      signed(relay, {
-        kind: 9,
-        content: "@Claude workflow",
-        tags: [
-          ["h", channel],
-          ["p", self],
-          ["buzz:workflow", "true"],
-          ["buzz:workflow-owner", alice],
-          ["buzz:workflow-mention", self],
-        ],
-      }),
-    );
-    const f = setup([event], { workflowAuthority: relay.pubkey });
-    try {
-      await f.deliver({ type: "mention", event });
-      if (runs) {
-        await vi.waitFor(() =>
-          expect(f.claudes().some((process) => process.prompts.length)).toBe(
-            true,
-          ),
-        );
-      } else {
-        await flush(10);
-        expect(f.claudes()).toHaveLength(0);
-        expect(f.workingUntil).not.toHaveBeenCalled();
-      }
-    } finally {
-      f.runtime.dispose();
-      vi.unstubAllEnvs();
-    }
-  },
-);
+it("gives the workflow reason for its owner's workflow mention that doesn't name it", async () => {
+  const relay = keypair();
+  const event = eventDto(
+    signed(relay, {
+      kind: 9,
+      content: "@Agent workflow",
+      tags: [
+        ["h", channel],
+        ["p", self],
+        ["buzz:workflow", "true"],
+        ["buzz:workflow-owner", alice],
+      ],
+    }),
+  );
+  const f = setup([event], { workflowAuthority: relay.pubkey });
+  try {
+    const ignored = vi.fn();
+    await f.deliver({ type: "mention", event }, { ignored });
+    expect(ignored).toHaveBeenCalledExactlyOnceWith("workflow");
+    expect(f.claudes()).toHaveLength(0);
+  } finally {
+    f.runtime.dispose();
+  }
+});
 
 it.each([false, true])(
   "handles sibling workflow authorization with cancellation=%s",
@@ -2427,6 +2414,30 @@ it("runs a timer as a one-off turn that is never saved", async () => {
   expect(claude?.killed).toBe(true);
   expect(data.get(`buzz.claude-code.sessions.v1:${self}`) ?? "{}").toBe("{}");
   expect(runtime.sessions(self)).toEqual([]);
+});
+
+it("records a one-off turn's session as the agent's, for its usage", async () => {
+  const { deliver, claudes, runtime, storage } = setup();
+  await deliver(timer("daily", "ops"));
+  await flush(10);
+  const claude = claudes().find((process) => process.prompts.length);
+  const args = claude?.options.args ?? [];
+  const session = args[args.indexOf("--session-id") + 1];
+  expect(session).toBeTruthy();
+  expect(runtime.sessionPlaces(self, "~/.buzz")).toEqual([
+    { place: "~/.buzz", saved: [], standalone: [session] },
+  ]);
+  // Later sessions' prompts push its prompt out of the saved prompts, and
+  // it is still the agent's.
+  const prompts = sessionPrompts(storage, "claude-code", self);
+  for (const later of ["l1", "l2", "l3"])
+    await prompts.save(later, [
+      { label: "", text: later.repeat(PROMPTS_BUDGET / 6) },
+    ]);
+  expect(prompts.sessions().map(({ id }) => id)).not.toContain(session);
+  expect(runtime.sessionPlaces(self, "~/.buzz")).toEqual([
+    { place: "~/.buzz", saved: [], standalone: [session] },
+  ]);
 });
 
 it("runs a watch on anyone's event as a one-off turn that sees it as data", async () => {
@@ -3919,8 +3930,12 @@ describe("a conversation given its own folder", () => {
     saved.set(channel, { id: "in-workspace", seen: 100, at: 4 });
     // Usage reads each place's sessions.
     expect(runtime.sessionPlaces(self, "~/.buzz")).toEqual([
-      { place: "~/.buzz", saved: ["in-workspace"] },
-      { place: { folder: "/repos/worktree" }, saved: ["in-folder"] },
+      { place: "~/.buzz", saved: ["in-workspace"], standalone: [] },
+      {
+        place: { folder: "/repos/worktree" },
+        saved: ["in-folder"],
+        standalone: [],
+      },
     ]);
     await runtime.find(
       self,

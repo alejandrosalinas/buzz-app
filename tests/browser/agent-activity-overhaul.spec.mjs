@@ -5,6 +5,7 @@ import {
 } from "./message-actions.mjs";
 import { open, end, wheel, settle } from "./timeline.mjs";
 import { generateSecretKey, finalizeEvent, getPublicKey } from "nostr-tools";
+import { chooseDefaultSkinTone } from "./skin-tone.mjs";
 
 test.use({
   productionBroker: true,
@@ -19,6 +20,7 @@ test("removing a reaction from a tall message preserves the reading position", a
   page,
   app,
 }) => {
+  await chooseDefaultSkinTone(page);
   await open(page, app);
   const event = app.append("primary", "alpha", "Reaction scroll target");
   const row = page.locator(

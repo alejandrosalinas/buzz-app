@@ -48,6 +48,7 @@ import {
 import type { RelaySession } from "../features/relay/session";
 import { ToastNotice } from "../shared/design-system/ui/Toast";
 import styles from "./IdentitySettings.module.css";
+import { useLanding } from "./landing";
 import { writeClipboardText } from "../shared/clipboard";
 import { IdentityBadge } from "./IdentityBadge";
 import { IdentityReflection } from "./IdentityReflection";
@@ -138,6 +139,7 @@ export function IdentitySettings({
   profileSession,
   community,
   memberships = [],
+  landing,
 }: {
   viewer?: string | undefined;
   identity?: Identity | undefined;
@@ -155,7 +157,10 @@ export function IdentitySettings({
   profileSession?: RelaySession | undefined;
   community?: Membership | undefined;
   memberships?: readonly Membership[];
+  /** The visit that opened Identity at Community sign-ins. */
+  landing?: string | undefined;
 }) {
+  const land = useLanding(landing, "#community-sign-ins-title");
   const [signingOut, setSigningOut] = useState(false);
   const [offered, setOffered] = useState(false);
   useEffect(() => {
@@ -402,8 +407,13 @@ export function IdentitySettings({
               )}
             </IdentityBadge>
             {federatedIdentity && (
-              <div className={styles.accounts}>
+              <section
+                ref={land}
+                className={styles.accounts}
+                aria-labelledby="community-sign-ins-title"
+              >
                 <Header
+                  id="community-sign-ins-title"
                   level={3}
                   title="Community sign-ins"
                   subtitle="Accounts you use to verify who you are and access your communities."
@@ -414,7 +424,7 @@ export function IdentitySettings({
                   accountRows={accountRows}
                   memberships={memberships}
                 />
-              </div>
+              </section>
             )}
           </div>
           {copyStatus?.failed && (

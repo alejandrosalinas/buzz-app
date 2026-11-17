@@ -22,7 +22,7 @@ import { communityDestination } from "../communities/destination";
 import { accountConsents } from "../communities/account-consent";
 import { FindCommunity, type JoinConsent } from "../communities/FindCommunity";
 import type { FoundCommunity } from "../communities/find-community";
-import type { createInviteIntent } from "../communities/invite-intent";
+import type { JoinRequest } from "../communities/invite-intent";
 import {
   type Admission,
   admitCommunity,
@@ -170,7 +170,7 @@ export function Welcome({
    * The app's invite intent: a typed address the restore did not admit is
    * handed to the rail's Add-a-community dialog as the gate lifts.
    */
-  invites: Pick<ReturnType<typeof createInviteIntent>, "open">;
+  invites: { open(invite: JoinRequest, viewer: string): void };
   children: ReactNode;
   /**
    * The NIP-FI session as the bundled Builderlab plugin calls it

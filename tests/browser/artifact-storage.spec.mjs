@@ -516,6 +516,144 @@ test("reuses unchanged stored state and indexes after repeat delivery", async ({
   expect(result.imported).toBe(true);
 });
 
+test("saves changing preferences without rewriting unchanged search indexes", async ({
+  page,
+  storageUrl,
+}) => {
+  await open(page, storageUrl);
+  const result = await page.evaluate(async () => {
+    const c = window.artifactTest.open("viewer", "relay", "test", {
+      project: ({ record, preference }) => {
+        const indexes = Array.from({ length: 400 }, (_, i) => ({
+          index: "search",
+          value: `term-${i}`,
+          order: record.id,
+        }));
+        return preference?.reverse ? indexes.reverse() : indexes;
+      },
+    });
+    await c.importBatch({ records: [{ id: "task", local: {} }] });
+    const writes = [];
+    const put = IDBObjectStore.prototype.put;
+    const remove = IDBObjectStore.prototype.delete;
+    IDBObjectStore.prototype.put = function (...args) {
+      if (this.name === "entries") writes.push("put");
+      return put.apply(this, args);
+    };
+    IDBObjectStore.prototype.delete = function (...args) {
+      if (this.name === "entries") writes.push("delete");
+      return remove.apply(this, args);
+    };
+    try {
+      const notices = [];
+      c.subscribe(() => notices.push("saved"));
+      for (let activity = 0; activity < 10; activity++)
+        await c.preferences.update("task", () => ({
+          activity,
+          reverse: activity % 2 === 1,
+        }));
+      return {
+        writes,
+        notices: notices.length,
+        saved: await c.preferences.get("task"),
+        indexed: await c.page({ index: "search", value: "term-200" }),
+      };
+    } finally {
+      IDBObjectStore.prototype.put = put;
+      IDBObjectStore.prototype.delete = remove;
+    }
+  });
+  expect(result.writes).toEqual([]);
+  expect(result.notices).toBe(10);
+  expect(result.saved).toEqual({ activity: 9, reverse: true });
+  expect(result.indexed.entries).toHaveLength(1);
+  expect(result.indexed.entries[0].preference).toEqual(result.saved);
+});
+
+test("changes only affected index keys and rolls back an invalid projection", async ({
+  page,
+  storageUrl,
+}) => {
+  await open(page, storageUrl);
+  const result = await page.evaluate(async () => {
+    const stable = { index: "all", value: "", order: "same" };
+    const c = window.artifactTest.open("viewer", "relay", "test", {
+      project: ({ preference }) => preference.indexes,
+    });
+    await c.importBatch({
+      preferences: [
+        {
+          id: "task",
+          value: {
+            indexes: [stable, { index: "old", value: "old", order: "a" }],
+          },
+        },
+      ],
+    });
+    const writes = [];
+    const put = IDBObjectStore.prototype.put;
+    const remove = IDBObjectStore.prototype.delete;
+    IDBObjectStore.prototype.put = function (value, ...args) {
+      if (this.name === "entries") writes.push(["put", value.index]);
+      return put.call(this, value, ...args);
+    };
+    IDBObjectStore.prototype.delete = function (key, ...args) {
+      if (this.name === "entries") writes.push(["delete", key[2]]);
+      return remove.call(this, key, ...args);
+    };
+    try {
+      await c.preferences.update("task", () => ({
+        indexes: [{ index: "next", value: "new", order: "z" }, stable, stable],
+      }));
+      const changed = {
+        writes: [...writes],
+        old: await c.page({ index: "old", value: "old" }),
+        next: await c.page({ index: "next", value: "new" }),
+        stable: await c.page({ index: "all", value: "" }),
+      };
+      const failure = await c.preferences
+        .update("task", () => ({
+          indexes: [{ index: "invalid", value: "", order: 5 }],
+        }))
+        .then(
+          () => "unexpected",
+          (error) => error.message,
+        );
+      const afterFailure = await c.page({ index: "next", value: "new" });
+      writes.length = 0;
+      await c.preferences.update("task", () => ({ indexes: [] }));
+      return {
+        changed,
+        failure,
+        afterFailure,
+        removed: {
+          writes,
+          next: await c.page({ index: "next", value: "new" }),
+          stable: await c.page({ index: "all", value: "" }),
+        },
+      };
+    } finally {
+      IDBObjectStore.prototype.put = put;
+      IDBObjectStore.prototype.delete = remove;
+    }
+  });
+  expect(result.changed.writes).toEqual([
+    ["delete", "old"],
+    ["put", "next"],
+  ]);
+  expect(result.changed.old.entries).toEqual([]);
+  expect(result.changed.next.entries).toHaveLength(1);
+  expect(result.changed.stable.entries).toEqual(result.changed.next.entries);
+  expect(result.failure).toBe("Invalid artifact index entry");
+  expect(result.afterFailure).toEqual(result.changed.next);
+  expect(result.removed.writes).toEqual([
+    ["delete", "all"],
+    ["delete", "next"],
+  ]);
+  expect(result.removed.next.entries).toEqual([]);
+  expect(result.removed.stable.entries).toEqual([]);
+});
+
 test("commits changed local data, preferences, revisions and availability", async ({
   page,
   storageUrl,

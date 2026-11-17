@@ -198,6 +198,7 @@ it.each([
   expect(failed).toHaveBeenCalledExactlyOnceWith(
     "Delete channel failed",
     error.message,
+    error instanceof ChannelLifecycleUnconfirmed,
   );
   expect(screen.queryByRole("button", { name: "Retry" })).toBeNull();
 });

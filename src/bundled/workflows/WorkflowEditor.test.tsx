@@ -5,6 +5,7 @@ import { cleanup, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, expect, test, vi } from "vitest";
 import { WorkflowEditor } from "./WorkflowEditor";
+import { WorkflowMentionMembers } from "./WorkflowMessageText";
 import { fixtureYaml } from "./fixtures";
 import { parse } from "yaml";
 
@@ -513,4 +514,42 @@ test("opening an existing workflow focuses its heading without running or saving
   await userEvent.setup().keyboard("{Enter}");
   expect(run).not.toHaveBeenCalled();
   expect(save).not.toHaveBeenCalled();
+});
+
+test("warns while editing when the relay limits agent mentions to the owner's runs", () => {
+  const yaml = `name: Review
+trigger:
+  on: reaction_added
+steps:
+  - id: say
+    action: send_message
+    text: "@Builder review this"
+`;
+  const editor = (agentMentions?: "any" | "owner") => (
+    <WorkflowMentionMembers.Provider
+      value={[
+        {
+          pubkey: "a".repeat(64),
+          name: "Builder",
+          label: "Builder",
+          agent: true,
+        },
+      ]}
+    >
+      <WorkflowEditor
+        yaml={yaml}
+        onChange={() => {}}
+        onSave={() => {}}
+        agentMentions={agentMentions}
+      />
+    </WorkflowMentionMembers.Provider>
+  );
+  const { rerender } = render(editor("owner"));
+  expect(
+    screen.getByText(
+      /Agents you mention respond only when you start this workflow/,
+    ),
+  ).toBeInTheDocument();
+  rerender(editor());
+  expect(screen.queryByText(/Agents you mention/)).not.toBeInTheDocument();
 });

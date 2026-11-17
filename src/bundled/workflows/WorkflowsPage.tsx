@@ -5,6 +5,7 @@ import {
   useState,
   type ReactNode,
 } from "react";
+import { useWorkflowAgentMentions } from "./useWorkflowAgentMentions";
 import type { RelayData } from "../../features/relay/service";
 import type { RelaySession } from "../../features/relay/session";
 import type { WorkflowDefinition } from "../../features/workflows/types";
@@ -131,6 +132,7 @@ export function WorkflowCommunity({
   }, [open, detailTarget]);
   const channel = eligible.find((item) => item.id === selected);
   const mentionMembers = useWorkflowMentionMembers(session, channel);
+  const agentMentions = useWorkflowAgentMentions(session.scope);
   useEffect(() => {
     if (
       !selected ||
@@ -340,6 +342,7 @@ export function WorkflowCommunity({
             onSaveReadback={setSaveReadback}
             onDelete={deleteWorkflow}
             viewer={viewer}
+            agentMentions={agentMentions}
             onClose={() => openChannel("")}
           />
         </WorkflowMentionMembers.Provider>

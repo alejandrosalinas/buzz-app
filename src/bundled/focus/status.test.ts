@@ -461,10 +461,20 @@ it("a retry after an earlier Focus expired sets the new telescope", async () => 
 it("recognises only listed Solo conversations", () => {
   const { data } = relay();
   expect(
-    soloConversation(data, { kind: "conversation", channelId: "solo" }),
+    soloConversation(data.snapshot(), {
+      kind: "conversation",
+      channelId: "solo",
+    }),
   ).toBe(true);
   expect(
-    soloConversation(data, { kind: "conversation", channelId: "team" }),
+    soloConversation(data.snapshot(), {
+      kind: "conversation",
+      channelId: "team",
+    }),
   ).toBe(false);
-  expect(soloConversation(data, { kind: "page" })).toBe(false);
+  expect(soloConversation(data.snapshot(), { kind: "page" })).toBe(false);
+  // A community with no retained session lists nothing.
+  expect(
+    soloConversation(undefined, { kind: "conversation", channelId: "solo" }),
+  ).toBe(false);
 });

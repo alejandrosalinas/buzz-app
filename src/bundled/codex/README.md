@@ -130,7 +130,11 @@ no Buzz messages. Set `BUZZ_CODEX_TEST_MODEL` to override its model.
   developer instructions, preserving Codex's native coding prompt.
 - Codex runs with sandbox `danger-full-access` and approval policy `never`: it
   can write outside its workspace, access the network and use git and `gh`.
-  Web search, inherited MCP servers, Apps and plugins are disabled.
+  Web search and inherited MCP servers are disabled. Apps and plugins are
+  disabled unless the agent's **Codex apps and plugins** setting is on for
+  this device; then Codex's own configuration decides, and the agent gets the Apps
+  connected to its ChatGPT sign-in. Protected agents and security reviews never
+  get them.
 - The Activity tab shows conversation status and the latest command/output;
   shared Agent Activity integration is deferred. Assistant text is not posted
   automatically. Final Buzz sends finish normally, consume pending steering and

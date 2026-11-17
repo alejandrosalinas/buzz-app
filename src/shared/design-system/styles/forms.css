@@ -399,6 +399,12 @@
     );
     overflow-wrap: anywhere;
   }
+  /* Options with descriptions wrap within a menu's width, as menus do. */
+  .buzz-select-popup[data-variant="compact"]:has(
+    .buzz-select-option-description
+  ) {
+    max-width: min(20rem, var(--available-width), calc(100vw - var(--space-4)));
+  }
   .buzz-select-indicator {
     flex-shrink: 0;
   }

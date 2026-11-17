@@ -1,7 +1,16 @@
+import { artifactTemplate } from "./agent-config-artifacts";
 import { finalizeEvent, generateSecretKey } from "nostr-tools";
 import { describe, expect, it } from "vitest";
 import type { RelayEvent } from "../relay/events";
-import { AgentConfigStore, type Subject } from "./agent-config";
+import {
+  AgentConfigStore,
+  settingsProblem,
+  syncedSettings,
+  type Subject,
+} from "./agent-config";
+import { fields } from "./community-config";
+import { edited } from "./config-writes";
+import { onRecommended } from "./recommended";
 import { resolveStart, type Mode, type StartInput } from "./agent-start";
 import {
   syncedSettingsSchema,
@@ -308,5 +317,99 @@ describe("team sections", () => {
       state: "unavailable",
       reason: expect.stringContaining('"team-1"'),
     });
+  });
+});
+
+describe("the synced Recommended mark", () => {
+  // Synthetic: an agent on Recommended has blank model settings.
+  const pointer = {
+    ...local,
+    model: "",
+    effort: "",
+    preset: "recommended",
+  } as unknown as Config;
+  const agent = {
+    pubkey: "c".repeat(64),
+    name: "Agent A",
+    type: "claude-code",
+    schema: syncedSettingsSchema,
+  };
+  const published = (config: object, head?: RelayEvent) =>
+    revision(
+      JSON.parse(
+        edited(head, fields("settings", { ...agent, config }, config, head)),
+      ),
+    );
+  const start = (head: RelayEvent, own: Config = local) => {
+    const store = new AgentConfigStore(memoryStorage());
+    install(store, settings, head);
+    // Only settings sync here; instructions stay this device's.
+    const { instructions: _, ...rest } = input(store);
+    const resolved = resolveStart({ ...rest, local: own });
+    if (!resolved.ok) throw new Error(resolved.reason);
+    return resolved.config;
+  };
+
+  it("round-trips beside the settings, where an older strict check never sees it", () => {
+    const head = published(pointer);
+    const body = JSON.parse(head.content);
+    expect(body.preset).toBe("recommended");
+    // What older versions check: only `settings`, strictly. It passes.
+    expect(
+      settingsProblem(syncedSettingsSchema, body.settings),
+    ).toBeUndefined();
+    expect(
+      syncedSettings(head.content, "claude-code", syncedSettingsSchema),
+    ).toMatchObject({ recommended: true });
+    // An agent off Recommended publishes exactly what it did before.
+    expect(JSON.parse(published(local).content)).not.toHaveProperty("preset");
+  });
+
+  it("tags the revision it saves, so Automatic can be counted from tags", () => {
+    const save = (config: object) =>
+      artifactTemplate({
+        channel: "c",
+        type: "buzz.agent.settings",
+        d: "d",
+        op: "create",
+        title: "Agent settings",
+        content: edited(
+          undefined,
+          fields("settings", { ...agent, config }, config),
+        ),
+      }).tags.filter(([name]) => name === "preset");
+    expect(save(pointer)).toEqual([["preset", "recommended"]]);
+    expect(save(local)).toEqual([]);
+  });
+
+  it("shows Automatic on a second device that never had the mark", () => {
+    const config = start(published(pointer), local);
+    expect(onRecommended(config)).toBe(true);
+  });
+
+  it("is cleared by a synced manual model choice, with no flip-back after a blank one", () => {
+    const first = published(pointer);
+    const named = published(
+      { ...pointer, model: "model-a", preset: undefined },
+      first,
+    );
+    expect(JSON.parse(named.content)).not.toHaveProperty("preset");
+    expect(onRecommended(start(named, pointer))).toBe(false);
+    // Back to the harness default from another device: still Custom, even
+    // though this device once had the mark.
+    const blank = published({ ...local, model: "", effort: "" }, named);
+    const config = start(blank, pointer);
+    expect(config).not.toHaveProperty("preset");
+    expect(onRecommended(config)).toBe(false);
+  });
+
+  it("stays Custom when an older version names a model and keeps the mark it doesn't know", () => {
+    // Older writers keep unknown fields (NIP-AP "Editing") but set a model.
+    const head = revision({
+      agentType: "claude-code",
+      settings: { model: "model-a", effort: "", scope: "thread" },
+      preset: "recommended",
+    });
+    expect(onRecommended(start(head, local))).toBe(false);
   });
 });

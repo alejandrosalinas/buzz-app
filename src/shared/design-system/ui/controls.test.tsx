@@ -65,6 +65,18 @@ test.each([
   expect(control).toHaveAttribute("data-icon-size", size);
 });
 
+test("an emoji icon button shows its glyph and keeps its label", () => {
+  render(<IconButton aria-label="Choose default skin tone" emoji="🤙🏽" />);
+  const control = screen.getByRole("button", {
+    name: "Choose default skin tone",
+  });
+  expect(control).toHaveTextContent("🤙🏽");
+  expect(control.querySelector(".buzz-icon-button-emoji")).toHaveAttribute(
+    "aria-hidden",
+    "true",
+  );
+});
+
 test("composer enables submission only for an available non-empty draft", async () => {
   const user = userEvent.setup();
   const submit = vi.fn((event) => event.preventDefault());

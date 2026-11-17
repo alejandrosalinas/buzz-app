@@ -283,7 +283,7 @@ test("primary gallery keeps hidden media and keyboard navigation through thread 
   });
   let reads = 0;
   let released = false;
-  await page.route("**/api/relay/**/query", async (route) => {
+  await page.route("**/api/relay/primary/query", async (route) => {
     if (
       !route
         .request()

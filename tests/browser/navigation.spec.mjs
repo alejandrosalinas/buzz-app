@@ -198,7 +198,7 @@ test("a collapsible sidebar yields to narrow drawer styles during resize", async
   await expect(navigation).toBeVisible();
 });
 
-test("a retired contributed Settings destination fails promptly on Back", async ({
+test("a retired contributed Settings destination promptly reports the plugin turned off on Back", async ({
   page,
   app,
 }) => {
@@ -223,12 +223,19 @@ test("a retired contributed Settings destination fails promptly on Back", async 
   await expect(pairing).toHaveCount(0);
   // The shell toolbar is inert behind the Settings modal; traverse history.
   await page.goBack();
+  const card = page.getByRole("alert");
   await expect(
-    page.getByRole("alert").getByRole("heading", {
-      name: "This page isn’t available",
+    card.getByRole("heading", {
+      name: "Pair mobile is turned off",
       exact: true,
     }),
   ).toBeVisible({ timeout: 3000 });
+  await expect(
+    card.getByRole("button", { name: "Manage plugins", exact: true }),
+  ).toBeVisible();
+  await expect(
+    card.getByRole("button", { name: "Go to Messages" }),
+  ).toHaveCount(0);
 });
 
 test("channel visits, toolbar, browser traversal and Settings sections share one history", async ({

@@ -59,6 +59,8 @@ const registry: SidebarSections = {
 };
 const navigator = {
   open: async () => ({ status: "opened" as const }),
+  subscribe: () => () => {},
+  snapshot: () => ({ entry: { target: contributionTarget } }),
 } as unknown as Navigation;
 declare global {
   interface Window {

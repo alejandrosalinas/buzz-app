@@ -29,3 +29,24 @@
 .item > button {
   width: 100%;
 }
+.trigger {
+  position: relative;
+  display: inline-flex;
+}
+.triggerDot,
+.unreadDot {
+  width: var(--space-2);
+  height: var(--space-2);
+  border-radius: var(--radius-pill);
+  background: var(--text-navigation-unread);
+}
+.triggerDot {
+  position: absolute;
+  inset-block-start: calc(var(--space-1) * -1);
+  inset-inline-end: calc(var(--space-1) * -1);
+  box-shadow: 0 0 0 2px var(--bg-app);
+}
+.unreadDot {
+  display: inline-block;
+  vertical-align: middle;
+}

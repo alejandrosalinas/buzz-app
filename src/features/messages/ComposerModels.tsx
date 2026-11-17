@@ -26,6 +26,7 @@ import {
   useAgentsSnapshot,
 } from "../agents/react";
 import type { MentionModelChoice } from "../agents/react";
+import { onAutomatic } from "../agents/recommended";
 import type { SessionPlace, SessionControlAction } from "../agents/service";
 import type { MentionPicks, RunPick } from "../relay/messages";
 import {
@@ -56,9 +57,40 @@ export type DraftPicks = Readonly<
   Record<string, RunPick & Readonly<{ type?: string }>>
 >;
 
+type ComposerModelsProps = Parameters<typeof ComposerModelsFor>[0];
+
+/** The picker below. An agent on Automatic (Recommended) runs on the
+ * recommendation, so it offers only its session controls, and a pick saved
+ * for it before it switched is left out of what is sent. */
+export function ComposerModels(props: ComposerModelsProps) {
+  const agents = useContext(AgentsContext);
+  // Read again as agents change, such as one switching to or from Automatic.
+  const snapshot = useAgentsSnapshot(agents);
+  const automatic = Object.keys(props.value)
+    .filter((pubkey) => {
+      const agent = snapshot?.agents.find((item) => item.pubkey === pubkey);
+      const type =
+        agent && agents?.types().find((item) => item.key === agent.type);
+      return !!type && onAutomatic(agent.config, type.id);
+    })
+    .join(":");
+  const value = useMemo(
+    () =>
+      automatic
+        ? Object.fromEntries(
+            Object.entries(props.value).filter(
+              ([pubkey]) => !automatic.split(":").includes(pubkey),
+            ),
+          )
+        : props.value,
+    [props.value, automatic],
+  );
+  return <ComposerModelsFor {...props} value={value} />;
+}
+
 /** Model and effort for the next run of each mentioned agent of the viewer's
  * that offers a choice. Session controls act immediately on this conversation. */
-export function ComposerModels({
+function ComposerModelsFor({
   pubkeys,
   profiles,
   media,
@@ -297,11 +329,14 @@ export function ComposerModels({
         : rest,
     );
   };
-  const label = choices.some((choice) => choice.session)
-    ? `Model, effort, and session controls${resettable ? " for this chat" : ""}`
-    : resettable
-      ? "Model and effort for this chat"
-      : "Model and effort for the next run";
+  const label =
+    choices.length > 0 && choices.every((choice) => choice.automatic)
+      ? `Session controls${resettable ? " for this chat" : ""}`
+      : choices.some((choice) => choice.session)
+        ? `Model, effort, and session controls${resettable ? " for this chat" : ""}`
+        : resettable
+          ? "Model and effort for this chat"
+          : "Model and effort for the next run";
   const target = resettable ? "this chat" : "next run";
   const unavailableDescriptionText = unavailableDescription.join(" ");
   return (
@@ -609,58 +644,61 @@ function AgentChoice({
           )
         }
       />
-      {availability && (
+      {/* On Automatic it runs on the recommendation: only the session row. */}
+      {!choice.automatic && availability && (
         <div className={styles.status} aria-hidden="true">
           <span className={styles.statusCopy}>{availability}</span>
         </div>
       )}
-      <div className={styles.controls}>
-        {choice.failed ? (
-          <div className={styles.status}>
-            <span className={styles.statusCopy} role="alert">
-              Model and effort could not be loaded.
-            </span>
-            <Button size="sm" disabled={disabled} onClick={retry}>
-              Retry
-            </Button>
-          </div>
-        ) : runs.efforts.length > 0 ? (
-          <EffortSlider
-            name={choice.name}
-            chatScoped={chatScoped}
-            avatarSrc={avatarSrc}
-            model={model}
-            efforts={runs.efforts}
-            resting={runs.effort}
-            value={selectedEffort}
-            disabled={disabled}
-            pick={(effort) =>
-              pick({
-                ...(selectedModel ? { model: selectedModel } : {}),
-                ...(effort ? { effort } : {}),
-              })
-            }
-            {...(thumb ? { thumb } : {})}
-          />
-        ) : (
-          <div className={styles.status}>
-            <span className={styles.statusIcon}>
-              <CircleDottedIcon size={20} aria-hidden="true" />
-            </span>
-            <div className={styles.statusCopy}>
-              {runs.id && several ? (
-                model()
-              ) : (
-                <span>
-                  {runs.id
-                    ? `${runs.label} · No thinking options`
-                    : "Model unavailable"}
-                </span>
-              )}
+      {!choice.automatic && (
+        <div className={styles.controls}>
+          {choice.failed ? (
+            <div className={styles.status}>
+              <span className={styles.statusCopy} role="alert">
+                Model and effort could not be loaded.
+              </span>
+              <Button size="sm" disabled={disabled} onClick={retry}>
+                Retry
+              </Button>
             </div>
-          </div>
-        )}
-      </div>
+          ) : runs.efforts.length > 0 ? (
+            <EffortSlider
+              name={choice.name}
+              chatScoped={chatScoped}
+              avatarSrc={avatarSrc}
+              model={model}
+              efforts={runs.efforts}
+              resting={runs.effort}
+              value={selectedEffort}
+              disabled={disabled}
+              pick={(effort) =>
+                pick({
+                  ...(selectedModel ? { model: selectedModel } : {}),
+                  ...(effort ? { effort } : {}),
+                })
+              }
+              {...(thumb ? { thumb } : {})}
+            />
+          ) : (
+            <div className={styles.status}>
+              <span className={styles.statusIcon}>
+                <CircleDottedIcon size={20} aria-hidden="true" />
+              </span>
+              <div className={styles.statusCopy}>
+                {runs.id && several ? (
+                  model()
+                ) : (
+                  <span>
+                    {runs.id
+                      ? `${runs.label} · No thinking options`
+                      : "Model unavailable"}
+                  </span>
+                )}
+              </div>
+            </div>
+          )}
+        </div>
+      )}
       {feedback && (
         <span className={`${styles.about} ${styles.controls}`} role="status">
           {feedback}

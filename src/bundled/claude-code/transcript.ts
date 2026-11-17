@@ -5,6 +5,7 @@ import { isMessageTool } from "../../buzz-mcp/session-tools";
 import { readEventBody } from "../../features/agent-harness/turn-records";
 import { readFile } from "../../buzz-mcp/app-client";
 import {
+  postedAs,
   promptMessage,
   promptSections,
   STEER,
@@ -112,7 +113,10 @@ export function claudeTurns(
   /** Messages sent with send, until their result says whether they were posted. */
   const sends = new Map<
     string,
-    { turn: TranscriptTurn; message: { posted?: boolean } }
+    {
+      turn: TranscriptTurn;
+      message: { posted?: boolean; messageId?: string };
+    }
   >();
   let last = 0;
   const turn = (id: string, at: number, partial: boolean) => {
@@ -165,7 +169,8 @@ export function claudeTurns(
     last = at;
     for (const result of results) {
       const sent = sends.get(str(result.tool_use_id));
-      if (sent && !result.is_error) sent.message.posted = true;
+      if (sent && !result.is_error)
+        Object.assign(sent.message, postedAs(text(result.content)));
       else if (sent) {
         sent.turn.items.push({
           id: `${id}:${str(result.tool_use_id)}`,

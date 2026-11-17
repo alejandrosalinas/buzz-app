@@ -30,3 +30,17 @@ it("chooses the closest preset when two deadlines are within tolerance", () => {
   expect(statusDuration(midnight, lateEvening)).toBe("today");
   expect(statusDuration(lateEvening + 3600, lateEvening)).toBe("3600");
 });
+
+it("prefers Today when another preset ends at the same midnight", () => {
+  const midnight = new Date(2026, 8, 25).getTime() / 1000;
+  // "8 hours" saved at 16:00 and "1 hour" saved at 23:00 both end at midnight.
+  expect(statusDuration(midnight, midnight - 28800)).toBe("today");
+  expect(statusDuration(midnight, midnight - 3600)).toBe("today");
+  // On a Sunday "This week" ends at the same midnight as "Today".
+  const monday = new Date(2026, 8, 28).getTime() / 1000;
+  expect(statusDeadline("week", monday - 28800)).toBe(monday);
+  expect(statusDuration(monday, monday - 28800)).toBe("today");
+  expect(statusDuration(monday, monday - 43200)).toBe("today");
+  // Only presets tie: Today at the edge of the tolerance is still custom.
+  expect(statusDuration(midnight + 121, midnight - 6 * 3600)).toBe("custom");
+});

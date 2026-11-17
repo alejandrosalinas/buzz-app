@@ -78,7 +78,8 @@ impl OAuthCallbackHost {
     }
 
     /// NIP-FA binds its handoff secret instead of requiring echoed OAuth state.
-    /// The attempt and all callback values stay inside the native session owner.
+    /// The attempt and all callback values stay inside the native session owner;
+    /// only the authorization page URL is shown, so a person can copy it.
     pub(crate) fn begin_federated(
         &self,
         owner: &str,

@@ -1482,7 +1482,6 @@ function CreateCommunity({
         }
       }}
       size="default"
-      headerGap="compact"
       footerGap="compact"
       initialFocus={() => {
         const input = addressInput.current;

@@ -384,20 +384,91 @@ it("edits in the composer, retains a rejected change and retries the same operat
   fill("Corrected message");
   submit();
   await waitFor(() => expect(h.publications).toHaveLength(1));
-  expect(editor()).toHaveAttribute("contenteditable", "false");
+  // The editor closes on submit; the failure is reported outside it.
+  await waitFor(() => expect(screen.queryByText("Editing message")).toBeNull());
   await act(async () =>
     h.publication(0).result.reject(new PublishRejected("Edit refused")),
   );
-  expect(await screen.findByRole("alert")).toHaveTextContent("Edit refused");
-  expect(editor()).toHaveValue("Corrected message");
+  const status = (
+    await screen.findByText("Message edit: Edit refused")
+  ).closest('[role="status"]');
+  expect(status).toHaveTextContent("Corrected message");
+  fireEvent.click(screen.getByRole("button", { name: "Retry message update" }));
+  await waitFor(() => expect(h.publications).toHaveLength(2));
+  expect(h.publication(1).event.id).toBe(h.publication(0).event.id);
+  await act(async () => h.publication(1).result.resolve());
+  await waitFor(() =>
+    expect(
+      screen.queryByRole("button", { name: "Retry message update" }),
+    ).toBeNull(),
+  );
+  expect(h.owner.session.channels.window("room").rows[0]?.content).toBe(
+    "Corrected message",
+  );
+});
+
+/** Holds animation frames so a failure can land before a deferred close. */
+function holdFrames() {
+  const frames = new Map<number, FrameRequestCallback>();
+  let next = 0;
+  vi.stubGlobal("requestAnimationFrame", (callback: FrameRequestCallback) => {
+    frames.set(++next, callback);
+    return next;
+  });
+  vi.stubGlobal("cancelAnimationFrame", (id: number) => frames.delete(id));
+  return async () => {
+    await act(async () => {
+      for (const [id, callback] of frames) {
+        frames.delete(id);
+        callback(performance.now());
+      }
+      await new Promise((resolve) => setTimeout(resolve));
+    });
+  };
+}
+
+it("keeps the editor open with Retry when an edit fails before it closes", async () => {
+  const h = await fixture();
+  await edit();
+  fill("Corrected message");
+  const release = holdFrames();
+  submit();
+  await waitFor(() => expect(h.publications).toHaveLength(1));
+  await act(async () =>
+    h.publication(0).result.reject(new PublishRejected("Edit refused")),
+  );
+  await release();
+  expect(screen.getByText("Editing message")).toBeVisible();
   fireEvent.click(screen.getByRole("button", { name: "Retry edit" }));
   await waitFor(() => expect(h.publications).toHaveLength(2));
   expect(h.publication(1).event.id).toBe(h.publication(0).event.id);
   await act(async () => h.publication(1).result.resolve());
-  await waitFor(() => expect(screen.queryByText("Editing message")).toBeNull());
-  expect(h.owner.session.channels.window("room").rows[0]?.content).toBe(
-    "Corrected message",
+  await release();
+  expect(screen.queryByText("Editing message")).toBeNull();
+});
+
+it("keeps the delete dialog open with Retry when deletion fails before it closes", async () => {
+  const h = await fixture();
+  fireEvent.click(
+    await screen.findByRole("menuitem", { name: "Delete message" }),
   );
+  const dialog = await screen.findByRole("alertdialog", {
+    name: "Delete message?",
+  });
+  const release = holdFrames();
+  fireEvent.click(screen.getByRole("button", { name: "Delete" }));
+  await waitFor(() => expect(h.publications).toHaveLength(1));
+  await act(async () =>
+    h.publication(0).result.reject(new PublishRejected("Deletion refused")),
+  );
+  await release();
+  expect(dialog).toHaveTextContent("Deletion refused");
+  fireEvent.click(screen.getByRole("button", { name: "Retry" }));
+  await waitFor(() => expect(h.publications).toHaveLength(2));
+  expect(h.publication(1).event.id).toBe(h.publication(0).event.id);
+  await act(async () => h.publication(1).result.resolve());
+  await release();
+  expect(dialog).not.toBeInTheDocument();
 });
 
 it.each(["member", "guest"] as const)(
@@ -441,10 +512,12 @@ it.each(["member", "guest"] as const)(
       await act(async () =>
         h.publication(0).result.reject(new PublishRejected("Deletion refused")),
       );
-      expect(await screen.findByRole("alert")).toHaveTextContent(
-        "Deletion refused",
+      expect(
+        await screen.findByText("Message deletion: Deletion refused"),
+      ).toBeVisible();
+      fireEvent.click(
+        screen.getByRole("button", { name: "Retry message update" }),
       );
-      fireEvent.click(screen.getByRole("button", { name: "Retry" }));
       await waitFor(() => expect(h.publications).toHaveLength(2));
       expect(h.publication(1).event.id).toBe(h.publication(0).event.id);
       await act(async () => h.publication(1).result.resolve());
@@ -879,18 +952,24 @@ it("keeps deletion recovery outside the optimistically removed row", async () =>
   fireEvent.click(screen.getByRole("button", { name: "Delete" }));
   await waitFor(() => expect(h.publications).toHaveLength(1));
   expect(h.owner.session.channels.window("room").rows).toHaveLength(0);
+  // The dialog closes on submit; the failure is reported outside it.
+  await waitFor(() => expect(screen.queryByRole("alertdialog")).toBeNull());
   await act(async () =>
     h.publication(0).result.reject(new PublishRejected("Deletion refused")),
   );
-  expect(await screen.findByRole("alert")).toHaveTextContent(
-    "Deletion refused",
-  );
+  expect(
+    await screen.findByText("Message deletion: Deletion refused"),
+  ).toBeVisible();
   expect(h.owner.session.channels.window("room").rows).toHaveLength(1);
-  fireEvent.click(screen.getByRole("button", { name: "Retry" }));
+  fireEvent.click(screen.getByRole("button", { name: "Retry message update" }));
   await waitFor(() => expect(h.publications).toHaveLength(2));
   expect(h.publication(1).event.id).toBe(h.publication(0).event.id);
   await act(async () => h.publication(1).result.resolve());
-  await waitFor(() => expect(screen.queryByRole("alertdialog")).toBeNull());
+  await waitFor(() =>
+    expect(
+      screen.queryByRole("button", { name: "Retry message update" }),
+    ).toBeNull(),
+  );
 });
 
 it("cancelling deletion never publishes", async () => {
@@ -914,7 +993,6 @@ it("recovers an uncertain deletion after the row and dialog disappear", async ()
   await act(async () =>
     h.publication(0).result.reject(new Error("Connection lost")),
   );
-  fireEvent.click(await screen.findByText("Close", { exact: true }));
   await waitFor(() => expect(screen.queryByRole("alertdialog")).toBeNull());
   expect(screen.queryByRole("button", { name: "Message actions" })).toBeNull();
   fireEvent.click(screen.getByRole("button", { name: "Retry message update" }));
@@ -941,7 +1019,7 @@ it.each(["failed", "unknown"] as const)(
             : new Error("Connection lost"),
         ),
     );
-    fireEvent.click(await screen.findByText("Close", { exact: true }));
+    await waitFor(() => expect(screen.queryByRole("alertdialog")).toBeNull());
     const retry = await screen.findByRole("button", {
       name: "Retry message update",
     });
@@ -974,7 +1052,7 @@ it("retries an owned-agent deletion without its row and disables retry when owne
   await act(async () =>
     h.publication(0).result.reject(new Error("Connection lost")),
   );
-  fireEvent.click(await screen.findByText("Close", { exact: true }));
+  await waitFor(() => expect(screen.queryByRole("alertdialog")).toBeNull());
   expect(h.owner.session.channels.window("room").rows).toHaveLength(0);
   const retry = await screen.findByRole("button", {
     name: "Retry message update",
@@ -1767,7 +1845,7 @@ it("keeps one unread visit until the last channel or thread view closes", async 
   expect(leaveChannel).toHaveBeenCalledTimes(2);
 });
 
-it("keeps a withheld empty-edit deletion recoverable and restores the draft only after retry succeeds", async () => {
+it("restores the draft when an empty-edit deletion is sent and keeps a refusal recoverable", async () => {
   const h = await fixture();
   fireEvent.keyDown(screen.getByRole("menuitem", { name: "Edit message" }), {
     key: "Escape",
@@ -1779,22 +1857,26 @@ it("keeps a withheld empty-edit deletion recoverable and restores the draft only
   submit();
   fireEvent.click(await screen.findByRole("button", { name: "Delete" }));
   await waitFor(() => expect(h.publications).toHaveLength(1));
+  expect(screen.queryByText("Editing message")).toBeNull();
   h.present(false);
   expect(screen.queryByRole("alertdialog")).toBeNull();
   await act(async () =>
     h.publication(0).result.reject(new PublishRejected("Deletion refused")),
   );
-  expect(editor()).toHaveValue("");
   expect(screen.getByText("Message deletion: Deletion refused")).toBeVisible();
   h.present(true);
   expect(screen.queryByRole("alertdialog")).toBeNull();
   fireEvent.click(screen.getByRole("button", { name: "Retry message update" }));
   await waitFor(() => expect(h.publications).toHaveLength(2));
   expect(h.publication(1).event.id).toBe(h.publication(0).event.id);
-  expect(editor()).toHaveValue("");
   await act(async () => h.publication(1).result.resolve());
-  await waitFor(() => expect(screen.queryByText("Editing message")).toBeNull());
+  await waitFor(() =>
+    expect(
+      screen.queryByRole("button", { name: "Retry message update" }),
+    ).toBeNull(),
+  );
   expect(screen.getByRole("textbox")).toHaveValue("Unsent reply draft");
+  expect(screen.queryByText("Editing message")).toBeNull();
   expect(screen.queryByRole("alertdialog")).toBeNull();
 });
 

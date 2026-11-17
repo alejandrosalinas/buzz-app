@@ -110,9 +110,12 @@ test("production WS → broker → mounted UI delivers messages and retries a pa
         established(20001),
     )
     .toBe(true);
-  const socketCount = app.relay.sockets.length;
-  const globalRequests = app.relay.requests.filter(({ filters }) =>
-    filters.every((filter) => !filter["#h"]),
+  const socketCount = app.relay.sockets.filter(
+    (s) => s.community === "primary",
+  ).length;
+  const globalRequests = app.relay.requests.filter(
+    ({ community, filters }) =>
+      community === "primary" && filters.every((filter) => !filter["#h"]),
   ).length;
   // Pause the page clock before the failure and step it in 250 ms slices, so
   // the checks below land inside the 6 s cooldown.
@@ -160,10 +163,13 @@ test("production WS → broker → mounted UI delivers messages and retries a pa
   await page.clock.runFor(3_000);
   await expect(notice(page)).toHaveCount(0);
   expect(heads(app, "alpha")).toHaveLength(calls);
-  expect(app.relay.sockets).toHaveLength(socketCount);
   expect(
-    app.relay.requests.filter(({ filters }) =>
-      filters.every((filter) => !filter["#h"]),
+    app.relay.sockets.filter((s) => s.community === "primary"),
+  ).toHaveLength(socketCount);
+  expect(
+    app.relay.requests.filter(
+      ({ community, filters }) =>
+        community === "primary" && filters.every((filter) => !filter["#h"]),
     ),
   ).toHaveLength(globalRequests);
   // The timeline keeps the browser's own clock from here.
@@ -325,20 +331,19 @@ test("automatic recovery restores an empty paused roster without restarting heal
   await expect(
     page.getByRole("button", { name: "Alpha", exact: true }),
   ).toHaveCount(0);
+  // Every joined community holds its own stream; only the recovering one
+  // (primary) is under test.
+  const primary = (predicate) =>
+    app.relay.requests.filter(
+      ({ community, filters }) =>
+        community === "primary" && filters.some(predicate),
+    );
   const globals = () =>
-    app.relay.requests.filter(({ filters }) =>
-      filters.some(
-        (filter) => filter.kinds.includes(0) || filter.kinds.includes(44100),
-      ),
+    primary(
+      (filter) => filter.kinds.includes(0) || filter.kinds.includes(44100),
     );
-  const observer = () =>
-    app.relay.requests.filter(({ filters }) =>
-      filters.some((filter) => filter.kinds.includes(24200)),
-    );
-  const presence = () =>
-    app.relay.requests.filter(({ filters }) =>
-      filters.some((filter) => filter.kinds.includes(20001)),
-    );
+  const observer = () => primary((filter) => filter.kinds.includes(24200));
+  const presence = () => primary((filter) => filter.kinds.includes(20001));
   await expect.poll(() => globals().length).toBe(2);
   await expect.poll(() => observer().length).toBe(1);
   await expect.poll(() => presence().length).toBe(1);
@@ -354,9 +359,16 @@ test("automatic recovery restores an empty paused roster without restarting heal
       ),
     )
     .toBe(true);
-  const sockets = app.relay.sockets.length;
+  const sockets = app.relay.sockets.filter(
+    (s) => s.community === "primary",
+  ).length;
+  // A badge session opens after primary's first repair, here during its
+  // recovery, and reads its own roster.
   const rosters = () =>
-    app.report.queries.filter(({ filter }) => filter.kinds?.includes(39002));
+    app.report.queries.filter(
+      ({ community, filter }) =>
+        community === "primary" && filter.kinds?.includes(39002),
+    );
   const calls = rosters().length;
   await crossCooldown(page, app);
   // No click: the next scheduled retry after the cooldown reads the roster.
@@ -371,7 +383,9 @@ test("automatic recovery restores an empty paused roster without restarting heal
   ).toBeVisible();
   await expect(notice(page)).toHaveCount(0);
   expect(rosters()).toHaveLength(calls + 1);
-  expect(app.relay.sockets).toHaveLength(sockets);
+  expect(
+    app.relay.sockets.filter((s) => s.community === "primary"),
+  ).toHaveLength(sockets);
   // The first authoritative (empty) roster resets the access generation:
   // activity renews its live-only route. That lifecycle may not restart the
   // healthy profile/membership chat globals.

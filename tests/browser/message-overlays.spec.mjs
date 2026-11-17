@@ -131,28 +131,20 @@ test("video speed options escape the thread and restore focus after selection an
   // Mark this as a reader gesture and capture the resized viewport before
   // assigning the exact clipping geometry used by this paint-order test.
   await scroller.dispatchEvent("wheel", { deltaY: -1 });
-  await trigger.evaluate((button) => {
+  const scrollTop = await trigger.evaluate((button) => {
     const scroller = button.closest("[data-message-scroller]");
-    // WebKit truncates fractional scroll requests. Round the final position so
-    // fractional message heights still reach the same constrained-menu setup.
-    scroller.scrollTop = Math.round(
+    // WebKit truncates fractional scroll requests. Control the whole-pixel
+    // scroll offset; the text-driven trigger position can still be fractional.
+    const target = Math.round(
       scroller.scrollTop +
         button.getBoundingClientRect().top -
         scroller.getBoundingClientRect().top -
         40,
     );
+    scroller.scrollTop = target;
+    return target;
   });
-  await expect
-    .poll(() =>
-      trigger.evaluate((button) => {
-        const scroller = button.closest("[data-message-scroller]");
-        return (
-          button.getBoundingClientRect().top -
-          scroller.getBoundingClientRect().top
-        );
-      }),
-    )
-    .toBeCloseTo(40, 0);
+  await expect(scroller).toHaveJSProperty("scrollTop", scrollTop);
   // The scroll event commits reading intent after geometry changes. Opening
   // the menu first can let a pending render follow the old bottom position.
   await expect(

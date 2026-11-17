@@ -35,7 +35,7 @@ const communities = {
 function landing({
   hosted = false,
   invite = undefined as
-    | { community: string; code: string; requestId: number }
+    | { community: string; code: string; requestId: string }
     | undefined,
 } = {}) {
   const props = {
@@ -163,11 +163,11 @@ it.each([
 it("presents an opened invite and clears it on close", async () => {
   const user = userEvent.setup();
   const { onInviteClose } = landing({
-    invite: { community: "https://relay.example", code: "x", requestId: 7 },
+    invite: { community: "https://relay.example", code: "x", requestId: "7" },
   });
   await screen.findByRole("main");
   await user.click(screen.getByRole("button", { name: "Back" }));
-  expect(onInviteClose).toHaveBeenCalledWith(7);
+  expect(onInviteClose).toHaveBeenCalledWith("7");
 });
 
 it("offers creating a community where hosting is available", async () => {

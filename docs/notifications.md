@@ -84,7 +84,11 @@ checks, not that an OS banner was displayed or read.
   Remote-capable hosts wait for the initial marker merge (bounded observation or
   complete snapshot); local-only hosts wait only for local storage. Failed or
   cancelled observation does not release alerts. Visibility is checked after UI
-  presentation, without publishing read intent.
+  presentation, without publishing read intent. The conversation in view stays
+  quiet unless **Notify while viewing** is on. This running-app policy, not the
+  platform adapter, decides whether an arrival alerts: a platform adapter that
+  suppressed a submitted alert because Buzz was the active application would
+  overrule it and leave that preference without a visible effect.
 - A fresh live arrival can still alert when a channel read or replay cached the
   message first. Content caching does not count as live alert delivery; duplicate
   live copies do not produce additional alerts.
@@ -151,8 +155,11 @@ Tauri response channel is registered before native submission.
 
 Desktop clicks restore/foreground Buzz and then call the existing activation
 closure. macOS installs one app-lifetime delegate at setup and routes body
-clicks by request ID to the running presentation callback. Its foreground completion keeps
-notifications in Notification Center without displaying a banner. Native
+clicks by request ID to the running presentation callback. Its foreground
+completion presents the banner and keeps the Notification Center entry, so an
+alert that passed the running-app policy is visible whether or not Buzz is the
+active application. It never adds the OS sound or badge options: alert audio
+stays app-owned and the Dock badge is projected from unread state. Native
 submission completion reports errors but does not confirm display; successful
 submissions stay registered for clicks. Unbundled development processes do not
 call UserNotifications or borrow Terminal's notification identity. Windows
@@ -199,8 +206,10 @@ Chromium/WebKit fixtures replace only OS/IPC boundaries; tests and native builds
 do not prove actual permission dialogs, appearance, sound or foregrounding.
 Report native checks and real banner/click results separately for each platform.
 
-For macOS, Windows and Linux, manual acceptance includes background and minimized
-Buzz, two distinct message/thread targets, immediate banner click, banner fade
+For macOS, Windows and Linux, manual acceptance includes background, minimized
+and focused Buzz (the last both for an alert outside the conversation in view
+and, with **Notify while viewing** on, for one inside it),
+two distinct message/thread targets, immediate banner click, banner fade
 then Notification Center click, dismissal without navigation, and old-account or
 revoked-access rejection. A macOS pass is not Windows/Linux acceptance.
 
@@ -212,8 +221,10 @@ observed unread messages (including thread replies) or explicit channel-unread
 intent. It is not an exact message count or evidence of complete history. Unknown
 and observed-zero both omit the dot. Existing bounded evidence/read-state owns
 startup and updates; this projection adds no relay reads, network subscriptions,
-or storage. Confirmed channel mutes remove that channel from the projection without
-removing its retained unread evidence, so unmuting can restore the dot. The dot
+or storage. Confirmed channel mutes count as the sidebar row shows them: a muted channel
+lights the dot only for a mention of you or manual unread, and a muted DM still
+lights it. Muting removes no retained unread evidence, so unmuting can restore
+the dot. The dot
 stays clear while mute preferences are unresolved. Personal space,
 account/session changes, access loss and host disposal clear or recompute the
 indicator. Disabling Channels does not stop host ownership. Desktop alert

@@ -1,5 +1,6 @@
 import type { EmojiMartData } from "@emoji-mart/data";
 import type { CustomEmoji } from "../../features/relay/emoji";
+import { defaultSkinTone } from "./skin-tone";
 
 export type EmojiMatch = Readonly<{
   id: string;
@@ -8,7 +9,11 @@ export type EmojiMatch = Readonly<{
   text: string;
   url?: string;
 }>;
-type Standard = EmojiMatch & { terms: readonly string[] };
+type Standard = EmojiMatch & {
+  terms: readonly string[];
+  /** Natives by Mart skin index 1–6, for emoji that have tones. */
+  skins?: readonly string[];
+};
 const normalize = (value: string) => value.toLowerCase().replace(/[-_\s]/g, "");
 let standard: Promise<readonly Standard[]> | undefined;
 
@@ -87,6 +92,9 @@ function loadStandard() {
                 shortcode: emoji.id,
                 name: emoji.name,
                 text: native,
+                ...(emoji.skins.length > 1 && {
+                  skins: emoji.skins.map((skin) => skin.native),
+                }),
                 terms: [
                   emoji.id.toLowerCase(),
                   ...emoji.name.toLowerCase().split(/[-_\s]+/),
@@ -121,16 +129,17 @@ export async function searchEmoji(
   query: string,
   custom: readonly CustomEmoji[],
   limit = Number.POSITIVE_INFINITY,
+  tone = defaultSkinTone(),
 ): Promise<readonly EmojiMatch[]> {
   const native = await loadStandard();
-  return rankEmoji(query, native, custom, limit);
+  return rankEmoji(query, native, custom, limit, tone);
 }
 export function searchCustomEmoji(
   query: string,
   custom: readonly CustomEmoji[],
   limit = Number.POSITIVE_INFINITY,
 ): readonly EmojiMatch[] {
-  return rankEmoji(query, [], custom, limit);
+  return rankEmoji(query, [], custom, limit, 1);
 }
 /** The one match whose shortcode is the typed name; separator-insensitive ranking
  * ties (`:1:` for `-1`) and community/Unicode namesakes are not exact. */
@@ -144,6 +153,7 @@ function rankEmoji(
   native: readonly Standard[],
   custom: readonly CustomEmoji[],
   limit: number,
+  tone: number,
 ): readonly EmojiMatch[] {
   if (!normalize(query)) return [];
   const customCandidates: Standard[] = custom.map(({ shortcode, url }) => ({
@@ -182,5 +192,9 @@ function rankEmoji(
   const bounded = Number.isFinite(limit)
     ? ranked.slice(0, Math.max(0, limit))
     : ranked;
-  return bounded.map(({ terms: _terms, ...item }) => item);
+  // Insert in the picker's saved default tone, like a picker selection.
+  return bounded.map(({ terms: _terms, skins, ...item }) => ({
+    ...item,
+    text: skins?.[tone - 1] ?? item.text,
+  }));
 }

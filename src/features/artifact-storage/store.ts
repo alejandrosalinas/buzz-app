@@ -5,6 +5,7 @@ import type {
   ArtifactCollectionDefinition,
   ArtifactEntry,
   ArtifactImport,
+  ArtifactIndex,
   ArtifactPage,
   ArtifactPageQuery,
   HostArtifactCollection,
@@ -252,7 +253,7 @@ export function createArtifactStore(viewer: string, relay: string) {
       then(
         entries.index("record").getAllKeys(IDBKeyRange.only(key(row.id))),
         (keys) => {
-          for (const old of keys) entries.delete(old);
+          const projected = new Map<string, ArtifactIndex>();
           for (const index of definition.project({
             record: row.record,
             ...(preference !== undefined ? { preference } : {}),
@@ -263,8 +264,21 @@ export function createArtifactStore(viewer: string, relay: string) {
               typeof index.order !== "string"
             )
               throw new Error("Invalid artifact index entry");
-            entries.put({ ...index, scope, collection, id: row.id });
+            projected.set(
+              JSON.stringify([
+                ...prefix,
+                index.index,
+                index.value,
+                index.order,
+                row.id,
+              ]),
+              index,
+            );
           }
+          for (const old of keys)
+            if (!projected.delete(JSON.stringify(old))) entries.delete(old);
+          for (const index of projected.values())
+            entries.put({ ...index, scope, collection, id: row.id });
           next();
         },
       );

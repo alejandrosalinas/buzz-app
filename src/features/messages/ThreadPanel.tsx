@@ -16,6 +16,7 @@ import { moveMessageSelection } from "./message-selection";
 import { MessageSelection } from "./use-message-selection";
 import { MessageEditScope } from "./MessageEditScope";
 import { useMessageSelectionCopy } from "./selection-copy";
+import { SelectionQuote } from "./SelectionQuote";
 import { ReplySummary } from "./ReplySummary";
 import { ReplyBranch } from "./ReplyBranch";
 import { replyTree } from "./reply-tree";
@@ -99,6 +100,9 @@ export type ThreadPanelProps = {
   revealFocus?: boolean | undefined;
   /** With revealSelected: each new value reveals the selected message again. */
   revealRequest?: number | undefined;
+  /** An opening that reads the thread as it opens it names the thread's read
+   * time from before that read; each new request decides the divider again. */
+  unreadRequest?: { readThrough: number } | undefined;
   headerActions?: ReactNode | undefined;
   /** Saved drafts may compose only against a verified matching root. */
   requireReadyRoot?: boolean | undefined;
@@ -230,6 +234,8 @@ function RetainedThreadPanel(props: ThreadPanelProps) {
     messageId: string;
     navigation: PageNavigation | undefined;
     revealRequest: number | undefined;
+    // Settles with its selection, so a retarget's line is decided for it.
+    unreadRequest: ThreadPanelProps["unreadRequest"];
     revision: number;
   };
   const current = useRef<Opening | undefined>(undefined);
@@ -259,6 +265,7 @@ function RetainedThreadPanel(props: ThreadPanelProps) {
     onRetryNavigation,
     revealSelected,
     revealRequest,
+    unreadRequest,
   } = props;
   const retryNavigation = useCallback(() => {
     retrying.current = true;
@@ -293,7 +300,7 @@ function RetainedThreadPanel(props: ThreadPanelProps) {
         prior.revealRequest === revealRequest &&
         !retrying.current
       ) {
-        const next = { ...prior, navigation: undefined };
+        const next = { ...prior, navigation: undefined, unreadRequest };
         current.current = next;
         setOpening(next);
         return;
@@ -310,7 +317,13 @@ function RetainedThreadPanel(props: ThreadPanelProps) {
         }
         if (signal.aborted || current.current !== prior) return;
         if (result === "selected") {
-          const next = { ...prior, messageId, navigation, revealRequest };
+          const next = {
+            ...prior,
+            messageId,
+            navigation,
+            revealRequest,
+            unreadRequest,
+          };
           current.current = next;
           setOpening(next);
           settle();
@@ -350,6 +363,7 @@ function RetainedThreadPanel(props: ThreadPanelProps) {
           messageId,
           navigation,
           revealRequest,
+          unreadRequest,
           revision: (prior?.revision ?? 0) + 1,
         };
         current.current = next;
@@ -376,6 +390,7 @@ function RetainedThreadPanel(props: ThreadPanelProps) {
     navigation,
     revealSelected,
     revealRequest,
+    unreadRequest,
     attempt,
   ]);
   return (
@@ -397,6 +412,7 @@ function RetainedThreadPanel(props: ThreadPanelProps) {
           navigation={opening.navigation}
           routePending={!!routing}
           revealRequest={opening.revealRequest}
+          unreadRequest={opening.unreadRequest}
           selectionFailure={
             failure && { ...failure, pending, retry: retryNavigation }
           }
@@ -427,6 +443,7 @@ function OwnedThreadPanel({
   active = true,
   revealSelected,
   revealFocus,
+  unreadRequest,
   requireReadyRoot,
   onDraftSaved,
   onSend,
@@ -502,6 +519,7 @@ function OwnedThreadPanel({
       active={active}
       revealSelected={revealSelected}
       revealFocus={revealFocus}
+      unreadRequest={unreadRequest}
       requireReadyRoot={requireReadyRoot}
       onDraftSaved={onDraftSaved}
       onSend={onSend}
@@ -535,6 +553,7 @@ function ThreadMessages({
   revealSelected,
   revealFocus,
   revealRequest,
+  unreadRequest,
   requireReadyRoot,
   onDraftSaved,
   onSend,
@@ -568,6 +587,7 @@ function ThreadMessages({
   /** Reveal an inline target without taking focus from its host. */
   revealFocus?: boolean | undefined;
   revealRequest?: number | undefined;
+  unreadRequest?: ThreadPanelProps["unreadRequest"];
   requireReadyRoot?: boolean | undefined;
   onDraftSaved?: ThreadPanelProps["onDraftSaved"];
   onSend?: ThreadPanelProps["onSend"];
@@ -659,7 +679,11 @@ function ThreadMessages({
       }),
     [session.unread, channelId, snapshot.root?.id, messageId],
   );
-  useSyncExternalStore(subscribeUnread, unreadSnapshot, unreadSnapshot);
+  const threadUnread = useSyncExternalStore(
+    subscribeUnread,
+    unreadSnapshot,
+    unreadSnapshot,
+  );
   const [expandedActivity, setExpandedActivity] = useState<ReadonlySet<string>>(
     new Set(),
   );
@@ -726,6 +750,9 @@ function ThreadMessages({
   const readingSettled = useRef(false);
   const [initialPositioned, setInitialPositioned] = useState(false);
   const follow = useRef(true);
+  // Where a placed unread line and the panel's own corrections since left the
+  // scroller; a scroll landing there is not the reader's.
+  const lineTop = useRef<number | undefined>(undefined);
   const resizePosition = useRef<
     | {
         width: number;
@@ -937,6 +964,162 @@ function ThreadMessages({
     !initialPositioned &&
     (!navigation || positionedVisit) &&
     snapshot.status !== "error";
+  // Each ordinary opening starts at the first top-level reply with unread in
+  // its branch, decided once before positioning so reading it does not move
+  // the line. Undefined while deciding.
+  const opening =
+    (rootTarget && !returning ? navigation?.signal : undefined) ??
+    unreadRequest;
+  const [boundary, setBoundary] = useState<{
+    opening?: object | undefined;
+    id?: string | null;
+    failed?: true;
+  }>(() => ({ opening }));
+  if (opening && opening !== boundary.opening) setBoundary({ opening });
+  const unreadBoundary = boundary.id;
+  const placed = useRef<typeof boundary>(undefined);
+  // Focus as this panel opened, and whether pointer or keyboard input has
+  // come since: either way the person owns focus now.
+  const opened = useRef<{ focused: Element | null; interacted?: true }>({
+    focused: null,
+  });
+  useLayoutEffect(() => {
+    opened.current = { focused: document.activeElement };
+    const interact = () => {
+      opened.current.interacted = true;
+    };
+    document.addEventListener("pointerdown", interact, true);
+    document.addEventListener("keydown", interact, true);
+    return () => {
+      document.removeEventListener("pointerdown", interact, true);
+      document.removeEventListener("keydown", interact, true);
+    };
+  }, []);
+  useEffect(() => {
+    // Attention and read marks change without a new thread snapshot.
+    void threadUnread;
+    if (boundary.id !== undefined) {
+      // A failed read decided nothing: decide again once it recovers, unless
+      // the reader has left the latest reply since.
+      if (boundary.failed && snapshot.status === "ready")
+        setBoundary(
+          follow.current
+            ? { opening: boundary.opening }
+            : { opening: boundary.opening, id: null },
+        );
+      return;
+    }
+    if (
+      revealSelected ||
+      returning ||
+      (navigation && !rootTarget) ||
+      (snapshot.status === "ready" && snapshot.root?.id !== messageId)
+    ) {
+      setBoundary({ ...boundary, id: null });
+      return;
+    }
+    if (snapshot.status === "error") {
+      setBoundary({ ...boundary, id: null, failed: true });
+      return;
+    }
+    // Decide once positioning could proceed, but not while an older page this
+    // decision asked for is in flight.
+    if (
+      snapshot.readKind === "older" ||
+      (!(snapshot.root && snapshot.direction) &&
+        (snapshot.status !== "ready" ||
+          (snapshot.direction !== "older" && snapshot.canLoadMore)))
+    )
+      return;
+    // An inactive reader reads nothing. Shown, it is a preview and gets no
+    // line; in a covered tab, it decides once shown, so the line is measured.
+    if (!active) {
+      const shown =
+        scroller.current &&
+        (scroller.current.checkVisibility?.({ visibilityProperty: true }) ??
+          true) &&
+        !scroller.current.closest("[inert]");
+      if (shown) setBoundary({ ...boundary, id: null });
+      return;
+    }
+    // A requested read time outlasts the read that opened the thread: unread
+    // is judged as of that time.
+    const since = unreadRequest?.readThrough;
+    const unread = (row: ChannelMessage): boolean => {
+      const attention = session.unread.attention(channelId, row.id, since);
+      return (
+        attention.unread ||
+        attention.forced ||
+        (tree.children.get(row.id) ?? []).some(unread)
+      );
+    };
+    const first = (tree.children.get(undefined) ?? []).find(unread);
+    // A requested read time follows a read of the whole thread, so a nested
+    // unread reply shows no new count: reveal it, as a reply target is.
+    const nested = (row: ChannelMessage): ChannelMessage | undefined => {
+      for (const child of tree.children.get(row.id) ?? []) {
+        const attention = session.unread.attention(channelId, child.id, since);
+        if (attention.unread || attention.forced) return child;
+        const found = nested(child);
+        if (found) return found;
+      }
+    };
+    const revealed = since !== undefined && first && nested(first);
+    const known =
+      since !== undefined || !!first || (threadUnread?.observedCount ?? 0) > 0;
+    // Resumed rows show at once; with unread known, the line waits for this
+    // view's own rows.
+    if (known && snapshot.resumed) return;
+    // With unread known in the thread, only a thread-wide read reaching the
+    // oldest loaded reply shows that older replies are read: one read alone,
+    // or the viewer's own, does not. A legacy walk reads forward from the
+    // oldest reply.
+    const oldest = snapshot.replies[0];
+    // A reply marked unread is unread whatever the frontier says; one the
+    // store knows of outside the loaded rows is older than them.
+    const loadedUnread = [snapshot.root, ...snapshot.replies].filter(
+      (row) => row && session.unread.attention(channelId, row.id).unread,
+    ).length;
+    const unreadOlder = (threadUnread?.observedCount ?? 0) > loadedUnread;
+    if (
+      known &&
+      snapshot.direction === "older" &&
+      (snapshot.canLoadMore || snapshot.limited) &&
+      oldest &&
+      (unreadOlder ||
+        oldest.createdAt >
+          (since ?? session.unread.threadReadThrough(channelId, messageId)))
+    ) {
+      if (snapshot.canLoadMore) void view.loadMore();
+      // Past the page limit the first unread reply stays unknown.
+      else setBoundary({ ...boundary, id: null });
+      return;
+    }
+    if (revealed) {
+      const ancestors = tree.ancestors(revealed.id);
+      setExpanded((current) =>
+        ancestors.every((id) => current.has(id))
+          ? current
+          : new Set([...current, ...ancestors]),
+      );
+    }
+    setBoundary({ ...boundary, id: first?.id ?? null });
+  }, [
+    boundary,
+    active,
+    unreadRequest,
+    revealSelected,
+    returning,
+    navigation,
+    rootTarget,
+    snapshot,
+    messageId,
+    tree,
+    session.unread,
+    channelId,
+    view,
+    threadUnread,
+  ]);
   const [inlineReveal, setInlineReveal] = useState<AbortSignal>();
   // biome-ignore lint/correctness/useExhaustiveDependencies: each reveal request needs its own signal.
   useEffect(() => {
@@ -1217,7 +1400,8 @@ function ThreadMessages({
       (!positioned.current &&
         !(snapshot.root && snapshot.direction) &&
         (snapshot.status !== "ready" ||
-          (snapshot.direction !== "older" && snapshot.canLoadMore)))
+          (snapshot.direction !== "older" && snapshot.canLoadMore))) ||
+      (!positioned.current && unreadBoundary === undefined)
     )
       return;
     // Native scroll anchoring is off here, so this panel owns ordinary reading
@@ -1279,8 +1463,10 @@ function ThreadMessages({
       reading?.anchor &&
       (reading.scrollTop === element.scrollTop || clamped || reshown) &&
       element.contains(reading.anchor.element)
-    )
+    ) {
       correctScrollTop(element, readingDrift(element, reading.anchor));
+      if (lineTop.current !== undefined) lineTop.current = element.scrollTop;
+    }
     if (olderAnchor.current) {
       const anchor = olderAnchor.current;
       const added = tree
@@ -1290,11 +1476,14 @@ function ThreadMessages({
         const row = [
           ...element.querySelectorAll<HTMLElement>("[data-message-id]"),
         ].find((row) => row.dataset.messageId === anchor.id);
-        if (row)
+        if (row) {
           correctScrollTop(
             element,
             row.getBoundingClientRect().top - anchor.top,
           );
+          if (lineTop.current !== undefined)
+            lineTop.current = element.scrollTop;
+        }
         if (snapshot.status !== "loading") olderAnchor.current = undefined;
       }
     }
@@ -1310,6 +1499,40 @@ function ThreadMessages({
     }
     // Initial positioning waits for one strict page or the legacy bounded walk.
     // subsequent live changes follow only while the reader is at the bottom.
+    // Each opening's line is placed once, when decided.
+    const placing = unreadBoundary !== undefined && placed.current !== boundary;
+    if (placing) placed.current = boundary;
+    const line =
+      placing && unreadBoundary
+        ? element.querySelector<HTMLElement>("[data-new-messages-boundary]")
+        : null;
+    if (line) {
+      correctScrollTop(
+        element,
+        line.getBoundingClientRect().top - element.getBoundingClientRect().top,
+      );
+      // Only a line that leaves the reader at the latest reply follows it.
+      follow.current =
+        element.scrollHeight - element.clientHeight - element.scrollTop < 1;
+      lineTop.current = element.scrollTop;
+      // Like a revealed message, the line is where a first opening's reading
+      // starts, so content-focused navigation moves focus in: from where the
+      // opening or navigation left it, not from where the person has since
+      // moved it. A reopening keeps its own focus handoff.
+      const focused = document.activeElement;
+      if (
+        active &&
+        navigation &&
+        navigation.focus !== "preserve" &&
+        !positioned.current &&
+        !opened.current.interacted &&
+        (!focused ||
+          focused === document.body ||
+          focused === opened.current.focused ||
+          focused === document.getElementById("main-content"))
+      )
+        element.focus({ preventScroll: true });
+    }
     if (follow.current) element.scrollTop = element.scrollHeight;
     positioned.current = true;
     if (!routePending) {
@@ -1349,6 +1572,7 @@ function ThreadMessages({
     selectedOffset,
     tree,
     expanded,
+    boundary,
   ]);
   // The effect above re-pins only when thread data changes. A growing composer
   // shrinks this viewport, late media grows rows and a join error grows the end
@@ -1371,7 +1595,7 @@ function ThreadMessages({
   // Main's retained presentation can be usable before the initial history walk
   // finishes. That is not yet automatic reading intent. Exact revealed targets
   // remain individually readable; later background refreshes keep earned readiness.
-  // biome-ignore lint/correctness/useExhaustiveDependencies: active can complete an exact background visit in the preceding layout effect without changing the snapshot.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: active can complete an exact background visit, and a decided unread line can position one, in the preceding layout effect without changing the snapshot.
   useLayoutEffect(() => {
     if (
       !positioned.current ||
@@ -1387,7 +1611,15 @@ function ThreadMessages({
       readingSettled.current = true;
       readingPositioned(scroller.current);
     }
-  }, [active, navigation, routePending, rootTarget, revealed, snapshot]);
+  }, [
+    active,
+    navigation,
+    routePending,
+    rootTarget,
+    revealed,
+    snapshot,
+    unreadBoundary,
+  ]);
   // An own send can land in the middle of a branch, not at the list bottom.
   // biome-ignore lint/correctness/useExhaustiveDependencies: Retry DOM lookup after history or branch visibility changes.
   useLayoutEffect(() => {
@@ -1423,6 +1655,7 @@ function ThreadMessages({
         element.scrollTop = element.scrollHeight;
       } else if (previous.anchor && element.contains(previous.anchor.element)) {
         correctScrollTop(element, readingDrift(element, previous.anchor));
+        if (lineTop.current !== undefined) lineTop.current = element.scrollTop;
       }
       // Exact-history restoration must start from this corrected geometry,
       // rather than applying the same child-only height delta a second time.
@@ -1538,7 +1771,12 @@ function ThreadMessages({
       previousParent = parent;
       const descendants = branchReplies.get(row.id) ?? [];
       const unreadCount = descendants.filter(
-        (reply) => session.unread.attention(channelId, reply.id).unread,
+        (reply) =>
+          session.unread.attention(
+            channelId,
+            reply.id,
+            unreadRequest?.readThrough,
+          ).unread,
       ).length;
       const unreadLabel = unreadCount
         ? `${unreadCount} new in available replies`
@@ -1616,6 +1854,14 @@ function ThreadMessages({
           className={styles.replyItem}
           data-layout={continuation ? "continuation" : "thread"}
         >
+          {!parent && row.id === unreadBoundary && (
+            <div className={styles.newMessages} data-new-messages-boundary>
+              <hr className="sr-only select-none" aria-label="New messages" />
+              <span className="select-none" aria-hidden="true">
+                New messages
+              </span>
+            </div>
+          )}
           {!parent &&
             row.replyParentId &&
             row.replyParentId !== rootId &&
@@ -1833,7 +2079,10 @@ function ThreadMessages({
             80;
           if (jumpingToLatest.current) return;
           captureResizePosition();
-          follow.current = bottom;
+          if (element.scrollTop !== lineTop.current) {
+            follow.current = bottom;
+            lineTop.current = undefined;
+          }
           setShowJumpToLatest(!bottom);
           if (bottom) setNewMessageCount(0);
           loadOlder();
@@ -2024,6 +2273,7 @@ function ThreadMessages({
       </section>
       {/* After the scroller, so its ref is attached when this registers. */}
       <MessageSelection list={scroller} rows={rows} session={session} />
+      <SelectionQuote list={scroller} />
       {preview && (
         <ChannelJoinNotice
           ready={
@@ -2107,6 +2357,8 @@ function ThreadMessages({
             targetAnchor.current = undefined;
             positioned.current = true;
             follow.current = !selectedParent;
+            // Never count this composer's own send as a new arrival.
+            previousReplies.current.ids.add(id);
             if (selectedParent)
               setExpanded(
                 (current) =>

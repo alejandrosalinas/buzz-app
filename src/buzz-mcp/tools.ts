@@ -164,7 +164,7 @@ export const TOOLS: readonly Tool[] = [
   ),
   tool(
     "agent_read",
-    "Read one of your owner's agents here, yourself included: name, type, instructions, whether they sync and their current revision; a hosted agent or one on another device says its config is unavailable when it can't be read here. agent is its pubkey or exact name; without it, lists them all.",
+    "Read one of your owner's agents here, yourself included: name, type, instructions, sync revision and safe modelSettings. Settings identify configured values, unresolved inherited defaults or Recommended policy; they do not prove an active turn's model. Unreadable or unsupported settings say unavailable. agent is its pubkey or exact name; without it, lists them all.",
     { agent: str },
   ),
   tool(
@@ -180,7 +180,7 @@ export const TOOLS: readonly Tool[] = [
   ),
   tool(
     "send",
-    "Post a message. Without channel, replies in the current thread. A reply goes in its message's thread.",
+    "Post a message. Without channel, replies in the current thread. A reply goes in its message's thread. To wake yourself in another conversation, use self_handoff; self-mentions are refused.",
     {
       text: str,
       path: str,
@@ -211,7 +211,7 @@ export const TOOLS: readonly Tool[] = [
   ),
   tool(
     "self_handoff",
-    "Hand off to yourself in another of your conversations, waking that session with text. thread: any of its messages, outside a Solo chat.",
+    "Queue work for yourself in another conversation. Use this instead of sending yourself a mention. The receipt confirms queue admission, not execution or completion. thread: any of its messages, outside a Solo chat.",
     { channel: str, thread: str, text: str },
     ["channel", "text"],
   ),
@@ -258,6 +258,34 @@ export const TOOLS: readonly Tool[] = [
         description: "Search 20 (max 100), thread 100 (500), channel 30 (200).",
       },
     },
+  ),
+  tool(
+    "search",
+    'Search messages you can read, best match first. The query q matches whole words only, not other forms of a word, and supports "exact phrase", -word and a or b. Without q, the newest messages matching the other fields. Each result has a link to cite it or open it with read.',
+    {
+      q: str,
+      from: { type: "string", description: "me, a name, npub or hex pubkey." },
+      in: {
+        type: "string",
+        description:
+          "A channel's name or ID, @name for your DM with someone, or a Buzz link.",
+      },
+      after: {
+        type: "string",
+        description:
+          "Only messages at or after this time: a date YYYY-MM-DD (from its start, UTC), a UTC time YYYY-MM-DDTHH:MM:SSZ, or a time back from now: 7d, 2w, 3m, 1y.",
+      },
+      before: {
+        type: "string",
+        description:
+          "Only messages before this time, not at it: a date YYYY-MM-DD (from its start, UTC, so that day is left out), a UTC time YYYY-MM-DDTHH:MM:SSZ, or a time back from now: 7d, 2w, 3m, 1y.",
+      },
+      sort: { type: "string", enum: ["relevance", "newest"] },
+      limit: { type: "integer", description: "Default 30, max 100." },
+      page: { type: "integer", description: "From a continue line." },
+    },
+    [],
+    { readOnlyHint: true },
   ),
   tool(
     "channel_list",
@@ -443,6 +471,8 @@ const SEARCH = [9, 40002, 45001, 45003];
 const HEX = /^[0-9a-f]{64}$/;
 /** A NIP-23 long-form note, as `buzz notes` writes it. */
 const NOTE = 30023;
+/** A channel ID, as Buzz links accept it. */
+const CHANNEL_ID = /^[a-zA-Z0-9][a-zA-Z0-9._-]{0,255}$/;
 /** A repository name the community accepts. */
 const REPO = /^[a-zA-Z0-9_-][a-zA-Z0-9._-]{0,63}$/;
 /** Pages of a channel's repository announcements read before giving up. */
@@ -552,7 +582,7 @@ const HANDLERS: Readonly<Record<string, Handler>> = {
         ...(fromRoot && { root: fromRoot }),
       },
     });
-    return root ? `Handed off to thread ${root}.` : `Handed off to ${channel}.`;
+    return `Queued self-handoff to ${channel}${root ? `, thread ${root}` : ""}. No message was posted. Execution has not been confirmed.`;
   },
   async agent_update({ client }, args) {
     if (!client.updateAgent)
@@ -896,6 +926,145 @@ const HANDLERS: Readonly<Record<string, Handler>> = {
     ].join("\n");
   },
 
+  async search(tools, args) {
+    const { client } = tools;
+    args = ignoreBlankFields(args, ["q", "from", "in", "after", "before"]);
+    const q = text(args.q);
+    // 0 is what a model sends for a field it means to leave out.
+    const limit = bound(
+      typeof args.limit === "number" ? args.limit || undefined : undefined,
+      30,
+      100,
+    );
+    const page = (args.page as number) || 1;
+    if (!Number.isSafeInteger(page) || page < 1)
+      throw new Error("page must be a whole number, 1 or more.");
+    const sort = text(args.sort) ?? "relevance";
+    if (sort !== "relevance" && sort !== "newest")
+      throw new Error("sort must be relevance or newest.");
+    const since = searchTime(args, "after");
+    const before = searchTime(args, "before");
+    // `before` excludes its time; the relay's `until` includes it.
+    const until = before === undefined ? undefined : before - 1;
+    if (since !== undefined && until !== undefined && since > until)
+      throw new Error("after must be earlier than before.");
+    const from =
+      args.from === undefined
+        ? undefined
+        : await tools.author(String(args.from).trim().replace(/^@/, ""));
+    const place =
+      args.in === undefined ? undefined : await tools.place(String(args.in));
+    if (!q && !from && !place && since === undefined && until === undefined)
+      throw new Error("Give q, or from, in, after or before.");
+    const newest = !q || sort === "newest";
+    const found = await client.query([
+      {
+        kinds: q ? SEARCH : MESSAGES,
+        limit,
+        ...(q ? { search: q } : {}),
+        // Bridge extensions: a newest-first search, and a later page.
+        ...(q && newest ? { search_sort: "newest" } : {}),
+        ...(page > 1 ? { page } : {}),
+        ...(from ? { authors: [from] } : {}),
+        ...(place ? { "#h": [place.id] } : {}),
+        ...(since !== undefined ? { since } : {}),
+        ...(until !== undefined ? { until } : {}),
+      },
+    ]);
+    // Keep the relay's order: for a search, best match first.
+    const edits = found.length
+      ? await client.query([
+          { kinds: [40003], "#e": found.map((e) => e.id), limit: 500 },
+        ])
+      : [];
+    const latest = new Map(edited([...found, ...edits]).map((e) => [e.id, e]));
+    const hits = found.flatMap((event) => latest.get(event.id) ?? []);
+    // Newest first if this community supports it (it advertises
+    // `buzz-search-sort`). An older relay ignores `search_sort` and ranks by
+    // relevance; that shows here only when the page is out of date order, so
+    // one hit, or a relevance page that happens to be in date order, is still
+    // called newest first.
+    const unsorted =
+      q &&
+      newest &&
+      hits.some(
+        (event, i) =>
+          i > 0 && event.created_at > (hits[i - 1] as BuzzEvent).created_at,
+      );
+    const order = !newest
+      ? "best match first"
+      : unsorted
+        ? "best match first (this community can't sort a search by newest)"
+        : "newest first";
+    const owners = hits.flatMap((event) => tag(event, "auth") ?? []);
+    const names = await tools.names([
+      ...(from ? [from] : []),
+      ...hits.map((e) => e.pubkey),
+      ...owners,
+    ]);
+    // Always the key: anyone can take another person's display name.
+    const who = (key: string) => {
+      const name = names.get(key);
+      return name ? `${key} ${JSON.stringify(name)}` : key;
+    };
+    const asked = [
+      q && JSON.stringify(q),
+      from && `from ${who(from)}`,
+      place && `in ${place.label}`,
+      text(args.after) && `after ${text(args.after)}`,
+      text(args.before) && `before ${text(args.before)}`,
+    ]
+      .filter(Boolean)
+      .join(" ");
+    const scope =
+      "Searched with your own access: channels you're in and open channels, not other people's private channels or DMs.";
+    if (!hits.length)
+      return `No messages${page > 1 ? ` on page ${page}` : ""} for ${asked}.\n${scope}`;
+    const places = await tools.places(hits.flatMap((e) => tag(e, "h") ?? []));
+    const words = q?.toLowerCase().match(/[\p{L}\p{N}]+/gu) ?? [];
+    const lines = hits.map((event, i) => {
+      const channel = tag(event, "h");
+      const thread = threadReference(event)?.rootId;
+      const owner = tag(event, "auth");
+      const link = channel
+        ? `buzz://message?${new URLSearchParams({ channel, id: event.id, ...(thread ? { thread } : {}) })}`
+        : event.id;
+      const meta = [
+        link,
+        channel && (places.get(channel) ?? channel),
+        `from ${who(event.pubkey)}`,
+        owner && `claimed owner ${who(owner)}`,
+        time(event.created_at),
+        thread && "in a thread",
+      ].filter(Boolean);
+      const body = snippet(
+        event.content.replace(/\s+/g, " ").trim(),
+        words,
+        400,
+      );
+      return `[${(page - 1) * limit + i + 1}] ${meta.join(" · ")}\n    ${body}`;
+    });
+    const more = {
+      ...(q ? { q } : {}),
+      ...(from ? { from } : {}),
+      ...(place ? { in: place.id } : {}),
+      // Resolved, so a span like 7d does not move between pages.
+      ...(since !== undefined ? { after: utc(since) } : {}),
+      ...(before !== undefined ? { before: utc(before) } : {}),
+      ...(q && newest ? { sort } : {}),
+      limit,
+      page: page + 1,
+    };
+    return [
+      `${hits.length} result${hits.length === 1 ? "" : "s"} for ${asked}, ${order}.`,
+      scope,
+      ...lines,
+      found.length >= limit
+        ? `More may match; continue with ${JSON.stringify(more)}`
+        : "No more matches.",
+    ].join("\n");
+  },
+
   async channel_list(tools, args) {
     const { client } = tools;
     const ids = new Set<string>();
@@ -1067,22 +1236,7 @@ const HANDLERS: Readonly<Record<string, Handler>> = {
     const { client } = tools;
     const to = list(args.to).map(pubkey);
     if (!to.length) throw new Error("to is required.");
-    const people = new Set([client.pubkey, ...to]);
-    const find = async () =>
-      (
-        await client.query([
-          { kinds: [39000], "#p": [client.pubkey], "#t": ["dm"], limit: 500 },
-        ])
-      ).find((event) => {
-        const members = new Set(
-          event.tags.filter((t) => t[0] === "p").map((t) => t[1]),
-        );
-        return (
-          members.size === people.size &&
-          [...people].every((key) => members.has(key))
-        );
-      });
-    let found = await find();
+    let found = await tools.findDm(to);
     if (!found) {
       await client.publish({
         kind: 41010,
@@ -1092,7 +1246,7 @@ const HANDLERS: Readonly<Record<string, Handler>> = {
       // The relay creates the channel's metadata just after answering.
       for (let tries = 0; !found && tries < 5; tries++) {
         if (tries) await new Promise((resolve) => setTimeout(resolve, 400));
-        found = await find();
+        found = await tools.findDm(to);
       }
     }
     const channel = found && tag(found, "d");
@@ -1634,6 +1788,12 @@ async function post(
   const files = await tools.attach(list(args.files));
   const content = `${(await tools.body(args, !files.links)) ?? ""}${files.links}`;
   const mentions = await tools.mentions(channel, content, list(args.mentions));
+  // The runner suppresses every relay event authored by this agent. A post
+  // receipt must not suggest that a self-mention scheduled another session.
+  if (mentions.includes(tools.client.pubkey))
+    throw new Error(
+      "Self-mentions do not wake your other sessions. Nothing was posted. Use self_handoff with channel, text, and thread outside a Solo chat.",
+    );
   const event = await tools.client.publish({
     kind: 9,
     content,
@@ -1734,6 +1894,100 @@ class Tools {
       { kinds: [39000], "#d": [channel], limit: 1 },
     ]);
     return metadata;
+  }
+
+  /** Your DM with exactly `people`, if it exists; never creates one. */
+  async findDm(people: readonly string[]) {
+    const wanted = new Set([this.client.pubkey, ...people]);
+    const dms = await this.client.query([
+      { kinds: [39000], "#p": [this.client.pubkey], "#t": ["dm"], limit: 500 },
+    ]);
+    return dms.find((event) => {
+      const members = new Set(
+        event.tags.filter((t) => t[0] === "p").map((t) => t[1]),
+      );
+      return (
+        members.size === wanted.size &&
+        [...wanted].every((key) => members.has(key))
+      );
+    });
+  }
+
+  /** The channel `value` names: a Buzz link, @person for your DM with them,
+   * or a channel's ID or name (optionally #name). */
+  async place(value: string) {
+    const v = value.trim();
+    const link = parseBuzzLink(v);
+    if (link?.format === "legacy") return this.placeOf(link.channelId);
+    if (v.startsWith("@")) {
+      const person = await this.author(v.slice(1));
+      const dm =
+        person === this.client.pubkey ? undefined : await this.findDm([person]);
+      if (!dm) throw new Error(`You have no DM with ${v.slice(1)}.`);
+      return this.placeOf(tag(dm, "d") as string);
+    }
+    const name = v.replace(/^#/, "");
+    if (name === v && CHANNEL_ID.test(v) && (await this.metadata(v)))
+      return this.placeOf(v);
+    const lower = name.toLowerCase();
+    const named: BuzzEvent[] = [];
+    const similar: BuzzEvent[] = [];
+    await this.scan({ kinds: [39000] }, (event) => {
+      const channel = tag(event, "name")?.toLowerCase();
+      if (channel === lower) named.push(event);
+      else if (channel?.includes(lower) && similar.length < 5)
+        similar.push(event);
+      return true;
+    });
+    const rows = (events: BuzzEvent[]) =>
+      events.map((e) => `${tag(e, "d")} #${tag(e, "name")}`).join("\n");
+    if (named.length > 1)
+      throw new Error(
+        `${named.length} channels are named ${name}; give its ID.\n${rows(named)}`,
+      );
+    if (!named[0])
+      throw new Error(
+        `No channel you can see is named ${name}.${similar.length ? `\nSimilar:\n${rows(similar)}` : ""}`,
+      );
+    return this.placeOf(tag(named[0], "d") as string);
+  }
+
+  async placeOf(id: string) {
+    return { id, label: (await this.places([id])).get(id) ?? id };
+  }
+
+  /** Labels for `channels`: #name, or "DM with" its other members. */
+  async places(channels: readonly string[]) {
+    const wanted = [...new Set(channels)];
+    const labels = new Map<string, string>();
+    if (!wanted.length) return labels;
+    const found = await this.client.query([
+      { kinds: [39000], "#d": wanted, limit: wanted.length },
+    ]);
+    const others = (event: BuzzEvent) =>
+      event.tags
+        .filter((t) => t[0] === "p" && t[1] && t[1] !== this.client.pubkey)
+        .map((t) => t[1] as string);
+    const dms = found.filter((event) => tag(event, "t") === "dm");
+    const names = await this.names(dms.flatMap(others));
+    for (const event of found) {
+      const id = tag(event, "d");
+      if (!id) continue;
+      const name = tag(event, "name");
+      labels.set(
+        id,
+        tag(event, "t") === "dm"
+          ? `DM with ${
+              others(event)
+                .map((key) => names.get(key) ?? key)
+                .join(", ") || "yourself"
+            }`
+          : name
+            ? `#${name}`
+            : id,
+      );
+    }
+    return labels;
   }
 
   async details(channel: string) {
@@ -2445,15 +2699,20 @@ function searchMemory(entries: readonly Memory[], q: string) {
   ].join("\n");
 }
 
-/** `line`, cut to SEARCH_LINE_CHARS around its first match. */
-function snippet(line: string, words: readonly string[]) {
-  if (line.length <= SEARCH_LINE_CHARS) return line;
+/** `line`, cut to `chars` around its first match, or its start without one. */
+function snippet(
+  line: string,
+  words: readonly string[],
+  chars = SEARCH_LINE_CHARS,
+) {
+  if (line.length <= chars) return line;
   const lower = line.toLowerCase();
   const at = Math.min(
     ...words.map((word) => lower.indexOf(word)).filter((index) => index >= 0),
   );
-  const start = Math.max(0, Math.min(at - 40, line.length - SEARCH_LINE_CHARS));
-  const end = start + SEARCH_LINE_CHARS;
+  const start =
+    at === Infinity ? 0 : Math.max(0, Math.min(at - 40, line.length - chars));
+  const end = start + chars;
   return `${start ? "…" : ""}${line.slice(start, end)}${end < line.length ? "…" : ""}`;
 }
 
@@ -2808,6 +3067,38 @@ function unixTime(args: Args, key: string) {
       `${key} must be Unix seconds: a whole number, not milliseconds.`,
     );
   return value as number;
+}
+
+const AGO: Record<string, number> = { d: 1, w: 7, m: 30, y: 365 };
+
+/** Unix `seconds` as a UTC time searchTime reads back. */
+const utc = (seconds: number) =>
+  new Date(seconds * 1000).toISOString().replace(/\.\d{3}Z$/, "Z");
+
+/** `args[key]` as Unix seconds: the start of a UTC date (YYYY-MM-DD), a UTC
+ * time (YYYY-MM-DDTHH:MM:SSZ), or a span back from now (7d, 2w, 3m, 1y; a
+ * month is 30 days). */
+function searchTime(args: Args, key: string) {
+  const value = text(args[key]);
+  if (value === undefined) return undefined;
+  const ago = /^(\d{1,4})([dwmy])$/i.exec(value);
+  if (ago)
+    return (
+      Math.floor(Date.now() / 1000) -
+      Number(ago[1]) * (AGO[(ago[2] as string).toLowerCase()] as number) * 86400
+    );
+  const day = /^\d{4}-\d{2}-\d{2}$/.test(value);
+  const ms = Date.parse(day ? `${value}T00:00:00Z` : value);
+  // The round trip rejects other forms and impossible dates such as 02-30.
+  if (
+    !(day || /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$/.test(value)) ||
+    Number.isNaN(ms) ||
+    utc(ms / 1000) !== (day ? `${value}T00:00:00Z` : value)
+  )
+    throw new Error(
+      `${key} must be a date (YYYY-MM-DD), a UTC time (YYYY-MM-DDTHH:MM:SSZ) or a span back from now (7d, 2w, 3m, 1y).`,
+    );
+  return ms / 1000;
 }
 
 /** The checks Buzz makes on a channel's name, description and lifetime. */

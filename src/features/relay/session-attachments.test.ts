@@ -213,3 +213,27 @@ it.each(["dispose", "clear"])(
     await rejected;
   },
 );
+
+it("forwards an accepted local message again before its relay echo", async () => {
+  const h = setup();
+  await h.membership();
+  const id = h.session.messages.send("c", "Copy this");
+  await vi.waitFor(() => expect(h.publish).toHaveBeenCalledOnce());
+  const { foldMessages } = await import("./fold");
+  const first = h.publish.mock.calls[0]?.[0];
+  assert.exists(first);
+  const row = foldMessages("c", viewer.pubkey, [first])[0];
+  assert.exists(row);
+  expect(row.id).toBe(id);
+  h.session.messages.forward("c", row, "Viewer", "");
+  await vi.waitFor(() => expect(h.publish).toHaveBeenCalledTimes(2));
+  const forwarded = h.publish.mock.calls[1]?.[0];
+  assert.exists(forwarded);
+  const received = foldMessages("c", viewer.pubkey, [forwarded])[0];
+  assert.exists(received);
+  h.session.messages.forward("c", received, "Viewer", "Again");
+  await vi.waitFor(() => expect(h.publish).toHaveBeenCalledTimes(3));
+  expect(
+    h.publish.mock.calls[2]?.[0].tags.filter(([tag]) => tag === "buzz:forward"),
+  ).toHaveLength(1);
+});

@@ -11,8 +11,14 @@ import type { RelayData } from "../../features/relay/service";
 import type { RelaySession } from "../../features/relay/session";
 import { splitPartition } from "../../features/relay/partition";
 import { NewWorkspace } from "../../features/solo/NewWorkspace";
-import { resetNewChatProject } from "../../features/solo/SoloDraft";
-import { soloDraftTarget } from "../../features/channel-navigation/routes";
+import {
+  resetNewChatProject,
+  soloDraftInput,
+} from "../../features/solo/SoloDraft";
+import {
+  soloDraftTarget,
+  resumeSoloDraftTarget,
+} from "../../features/channel-navigation/routes";
 import { soloNavigationFor } from "../../features/channel-navigation/solo-navigation";
 import { IconButton } from "../../shared/design-system/ui/IconButton";
 import {
@@ -80,6 +86,7 @@ function ReadyNewMenu({
   const [creatingSection, setCreatingSection] = useState(false);
   const [creatingProject, setCreatingProject] = useState(false);
   const trigger = useRef<HTMLButtonElement>(null);
+  const [draftFocus, setDraftFocus] = useState<HTMLElement | null>(null);
   const scope = splitPartition(session.scope);
   const current = () => relay.snapshot().session === session;
   const menuTrigger = (
@@ -101,18 +108,41 @@ function ReadyNewMenu({
   );
   return (
     <>
-      <MenuRoot open={open} onOpenChange={onOpenChange}>
+      <MenuRoot
+        open={open}
+        onOpenChange={(next) => {
+          if (next) setDraftFocus(null);
+          onOpenChange?.(next);
+        }}
+      >
         {triggerContainer === undefined
           ? menuTrigger
           : triggerContainer && createPortal(menuTrigger, triggerContainer)}
-        <MenuPopup>
+        <MenuPopup
+          finalFocus={
+            draftFocus
+              ? () => (draftFocus.isConnected ? draftFocus : false)
+              : undefined
+          }
+        >
           <MenuGroup>
             <MenuGroupLabel emphasis="quiet">Solo</MenuGroupLabel>
             {!composing && (
               <MenuItem
                 onClick={() => {
-                  if (current())
-                    void navigator.open(soloDraftTarget(session.scope));
+                  if (!current()) return;
+                  const target = navigator.snapshot().entry?.target;
+                  const destination = resumeSoloDraftTarget(
+                    session.scope,
+                    target,
+                  );
+                  const input =
+                    destination === target ? soloDraftInput() : null;
+                  if (input) {
+                    setDraftFocus(input);
+                    return;
+                  }
+                  void navigator.open(destination);
                 }}
               >
                 New chat

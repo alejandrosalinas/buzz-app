@@ -33,7 +33,7 @@ export type DialogProps = {
   /** Position within a host; sectioned modals stay bounded. Null waits for its ref. */
   container?: HTMLElement | null;
   actions?: ReactNode;
-  /** Tighter heading-to-body spacing for compact forms. */
+  /** Both values use the shared 12px heading-to-body gap. Compact is a legacy alias. */
   headerGap?: "default" | "compact";
   /** Keep spacing beside scrolling content on the fixed header and footer. */
   chromeSpacing?: "default" | "padded";

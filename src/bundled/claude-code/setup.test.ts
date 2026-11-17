@@ -251,7 +251,13 @@ function scripted(
   const spawn = async (id: string, options: HostProcessOptions = {}) => {
     const args = options.args ?? [];
     calls.push({ id, args });
-    const result = output[`${id} ${args.join(" ")}`.trim()];
+    const command = `${id} ${args.join(" ")}`.trim();
+    // No setup of the person's own unless the script says otherwise.
+    const result =
+      output[command] ??
+      (command === "claude auth status --json"
+        ? { stdout: '{"loggedIn": false}', code: 1 }
+        : undefined);
     if (result instanceof Error) throw result;
     queueMicrotask(() => {
       if (result?.stdout) options.onStdout?.(result.stdout);
@@ -414,8 +420,8 @@ it("caches failed model discovery until retry and closes a late probe on disposa
   await setup.loadModels();
   expect(setup.snapshot().modelsError).toBe("probe failed");
   await setup.loadModels();
-  // The version and the failed probe.
-  expect(spawn).toHaveBeenCalledTimes(2);
+  // The version, the setup check and the failed probe.
+  expect(spawn).toHaveBeenCalledTimes(3);
   spawn.mockImplementationOnce(() => late);
   const pending = setup.loadModels(true);
   expect(setup.snapshot().modelsChecking).toBe(true);
@@ -625,6 +631,8 @@ function releases(
       code: 0,
     };
     if (id === "platform") result = { stdout: "Darwin arm64\n", code: 0 };
+    else if (args[0] === "auth")
+      result = { stdout: '{"loggedIn": false}', code: 1 };
     else if (id === "install") {
       state.fetched.push(args.join(" "));
       if (state.offline) result = { code: 1 };

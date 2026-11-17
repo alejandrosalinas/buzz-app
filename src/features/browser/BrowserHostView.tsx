@@ -14,6 +14,7 @@ import {
   CloudOffIcon,
   DotsThreeIcon,
   LockIcon,
+  UserIcon,
 } from "../../shared/design-system/icons/index";
 import { Button } from "../../shared/design-system/ui/Button";
 import { EmptyState } from "../../shared/design-system/ui/EmptyState";
@@ -101,6 +102,7 @@ export function BrowserHostView({
   builderlab,
   canResumeUrl,
   label,
+  openSignIn,
   platform,
   sessions,
   pollInterval = 300,
@@ -516,6 +518,8 @@ export function BrowserHostView({
         </div>
       ) : null}
       <div className={styles.viewport} ref={viewport}>
+        {/* The pages share one Try again, keyed so a retry that lands on
+            another page keeps the focused button, wherever it sits in the row. */}
         {page === "denied" ? (
           <div role="alert" className="page-status">
             <EmptyState
@@ -524,6 +528,7 @@ export function BrowserHostView({
               description="The link may be wrong, or the app may have been removed. Ask whoever shared it."
               action={
                 <Button
+                  key="retry"
                   type="button"
                   variant="primary"
                   loading={retrying}
@@ -547,6 +552,7 @@ export function BrowserHostView({
               action={
                 <>
                   <Button
+                    key="retry"
                     type="button"
                     variant="primary"
                     loading={retrying}
@@ -555,6 +561,7 @@ export function BrowserHostView({
                     Try again
                   </Button>
                   <Button
+                    key="open"
                     type="button"
                     onClick={() => {
                       setOpenFailed(false);
@@ -564,6 +571,36 @@ export function BrowserHostView({
                     }}
                   >
                     Open in browser
+                  </Button>
+                </>
+              }
+            />
+          </div>
+        ) : page === "sign-in" ? (
+          <div role="alert" className="page-status">
+            <EmptyState
+              icon={<UserIcon />}
+              title="Sign in again to open this app"
+              description="Builderlab didn’t accept your sign-in. Try again. If that doesn’t work, sign out and back in, then try again."
+              action={
+                <>
+                  {openSignIn && (
+                    <Button
+                      key="settings"
+                      type="button"
+                      onClick={() => openSignIn()}
+                    >
+                      Open settings
+                    </Button>
+                  )}
+                  <Button
+                    key="retry"
+                    type="button"
+                    variant="primary"
+                    loading={retrying}
+                    onClick={() => retryAttach.current?.()}
+                  >
+                    Try again
                   </Button>
                 </>
               }

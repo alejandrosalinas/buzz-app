@@ -23,6 +23,8 @@ export function recoveryMessage(code: string) {
     return "Sign-in could not access secure storage. Check your system’s credential permissions and try again.";
   if (code === "sign-in-canceled")
     return "Sign-in was canceled. Sign in when you’re ready.";
+  if (code === "sign-in-link-unavailable")
+    return "Couldn’t copy the sign-in link. Try again.";
   if (code === "reauthentication-required")
     return "Your sign-in has expired. Sign in again to continue.";
   return "Sign-in did not finish. Try again.";
@@ -48,6 +50,7 @@ const SIGN_IN_REQUIRED =
 function explains(state: SessionSnapshot, error: string | undefined) {
   const refusal = error || state.failure || "";
   return (
+    refusal === "clock-skew" ||
     /binding[-_]mismatch|authorization[-_]denied/.test(refusal) ||
     ISSUER_REFUSALS.has(refusal) ||
     (!!error &&
@@ -85,6 +88,7 @@ export function issuerMayAnswerAgain(error: string | undefined) {
   return (
     !!error &&
     (ISSUER_REFUSALS.has(error) ||
+      error === "clock-skew" ||
       /authorization[-_]denied|binding[-_]mismatch/.test(error))
   );
 }
@@ -120,7 +124,48 @@ export function CommunitySignIn({
     />
   );
 }
-function Action({
+/** A refusal whose response suggested this computer's clock is off keeps
+ * its own explanation; this line only adds the likely cause. */
+function ClockHint({
+  state,
+  error,
+}: {
+  state: SessionSnapshot;
+  error?: string | undefined;
+}) {
+  const offset = state.clockOffset;
+  const refusal = error || state.failure || "";
+  if (!offset || !refusal || refusal === "clock-skew") return null;
+  const minutes = Math.max(1, Math.round(Math.abs(offset) / 60));
+  return (
+    <p className="text-body-sm text-danger">
+      Your computer’s clock looks about {minutes}{" "}
+      {minutes === 1 ? "minute" : "minutes"} off, which can cause this. Check
+      your date and time settings.
+    </p>
+  );
+}
+function Action(props: {
+  identity: FederatedIdentity;
+  error?: string | undefined;
+  retry: () => void;
+  relay?: string | undefined;
+  memberships: readonly Membership[];
+  asksAgain: boolean;
+}) {
+  const state = useSyncExternalStore(
+    props.identity.subscribe,
+    props.identity.snapshot,
+    props.identity.snapshot,
+  );
+  return (
+    <>
+      <Explanation {...props} />
+      <ClockHint state={state} error={props.error} />
+    </>
+  );
+}
+function Explanation({
   identity,
   error,
   retry,
@@ -187,6 +232,13 @@ function Action({
       />
     );
   }
+  if (refusal === "clock-skew")
+    return (
+      <p role="alert" className="text-body-sm text-danger">
+        Your computer’s date and time look wrong. Check them in System Settings,
+        then try again.
+      </p>
+    );
   if (ISSUER_REFUSALS.has(refusal))
     return (
       <p role="alert" className="text-body-sm text-danger">

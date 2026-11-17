@@ -20,7 +20,8 @@ import {
 import { ToastProvider } from "../../shared/design-system/ui/Toast";
 import { createNavigationController } from "../navigation/controller";
 import { createMemoryHistory } from "../navigation/history";
-import type { ChannelMessage } from "../relay/contracts";
+import { forwardBody } from "../relay/forwarded-message";
+import type { ChannelSummary, ChannelMessage } from "../relay/contracts";
 import type { OutboxRecovery, OutgoingEvent } from "../relay/outbox";
 import type { RelaySession } from "../relay/session";
 import { ForwardMessageProvider, useForwardMessage } from "./ForwardMessage";
@@ -32,6 +33,26 @@ const viewer = "a".repeat(64),
   messageId = "c".repeat(64);
 const scope = `https://relay.example:${viewer}`;
 const destination = "11111111-1111-4111-8111-111111111111";
+const sourceRow: ChannelMessage = {
+  id: messageId,
+  channelId: "alpha",
+  authorId: viewer,
+  createdAt: 1,
+  content: "Source message",
+  mentions: [],
+  participants: [],
+  attachments: [],
+  reactions: [],
+  replyCount: 0,
+};
+const sourceSnapshot = {
+  id: messageId,
+  channelId: "alpha",
+  authorId: viewer,
+  authorName: viewer.slice(0, 10),
+  createdAt: 1,
+  content: "Source message",
+};
 const stops: (() => void)[] = [];
 // Toast actions sit on Sonner's swipeable card, which captures the pointer.
 HTMLElement.prototype.setPointerCapture ??= () => {};
@@ -145,7 +166,7 @@ function setup({
     scope: { viewer, communityOrigin: "https://relay.example" },
   });
   stops.push(controller.dispose);
-  const channels = { channels: [] },
+  const channels = { status: "ready", channels: [] as ChannelSummary[] },
     profiles = new Map();
   const choices = {
     identities: [] as { pubkey: string; managed: boolean }[],
@@ -188,6 +209,19 @@ function setup({
     ),
   };
   const messages = {
+    forwardProblem: vi.fn<RelaySession["messages"]["forwardProblem"]>(
+      () => undefined,
+    ),
+    forward: vi.fn<RelaySession["messages"]["forward"]>(
+      (channelId, _row, _name, note, recovery): string =>
+        messages.send(
+          channelId,
+          forwardBody(sourceSnapshot, note),
+          [],
+          [],
+          recovery,
+        ),
+    ),
     send: vi.fn<RelaySession["messages"]["send"]>(
       (channelId, content, _mentions, _attachments, recovery) => {
         const id = "e".repeat(64);
@@ -213,12 +247,36 @@ function setup({
     directMessages,
     messages,
     outbox,
-    channels: { list: () => channels, subscribeList: () => () => {} },
+    channels: {
+      list: () => channels,
+      subscribeList: () => () => {},
+      describe: () => ({
+        state: "found",
+        name: "Source",
+        private: true,
+        hidden: false,
+        archived: false,
+        joined: true,
+      }),
+    },
     profiles: { snapshot: () => profiles, subscribe: () => () => {} },
     agentChoices: { snapshot: () => choices, subscribe: () => () => {} },
     media: (url: string) => url,
     thread: () => {
-      throw new Error("Preview unavailable");
+      const snapshot = {
+        status: "ready",
+        root: sourceRow,
+        replies: [],
+        target: sourceRow,
+        targetStatus: "ready",
+        canLoadMore: false,
+      };
+      return {
+        snapshot: () => snapshot,
+        subscribe: () => () => {},
+        refresh: async () => {},
+        dispose: () => {},
+      };
     },
   } as unknown as RelaySession;
   render(
@@ -252,11 +310,13 @@ function setup({
     publish,
     choices,
     profiles,
+    channels,
   };
 }
 async function choose(user: ReturnType<typeof userEvent.setup>) {
   await user.click(screen.getByRole("button", { name: "Forward source" }));
   await screen.findByRole("dialog", { name: "Forward message" });
+  await user.type(screen.getByRole("combobox"), "Avery");
   await user.click(await screen.findByRole("option", { name: /Avery Chen/ }));
 }
 
@@ -275,6 +335,7 @@ it("keeps the verified name after choosing a forwarding recipient", async () => 
     },
   });
   await user.click(screen.getByRole("button", { name: "Forward source" }));
+  await user.type(screen.getByRole("combobox"), "Verified");
   await user.click(
     await screen.findByRole("option", { name: /Verified recipient/ }),
   );
@@ -283,43 +344,39 @@ it("keeps the verified name after choosing a forwarding recipient", async () => 
   ).toBeInTheDocument();
 });
 
-it("closes the people list once its one person is chosen and explains the limit when To is used again", async () => {
+it("lets multiple people form a group destination", async () => {
   const user = userEvent.setup();
-  setup();
+  const { directMessages } = setup();
   await choose(user);
-  const to = screen.getByRole("combobox", { name: "Message recipients" });
-  // The full field says so itself; no hint covers the note below it.
-  expect(to).toHaveFocus();
-  expect(to).toHaveAttribute("aria-expanded", "false");
-  expect(to).toHaveAttribute("placeholder", "1 person selected");
-  expect(screen.queryByText(/one person/i)).not.toBeInTheDocument();
-  await user.click(to);
-  expect(
-    await screen.findByText(
-      "One person at a time. Remove them to choose someone else.",
+  await user.type(screen.getByRole("combobox"), "Morgan");
+  await user.click(await screen.findByRole("option", { name: /Morgan Lee/ }));
+  await user.click(
+    screen.getByRole("button", {
+      name: "Forward to Avery Chen and Morgan Lee",
+    }),
+  );
+  await waitFor(() =>
+    expect(directMessages.open).toHaveBeenCalledWith(
+      [recipient, "d".repeat(64)],
+      expect.any(AbortSignal),
     ),
-  ).toHaveAttribute("role", "status");
-  await user.keyboard("{Backspace}");
-  expect(
-    screen.queryByRole("button", { name: "Remove Avery Chen" }),
-  ).not.toBeInTheDocument();
-  expect(
-    await screen.findByRole("option", { name: /Morgan Lee/ }),
-  ).toBeInTheDocument();
+  );
 });
 
-it("forwards a note and permalink through the chosen person's DM and retires the completed dialog", async () => {
+it("forwards a snapshot and note through the chosen person's DM and retires the completed dialog", async () => {
   const user = userEvent.setup();
   const { navigation, directMessages, messages, outbox, operations } = setup();
   await choose(user);
   expect(
     screen.getByRole("combobox", { name: "Message recipients" }),
-  ).toHaveAttribute("readonly");
+  ).not.toHaveAttribute("readonly");
   await user.type(
     screen.getByRole("textbox", { name: "Note (optional)" }),
     "Worth a look",
   );
-  await user.click(screen.getByRole("button", { name: "Forward" }));
+  await user.click(
+    screen.getByRole("button", { name: "Forward to Avery Chen" }),
+  );
   await waitFor(() =>
     expect(
       screen.queryByRole("dialog", { name: "Forward message" }),
@@ -331,14 +388,14 @@ it("forwards a note and permalink through the chosen person's DM and retires the
   );
   expect(messages.send).toHaveBeenCalledWith(
     destination,
-    `Worth a look\n\nbuzz://message?channel=alpha&id=${messageId}`,
+    forwardBody(sourceSnapshot, "Worth a look"),
     [],
     [],
     {
       key: "message:forward",
       value: JSON.stringify({
         source: { channelId: "alpha", forward: messageId },
-        person: { pubkey: recipient, name: "Avery Chen" },
+        people: [{ pubkey: recipient, name: "Avery Chen" }],
         note: "Worth a look",
       }),
     },
@@ -363,13 +420,13 @@ it("opens the forwarded message in the DM from the success notice, with the sour
   const { navigation } = setup();
   const source = navigation.snapshot().entry.target;
   await choose(user);
-  await user.click(screen.getByRole("button", { name: "Forward" }));
+  await user.click(
+    screen.getByRole("button", { name: "Forward to Avery Chen" }),
+  );
   await screen.findByText("Message forwarded to Avery Chen");
   // Forwarding leaves you where you were; the notice is the way on.
   expect(navigation.snapshot().entry.target).toEqual(source);
-  await user.click(
-    screen.getByRole("button", { name: "Open your DM with Avery Chen" }),
-  );
+  await user.click(screen.getByRole("button", { name: "Open Avery Chen" }));
   await waitFor(() =>
     expect(navigation.snapshot().entry.target).toEqual({
       version: 1,
@@ -398,9 +455,11 @@ it.each([
     const { navigation } = setup();
     const source = navigation.snapshot().entry.target;
     await choose(user);
-    await user.click(screen.getByRole("button", { name: "Forward" }));
+    await user.click(
+      screen.getByRole("button", { name: "Forward to Avery Chen" }),
+    );
     const link = await screen.findByRole("button", {
-      name: "Open your DM with Avery Chen",
+      name: "Open Avery Chen",
     });
     await waitFor(() =>
       expect(
@@ -463,7 +522,9 @@ it("keeps an uncertain send locked and retries its exact event without another D
     new Error("Delivery could not be confirmed"),
   );
   await choose(user);
-  await user.click(screen.getByRole("button", { name: "Forward" }));
+  await user.click(
+    screen.getByRole("button", { name: "Forward to Avery Chen" }),
+  );
   const retry = await screen.findByRole("button", { name: "Retry forward" });
   expect(
     screen.getByRole("textbox", { name: "Note (optional)" }),
@@ -485,7 +546,7 @@ it("keeps an uncertain send locked and retries its exact event without another D
   expect(messages.send).toHaveBeenCalledTimes(1);
   expect(directMessages.delivered).toHaveBeenCalledTimes(2);
   expect(messages.send.mock.calls[0]?.[1]).toBe(
-    `buzz://message?channel=alpha&id=${messageId}`,
+    forwardBody(sourceSnapshot, ""),
   );
 });
 
@@ -522,7 +583,7 @@ it("restores a saved forward after reload and confirms its exact event instead o
   expect(operations()).toEqual([]);
   // The notice names the recovery payload's person and opens its h-tag DM.
   await user.click(
-    await screen.findByRole("button", { name: "Open your DM with Avery Chen" }),
+    await screen.findByRole("button", { name: "Open Avery Chen" }),
   );
   await waitFor(() =>
     expect(navigation.snapshot().entry.target).toMatchObject({
@@ -541,12 +602,13 @@ it("names and opens the saved forward's DM when the outbox loads it after anothe
   // The outbox finishes loading mid-submit with a forward to Avery pending.
   outbox.ready = async () => publish([pendingForward()]);
   await user.click(screen.getByRole("button", { name: "Forward source" }));
+  await user.type(screen.getByRole("combobox"), "Morgan");
   await user.click(await screen.findByRole("option", { name: /Morgan Lee/ }));
-  await user.click(screen.getByRole("button", { name: "Forward" }));
-  await screen.findByText("Message forwarded to Avery Chen");
   await user.click(
-    screen.getByRole("button", { name: "Open your DM with Avery Chen" }),
+    screen.getByRole("button", { name: "Forward to Morgan Lee" }),
   );
+  await screen.findByText("Message forwarded to Avery Chen");
+  await user.click(screen.getByRole("button", { name: "Open Avery Chen" }));
   await waitFor(() =>
     expect(navigation.snapshot().entry.target).toMatchObject({
       channelId: destination,
@@ -581,7 +643,9 @@ it("routes a hosted conversation's forwards through the dialog owner's pending g
     new Error("Delivery could not be confirmed"),
   );
   await choose(user);
-  await user.click(screen.getByRole("button", { name: "Forward" }));
+  await user.click(
+    screen.getByRole("button", { name: "Forward to Avery Chen" }),
+  );
   await screen.findByRole("button", { name: "Retry forward" });
   await user.click(screen.getByRole("button", { name: "Cancel" }));
   await user.click(screen.getByRole("button", { name: "Forward another" }));
@@ -609,17 +673,21 @@ it("retains an editable draft when opening the DM fails", async () => {
   await choose(user);
   const note = screen.getByRole("textbox", { name: "Note (optional)" });
   await user.type(note, "Try again");
-  await user.click(screen.getByRole("button", { name: "Forward" }));
+  await user.click(
+    screen.getByRole("button", { name: "Forward to Avery Chen" }),
+  );
   await screen.findByRole("alert");
   // The error notice reports the failure; there is no sent message to open.
   await screen.findByRole("button", { name: "Dismiss notification" });
   expect(
-    screen.queryByRole("button", { name: /^Open your DM/ }),
+    screen.queryByRole("button", { name: /^Open Avery/ }),
   ).not.toBeInTheDocument();
   expect(note).toBeEnabled();
   expect(note).toHaveValue("Try again");
   expect(messages.send).not.toHaveBeenCalled();
-  await user.click(screen.getByRole("button", { name: "Forward" }));
+  await user.click(
+    screen.getByRole("button", { name: "Forward to Avery Chen" }),
+  );
   await waitFor(() => expect(messages.send).toHaveBeenCalledTimes(1));
 });
 
@@ -633,7 +701,9 @@ it("keeps pending work through passive Back and completes without replay on Forw
   directMessages.delivered.mockImplementationOnce(() => gate);
   try {
     await choose(user);
-    await user.click(screen.getByRole("button", { name: "Forward" }));
+    await user.click(
+      screen.getByRole("button", { name: "Forward to Avery Chen" }),
+    );
     await waitFor(() =>
       expect(directMessages.delivered).toHaveBeenCalledTimes(1),
     );
@@ -662,7 +732,7 @@ it("keeps pending work through passive Back and completes without replay on Forw
   expect(messages.send).toHaveBeenCalledTimes(1);
 });
 
-it("keeps the permalink renderable when a literal note contains an unclosed Markdown fence", async () => {
+it("keeps the quoted snapshot renderable when a literal note contains an unclosed Markdown fence", async () => {
   const user = userEvent.setup();
   const { messages } = setup();
   await choose(user);
@@ -671,7 +741,9 @@ it("keeps the permalink renderable when a literal note contains an unclosed Mark
     screen.getByRole("textbox", { name: "Note (optional)" }),
     note,
   );
-  await user.click(screen.getByRole("button", { name: "Forward" }));
+  await user.click(
+    screen.getByRole("button", { name: "Forward to Avery Chen" }),
+  );
   await waitFor(() => expect(messages.send).toHaveBeenCalledTimes(1));
   render(
     <MessageMarkdown
@@ -691,9 +763,8 @@ it("keeps the permalink renderable when a literal note contains an unclosed Mark
       onOpenLink={() => true}
     />,
   );
-  expect(screen.getByRole("link")).toHaveAttribute(
-    "href",
-    `buzz://message?channel=alpha&id=${messageId}`,
+  expect(document.querySelector("blockquote")).toHaveTextContent(
+    "Source message",
   );
   expect(screen.getByText(/Please check this/).innerHTML).toBe(
     "```<br>Please check this",
@@ -726,7 +797,9 @@ it.each([true, false])(
     });
     try {
       await choose(user);
-      await user.click(screen.getByRole("button", { name: "Forward" }));
+      await user.click(
+        screen.getByRole("button", { name: "Forward to Avery Chen" }),
+      );
       await waitFor(() => expect(directMessages.open).toHaveBeenCalledOnce());
       choices.identities = [];
       if (!selectedAgent)
@@ -759,7 +832,9 @@ it("refuses at submit someone whose Delete started after preparation, without ag
   });
   try {
     await choose(user);
-    await user.click(screen.getByRole("button", { name: "Forward" }));
+    await user.click(
+      screen.getByRole("button", { name: "Forward to Avery Chen" }),
+    );
     await waitFor(() => expect(directMessages.open).toHaveBeenCalledOnce());
     choices.identities = [
       { pubkey: recipient, managed: true, deleting: true } as {
@@ -781,7 +856,9 @@ it("closes the people list on Escape, then the dialog, retiring its visit", asyn
   const { navigation } = setup();
   await user.click(screen.getByRole("button", { name: "Forward source" }));
   const dialog = await screen.findByRole("dialog", { name: "Forward message" });
-  // Focusing To opens the people list.
+  await waitFor(() => expect(screen.getByRole("combobox")).toHaveFocus());
+  expect(screen.queryByRole("listbox")).not.toBeInTheDocument();
+  await user.type(screen.getByRole("combobox"), "Avery");
   await screen.findByRole("listbox", { name: "People" });
   await user.keyboard("{Escape}");
   await waitFor(() =>
@@ -859,13 +936,7 @@ it.each(["Cancel", "Escape"])(
     expect(item).not.toBeInTheDocument();
     if (dismissal === "Cancel") await cancelForward(user);
     else {
-      await screen.findByRole("listbox", { name: "People" });
-      await user.keyboard("{Escape}");
-      await waitFor(() =>
-        expect(
-          screen.queryByRole("listbox", { name: "People" }),
-        ).not.toBeInTheDocument(),
-      );
+      await waitFor(() => expect(screen.getByRole("combobox")).toHaveFocus());
       await user.keyboard("{Escape}");
       await waitFor(() =>
         expect(
@@ -948,3 +1019,88 @@ it.each([
     );
   },
 );
+
+it("offers only writable channels and forwards there without opening a DM", async () => {
+  const user = userEvent.setup();
+  const { channels, directMessages, messages } = setup();
+  const channel = {
+    id: destination,
+    name: "design",
+    channelType: "stream",
+    private: true,
+  } as ChannelSummary;
+  channels.channels.push(
+    channel,
+    { ...channel, id: "archived", name: "archived", archived: true },
+    { ...channel, id: "guest", name: "guest", readOnly: true },
+  );
+  await user.click(screen.getByRole("button", { name: "Forward source" }));
+  expect(
+    screen.queryByRole("option", { name: /archived/ }),
+  ).not.toBeInTheDocument();
+  expect(
+    screen.queryByRole("option", { name: /guest/ }),
+  ).not.toBeInTheDocument();
+  await waitFor(() => expect(screen.getByRole("combobox")).toHaveFocus());
+  expect(screen.queryByRole("listbox")).not.toBeInTheDocument();
+  await user.type(
+    screen.getByRole("combobox", { name: "Message recipients" }),
+    "#",
+  );
+  expect(
+    screen.queryByRole("option", { name: /Avery Chen/ }),
+  ).not.toBeInTheDocument();
+  await user.click(await screen.findByRole("option", { name: /design/ }));
+  const submit = screen.getByRole("button", { name: "Forward to #design" });
+  expect(submit).toHaveAccessibleDescription(
+    /Everyone in #design will be able to read/,
+  );
+  await user.click(submit);
+  await waitFor(() => expect(messages.forward).toHaveBeenCalledOnce());
+  expect(messages.forward.mock.calls[0]?.[0]).toBe(destination);
+  expect(directMessages.open).not.toHaveBeenCalled();
+  await screen.findByText("Message forwarded to #design");
+});
+it("retains the source and note when a forward exceeds the payload budget", async () => {
+  const user = userEvent.setup();
+  const { messages } = setup();
+  messages.forward.mockImplementationOnce(() => {
+    throw new Error(
+      "This message is too long to forward. Copy its link instead.",
+    );
+  });
+  await choose(user);
+  await user.type(
+    screen.getByRole("textbox", { name: "Note (optional)" }),
+    "Keep me",
+  );
+  await user.click(
+    screen.getByRole("button", { name: "Forward to Avery Chen" }),
+  );
+  expect(await screen.findByRole("alert")).toHaveTextContent(
+    "This message is too long to forward. Copy its link instead.",
+  );
+  expect(screen.getByRole("textbox", { name: "Note (optional)" })).toHaveValue(
+    "Keep me",
+  );
+  expect(screen.getByRole("dialog", { name: "Forward message" })).toBeVisible();
+  expect(messages.send).not.toHaveBeenCalled();
+});
+
+it("shows a forwarding problem before submission and offers a working Copy link", async () => {
+  const user = userEvent.setup();
+  const { messages } = setup();
+  messages.forwardProblem.mockReturnValue(
+    "This message is too long to forward. Copy its link instead.",
+  );
+  await choose(user);
+  expect(
+    screen.getByRole("button", { name: "Forward to Avery Chen" }),
+  ).toBeDisabled();
+  expect(screen.getByRole("alert")).toHaveTextContent("too long");
+  await user.click(screen.getByRole("button", { name: "Copy link" }));
+  expect(await navigator.clipboard.readText()).toBe(
+    `buzz://message?channel=alpha&id=${messageId}`,
+  );
+  expect(messages.forward).not.toHaveBeenCalled();
+});

@@ -57,7 +57,11 @@ it.each([
     };
     render(
       <PairingSettings
-        communities={{ snapshot: () => snapshot, subscribe: () => () => {} }}
+        communities={{
+          snapshot: () => snapshot,
+          subscribe: () => () => {},
+          retained: () => undefined,
+        }}
         active={() => true}
         native={native}
       />,
@@ -113,7 +117,11 @@ it.each([true, false])(
     } satisfies PairingNative;
     render(
       <PairingSettings
-        communities={{ snapshot: () => snapshot, subscribe: () => () => {} }}
+        communities={{
+          snapshot: () => snapshot,
+          subscribe: () => () => {},
+          retained: () => undefined,
+        }}
         active={() => true}
         available
         native={native}
@@ -195,7 +203,11 @@ it.each(["uncertain", "cancelled"] as const)(
     let mounted!: ReturnType<typeof render>;
     const view = () => (
       <PairingSettings
-        communities={{ snapshot: () => snapshot, subscribe: () => () => {} }}
+        communities={{
+          snapshot: () => snapshot,
+          subscribe: () => () => {},
+          retained: () => undefined,
+        }}
         active={() => true}
         available
         native={native}
@@ -204,7 +216,11 @@ it.each(["uncertain", "cancelled"] as const)(
     await act(async () => {
       mounted = render(
         <PairingSettings
-          communities={{ snapshot: () => snapshot, subscribe: () => () => {} }}
+          communities={{
+            snapshot: () => snapshot,
+            subscribe: () => () => {},
+            retained: () => undefined,
+          }}
           active={() => true}
           available
           native={native}
@@ -303,7 +319,11 @@ it("copies the current QR and explains phone verification", async () => {
   } satisfies PairingNative;
   render(
     <PairingSettings
-      communities={{ snapshot: () => snapshot, subscribe: () => () => {} }}
+      communities={{
+        snapshot: () => snapshot,
+        subscribe: () => () => {},
+        retained: () => undefined,
+      }}
       active={() => true}
       available
       native={native}
@@ -382,7 +402,11 @@ it("rejects a mismatch and requires explicit retry", async () => {
   } satisfies PairingNative;
   render(
     <PairingSettings
-      communities={{ snapshot: () => snapshot, subscribe: () => () => {} }}
+      communities={{
+        snapshot: () => snapshot,
+        subscribe: () => () => {},
+        retained: () => undefined,
+      }}
       active={() => true}
       available
       native={native}
@@ -439,7 +463,11 @@ it("keeps rejection progress truthful until native denial finishes", async () =>
   } satisfies PairingNative;
   render(
     <PairingSettings
-      communities={{ snapshot: () => snapshot, subscribe: () => () => {} }}
+      communities={{
+        snapshot: () => snapshot,
+        subscribe: () => () => {},
+        retained: () => undefined,
+      }}
       active={() => true}
       available
       native={native}

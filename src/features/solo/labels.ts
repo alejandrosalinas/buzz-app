@@ -19,12 +19,14 @@ export function soloShareDisclosure(multiple = false): string {
 export function soloRetainedAccessWarning(
   base: Pick<ChannelSummary, "visibility" | "joinRole">,
   mayHaveGuestMembers = true,
+  removalLocation: string | null = "People",
 ): string {
   if (base.visibility !== "public") return "";
+  const untilRemoved = `until you remove them${removalLocation ? ` in ${removalLocation}` : ""}.`;
   if (base.joinRole !== "guest")
-    return "People who already joined remain members and keep their access until you remove them in People.";
+    return `People who already joined remain members and keep their access ${untilRemoved}`;
   return mayHaveGuestMembers
-    ? "People who joined while it was View only are members and keep reading until you remove them in People."
+    ? `People who joined while it was View only are members and keep reading ${untilRemoved}`
     : "";
 }
 

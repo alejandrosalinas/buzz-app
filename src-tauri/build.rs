@@ -106,6 +106,7 @@ fn main() {
             "federated_identity_ask_again",
             "federated_identity_sign_in",
             "federated_identity_cancel_sign_in",
+            "federated_identity_sign_in_link",
             "federated_identity_sign_out",
             "credential_pair_answer",
             "credential_pair_prompt",

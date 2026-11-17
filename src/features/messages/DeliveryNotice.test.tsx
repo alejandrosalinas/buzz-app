@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import "@testing-library/jest-dom/vitest";
-import { cleanup, render, screen } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, expect, it, vi } from "vitest";
 import { DeliveryNotice } from "./DeliveryNotice";
 import type { ChannelMessage } from "../relay/contracts";
@@ -64,4 +64,26 @@ it("offers Retry as soon as a pending send fails, and stays quiet while unconfir
     <DeliveryNotice row={{ ...pending, delivery: "unknown" }} retry={retry} />,
   );
   expect(screen.queryByRole("status")).not.toBeInTheDocument();
+});
+
+it("explains a refused retry and stops offering it until the delivery changes", () => {
+  const retry = vi.fn(() => {
+    throw new Error("Retry this from the plugin that sent it.");
+  });
+  const view = render(
+    <DeliveryNotice row={{ ...row, delivery: "failed" }} retry={retry} />,
+  );
+  fireEvent.click(screen.getByRole("button", { name: "Retry" }));
+  expect(retry).toHaveBeenCalledOnce();
+  expect(screen.getByRole("status")).toHaveTextContent(
+    "Couldn’t send this message. Retry this from the plugin that sent it.",
+  );
+  expect(screen.getByRole("status")).not.toHaveClass("sr-only");
+  expect(
+    screen.queryByRole("button", { name: "Retry" }),
+  ).not.toBeInTheDocument();
+  view.rerender(
+    <DeliveryNotice row={{ ...row, delivery: "unknown" }} retry={retry} />,
+  );
+  expect(screen.getByRole("button", { name: "Retry" })).toBeVisible();
 });

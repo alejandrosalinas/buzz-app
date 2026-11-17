@@ -16,7 +16,7 @@ import {
   PresentationIcon,
   GlobeIcon,
   ChatCircleIcon,
-  MessageReplyIcon,
+  ThreadIcon,
   HashIcon,
   LockIcon,
 } from "../../shared/design-system/icons/index";
@@ -100,7 +100,7 @@ const icons = {
   buzz: ChatCircleIcon,
   channel: HashIcon,
   message: ChatCircleIcon,
-  thread: MessageReplyIcon,
+  thread: ThreadIcon,
 };
 
 /** Anchor wrapper for the isolated lab; messages use LinkLabel in a host-owned anchor. */

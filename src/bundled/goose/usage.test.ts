@@ -3,6 +3,7 @@ import type { EventData } from "../../features/relay/events";
 import { turnPrompt } from "../claude-code/prompt";
 import { REQUEST_TIMEOUT_MS } from "./goose";
 import { type FakeSession, fakeSpawn } from "./goose-testing";
+import { standalonePrompt } from "./runtime";
 import { GooseHistory } from "./transcript";
 import { readUsage, sessionUsage } from "./usage";
 
@@ -100,6 +101,20 @@ it("observes each reply's tokens and goose's price", () => {
   );
 });
 
+it("counts a watch's or timer's one-off session, which has no channel", () => {
+  const session = sessionUsage("s", [
+    user(standalonePrompt(agent, "Timer: daily\n\nReport ops in #ops.")),
+    reply(start + 1, tokens(4, 0, 100, 0.06)),
+  ]);
+  expect(session).toMatchObject({
+    id: "s",
+    startedAt: start * 1000,
+    lastAt: (start + 1) * 1000,
+    observations: [{ cost: { usd: 0.06 } }],
+  });
+  expect(session).not.toHaveProperty("channelId");
+});
+
 it("reads the agent's sessions in its workspace through goose, every page", async () => {
   const saved = (
     sessionId: string,
@@ -124,6 +139,11 @@ it("reads the agent's sessions in its workspace through goose, every page", asyn
         // A session of the user's own.
         saved("own", [user("Tidy my notes"), work]),
         saved("mine", [user(ask()), work]),
+        saved("once", [user(standalonePrompt(agent, "Timer: daily")), work]),
+        saved("theirs-once", [
+          user(standalonePrompt(other, "Timer: daily")),
+          work,
+        ]),
       ],
     }),
   );
@@ -134,7 +154,10 @@ it("reads the agent's sessions in its workspace through goose, every page", asyn
     Date.parse("2026-06-01T00:00:00Z"),
     new AbortController().signal,
   );
-  expect(sessions.map((session) => session.id)).toEqual(["mine"]);
+  expect(sessions.map((session) => session.id).sort()).toEqual([
+    "mine",
+    "once",
+  ]);
   expect(sessions[0]?.observations[0]).toMatchObject({
     tokens: { input: 1, cacheRead: 2, cacheWrite: 3 },
     cost: { usd: 0.5 },

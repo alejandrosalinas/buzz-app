@@ -37,7 +37,10 @@ import {
 import { DraftMentionRoster } from "./draft-mention-roster";
 import {
   allowsOutsideMentions,
+  outsideMentionReferences,
+  pickedAgents,
   mentionAdmission,
+  mentionChannel,
   pastedMentionRecipient,
 } from "./mention-admission";
 import { rememberMention } from "./mention-history";
@@ -966,11 +969,14 @@ function Composer({
           ]),
         ]
       : pubkeys;
-  // Read at send time: inline mentions win, else the toolbar's agents.
-  const sendRecipients = () =>
-    routing && !valueRef.current.recipients.length
-      ? routed
-      : valueRef.current.recipients;
+  // Read at send time: inline mentions win, else the toolbar's agents. A
+  // reference addresses nobody, so it goes along with the toolbar's agents.
+  const sendRecipients = () => {
+    const typed = valueRef.current.recipients;
+    return routing && typed.every((person) => referenced(person.pubkey))
+      ? [...routed, ...typed]
+      : typed;
+  };
   const compactingNow = (
     recipients = sendRecipients().map((item) => item.pubkey),
   ) =>
@@ -1198,21 +1204,39 @@ function Composer({
   // A member not yet known to be an agent (say, an unloaded profile) is a
   // person: routing stays off and mentions in the text decide.
   const routing = solo && !withPeople && agentsOnly && !editing.target;
+  /** A Solo chat only references a person outside it: that tag notifies
+   * nobody, so it neither replaces the toolbar's agents nor joins them. Until
+   * the session has read all its agents, an outside name may be the viewer's
+   * agent, so it is named, not a reference: the send reads again. */
+  function referenced(pubkey: string) {
+    if (!solo) return false;
+    const chat = mentionChannel(session, channelId);
+    const agents = pickedAgents(session.agentChoices);
+    return (
+      !!agents &&
+      !chat?.members?.includes(pubkey) &&
+      outsideMentionReferences(chat, agents, pubkey)
+    );
+  }
+  // Whether the text's tags name anyone is settled once agents are known.
+  const tagsSettled = !solo || !!pickedAgents(session.agentChoices);
+  const named = routing
+    ? recipients.filter((person) => !referenced(person.pubkey))
+    : recipients;
   /** Who hears this message: inline mentions win; without any, the toolbar's
    * agents stand in. */
-  const addressed = routing && !recipients.length ? routed : recipients;
+  const addressed = routing && !named.length ? routed : named;
   // The agents a send addresses: model, effort and session controls are
   // offered for each, so a one-to-one DM with an agent always has them.
   const addressedKeys = sessionTargets(addressed.map((item) => item.pubkey));
   const sessionState = useSessionState(agents, addressedKeys, sessionPlace);
   const compacting = sessionState === "compacting";
-  // In a saved chat, the viewer's own pick outlives a remount until the next
-  // send, which the chat's history then seeds from. A new chat always starts
-  // from the main agent, unless a refused start gave its pick back (SoloDraft
-  // saves that one) and the viewer has not picked since.
+  // An explicit pick stays with its draft across remounts. Saved chats clear
+  // it on send and then seed from history; SoloDraft consumes it when a new
+  // chat starts.
   const pillKey = `${draftKey}:agents`;
   const keepPick = (people: readonly MentionRecipient[] | null) => {
-    writeView(scope, pillKey, !submission && people?.length ? people : null);
+    writeView(scope, pillKey, people?.length ? people : null);
   };
   const choose = (people: readonly MentionRecipient[]) => {
     seededRoute.current = undefined;
@@ -1223,22 +1247,30 @@ function Composer({
   const audience = routing
     ? {
         recipients: addressed,
-        named: recipients.length > 0,
+        named: named.length > 0,
         only(people: readonly MentionRecipient[]) {
           if (!people.length) return;
           const team = people.map(({ pubkey, name }) => ({ pubkey, name }));
           // While tags in the text decide, a team replaces those tags, as a
           // pick edits them.
-          if (!recipients.length) choose(team);
-          else if (!replaceRecipients(team)) return;
+          if (!named.length) choose(team);
+          else if (
+            !replaceRecipients([
+              ...team,
+              ...recipients.filter((person) => referenced(person.pubkey)),
+            ])
+          )
+            return;
           // Typing resumes in the draft, at its caret.
           input.current?.focus();
         },
         toggle({ pubkey, name }: MentionRecipient) {
+          // The menu offers agents only: a reference never joins the route.
+          if (referenced(pubkey)) return;
           // While tags in the text decide, a pick edits those tags, so it
           // always changes who gets the message. Focus and the caret stay
           // put, and only an added agent must be admissible.
-          if (recipients.length) {
+          if (named.length) {
             if (!recipients.some((person) => person.pubkey === pubkey))
               keepProseCaret(
                 (at) =>
@@ -1257,8 +1289,8 @@ function Composer({
             // An added agent replaces any the message can no longer reach,
             // which the menu cannot uncheck.
             const admitted = admits();
-            const reachable = routed.filter((person) =>
-              admitted(person.pubkey),
+            const reachable = routed.filter(
+              (person) => admitted(person.pubkey) && !referenced(person.pubkey),
             );
             if (reachable.length < 32) choose([...reachable, { pubkey, name }]);
           } else if (routed.length > 1)
@@ -1270,16 +1302,17 @@ function Composer({
   // agents are set aside for good; a draft that already has mentions when the
   // pill takes over (restored, or before its agents were known) starts so.
   useEffect(() => {
+    if (!tagsSettled) return;
     const before = mentionCount.current;
-    mentionCount.current = routing ? recipients.length : 0;
-    if (!routing || !recipients.length || before) return;
+    mentionCount.current = routing ? named.length : 0;
+    if (!routing || !named.length || before) return;
     // The composer's own prefill is withdrawn as the pill takes over, not
     // the viewer's choice.
     if (automaticTag.current === JSON.stringify(valueRef.current)) return;
     setReplacedKey(draftKey);
     setRouted([]);
     writeView(scope, pillKey, null);
-  }, [routing, recipients.length, draftKey, scope, pillKey]);
+  }, [tagsSettled, routing, named.length, draftKey, scope, pillKey]);
   const editLocked = useListedChannel(
     listed,
     channelId,
@@ -2281,12 +2314,18 @@ function Composer({
     )
       return undefined;
     // Once typed mentions replaced the remembered agents, the history is
-    // skipped.
+    // skipped. A reference is never a remembered agent.
+    const admitted = mentionAdmission(
+      session,
+      channelId,
+      agentChoices,
+      mentionRoster,
+    );
     return seedAgents(
       session,
       channelId,
       replaced ? [] : (history?.rows ?? []),
-      mentionAdmission(session, channelId, agentChoices, mentionRoster),
+      (key) => admitted(key) && !referenced(key),
       session.agentChoices
         .snapshot()
         .selectable.some((choice) => choice.pubkey === chosenAgent)
@@ -2350,7 +2389,7 @@ function Composer({
     // Alone with agents, the agent joins the toolbar, never the text. An empty
     // pill is always refilled, even after a send, so removed mentions fall back.
     if (routing) {
-      if (routed.length || recipients.length) return;
+      if (routed.length || named.length) return;
       // A saved pick is restored whole, however discovery stands; the send
       // checks each agent and asks the viewer about any it can't reach.
       const chosen = readView<unknown>(scope, pillKey, null);
@@ -2521,7 +2560,23 @@ function Composer({
       )
     )
       throw new Error("Someone joined this chat. Tag an agent to send.");
-    const recipients = [...explicit];
+    let references: readonly string[] = [];
+    if (explicit.some((key) => !channel.members?.includes(key))) {
+      // Only your agents join. Anyone else outside the chat is a reference,
+      // as in a DM; only a complete agent read can tell a name is not yours.
+      await session.agentChoices.refresh();
+      if (!currentAdmission())
+        throw new Error("The session changed. Review its channel and retry.");
+      const agents = session.agentChoices.snapshot();
+      references = explicit.filter(
+        (key) =>
+          !channel.members?.includes(key) &&
+          outsideMentionReferences(channel, agents.identities, key),
+      );
+      if (references.length && !agents.complete)
+        throw new Error("Could not load your agents. Retry.");
+    }
+    const recipients = explicit.filter((key) => !references.includes(key));
     if (!recipients.length) {
       // An untagged send relies on a person being present; confirm it against
       // the fresh roster and agent inventory, not the rendered snapshot.
@@ -2541,10 +2596,6 @@ function Composer({
     }
     const missing = recipients.filter((key) => !channel.members?.includes(key));
     if (missing.length) {
-      // Classification no longer depends on inventory; refresh before admission.
-      await session.agentChoices.refresh();
-      if (!currentAdmission())
-        throw new Error("The session changed. Review its channel and retry.");
       if (
         missing.some(
           (key) =>
@@ -2564,7 +2615,7 @@ function Composer({
       if (!currentAdmission())
         throw new Error("The session changed. Review its channel and retry.");
     }
-    return recipients;
+    return { recipients, references };
   }
   async function send() {
     if (!permitted.current || voice.isCapturing()) return;
@@ -2761,27 +2812,15 @@ function Composer({
       captured.text.trim().startsWith("/")
         ? captured.text.trim()
         : undefined;
-    // A send is an agent follow-up unless it addresses a confirmed person
-    // (a loaded, non-agent profile). Those, and untagged conversation in a
-    // shared chat, go out now; recipients still being classified keep the
-    // owner's queue preference.
-    const profileSnapshot = session.profiles.snapshot();
-    const agentKeys = knownAgentPubkeys(
-      profileSnapshot,
-      session.agentChoices.snapshot(),
-    );
-    const queueFollowUp =
+    // The toolbar's agents stand in when the text tags only references.
+    const fromPill =
+      routing &&
+      captured.recipients.every((person) => referenced(person.pubkey));
+    const queueable =
       !!host &&
       ownSoloConversation &&
       !threadRootId &&
-      followUpBehaviorPreference() === "queue" &&
-      capturedRecipients.length > 0 &&
-      !soloHasPeople(
-        capturedRecipients.map(({ pubkey }) => pubkey),
-        session.viewer,
-        profileSnapshot,
-        agentKeys,
-      );
+      followUpBehaviorPreference() === "queue";
     try {
       const tokens = draftTokens(captured);
       messageTokenTags(tokens);
@@ -2820,15 +2859,18 @@ function Composer({
         )
       )
         throw new Error(
-          routing && !captured.recipients.length
+          fromPill
             ? "An agent you're sending to is archived or being deleted. Choose another agent to send."
             : "A selected recipient is archived or being deleted. Remove it before sending.",
         );
+      // Until agents are known, the new chat's start reads them and decides.
       if (
         ownSoloConversation &&
         submission &&
+        pickedAgents(session.agentChoices) &&
         capturedRecipients.some(
           (person) =>
+            !referenced(person.pubkey) &&
             !session.agentChoices
               .snapshot()
               .selectable.some((agent) => agent.pubkey === person.pubkey),
@@ -2855,10 +2897,10 @@ function Composer({
       if (soloConversation || ownSoloConversation) {
         admission.current = true;
         setAdmitting(true);
-        recipients = await prepareRecipients(
+        ({ recipients, references } = await prepareRecipients(
           recipients,
-          routing && !captured.recipients.length,
-        );
+          fromPill,
+        ));
       } else if (recipients.length) {
         // An agent only an earlier Buzz runs would not answer; offer it here first.
         const lookup = oldAgents.find(captured.recipients);
@@ -3059,7 +3101,24 @@ function Composer({
       ) => {
         if (compactingNow(recipients))
           throw new Error("Wait for compaction to finish, or interrupt it.");
-        if (!queueFollowUp || !host) return publishNow(uploaded, session);
+        // A send is an agent follow-up unless it addresses a confirmed person
+        // (a loaded, non-agent profile). Those, and untagged conversation in
+        // a shared chat, go out now; recipients still being classified keep
+        // the owner's queue preference. The recipients are the fresh ones,
+        // without references: someone may have joined or left since.
+        const profiles = session.profiles.snapshot();
+        if (
+          !queueable ||
+          !host ||
+          !recipients.length ||
+          soloHasPeople(
+            recipients,
+            session.viewer,
+            profiles,
+            knownAgentPubkeys(profiles, session.agentChoices.snapshot()),
+          )
+        )
+          return publishNow(uploaded, session);
         const message = {
           channelId,
           text: content,
@@ -3115,7 +3174,9 @@ function Composer({
           },
           capturedAttachments,
           async (uploaded) => {
-            const sent = await publish(uploaded);
+            // Report a synchronous publication before the new row can render.
+            const result = publish(uploaded);
+            const sent = typeof result === "string" ? result : await result;
             if (sent && live.current) onSend?.(sent);
           },
           (files, preparationError) => {
@@ -3210,9 +3271,14 @@ function Composer({
         JSON.stringify(followUp) !== JSON.stringify(valueRef.current);
       valueRef.current = followUp;
       updateDraft(followUp);
-      // The toolbar keeps whoever heard this message for the follow-up.
+      // The toolbar keeps whoever heard this message for the follow-up; a
+      // reference named only this message.
       if (routing) {
-        setRouted(capturedRecipients);
+        setRouted(
+          capturedRecipients.filter((person) =>
+            recipients.includes(person.pubkey),
+          ),
+        );
         setReplacedKey(undefined);
         keepPick(null);
       }
@@ -3305,7 +3371,7 @@ function Composer({
           <RecipientAvatars
             session={session}
             recipients={addressed}
-            mentions={!!recipients.length}
+            mentions={!!named.length}
             disabled={editingDisabled}
             remove={(pubkey) => {
               const person = addressed.find((item) => item.pubkey === pubkey);

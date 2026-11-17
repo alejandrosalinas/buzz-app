@@ -14,7 +14,7 @@ import type { AttentionValue } from "../../features/agents/attention";
 import { GitHubError, type GitHubCli } from "./gh";
 import { createPullStates } from "./pull-states";
 import { POLL_MS, watchPulls } from "./watcher";
-import { QUIET_MS, WAKE_LIMIT } from "./watch";
+import { QUIET_MS, SPACING_MS } from "./watch";
 import { savePolicy } from "./authors";
 import { AuthorSettings } from "./AuthorSettings";
 
@@ -31,7 +31,21 @@ const answer = ({
   comments = [] as Comment[],
   reviews = [] as (Comment & { inline: (Comment & { path: string })[] })[],
   state = "OPEN",
-} = {}) => ({ head, checks, comments, reviews, state });
+  merge = "CLEAN",
+  decision = null as string | null,
+  queued = false,
+  threads = [] as boolean[],
+} = {}) => ({
+  head,
+  checks,
+  comments,
+  reviews,
+  state,
+  merge,
+  decision,
+  queued,
+  threads,
+});
 
 /** What gh answers the store for every pull request in `variables`, all
  * `pull`, or for the text of feedback `ids`. */
@@ -69,7 +83,14 @@ function respond(
       pullRequest: {
         state: pull.state,
         isDraft: false,
-        mergeStateStatus: "CLEAN",
+        mergeStateStatus: pull.merge,
+        reviewDecision: pull.decision,
+        isInMergeQueue: pull.queued,
+        autoMergeRequest: null,
+        reviewThreads: {
+          totalCount: pull.threads.length,
+          nodes: pull.threads.map((isResolved) => ({ isResolved })),
+        },
         headRefOid: pull.head,
         commits: {
           nodes: [
@@ -166,6 +187,8 @@ function setup(
   );
   const states = createPullStates(github as unknown as GitHubCli);
   const woke = vi.fn();
+  /** Each wake's text as sent, with the status line `woke` leaves out. */
+  const sent: string[] = [];
   const records: Record<string, Record<string, AttentionValue>> = JSON.parse(
     localStorage.getItem("test.attention") ?? "{}",
   );
@@ -189,10 +212,11 @@ function setup(
     emit(key, object, text) {
       if (!runs) throw new Error("Delivery unavailable");
       const value = object.value;
+      sent.push(text);
       woke(key, {
         channel: value.channel,
         ...(value.root ? { root: value.root } : {}),
-        text,
+        text: text.replace(/\n\nNow: [^\n]*$/, ""),
       });
     },
     completed: (key, object) => completed.has(`${key}/${object.slug}`),
@@ -321,6 +345,7 @@ function setup(
     addAttentionSource,
     tool,
     woke,
+    sent,
     /** The text of each wake, in order. */
     texts: () =>
       woke.mock.calls.map(([, wake]) => (wake as { text: string }).text),
@@ -570,31 +595,71 @@ describe("github_watch_pr", () => {
     app.dispose();
   });
 
-  it("finishes at the wake limit and a new call starts a fresh watch", async () => {
+  it("keeps watching past many wakes, spacing them and joining news in between", async () => {
     const app = setup();
     await app.call({ url });
-    for (let index = 0; index < WAKE_LIMIT; index++) {
+    const pushed = (index: number, comments: Comment[] = []) =>
       app.gh(
         answer({
           head: index.toString(16).padStart(10, "0"),
           checks: [{ name: "unit", conclusion: "SUCCESS" }],
+          comments,
         }),
       );
-      await vi.advanceTimersByTimeAsync(POLL_MS);
+    for (let index = 0; index < 25; index++) {
+      pushed(index);
+      await vi.advanceTimersByTimeAsync(SPACING_MS);
     }
-    expect(app.texts()).toHaveLength(WAKE_LIMIT);
-    expect(app.texts().at(-1)).toContain("this watch has ended");
-    expect(app.completed.size).toBe(1);
-    await app.call({ url });
-    app.gh(
-      answer({
-        head: "abcdef0123",
-        checks: [{ name: "unit", conclusion: "SUCCESS" }],
-      }),
-    );
+    expect(app.texts()).toHaveLength(25);
+    expect(app.completed.size).toBe(0);
+    pushed(99);
     await vi.advanceTimersByTimeAsync(POLL_MS);
-    expect(app.texts()).toHaveLength(WAKE_LIMIT + 1);
-    expect(app.texts().at(-1)).not.toContain("this watch has ended");
+    expect(app.texts()).toHaveLength(26);
+    // A push a minute after a wake waits for the spacing, with what comes
+    // meanwhile, as one wake.
+    pushed(100);
+    await vi.advanceTimersByTimeAsync(POLL_MS);
+    pushed(100, [{ id: "I1", login: "wes", body: "Looks good" }]);
+    await vi.advanceTimersByTimeAsync(SPACING_MS - 3 * POLL_MS);
+    expect(app.texts()).toHaveLength(26);
+    await vi.advanceTimersByTimeAsync(2 * POLL_MS);
+    expect(app.texts()).toHaveLength(27);
+    expect(app.texts().at(-1)).toMatch(
+      /^CI passed on 000000006 .*\n\nNew feedback on .*\n.*\n {2}> Looks good$/,
+    );
+    // Every wake says where the pull request stands.
+    expect(app.sent.at(-1)).toMatch(
+      /\n\nNow: open, no review decision, CI passed on 000000006, no conflicts, 0 unresolved threads, auto-merge off\.$/,
+    );
+    app.dispose();
+  });
+
+  it("wakes on the way to merging: conflicts, then ready, then leaving the merge queue", async () => {
+    const app = setup();
+    const green = { checks: [{ name: "unit", conclusion: "SUCCESS" }] };
+    app.gh(answer(green));
+    expect(await app.call({ url })).toContain("Already there:");
+    app.gh(answer({ ...green, merge: "DIRTY" }));
+    await vi.advanceTimersByTimeAsync(POLL_MS);
+    expect(app.texts()).toEqual([
+      `Merge conflicts on ${url}: it can't merge cleanly into its base.`,
+    ]);
+    expect(app.sent[0]).toMatch(/Now: .*, conflicts, /);
+    // Approved with a thread open is not ready; resolving it is.
+    app.gh(answer({ ...green, decision: "APPROVED", threads: [false] }));
+    await vi.advanceTimersByTimeAsync(SPACING_MS);
+    expect(app.texts()).toHaveLength(1);
+    app.gh(answer({ ...green, decision: "APPROVED", threads: [true] }));
+    await vi.advanceTimersByTimeAsync(POLL_MS);
+    expect(app.texts()[1]).toMatch(new RegExp(`^${url} looks ready to merge`));
+    app.gh(answer({ ...green, decision: "APPROVED", queued: true }));
+    await vi.advanceTimersByTimeAsync(SPACING_MS);
+    expect(app.texts()).toHaveLength(2);
+    app.gh(answer({ ...green, decision: "APPROVED" }));
+    await vi.advanceTimersByTimeAsync(POLL_MS);
+    expect(app.texts().slice(2)).toEqual([
+      `${url} is no longer set to merge while it is open: it left the merge queue, or auto-merge was turned off or cancelled.\n${url} looks ready to merge: approved, checks that block merging passed, no conflicts or unresolved threads. GitHub decides how many approvals it needs; check that before you turn on auto-merge.`,
+    ]);
     app.dispose();
   });
 
@@ -747,7 +812,7 @@ describe("github_watch_pr", () => {
           checks: [{ name: "unit", conclusion: "SUCCESS" }],
         }),
       );
-      await vi.advanceTimersByTimeAsync(POLL_MS);
+      await vi.advanceTimersByTimeAsync(SPACING_MS);
       app.gh(answer({ head: "2222222222", state: "MERGED" }));
       await vi.advanceTimersByTimeAsync(POLL_MS);
     } finally {
@@ -791,22 +856,33 @@ describe("github_watch_pr", () => {
     app.dispose();
   });
 
-  it("ends a watch it cannot read for half an hour, telling the agent", async () => {
+  it("tells the agent once when it cannot read for an hour, and ends after a day", async () => {
     const app = setup();
     await app.call({ url });
     app.gh(null);
-    await vi.advanceTimersByTimeAsync(29 * POLL_MS);
+    await vi.advanceTimersByTimeAsync(59 * POLL_MS);
     expect(app.woke).not.toHaveBeenCalled();
     // A good read in between starts the count again.
     app.gh(answer());
     await vi.advanceTimersByTimeAsync(POLL_MS);
     app.gh(null);
-    await vi.advanceTimersByTimeAsync(29 * POLL_MS);
+    await vi.advanceTimersByTimeAsync(59 * POLL_MS);
     expect(app.woke).not.toHaveBeenCalled();
     await vi.advanceTimersByTimeAsync(POLL_MS);
     expect(app.texts()).toEqual([
-      expect.stringContaining(`Stopped watching ${url}`),
+      expect.stringMatching(
+        new RegExp(
+          `^${url} could not be read .* for 60 minutes. The watch keeps trying`,
+        ),
+      ),
     ]);
+    expect(app.completed.size).toBe(0);
+    await vi.advanceTimersByTimeAsync((24 * 60 - 61) * POLL_MS);
+    expect(app.texts()).toHaveLength(1);
+    expect(app.completed.size).toBe(0);
+    await vi.advanceTimersByTimeAsync(POLL_MS);
+    expect(app.texts()).toHaveLength(2);
+    expect(app.texts()[1]).toContain(`Stopped watching ${url}`);
     expect([...app.completed]).toHaveLength(1);
     app.dispose();
   });
@@ -857,7 +933,7 @@ describe("github_watch_pr", () => {
     await vi.advanceTimersByTimeAsync(POLL_MS);
     expect(app.texts()).toEqual([`CI passed on 111111111 for ${url}.`]);
     app.readsText(true);
-    await vi.advanceTimersByTimeAsync(2 * POLL_MS + QUIET_MS);
+    await vi.advanceTimersByTimeAsync(SPACING_MS);
     expect(app.texts()).toHaveLength(2);
     expect(app.texts()[1]).toMatch(
       new RegExp(`^New feedback on .+\\n- comment by wes ${url}#I1:`),
@@ -1007,7 +1083,7 @@ describe("github_watch_pr", () => {
     expect(app.texts()[0]).not.toContain("body-alice");
     // Membership read once it can be; strangers are never told.
     app.members(["alice"]);
-    await vi.advanceTimersByTimeAsync(POLL_MS + QUIET_MS + POLL_MS);
+    await vi.advanceTimersByTimeAsync(SPACING_MS);
     expect(app.texts()).toHaveLength(2);
     expect(app.texts()[1]).toContain("body-alice");
     expect(app.texts().join("\n")).not.toContain("body-stranger");
@@ -1056,7 +1132,7 @@ describe("github_watch_pr", () => {
     save("allow author:stranger");
     const later = { id: "I3", login: "stranger", body: "body-later" };
     app.gh(answer({ comments: [wes, stranger, later] }));
-    await vi.advanceTimersByTimeAsync(POLL_MS + QUIET_MS + POLL_MS);
+    await vi.advanceTimersByTimeAsync(SPACING_MS);
     expect(app.texts()).toHaveLength(2);
     expect(app.texts()[1]).toContain("body-later");
     cleanup();

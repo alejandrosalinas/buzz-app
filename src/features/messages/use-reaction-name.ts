@@ -9,10 +9,17 @@ export function useReactionName(load = true) {
   useEffect(() => {
     if (!load) return;
     let live = true;
-    void import("./reaction-name").then(({ reactionName }) => {
-      loaded = reactionName;
-      if (live) setLoaded(true);
-    });
+    // A failed load (a navigation cancelled the chunk, or it is gone) leaves
+    // the name unresolved; the warning keeps a chunk that keeps failing
+    // visible. The next mount tries again, but only a new document fetches
+    // the chunk again: some engines keep the failed fetch and reject at once.
+    void import("./reaction-name").then(
+      ({ reactionName }) => {
+        loaded = reactionName;
+        if (live) setLoaded(true);
+      },
+      (error) => console.warn("The reaction name table didn't load", error),
+    );
     return () => {
       live = false;
     };

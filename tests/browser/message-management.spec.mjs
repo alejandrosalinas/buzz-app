@@ -192,6 +192,12 @@ test("manage a channel message, peer unread state, and its thread", async ({
   await expect(
     page.getByRole("textbox", { name: "Message #Alpha", exact: true }),
   ).toBeFocused();
+  // The row leaves before the relay records the deletion.
+  await expect
+    .poll(() =>
+      app.report.publications.some(({ event: item }) => item.kind === 5),
+    )
+    .toBe(true);
   const deletion = app.report.publications.find(
     ({ event: item }) => item.kind === 5,
   ).event;

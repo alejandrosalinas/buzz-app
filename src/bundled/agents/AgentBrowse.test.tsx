@@ -18,6 +18,7 @@ import type { ReadTransport } from "../../features/relay/transport";
 import type {
   Agent,
   Agents,
+  AgentsSnapshot,
   RegisteredAgentType,
 } from "../../features/agents/service";
 import type { Profile } from "../../features/relay/contracts";
@@ -32,6 +33,7 @@ function AgentBrowse(
   props: ReturnType<typeof importing> & {
     relay: RelayData;
     onOpen?: (agent: Agent) => void;
+    openSettings?: (section: string) => void;
   },
 ) {
   const [selection, setSelection] = useState<SharedAgentSelection>();
@@ -72,13 +74,15 @@ const echo = {
 } as RegisteredAgentType;
 const notes = { key: "test/notes", title: "Notes" } as RegisteredAgentType;
 const imported = { pubkey: "e".repeat(64), name: "Shared helper" } as Agent;
-/** Import's props: one type, and an `agents` holding `own` whose `port`
- * resolves. */
+/** Import's props: one type, and an `agents` in `status` (with `error`)
+ * holding `own` whose `port` resolves. */
 const importing = (
   types: readonly RegisteredAgentType[] = [echo],
   own: readonly Agent[] = [],
+  status: AgentsSnapshot["status"] = "ready",
+  error?: string,
 ) => {
-  const snapshot = { agents: own };
+  const snapshot = { status, error, agents: own };
   return {
     agents: {
       subscribe: () => () => {},
@@ -528,6 +532,174 @@ it("does not silently replace an unavailable shared runtime", async () => {
     within(dialog).getByRole("combobox", { name: "Harness" }),
   ).toBeVisible();
   expect(props.agents.port).not.toHaveBeenCalled();
+});
+
+/** Opens a shared agent's Import dialog with no type to import as, while
+ * Agents is in `status`. */
+async function noTypes(
+  status: AgentsSnapshot["status"],
+  openSettings = vi.fn(),
+  error?: string,
+) {
+  const read = vi.fn().mockResolvedValue([shared]);
+  const props = importing([], [], status, error);
+  render(
+    <AgentBrowse
+      relay={community(read)}
+      {...props}
+      openSettings={openSettings}
+    />,
+  );
+  fireEvent.click(await screen.findByRole("button", { name: "Shared helper" }));
+  fireEvent.click(screen.getByRole("button", { name: "Import" }));
+  return screen.getByRole("dialog", { name: "Shared helper" });
+}
+
+// Desktop where no plugin registered a type that runs agents here: every
+// agent plugin off, or one on that failed to activate. The component cannot
+// tell these apart, so it names what is missing, not why.
+it("says why a shared agent can't be imported here, and links Manage plugins", async () => {
+  const openSettings = vi.fn();
+  const dialog = await noTypes("ready", openSettings);
+  expect(
+    within(dialog).getByText(/No harness that runs agents on this computer/),
+  ).toHaveTextContent(
+    "No harness that runs agents on this computer is available. Check Manage plugins.",
+  );
+  expect(within(dialog).getByRole("button", { name: "Import" })).toBeDisabled();
+  fireEvent.click(
+    within(dialog).getByRole("button", { name: "Manage plugins" }),
+  );
+  expect(openSettings).toHaveBeenCalledExactlyOnceWith("plugins");
+  // Settings opens in place of the dialog, not over it.
+  expect(
+    screen.queryByRole("dialog", { name: "Shared helper" }),
+  ).not.toBeInTheDocument();
+});
+
+// Only a hosted type is on, so Manage plugins shows a plugin enabled. The
+// page keeps hosted types out of Import, since an imported agent needs a key
+// here, and the dialog must not claim no plugin is on.
+it("does not say no plugin is on when only a hosted type is", async () => {
+  const read = vi.fn().mockResolvedValue([shared]);
+  const props = importing([], [], "ready");
+  const hosted = [
+    { ...echo, key: "test/cloud", title: "Cloud", remote: {} },
+  ] as unknown as RegisteredAgentType[];
+  props.agents.types = () => hosted;
+  const openSettings = vi.fn();
+  render(
+    <AgentBrowse
+      relay={community(read)}
+      {...props}
+      openSettings={openSettings}
+    />,
+  );
+  fireEvent.click(await screen.findByRole("button", { name: "Shared helper" }));
+  fireEvent.click(screen.getByRole("button", { name: "Import" }));
+  const dialog = screen.getByRole("dialog", { name: "Shared helper" });
+  expect(
+    within(dialog).getByText(/No harness that runs agents on this computer/),
+  ).toHaveTextContent(
+    "No harness that runs agents on this computer is available. Check Manage plugins.",
+  );
+  expect(within(dialog).queryByText(/plugin is turned on/)).toBeNull();
+  fireEvent.click(
+    within(dialog).getByRole("button", { name: "Manage plugins" }),
+  );
+  expect(openSettings).toHaveBeenCalledExactlyOnceWith("plugins");
+});
+
+it("keeps Manage plugins plain text while a shared agent is still importing", async () => {
+  const read = vi.fn().mockResolvedValue([shared]);
+  const props = importing();
+  let fail = () => {};
+  props.agents.port.mockImplementationOnce(
+    () =>
+      new Promise((_, reject) => {
+        fail = () => reject(new Error("Keychain access was denied"));
+      }),
+  );
+  const openSettings = vi.fn();
+  const view = render(
+    <AgentBrowse
+      relay={community(read)}
+      {...props}
+      openSettings={openSettings}
+    />,
+  );
+  fireEvent.click(await screen.findByRole("button", { name: "Shared helper" }));
+  fireEvent.click(screen.getByRole("button", { name: "Import" }));
+  const dialog = screen.getByRole("dialog", { name: "Shared helper" });
+  fireEvent.click(within(dialog).getByRole("button", { name: "Import" }));
+  expect(props.agents.port).toHaveBeenCalledTimes(1);
+  // The last agent plugin goes off while the import is still running.
+  const gone = importing([]);
+  view.rerender(
+    <AgentBrowse
+      relay={community(read)}
+      {...props}
+      agents={gone.agents}
+      types={gone.types}
+      openSettings={openSettings}
+    />,
+  );
+  expect(
+    within(dialog).getByText(/No harness that runs agents on this computer/),
+  ).toHaveTextContent(
+    "No harness that runs agents on this computer is available. Check Manage plugins.",
+  );
+  // Opening Settings would close the dialog over the import, which Close
+  // may not do either, so the link waits as plain text.
+  expect(
+    within(dialog).queryByRole("button", { name: "Manage plugins" }),
+  ).not.toBeInTheDocument();
+  expect(within(dialog).getByRole("button", { name: "Close" })).toBeDisabled();
+  await act(async () => {
+    fail();
+  });
+  // The import's outcome still lands in the dialog, and the link is back.
+  expect(within(dialog).getByRole("alert")).toHaveTextContent(
+    "Keychain access was denied",
+  );
+  fireEvent.click(
+    within(dialog).getByRole("button", { name: "Manage plugins" }),
+  );
+  expect(openSettings).toHaveBeenCalledExactlyOnceWith("plugins");
+  expect(
+    screen.queryByRole("dialog", { name: "Shared helper" }),
+  ).not.toBeInTheDocument();
+});
+
+it("tells a browser that shared agents import only in the desktop app", async () => {
+  // Outside the desktop app Agents is unavailable and no type registers.
+  const dialog = await noTypes("unavailable");
+  expect(
+    within(dialog).getByText(
+      "Agents runs in the desktop app. Open Buzz there to import one.",
+    ),
+  ).toBeVisible();
+  expect(within(dialog).queryByText(/Manage plugins/)).not.toBeInTheDocument();
+});
+
+it("says a shared agent can't be imported while Agents could not load", async () => {
+  const dialog = await noTypes("error", vi.fn(), "Keychain is locked.");
+  expect(
+    within(dialog).getByText("Agents could not load. Keychain is locked."),
+  ).toBeVisible();
+  expect(within(dialog).queryByText(/Manage plugins/)).not.toBeInTheDocument();
+});
+
+it("waits for agent types to register instead of asking for a plugin", async () => {
+  const dialog = await noTypes("loading");
+  // Loading feedback is delayed a second, as LoadingRegion does everywhere.
+  expect(
+    await within(dialog).findByRole("status", undefined, { timeout: 2000 }),
+  ).toHaveTextContent("Loading agent types…");
+  expect(
+    within(dialog).queryByText(/No harness that runs agents on this computer/),
+  ).not.toBeInTheDocument();
+  expect(within(dialog).queryByText(/Manage plugins/)).not.toBeInTheDocument();
 });
 
 it("collapses long instructions and expands them on request", async () => {

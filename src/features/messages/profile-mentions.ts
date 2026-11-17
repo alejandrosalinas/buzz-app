@@ -1,3 +1,7 @@
+import {
+  preparedMarkdown,
+  type PreparedMarkdown,
+} from "./markdown-preparation";
 import type { AgentLibrary } from "../agents/library";
 import type { ChannelMessage, Profile } from "../relay/contracts";
 import { profileTarget } from "../profiles/target";
@@ -19,7 +23,12 @@ type Part = { text: string; target?: string | undefined };
 export function profileMentionParts(
   row: Pick<
     ChannelMessage,
-    "content" | "edited" | "attachmentSeams" | "mentions" | "mentionReferences"
+    | "content"
+    | "edited"
+    | "attachmentSeams"
+    | "mentions"
+    | "mentionReferences"
+    | "mentionLabels"
   >,
   profiles: ReadonlyMap<string, Profile> | undefined,
   agents: AgentLibrary["identities"] = [],
@@ -35,7 +44,7 @@ export function profileMentionParts(
   for (const id of new Set(identities)) {
     const target = profileTarget(id);
     if (!target) continue;
-    const labels = [
+    const labels = row.mentionLabels?.find((item) => item.id === id)?.names ?? [
       ...profileMentionNames(profiles?.get(id)),
       ...agents
         .filter((agent) => agent.pubkey === id)
@@ -115,6 +124,36 @@ export function profileMentionParts(
   }
   if (plain < text.length) parts.push({ text: text.slice(plain) });
   return parts.length ? parts : [{ text }];
+}
+
+/** The renderer and forwarded metadata share the same Markdown exclusions. */
+export function renderedProfileMentionParts(
+  row: Parameters<typeof profileMentionParts>[0],
+  profiles: Parameters<typeof profileMentionParts>[1],
+  agents: AgentLibrary["identities"] = [],
+  prepared: PreparedMarkdown = preparedMarkdown(row.content),
+): Part[] {
+  if (prepared.kind === "plain") return [{ text: prepared.content }];
+  const normalized = {
+    ...row,
+    content: prepared.content,
+    // Seams index the folded body, before link normalization.
+    ...(row.edited || (row.attachmentSeams && prepared.content !== row.content)
+      ? { edited: true as const }
+      : {}),
+  };
+  let offset = 0;
+  let rangeIndex = 0;
+  return profileMentionParts(normalized, profiles, agents).map((part) => {
+    const start = offset;
+    offset += part.text.length;
+    while ((prepared.literalRanges[rangeIndex]?.end ?? Infinity) <= start)
+      rangeIndex++;
+    return part.target &&
+      (prepared.literalRanges[rangeIndex]?.start ?? Infinity) < offset
+      ? { text: part.text }
+      : part;
+  });
 }
 
 const QUALIFIER = /^ \(([a-f0-9]{64})\)/i;

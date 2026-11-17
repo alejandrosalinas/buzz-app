@@ -1,10 +1,12 @@
 import { motion, useReducedMotion } from "motion/react";
 import { useState } from "react";
-import { EmojiArtwork } from "../../features/profiles/AvatarEditor";
+import { AvatarCropFrame } from "../../features/profiles/AvatarCrop";
+import { useAvatarPreview } from "../../features/profiles/use-avatar-preview";
 import { BuilderlabLogoIcon } from "../../shared/design-system/icons";
 import type { AvatarSelection } from "./AgentAvatarPicker";
 import { AgentPortrait } from "./AgentCard";
 import styles from "./AgentCreate.module.css";
+import { EmojiSwap } from "./EmojiSwap";
 
 const graphemes = new Intl.Segmenter(undefined, { granularity: "grapheme" });
 const endings = [
@@ -33,6 +35,15 @@ export function RemoteAgentIntroduction({
 }) {
   const [finish] = useState(
     () => endings[Math.floor(Math.random() * endings.length)] ?? endings[0],
+  );
+  // The picture is still the original upload; the crop is painted on save.
+  // If it fails to load, the portrait's own fallback and retries take over.
+  const [unframed, setUnframed] = useState(false);
+  const crop = avatar.kind === "image" && !unframed ? avatar.crop : undefined;
+  const framed = useAvatarPreview(
+    crop && avatar.kind === "image" ? avatar.picture : "",
+    community,
+    "small",
   );
   const hello = `Hi, I’m ${name}.`;
   const opening = builderlab
@@ -154,8 +165,19 @@ export function RemoteAgentIntroduction({
             className={styles.remoteEmoji}
             style={{ backgroundColor: avatar.color }}
           >
-            <EmojiArtwork emoji={avatar.emoji} animate={false} />
+            <EmojiSwap
+              emoji={avatar.emoji}
+              crop={avatar.crop}
+              animate={false}
+            />
           </div>
+        ) : crop && framed ? (
+          <AvatarCropFrame
+            src={framed}
+            shape="squircle"
+            crop={crop}
+            onError={() => setUnframed(true)}
+          />
         ) : (
           <AgentPortrait
             agent={{ name, picture: avatar.picture }}

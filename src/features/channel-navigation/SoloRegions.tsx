@@ -1,8 +1,10 @@
 import { SoloDisclosure } from "./SoloDisclosure";
+import { RegionChannelGroup, RegionChannelGroups } from "./RegionChannelGroup";
 import {
   WorkspaceCompositionContext,
   RegionWorkspace,
   RegionChats,
+  RegionChatList,
   type ComposeWorkspaces,
 } from "./WorkspaceComposition";
 import {
@@ -465,6 +467,7 @@ function RegionFrame({
                     ...destinationUi,
                     Workspace: RegionWorkspace,
                     Chats: RegionChats,
+                    ChatList: RegionChatList,
                   }
                 : destinationUi
             }
@@ -502,7 +505,9 @@ function RegionFrame({
           <>
             {hasActions && <NavigationSectionHeading actions={headerActions} />}
             {headerNotice}
-            {contents}
+            <RegionChannelGroups session={session}>
+              {contents}
+            </RegionChannelGroups>
             {!composing && groupDisclosure ? ordinary : null}
           </>
         ) : (
@@ -526,7 +531,9 @@ function RegionFrame({
             headerActions={headerActions}
             headerNotice={headerNotice}
           >
-            {contents}
+            <RegionChannelGroups session={session}>
+              {contents}
+            </RegionChannelGroups>
             {!composing && groupDisclosure ? ordinary : null}
           </SidebarSection>
         )}
@@ -656,4 +663,5 @@ const destinationUi = {
   Conversation: RegionConversation,
   Card: RegionCard,
   Disclosure: SoloDisclosure,
+  ChannelGroup: RegionChannelGroup,
 };

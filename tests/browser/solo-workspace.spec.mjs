@@ -32,7 +32,7 @@ async function showSharedMark(page, app, row) {
   const person = app.serveProfile(generateSecretKey(), {
     name: "Shared teammate",
   });
-  await page.route("**/api/relay/**/query", async (route) => {
+  await page.route("**/api/relay/primary/query", async (route) => {
     const filters = route.request().postDataJSON();
     if (!filters.some((filter) => filter.kinds?.includes(39002)))
       return route.continue();
@@ -554,7 +554,7 @@ test.describe("personal recipients", () => {
       releaseHead = resolve;
     });
     let readHead = false;
-    await page.route("**/api/relay/**/query", async (route) => {
+    await page.route("**/api/relay/primary/query", async (route) => {
       if (
         !route
           .request()

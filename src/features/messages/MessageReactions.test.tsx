@@ -1007,3 +1007,39 @@ it.each([false, true])(
     else expect(screen.queryByTestId("inline-add-reaction")).toBeNull();
   },
 );
+it("keeps the raw emoji when the name table fails to load, and the next reveal retries", async () => {
+  const h = harness([react(other)]);
+  render(<h.Controls />);
+  const pill = screen.getByRole("button", {
+    name: `👍: ${other.pubkey.slice(0, 10)}`,
+  });
+  // A navigation cancels the chunk in flight, so the import rejects.
+  vi.doMock("./reaction-name", () =>
+    Promise.reject(new TypeError("Importing a module script failed.")),
+  );
+  const unhandled = vi.fn();
+  process.on("unhandledRejection", unhandled);
+  const warned = vi.spyOn(console, "warn").mockImplementation(() => {});
+  try {
+    fireEvent.mouseEnter(pill);
+    fireEvent.mouseMove(pill);
+    const preview = await screen.findByRole("tooltip", {}, { timeout: 2500 });
+    // The mocked import rejects after one tick or several; wait for its handler.
+    await waitFor(() =>
+      expect(warned).toHaveBeenCalledWith(
+        "The reaction name table didn't load",
+        expect.any(Error),
+      ),
+    );
+    await act(flush);
+    expect(preview.textContent).not.toContain(":+1:");
+    expect(unhandled).not.toHaveBeenCalled();
+    vi.doUnmock("./reaction-name");
+    act(() => pill.focus());
+    await waitFor(() => expect(preview.textContent).toContain(":+1:"));
+  } finally {
+    vi.doUnmock("./reaction-name");
+    process.off("unhandledRejection", unhandled);
+    warned.mockRestore();
+  }
+});

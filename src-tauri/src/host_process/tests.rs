@@ -1179,9 +1179,59 @@ fn every_process_is_told_the_buzz_version_a_plugin_cannot_change() {
             ("BUZZ_VERSION".to_string(), plugin_value),
             ("PLUGIN_SETTING".to_string(), Some("kept".to_string())),
         ]);
-        set_environment(&mut command, OsStr::new("/bin"), &environment, "0.7.12").unwrap();
+        let login_shell = [
+            ("PATH", "/profile/bin"),
+            ("PROFILE_SETTING", "forwarded"),
+            ("PLUGIN_SETTING", "from-profile"),
+            ("BUZZ_RESOLVING_ENVIRONMENT", "1"),
+            ("NOSTR_KEY", "from-profile"),
+        ]
+        .map(|(name, value)| (name.into(), value.into()));
+        set_environment(
+            &mut command,
+            &login_shell,
+            OsStr::new("/bin"),
+            &environment,
+            "0.7.12",
+        )
+        .unwrap();
         assert_eq!(get(&command, "BUZZ_VERSION").as_deref(), Some("0.7.12"));
         assert_eq!(get(&command, "PLUGIN_SETTING").as_deref(), Some("kept"));
         assert_eq!(get(&command, "PATH").as_deref(), Some("/bin"));
+        assert_eq!(
+            get(&command, "PROFILE_SETTING").as_deref(),
+            Some("forwarded")
+        );
+        assert_eq!(get(&command, "BUZZ_RESOLVING_ENVIRONMENT"), None);
+        assert_eq!(get(&command, "NOSTR_KEY"), None);
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn host_programs_never_load_an_appimage_bundle() {
+    let appdir = Path::new("/tmp/.mount_BuzzX1");
+    for (value, expected) in [
+        // linuxdeploy's launcher, started without a library path of its own.
+        ("/tmp/.mount_BuzzX1/usr/lib:", Some(None)),
+        (
+            "/tmp/.mount_BuzzX1/usr/lib:/opt/mine/lib",
+            Some(Some("/opt/mine/lib")),
+        ),
+        ("/tmp/.mount_BuzzX1", Some(None)),
+        (
+            "/usr/share:/tmp/.mount_BuzzX1/usr/share",
+            Some(Some("/usr/share")),
+        ),
+        // Another AppImage's mount, or none, is the person's own.
+        ("/tmp/.mount_BuzzX10/usr/lib", None),
+        ("/opt/mine/lib", None),
+        ("", None),
+    ] {
+        assert_eq!(
+            without_bundle_paths(OsStr::new(value), appdir),
+            expected.map(|kept| kept.map(OsString::from)),
+            "{value}"
+        );
     }
 }

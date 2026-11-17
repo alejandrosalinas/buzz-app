@@ -1022,3 +1022,137 @@ test("a thread's long conversation name wraps inside its pane and opens from the
     "?threadParent=1",
   );
 });
+
+// Browser-only contract: real wrapped Markdown height, inline expansion/focus,
+// and attachment containment inside the sender's bubble in both themes.
+test("forwarded snapshots remain readable without their source and expand inline", async ({
+  page,
+}) => {
+  await withMessagesFixture(
+    page,
+    async () => {
+      const card = page
+        .getByRole("group", { name: /Forwarded message from Original Author/ })
+        .first();
+      await expect(card).toBeVisible();
+      await expect(card).toContainText("Private conversation");
+      const senderRow = card.locator("xpath=ancestor::*[@data-message-id][1]");
+      await expect(
+        senderRow.locator('img[src*="forwarder.png"]'),
+      ).toBeVisible();
+      await expect(card.locator('img[src*="forwarder.png"]')).toHaveCount(0);
+      await expect(card).toContainText("A*B*");
+      await expect(card.locator("em")).toHaveCount(0);
+      await page.evaluate(() =>
+        Object.assign(document.documentElement.dataset, {
+          colorMode: "light",
+          accent: "magenta",
+          colorLevel: "high",
+        }),
+      );
+      const link = card.getByRole("link", { name: "Reference", exact: true });
+      await expect(link).toBeVisible();
+      const colors = await link.evaluate((el) => {
+        const group = el.closest('[role="group"]');
+        return {
+          ink: getComputedStyle(el).color,
+          paper: getComputedStyle(group).backgroundColor,
+          selectionInk: getComputedStyle(el, "::selection").color,
+          selectionPaper: getComputedStyle(el, "::selection").backgroundColor,
+        };
+      });
+      expect(colors.ink).not.toBe(colors.paper);
+      expect(colors.selectionInk).not.toBe(colors.selectionPaper);
+
+      await expect(
+        card.getByRole("button", { name: "View original" }),
+      ).toHaveCount(0);
+      await expect(card).toContainText("Paragraph 30");
+      const expand = card.getByRole("button", { name: "Show full message" });
+      await expect(expand).toHaveAttribute("aria-expanded", "false");
+      await expand.focus();
+      await page.keyboard.press("Enter");
+      await expect(
+        card.getByRole("button", { name: "Show less" }),
+      ).toBeFocused();
+      await expect(
+        card.getByRole("button", { name: "Show less" }),
+      ).toHaveAttribute("aria-expanded", "true");
+      for (const dark of [false, true]) {
+        await page.evaluate(
+          (dark) => document.documentElement.classList.toggle("dark", dark),
+          dark,
+        );
+        for (const width of [1440, 480]) {
+          await page.setViewportSize({ width, height: 950 });
+          await page.evaluate(() => {
+            document.documentElement.style.fontSize = "20px";
+          });
+          const box = await card.boundingBox();
+          expect(box.width).toBeLessThanOrEqual(width);
+          expect(box.x).toBeGreaterThanOrEqual(0);
+          expect(box.x + box.width).toBeLessThanOrEqual(width);
+          await expect(card.locator("img").first()).toBeVisible();
+          for (const attachment of await card
+            .locator("[data-message-attachments] img")
+            .all()) {
+            const bounds = await attachment.boundingBox();
+            expect(bounds.x).toBeGreaterThanOrEqual(box.x);
+            expect(bounds.x + bounds.width).toBeLessThanOrEqual(
+              box.x + box.width,
+            );
+          }
+        }
+      }
+    },
+    "?forwarded",
+  );
+});
+
+test("keeps the forward dialog compact and aligned", async ({ page }) => {
+  await withMessagesFixture(
+    page,
+    async () => {
+      const card = page
+        .getByRole("group", { name: /Forwarded message from Original Author/ })
+        .first();
+      await expect(card).toBeVisible();
+      const row = card.locator("xpath=ancestor::*[@data-message-id][1]");
+      await row.hover();
+      await row.getByRole("button", { name: "More message actions" }).click();
+      await expect(
+        page.getByRole("menuitem", { name: "Copy as forward", exact: true }),
+      ).toHaveCount(0);
+      await page
+        .getByRole("menuitem", { name: "Forward message", exact: true })
+        .click();
+      const dialog = page.getByRole("dialog", { name: "Forward message" });
+      await expect(dialog).toBeVisible();
+      const to = dialog.getByRole("combobox");
+      await expect(to).toBeFocused();
+      await expect(page.getByRole("listbox")).toHaveCount(0);
+      const description = dialog.getByText(
+        "Send a copy to people or a channel, with an optional note.",
+      );
+      const descBox = await description.boundingBox();
+      const toBox = await to.boundingBox();
+      expect(toBox.y - descBox.y - descBox.height).toBeLessThan(40);
+      await expect(
+        dialog.getByRole("textbox", { name: "Note (optional)" }),
+      ).toHaveAttribute("rows", "2");
+      const preview = dialog.getByRole("group", {
+        name: /Forwarded message from/,
+      });
+      const noteBox = await dialog
+        .getByRole("textbox", { name: "Note (optional)" })
+        .boundingBox();
+      const previewBox = await preview.boundingBox();
+      expect(Math.abs(previewBox.width - noteBox.width)).toBeLessThan(1);
+      await expect(
+        dialog.getByRole("button", { name: "Copy as forward", exact: true }),
+      ).toHaveCount(0);
+      await dialog.getByRole("button", { name: "Cancel" }).click();
+    },
+    "?forwarded&threadWindow",
+  );
+});

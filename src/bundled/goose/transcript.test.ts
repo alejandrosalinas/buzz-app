@@ -75,7 +75,7 @@ const conversation = () => [
   ]),
   user([answer("t1", "Tue Oct 13")]),
   assistant([call("t2", "buzz__send", { text: "Hi Alice!", final: true })]),
-  user([answer("t2", "sent abc")]),
+  user([answer("t2", `sent ${"b".repeat(64)}`)]),
   assistant([text("Replied in the thread.")]),
 ];
 
@@ -110,7 +110,10 @@ describe("gooseTurns", () => {
       ["message", "Hi Alice!"],
       ["message", "Replied in the thread."],
     ]);
-    expect(turn?.items[3]).toMatchObject({ posted: true });
+    expect(turn?.items[3]).toMatchObject({
+      posted: true,
+      messageId: "b".repeat(64),
+    });
   });
 
   it("keeps a steer in its turn, and marks a failed send and tool", () => {

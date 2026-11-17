@@ -150,3 +150,68 @@ it("links a failed turn's refused key to Goose's own Agent setup, quoting goose"
     "Goose's provider rejected its API key or sign-in. Head to [Settings](buzz://settings?section=agents&provider=buzz.goose%2Fgoose) to check its provider.\n\ngoose said:\n> Authentication required",
   );
 });
+
+it("recommends a candidate only on a set-up provider whose live list has its model", async () => {
+  vi.spyOn(navigator, "platform", "get").mockReturnValue("Win32");
+  vi.spyOn(GooseSetup.prototype, "providers").mockResolvedValue({
+    providers: [
+      { id: "provider-a", name: "A", configured: true },
+      { id: "broken", name: "Broken", configured: true },
+      { id: "unset", name: "Unset", configured: false },
+    ],
+  } as unknown as Awaited<ReturnType<GooseSetup["providers"]>>);
+  const models = vi
+    .spyOn(GooseSetup.prototype, "models")
+    .mockImplementation(async (id) => {
+      if (id === "broken") throw new Error("discovery failed");
+      return [{ id: "model-a", label: "model-a" }] as Awaited<
+        ReturnType<GooseSetup["models"]>
+      >;
+    });
+  vi.spyOn(GooseSetup.prototype, "efforts").mockResolvedValue({
+    current: "low",
+    levels: ["low", "high"],
+  });
+  let type: AgentType | undefined;
+  apply({
+    pluginOwner: { id: "buzz.goose", revision: "r1" },
+    host: { request: vi.fn() },
+    agentProtection: { registerModels: vi.fn() },
+    agents: {
+      register: (registered: AgentType) => {
+        type = registered;
+      },
+      relay: () => undefined,
+    },
+    effect: vi.fn(),
+  } as never);
+  const candidate = (provider: string, model: string, effort = "high") => ({
+    harness: "goose",
+    provider,
+    model,
+    effort,
+    label: "Model A",
+  });
+  await expect(
+    type?.recommends?.(candidate("provider-a", "model-a")),
+  ).resolves.toBe(true);
+  // The model is offered, but not on the candidate's thinking level, which
+  // goose would refuse each turn.
+  await expect(
+    type?.recommends?.(candidate("provider-a", "model-a", "max")),
+  ).resolves.toBe(false);
+  // The provider is ready but doesn't offer the model.
+  await expect(
+    type?.recommends?.(candidate("provider-a", "model-z")),
+  ).resolves.toBe(false);
+  // Discovery fails; the pick treats a rejection as not ready.
+  await expect(
+    type?.recommends?.(candidate("broken", "model-a")),
+  ).rejects.toThrow("discovery failed");
+  // A provider not set up is never asked for its models.
+  models.mockClear();
+  await expect(type?.recommends?.(candidate("unset", "model-a"))).resolves.toBe(
+    false,
+  );
+  expect(models).not.toHaveBeenCalled();
+});

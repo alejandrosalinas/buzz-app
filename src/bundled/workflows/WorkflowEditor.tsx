@@ -1,7 +1,14 @@
 import { Field } from "../../shared/design-system/ui/Field";
 import { Input } from "../../shared/design-system/ui/Input";
 import { Textarea } from "../../shared/design-system/ui/Textarea";
-import { useEffect, useId, useRef, useState, type ReactNode } from "react";
+import {
+  useContext,
+  useEffect,
+  useId,
+  useRef,
+  useState,
+  type ReactNode,
+} from "react";
 import { DotsThreeIcon } from "../../shared/design-system/icons";
 import { IconButton } from "../../shared/design-system/ui/IconButton";
 import { Button } from "../../shared/design-system/ui/Button";
@@ -18,6 +25,11 @@ import { WorkflowForm, type WorkflowSelection } from "./WorkflowForm";
 import { conditionRowError } from "./workflowConditionExpression";
 import { draftIssue } from "./editor-model";
 import { getWorkflowActivationWarning } from "./workflowActivationWarning";
+import {
+  getAgentMentionWarning,
+  type WorkflowAgentMentions,
+} from "./workflowAgentMentionWarning";
+import { WorkflowMentionMembers } from "./WorkflowMessageText";
 import {
   formStateToYaml,
   yamlToFormState,
@@ -50,6 +62,7 @@ export function WorkflowEditor({
   children,
   create = false,
   chooseChannel = false,
+  agentMentions = "any",
 }: {
   yaml: string;
   initialYaml?: string | undefined;
@@ -72,6 +85,8 @@ export function WorkflowEditor({
   children?: ReactNode;
   create?: boolean;
   chooseChannel?: boolean;
+  /** The community's NIP-11 `workflow_agent_mentions`. */
+  agentMentions?: WorkflowAgentMentions | undefined;
 }) {
   const id = useId();
   const heading = useRef<HTMLSpanElement>(null);
@@ -135,6 +150,8 @@ export function WorkflowEditor({
     onChange(next);
   };
   const warning = getWorkflowActivationWarning(yaml);
+  const members = useContext(WorkflowMentionMembers);
+  const mentionWarning = getAgentMentionWarning(yaml, members, agentMentions);
   const submit = () => {
     if (readOnly || busy || locked || blocked || error) return;
     const wasEnabled =
@@ -404,6 +421,11 @@ export function WorkflowEditor({
               className="text-body-sm text-secondary"
             >
               {controlReason}
+            </p>
+          )}
+          {!readOnly && mentionWarning && (
+            <p role="status" className="text-body-sm text-warning">
+              {mentionWarning}
             </p>
           )}
           {status}

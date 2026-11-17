@@ -1,7 +1,8 @@
 import { createTestSession } from "../test-helpers";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import type { Host, HostResponse } from "../../../features/host/service";
-import { createAgentClient } from "../agents/client";
+import { createAgentClient, type OwnerIdentity } from "../agents/client";
+import type { BuilderlabSession } from "../session";
 import type { RelayData } from "../../../features/relay/service";
 import { builderlabType } from "./index";
 
@@ -178,14 +179,85 @@ it.each(["account", "server"])(
     const other = await fixture(
       changed === "account" ? "account-b" : "account-a",
     );
+    const refusal =
+      changed === "account"
+        ? "account that created"
+        : "another Builderlab server";
     await expect(
       other.remote.activate({ ...provision, pubkey, auth: proof }),
-    ).rejects.toThrow("account that created");
+    ).rejects.toThrow(refusal);
     other.session.signOut();
-    await expect(other.remote.remove(removal)).rejects.toThrow(
-      "account that created",
-    );
+    await expect(other.remote.remove(removal)).rejects.toThrow(refusal);
     expect(other.request).not.toHaveBeenCalled();
+  },
+);
+
+it.each(["activation", "creation"])(
+  "aborts %s when the selection moves it to another server",
+  async (operation) => {
+    const h = await fixture();
+    // The selection's session: the same account until it moves server.
+    let target: string | undefined;
+    const listeners = new Set<() => void>();
+    const selected: BuilderlabSession = {
+      ...h.session,
+      get target() {
+        return target;
+      },
+      subscribe(listener) {
+        listeners.add(listener);
+        const stop = h.session.subscribe(listener);
+        return () => {
+          listeners.delete(listener);
+          stop();
+        };
+      },
+    };
+    let release = () => {};
+    const held = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    let reached = () => {};
+    const holding = new Promise<void>((resolve) => {
+      reached = resolve;
+    });
+    const owner: OwnerIdentity = {
+      key: async () => {
+        reached();
+        await held;
+        return "12".repeat(32);
+      },
+      signBinding: async () => ({}),
+    };
+    const remote = builderlabType(
+      createAgentClient(selected, owner),
+      selected,
+      relay,
+    ).remote;
+    if (!remote) throw new Error("Missing hosted adapter");
+    let pending: Promise<unknown>;
+    if (operation === "activation") {
+      pending = remote.activate({ ...provision, pubkey, auth: proof });
+      await holding;
+    } else {
+      h.request.mockImplementationOnce(async () => {
+        reached();
+        await held;
+        return response(registration);
+      });
+      pending = remote.provision(provision);
+      await holding;
+    }
+    target = "https://peer.example/api";
+    for (const listener of [...listeners]) listener();
+    release();
+    await expect(pending).rejects.toThrow("another Builderlab server");
+    expect(
+      h.request.mock.calls.map(([input]) => input.url.split("/").at(-1)),
+    ).toEqual(operation === "activation" ? [] : ["register-agent"]);
+    expect(
+      localStorage.getItem(`buzz.builderlab.adapter-identity.v1:${pubkey}`),
+    ).toBeNull();
   },
 );
 

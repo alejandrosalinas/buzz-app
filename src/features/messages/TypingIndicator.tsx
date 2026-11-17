@@ -387,10 +387,14 @@ export function TypingIndicator({
     resolveName(pubkey, profiles.get(pubkey)?.name ?? pubkey.slice(0, 10));
   const scopeLabel = (pubkey: string, workRoot?: string) => {
     if (threadRootId) return undefined;
-    const roots = workRoot ? [workRoot] : (details.get(pubkey)?.roots ?? []);
+    // Work whose conversation is unknown has no scope to name.
+    const roots = (
+      workRoot ? [workRoot] : (details.get(pubkey)?.roots ?? [])
+    ).filter((root): root is string | null => root === null || !!root);
+    // The channel alone is the conversation already shown.
+    if (!roots.some(Boolean)) return undefined;
     const labels = roots.slice(0, 2).map((root) => {
       if (root === null) return "Channel conversation";
-      if (!root) return "Work with unconfirmed thread";
       const text = rows
         .find((row) => row.id === root)
         ?.content.replace(/\s+/g, " ")
@@ -461,10 +465,7 @@ export function TypingIndicator({
         : detail.detailAvailability === "no-current-step"
           ? (remoteDetail ?? "No current step details received.")
           : "Only typing updates are reaching this app.";
-    const scope =
-      detail.roots.length === 1 && detail.roots[0] === null
-        ? undefined
-        : scopeLabel(pubkey, workRoot);
+    const scope = scopeLabel(pubkey, workRoot);
     // The row is the way into an agent's transcript for this work.
     if (canOpen && target)
       return (

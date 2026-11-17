@@ -76,8 +76,8 @@
   flex: 1;
   min-width: 0;
 }
-/* Show more and Show less are text actions sharing one row: Show more aligns
-   with the chat icons and titles; Show less ends on the row inset. */
+/* Show more and Show fewer are text actions sharing one row: Show more aligns
+   with the chat icons and titles; Show fewer ends on the row inset. */
 .showMore {
   display: flex;
   align-items: center;

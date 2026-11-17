@@ -109,7 +109,7 @@ like the file.
 | --- | --- | --- |
 | `version` | yes | The number `1`. Any other value makes the whole file unusable. |
 | `source` | yes | Display name of the managing organization or tool, shown as "Recommended by *source*" and "Managed by *source*". 1 to 80 characters after trimming. Only visible characters and ordinary spaces: no control characters, no Unicode format characters (such as bidirectional overrides or zero-width characters) and no non-ASCII space or line separators. |
-| `plugins` | yes | Array of at most 64 entries. Later entries beyond 64 are ignored. |
+| `plugins` | yes | Array of at most 256 entries. Later entries beyond 256 are ignored. |
 | `plugins[].id` | yes | The plugin manifest ID: lowercase letters, digits, dots and hyphens, starting with a letter. Not a plugin included with Buzz. |
 | `plugins[].repository` | yes | An HTTPS or SSH Git URL, or GitHub `owner/repository`, as the Add dialog accepts. No credentials, query or fragment. Buzz stores the normalized HTTPS or SSH URL. |
 | `plugins[].reference` | yes | A branch or tag name: letters, digits, `.`, `_`, `/`, `-`, at most 200 characters, not starting with `-`. |

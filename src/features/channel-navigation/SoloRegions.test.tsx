@@ -20,7 +20,11 @@ import {
 } from "react";
 import { SoloRegions } from "./SoloRegions";
 import { SoloInventory } from "./SoloInventory";
-import { ChannelNavigationProvider } from "./ChannelNavigationState";
+import {
+  ChannelNavigationProvider,
+  useChannelNavigation,
+} from "./ChannelNavigationState";
+import type { ChannelSummary } from "../relay/contracts";
 import type { ConfigurationState } from "../../plugins/types";
 import { conversationTarget, soloDraftTarget } from "./routes";
 import { MessageComposer } from "../messages/MessageComposer";
@@ -2044,7 +2048,7 @@ it.each([
   ["ellipsis", "pointer"],
   ["ellipsis", "keyboard"],
 ] as const)(
-  "hands the %s destination action focus after %s menu close completes",
+  "hands the seventh %s destination action focus after %s menu close completes",
   async (surface, input) => {
     const h = fixture();
     const pending: readonly never[] = [];
@@ -2067,6 +2071,12 @@ it.each([
             ui={ui}
             channelId="owned"
             menuActions={[
+              ...Array.from({ length: 6 }, (_, index) => ({
+                id: `action-${index}`,
+                label: `Action ${index + 1}`,
+                icon: <span />,
+                onSelect: () => {},
+              })),
               {
                 id: "new-task",
                 label: "New task",
@@ -2523,4 +2533,263 @@ it("keeps native rename and selection with a source-owned destination", async ()
   expect(
     await screen.findByRole("textbox", { name: "Chat name" }),
   ).toBeInTheDocument();
+});
+
+it.each([
+  { name: "joined stream", change: {}, visible: true, writable: true },
+  {
+    name: "joined forum",
+    change: { channelType: "forum" },
+    visible: true,
+    writable: true,
+  },
+  { name: "cached", change: { cached: true }, visible: true, writable: false },
+  {
+    name: "archived",
+    change: { archived: true },
+    visible: true,
+    writable: false,
+  },
+  {
+    name: "read-only guest",
+    change: { readOnly: true, viewerRole: "guest" },
+    visible: true,
+    writable: false,
+  },
+  {
+    name: "not joined",
+    change: { members: [] },
+    visible: false,
+    writable: false,
+  },
+  {
+    name: "Solo chat",
+    change: { channelType: "solo" },
+    visible: false,
+    writable: false,
+  },
+  {
+    name: "system channel",
+    change: { channelType: "system" },
+    visible: false,
+    writable: false,
+  },
+  { name: "missing", change: {}, visible: false, writable: false },
+] satisfies {
+  name: string;
+  change: Partial<ChannelSummary>;
+  visible: boolean;
+  writable: boolean;
+}[])(
+  "channel groups retain host access rules for $name",
+  async ({ name, change, visible, writable }) => {
+    const h = fixture();
+    const viewer = h.session.viewer;
+    assert(viewer);
+    h.session.channelWrites = { ...h.session.channelWrites, available: true };
+    h.roster(
+      name === "missing"
+        ? []
+        : [
+            {
+              id: "source",
+              name: "Source channel",
+              channelType: "stream",
+              members: [viewer],
+              ...change,
+            },
+          ],
+    );
+    await h.register({
+      component: ({ ui }) => {
+        const Group = ui.ChannelGroup;
+        assert(Group);
+        return (
+          <Group
+            channelId="source"
+            onSelect={() => {}}
+            expanded
+            controls="source-tasks"
+            disclosureLabel="Hide source tasks"
+            onToggle={() => {}}
+            onNewTask={() => {}}
+          >
+            Task content
+          </Group>
+        );
+      },
+    });
+    mount(h);
+    expect(!!screen.queryByRole("button", { name: "Source channel" })).toBe(
+      visible,
+    );
+    expect(!!screen.queryByText("Task content")).toBe(visible);
+    expect(
+      !!screen.queryByRole("button", { name: "New task in Source channel" }),
+    ).toBe(writable);
+  },
+);
+
+it("channel groups separate selection from disclosure, preserve children, and recheck task access", async () => {
+  const h = fixture();
+  const viewer = h.session.viewer;
+  assert(viewer);
+  h.session.channelWrites = { ...h.session.channelWrites, available: true };
+  const channel: ChannelSummary = {
+    id: "source",
+    name: "Source channel",
+    channelType: "stream",
+    members: [viewer],
+  };
+  h.roster([channel]);
+  const select = vi.fn(),
+    create = vi.fn();
+  function Body({ ui }: SoloRegionProps) {
+    const [expanded, setExpanded] = useState(true);
+    const Group = ui.ChannelGroup;
+    assert(Group);
+    return (
+      <Group
+        channelId="source"
+        onSelect={select}
+        expanded={expanded}
+        controls="source-tasks"
+        disclosureLabel="Toggle source tasks"
+        onToggle={() => setExpanded(!expanded)}
+        onNewTask={create}
+      >
+        <input aria-label="Task draft" defaultValue="Saved draft" />
+      </Group>
+    );
+  }
+  await h.register({ component: Body });
+  mount(h);
+  const user = userEvent.setup();
+  await user.click(screen.getByRole("button", { name: "Source channel" }));
+  expect(select).toHaveBeenCalledOnce();
+  const disclosure = screen.getByRole("button", {
+    name: "Toggle source tasks",
+  });
+  expect(disclosure).toHaveAttribute("aria-expanded", "true");
+  const draft = screen.getByRole("textbox", { name: "Task draft" });
+  await user.click(disclosure);
+  expect(disclosure).toHaveAttribute("aria-expanded", "false");
+  expect(draft).toBeInTheDocument();
+  expect(draft).not.toBeVisible();
+  await user.click(disclosure);
+  expect(screen.getByRole("textbox", { name: "Task draft" })).toBe(draft);
+  const newTask = screen.getByRole("button", {
+    name: "New task in Source channel",
+  });
+  // The connection can lose its writer before a roster notification rerenders it.
+  h.session.channelWrites = { ...h.session.channelWrites, available: false };
+  await user.click(newTask);
+  expect(create).not.toHaveBeenCalled();
+  h.session.channelWrites = { ...h.session.channelWrites, available: true };
+  await user.click(newTask);
+  expect(create).toHaveBeenCalledOnce();
+  await user.click(
+    screen.getByRole("button", { name: "Actions for Source channel" }),
+  );
+  await screen.findByRole("menu");
+  await act(() => h.reconnect());
+  await waitFor(() =>
+    expect(screen.queryByRole("menu")).not.toBeInTheDocument(),
+  );
+  await act(() => h.roster([{ ...channel, members: [] }]));
+  expect(draft).not.toBeInTheDocument();
+  expect(
+    screen.queryByRole("button", { name: "Source channel" }),
+  ).not.toBeInTheDocument();
+});
+
+it("channel groups share a 3,000-record roster and retain the complete native menu", async () => {
+  const h = fixture();
+  const viewer = h.session.viewer;
+  assert(viewer);
+  const channels: ChannelSummary[] = Array.from(
+    { length: 3_000 },
+    (_, index) => ({
+      id: `source-${index}`,
+      name: `Source ${index}`,
+      channelType: "stream",
+      members: [viewer],
+    }),
+  );
+  h.roster(channels);
+  await h.register({
+    component: ({ ui }) => {
+      const Group = ui.ChannelGroup;
+      assert(Group);
+      return (
+        <>
+          {channels.slice(-100).map((channel) => (
+            <Group
+              key={channel.id}
+              channelId={channel.id}
+              onSelect={() => {}}
+              expanded={false}
+              controls={`tasks-${channel.id}`}
+              disclosureLabel={`Show ${channel.name}`}
+              onToggle={() => {}}
+            />
+          ))}
+        </>
+      );
+    },
+  });
+  const list = vi.spyOn(h.session.channels, "list");
+  const ensureList = vi.spyOn(h.session.channels, "ensureList");
+  const ensureChannel = vi.spyOn(h.session.channels, "ensure");
+  const ensureProfiles = vi.fn(h.session.profiles.ensure);
+  h.session.profiles = { ...h.session.profiles, ensure: ensureProfiles };
+  const offered = Array.from(
+    { length: 12 },
+    (_, index) => `Native action ${index + 1}`,
+  );
+  const nativeActions = vi.fn(() =>
+    offered.map((label) => <MenuItem key={label}>{label}</MenuItem>),
+  );
+  function NativeMenuOwner() {
+    const navigation = useChannelNavigation();
+    useEffect(() => {
+      navigation?.menuActions.publish(nativeActions);
+      return () => navigation?.menuActions.publish(undefined);
+    }, [navigation?.menuActions]);
+    return null;
+  }
+  const view = mount(h, undefined, (children) => (
+    <ChannelNavigationProvider relay={h.relay}>
+      <NativeMenuOwner />
+      {children}
+    </ChannelNavigationProvider>
+  ));
+  expect(
+    view.container.querySelectorAll("[data-solo-channel-group]"),
+  ).toHaveLength(100);
+  expect(list.mock.calls.length).toBeLessThan(20);
+  expect(ensureList).not.toHaveBeenCalled();
+  expect(ensureChannel).not.toHaveBeenCalled();
+  expect(ensureProfiles).not.toHaveBeenCalled();
+  expect(nativeActions).not.toHaveBeenCalled();
+  const user = userEvent.setup();
+  const group = view.container.querySelector<HTMLElement>(
+    '[data-solo-channel-group="source-2999"]',
+  );
+  assert(group);
+  await user.click(
+    within(group).getByRole("button", {
+      name: "Actions for Source 2999",
+    }),
+  );
+  const menu = await screen.findByRole("menu");
+  expect(
+    within(menu)
+      .getAllByRole("menuitem")
+      .map((item) => item.textContent),
+  ).toEqual([
+    "View channel details",
+    ...offered,
+    "Channel actions unavailable on this connection",
+  ]);
 });

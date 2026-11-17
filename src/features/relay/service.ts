@@ -59,6 +59,9 @@ export type RelayData = {
   tryAgain(): void;
   disconnect(): void;
   clearCache(): Promise<void>;
+  /** The selected community's origin, known before it connects; undefined
+   * with none selected. */
+  selected?(): string | undefined;
 };
 declare module "@deepseek-ai/cordis" {
   interface Context {

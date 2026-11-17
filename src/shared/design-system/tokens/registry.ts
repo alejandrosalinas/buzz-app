@@ -1723,10 +1723,10 @@ export const TYPE_ROLES: TypeRole[] = [
     token: "text-message",
     pointsAt: "body/message",
     size: "14px",
-    lineHeight: "1.5714285714285714 (22px at default)",
-    tracking: "-0.0025em",
+    lineHeight: "1.5357142857142858 (21.5px at default)",
+    tracking: "-0.01em",
     weight: "400",
-    use: "Sent and received message prose, with compact line spacing.",
+    use: "Sent and received message prose and composer text, with compact line spacing.",
     status: "core",
   },
   {

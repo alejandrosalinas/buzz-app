@@ -23,14 +23,18 @@ export type IconButtonProps = Omit<
   "children" | "size" | "variant" | "shape"
 > & {
   "aria-label": string;
-  icon: ReactElement;
   variant?: IconButtonVariant;
   size?: IconButtonSize;
   shape?: IconButtonShape;
-};
+} & (
+    | { icon: ReactElement; emoji?: never }
+    /** A glyph in place of an icon, such as a hand in the chosen skin tone. */
+    | { emoji: string; icon?: never }
+  );
 
 export function IconButton({
   icon,
+  emoji,
   variant = "ghost",
   size = "sm",
   shape = variant === "avatar" ? "round" : "control",
@@ -65,7 +69,13 @@ export function IconButton({
       data-icon-size={size}
       data-icon-shape={shape}
     >
-      {icon}
+      {emoji === undefined ? (
+        icon
+      ) : (
+        <span className="buzz-icon-button-emoji" aria-hidden="true">
+          {emoji}
+        </span>
+      )}
     </Button>
   );
 }

@@ -1,6 +1,7 @@
 // Goose transcript projection adapted from Salman’s #1010 (9706e746).
 // Inline Mesh runs retain a volatile display trace.
 import {
+  postedAs,
   promptMessage,
   promptSections,
   type ToolItem,
@@ -89,7 +90,10 @@ export function gooseTurns(
   /** Messages sent with send, until their result says whether they posted. */
   const sends = new Map<
     string,
-    { turn: TranscriptTurn; message: { posted?: boolean } }
+    {
+      turn: TranscriptTurn;
+      message: { posted?: boolean; messageId?: string };
+    }
   >();
   let last = 0;
   const turn = (id: string, at: number, partial: boolean) => {
@@ -131,7 +135,7 @@ export function gooseTurns(
       const callId = str(response.id);
       const { failed, text } = result(response.toolResult);
       const sent = sends.get(callId);
-      if (sent && !failed) sent.message.posted = true;
+      if (sent && !failed) Object.assign(sent.message, postedAs(text));
       else if (sent)
         sent.turn.items.push({
           id: `${id}:${callId}`,

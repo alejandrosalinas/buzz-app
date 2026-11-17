@@ -16,7 +16,8 @@ import { PanelsService } from "../../src/features/panels/service";
 import { ConversationService } from "../../src/features/conversation/service";
 import { ShortcutsService } from "../../src/features/shortcuts/service";
 import { SettingsCardsService } from "../../src/features/settings/service";
-import { bundledPlugins } from "../../src/bundled";
+import channelsManifest from "../../src/bundled/channels/manifest.json";
+import * as channels from "../../src/bundled/channels";
 import { conversationFeatures } from "../../src/app/conversation-features";
 import { createRelaySession } from "../../src/features/relay/session";
 import { PublishRejected } from "../../src/features/relay/outbox";
@@ -279,7 +280,16 @@ const probe = {
   },
 };
 const plugins = createPluginManager(ctx, {
-  bundled: [...bundledPlugins, probe],
+  // The proof opens Channels and installed contributions, not the other bundled
+  // plugins. Keep their cold module transforms out of the navigation budget.
+  bundled: [
+    {
+      manifest: { ...channelsManifest, apiVersion: 1 },
+      module: channels,
+      enabledByDefault: true,
+    },
+    probe,
+  ],
   builtIn: conversationFeatures,
   storage,
 });

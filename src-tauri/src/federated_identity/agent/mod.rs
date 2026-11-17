@@ -5,7 +5,7 @@ pub(crate) mod grant;
 
 use super::{
     config::canonical_relay,
-    protocol::{self, now, Failure},
+    protocol::{self, Failure},
     FederatedIdentity, SessionChange, Snapshot,
 };
 use base64::{
@@ -23,7 +23,7 @@ use zeroize::{Zeroize, Zeroizing};
 
 const GRANT_PATH: &str = "/v1/nip-fi/agent-grant";
 const ASSERTION_PATH: &str = "/v1/nip-fi/agent-assertion";
-const GRANT_TOKEN_TYPE: &str = "urn:builderlab:params:oauth:token-type:nip-fi-agent-grant";
+const GRANT_TOKEN_TYPE: &str = "urn:nostr:params:oauth:token-type:nip-fi-agent-grant";
 const SIGN_IN: &str = "Sign in to your organization to enroll this agent";
 const STOPPED: &str =
     "Your organization no longer accepts this agent; sign in again to re-enroll it";
@@ -128,8 +128,9 @@ struct Cached {
     account: String,
     relay: String,
     header: Zeroizing<String>,
-    refresh_at: u64,
+    refresh_at: tokio::time::Instant,
     expires_at: tokio::time::Instant,
+    received: super::assertion::Received,
     grants: u64,
 }
 
@@ -169,7 +170,7 @@ impl Admission {
         if self
             .cached
             .as_ref()
-            .is_some_and(|cached| cached.expires_at <= tokio::time::Instant::now())
+            .is_some_and(|cached| cached.expires_at <= cached.received.now())
         {
             return Err("Agent assertion expired before dispatch".into());
         }
@@ -575,7 +576,6 @@ impl AgentTokens {
             return Err(DELETED.into());
         }
         let retirements = self.admit().await?;
-        let now = now()? as u64;
         let account = self.account();
         if let Some(cached) = &slot.assertion {
             if cached.retirements == retirements
@@ -583,8 +583,8 @@ impl AgentTokens {
                     .as_ref()
                     .is_none_or(|account| *account == cached.account)
                 && cached.relay == relay
-                && cached.refresh_at > now
-                && cached.expires_at > tokio::time::Instant::now() + valid_for
+                && cached.refresh_at > cached.received.now()
+                && cached.expires_at > cached.received.now() + valid_for
             {
                 return Ok(Some(cached.clone()));
             }
@@ -636,14 +636,14 @@ impl AgentTokens {
                             .grants += 1;
                         return Err(STOPPED.into());
                     }
-                    Err(failure) => return Err(refused(failure.code)),
+                    Err(failure) => return Err(refused(failure)),
                 }
             }
             Ok(cached) if grant.replacement => {
                 self.settle(agent, grant, retirements).await?;
                 cached
             }
-            minted => minted.map_err(|failure| refused(failure.code))?,
+            minted => minted.map_err(refused)?,
         };
         if !self.live(&agent.pubkey, incarnation) {
             return Err(DELETED.into());
@@ -665,7 +665,7 @@ impl AgentTokens {
             ..cached
         };
         slot.assertion = Some(cached.clone());
-        if cached.expires_at <= tokio::time::Instant::now() + valid_for {
+        if cached.expires_at <= cached.received.now() + valid_for {
             return Err(SHORT_LIVED.into());
         }
         Ok(Some(cached))
@@ -899,35 +899,45 @@ impl AgentTokens {
             expires_at: u64,
         }
         let client = protocol::client()?;
-        let issued: Issued = protocol::json(|| {
+        let (issued, request_start): (Issued, _) = protocol::json_with(|| {
             let request = client
                 .post(endpoint.clone())
                 .bearer_auth(&grant.token)
                 .header("Content-Type", "application/json")
                 .body(body.clone());
-            match proof() {
+            std::future::ready(Ok(match proof() {
                 Ok(proof) => request.header("Nostr-Authorization", proof),
                 Err(_) => request,
-            }
+            }))
         })
         .await?;
         let assertion = Zeroizing::new(issued.assertion);
-        let now = now()? as u64;
+        let monotonic_now = tokio::time::Instant::now();
+        let wall_now = protocol::wall_now();
+        let now = wall_now
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_err(|_| "clock-unavailable")?
+            .as_secs();
         if issued.nostr_pubkey != agent.pubkey || issued.expires_at <= now {
             return Err("invalid-assertion".into());
         }
-        validate(&assertion, agent, grant, &relay, issued.expires_at, now)?;
+        let minted = validate(&assertion, agent, grant, &relay, issued.expires_at, now)?;
+        let (expires_at, _) = super::assertion::token_deadline(
+            request_start,
+            minted,
+            issued.expires_at,
+            wall_now,
+            monotonic_now,
+        )
+        .ok_or("invalid-assertion")?;
         Ok(Cached {
             header: Zeroizing::new(format!("Bearer {}", assertion.as_str())),
             // One with 30s or less to live is used once, never reused.
-            refresh_at: issued.expires_at.saturating_sub(30),
-            expires_at: super::assertion::monotonic_expiry(
-                issued.expires_at,
-                std::time::SystemTime::now(),
-                tokio::time::Instant::now(),
-            )
-            .ok_or("invalid-assertion")?
-            .0,
+            refresh_at: expires_at
+                .checked_sub(std::time::Duration::from_secs(30))
+                .unwrap_or(monotonic_now),
+            expires_at,
+            received: super::assertion::Received::at(monotonic_now, wall_now),
             grants: 0,
             retirements: 0,
             account: grant.account.clone(),
@@ -1124,11 +1134,10 @@ impl AgentTokens {
                     .append_pair("subject_token", token)
                     .append_pair(
                         "subject_token_type",
-                        "urn:builderlab:params:oauth:token-type:bb-session",
+                        "urn:nostr:params:oauth:token-type:nip-fa-session",
                     )
                     .append_pair("requested_token_type", GRANT_TOKEN_TYPE)
                     .append_pair("agent_pubkey", &agent.pubkey)
-                    .append_pair("runtime", "local")
                     .append_pair("owner_attestation", &agent.auth)
                     .finish();
                 (
@@ -1160,7 +1169,7 @@ impl AgentTokens {
                 .header("Content-Type", "application/x-www-form-urlencoded")
                 .body(form.as_bytes().to_vec());
             match proof() {
-                Ok(proof) => request.header("Nostr-Agent-Proof", proof),
+                Ok(proof) => request.header("Nostr-Authorization", proof),
                 Err(_) => request,
             }
         });
@@ -1206,6 +1215,8 @@ fn nostr(event: serde_json::Value) -> Result<String, String> {
 }
 
 /// Local misuse checks on an agent assertion; the relay verifies its signature.
+/// A future `iat` past `CLOCK_SKEW_SECS` is `invalid-assertion` here on
+/// purpose: `clock-skew` is only the human sign-in's diagnosis.
 fn validate(
     token: &str,
     agent: &AppAgent,
@@ -1213,7 +1224,7 @@ fn validate(
     relay: &str,
     expires_at: u64,
     now: u64,
-) -> Result<(), Failure> {
+) -> Result<u64, Failure> {
     let invalid = || Failure::from("invalid-assertion");
     let parts: Vec<_> = token.split('.').collect();
     if token.len() > 8192 || parts.len() != 3 || parts.iter().any(|part| part.is_empty()) {
@@ -1225,19 +1236,21 @@ fn validate(
     };
     let (header, claims) = (decode(parts[0])?, decode(parts[1])?);
     let text = |name: &str| claims.get(name).and_then(serde_json::Value::as_str);
-    let minted = claims.get("iat").and_then(serde_json::Value::as_u64);
+    let minted = super::protocol::numeric_date(&claims, "iat").map(|iat| iat.ceil() as u64);
     let audience = format!("https://{}", &relay["wss://".len()..]);
     if header.get("typ").and_then(serde_json::Value::as_str) != Some("nip-fi-agent+jwt")
         || text("nostr_pubkey") != Some(&agent.pubkey)
         || text("nostr_owner_pubkey") != Some(&agent.owner)
         || text("iss") != Some(&grant.issuer)
         || text("aud") != Some(&audience)
-        || claims.get("exp").and_then(serde_json::Value::as_u64) != Some(expires_at)
-        || !minted.is_some_and(|minted| minted <= now + 5 && minted <= expires_at)
+        || super::protocol::numeric_date(&claims, "exp") != Some(expires_at as f64)
+        || !minted.is_some_and(|minted| {
+            minted <= now + super::protocol::CLOCK_SKEW_SECS && minted <= expires_at
+        })
     {
         return Err(invalid());
     }
-    Ok(())
+    minted.ok_or_else(invalid)
 }
 
 /// A failed enrollment, and whether the organization refused it (rather than
@@ -1263,7 +1276,7 @@ impl From<&str> for Error {
 impl From<Failure> for Error {
     fn from(failure: Failure) -> Self {
         Self {
-            message: refused(failure.code),
+            message: refused(failure),
             refused: matches!(
                 failure.code,
                 "adapter-refused"
@@ -1277,8 +1290,13 @@ impl From<Failure> for Error {
 }
 
 /// What the agent's owner sees when the identity issuer turns it away.
-fn refused(code: &'static str) -> String {
-    match code {
+fn refused(failure: Failure) -> String {
+    if failure.rate_limited {
+        return "Your organization is limiting this agent's requests; try again later. \
+            If it keeps failing, you may have reached your organization's agent limit"
+            .into();
+    }
+    match failure.code {
         "network-unavailable" | "network-timeout" => {
             "Your organization's identity service is unreachable".into()
         }

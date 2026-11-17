@@ -1,4 +1,9 @@
 import { localStore, type AgentStore } from "../../features/agents/store";
+import {
+  followRecommended,
+  onRecommended,
+  type RecommendedRun,
+} from "../../features/agents/recommended";
 import { config, type Config } from "./runtime";
 
 export type ClaudeProviderDefaults = Readonly<{
@@ -14,17 +19,40 @@ export class ClaudeDefaults {
   private state: ClaudeProviderDefaults;
   private readonly listeners = new Set<() => void>();
 
-  constructor(private readonly storage: AgentStore = localStore()) {
+  constructor(
+    private readonly storage: AgentStore = localStore(),
+    /** What agents on Recommended run on, once found. */
+    private readonly recommended?: RecommendedRun,
+  ) {
     this.state = this.read();
   }
 
   snapshot = () => this.state;
+  /** Also told when the recommendation is found, which `resolve` reads, so
+   * a runtime made before then picks it up. */
   subscribe = (listener: () => void) => {
     this.listeners.add(listener);
-    return () => this.listeners.delete(listener);
+    const unsubscribe = this.recommended?.subscribe(listener);
+    return () => {
+      this.listeners.delete(listener);
+      unsubscribe?.();
+    };
   };
+  /** Settles once what `raw`, when on Recommended, runs on is known, so
+   * `resolve` names it rather than the device default. Only the first
+   * finding waits; a retry after nothing was offered runs alongside. */
+  async follow(raw: unknown) {
+    if (!this.recommended || !onRecommended(raw)) return;
+    const finding = this.recommended.find();
+    if (this.recommended.current() === undefined) await finding;
+  }
   resolve(raw: unknown): Config {
-    const explicit = config(raw);
+    // Recommended picks the model and level, as an explicit choice would.
+    const explicit = followRecommended(
+      raw,
+      config(raw),
+      this.recommended?.current(),
+    );
     return {
       ...explicit,
       model: explicit.model.trim() ? explicit.model : this.state.model,

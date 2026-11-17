@@ -4,6 +4,7 @@ import { fileURLToPath } from "node:url";
 import { resolve } from "node:path";
 import { defineConfig, loadEnv, type PluginOption } from "vite";
 import react from "@vitejs/plugin-react";
+import { entityDecoderAlias } from "./scripts/entity-decoder-alias.mjs";
 import { worktreePort } from "./scripts/worktree-port.mjs";
 import {
   parseCommunityAliases,
@@ -11,6 +12,7 @@ import {
 } from "./src/features/communities/destination.ts";
 import { parseFirstRunAccountSeed } from "./src/features/identity/first-run-seed.ts";
 import { isBuiltInBuilderlab } from "./src/features/federated-identity/community-hosts.ts";
+import { parseRecommended } from "./src/features/agents/recommended.ts";
 
 /** A value native builds also read: process first, then repository-root
  * .env.local, never Vite mode files; undefined when unset. */
@@ -108,13 +110,6 @@ export default defineConfig(async ({ command, mode }) => {
     .filter(Boolean)
     .map(relayOrigin)
     .join(" ");
-  const workflowRestrictedCommunities = (
-    env.BUZZ_WORKFLOW_RESTRICTED_COMMUNITIES ?? ""
-  )
-    .split(/\s+/)
-    .filter(Boolean)
-    .map(relayOrigin)
-    .join(" ");
   // Public routing configuration only; the viewer pin and credentials stay in Node.
   const defaultRelay = env.BUZZ_RELAY_URL?.trim();
   const defaultOrigin = defaultRelay ? relayOrigin(defaultRelay) : "";
@@ -158,6 +153,9 @@ export default defineConfig(async ({ command, mode }) => {
       throw new Error(`${name} must be an https:// URL without credentials.`);
     return value;
   });
+  // Packagers may recommend agent settings: candidates in priority order.
+  const recommended = env.BUZZ_RECOMMENDED_AGENT?.trim() ?? "";
+  parseRecommended(recommended);
   // Opt-in seed: replaces first run's Builderlab account requests, key backup
   // and recovery, so the first-run screens can be walked against a real account
   // whose binding must not change. Builds never see it. The full list is in
@@ -202,6 +200,7 @@ export default defineConfig(async ({ command, mode }) => {
     });
   return {
     plugins,
+    resolve: { alias: [entityDecoderAlias] },
     define: {
       "import.meta.env.VITE_BUZZ_LIVE": JSON.stringify(live ? "1" : "0"),
       "import.meta.env.VITE_BUZZ_NOTIFICATIONS_PAUSED": JSON.stringify(
@@ -211,8 +210,6 @@ export default defineConfig(async ({ command, mode }) => {
       "import.meta.env.VITE_BUZZ_EXTERNAL_MCP_COMMUNITIES": JSON.stringify(
         externalMcpCommunities,
       ),
-      "import.meta.env.VITE_BUZZ_WORKFLOW_RESTRICTED_COMMUNITIES":
-        JSON.stringify(workflowRestrictedCommunities),
       "import.meta.env.VITE_BUZZ_BUILDERLAB_URL": JSON.stringify(builderlabUrl),
       "import.meta.env.VITE_BUZZ_FEDERATED_IDENTITY": JSON.stringify(
         federatedUrl === undefined ? "0" : "1",
@@ -227,6 +224,8 @@ export default defineConfig(async ({ command, mode }) => {
       "import.meta.env.VITE_BUZZ_MOBILE_APP_IOS_URL": JSON.stringify(mobileIos),
       "import.meta.env.VITE_BUZZ_MOBILE_APP_ANDROID_URL":
         JSON.stringify(mobileAndroid),
+      "import.meta.env.VITE_BUZZ_RECOMMENDED_AGENT":
+        JSON.stringify(recommended),
       "import.meta.env.VITE_BUZZ_FIRST_RUN_ACCOUNT":
         JSON.stringify(firstRunAccount),
     },

@@ -89,7 +89,7 @@ pub(crate) async fn relay_socket_connect(
             .0
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
-        if live.len() >= 16 || live.contains_key(&id) {
+        if live.len() >= 32 || live.contains_key(&id) {
             return Err("Native sockets are busy".into());
         }
         live.insert(
@@ -430,7 +430,17 @@ async fn upgrade(
                         // Missing evidence: the relay requires a token after all.
                         None => unsigned.unwrap_or("relay-unauthorized"),
                     },
-                    403 => "relay-forbidden",
+                    403 => {
+                        if let Ok(server) = fi.server_for(relay) {
+                            server.note_clock_offset(super::protocol::clock_offset(
+                                response
+                                    .headers()
+                                    .get("date")
+                                    .and_then(|v| v.to_str().ok()),
+                            ));
+                        }
+                        "relay-forbidden"
+                    }
                     503 => "relay-unavailable",
                     _ => "Native socket upgrade refused",
                 }

@@ -103,10 +103,12 @@ jobs:
           rustup toolchain install "$version" --profile minimal --target "$TARGET"
           echo "RUSTUP_TOOLCHAIN=$version" >> "$GITHUB_ENV"
           echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
+      # Previews from main save; stable and beta tags only restore main's cache.
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
           key: macos-prerelease-${{ matrix.arch }}
           cache-all-crates: true
+          save-if: ${{ github.ref == 'refs/heads/main' }}
 
       - name: Set release version
         id: version
@@ -351,6 +353,11 @@ jobs:
           rustup toolchain install $env:RUST_VERSION --profile minimal
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           "RUSTUP_TOOLCHAIN=$env:RUST_VERSION" >> $env:GITHUB_ENV
+      # Previews from main save; stable and beta tags only restore main's cache.
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          key: windows-release
+          save-if: ${{ github.ref == 'refs/heads/main' }}
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: ${{ steps.pins.outputs.node }}
@@ -433,13 +440,17 @@ jobs:
             build-essential ca-certificates curl desktop-file-utils file git \
             libasound2-dev libayatana-appindicator3-dev libgtk-3-dev librsvg2-dev \
             libopus-dev libssl-dev libwebkit2gtk-4.1-dev libxdo-dev patchelf pkg-config \
-            squashfs-tools wget xdg-utils
+            squashfs-tools wget xdg-utils zstd
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
       - run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
-      # No shared writable release caches. Use existing pins and frozen inputs.
       - uses: cashapp/activate-hermit@cea9af7913204a965fd488637a8d1811bba2e616 # v1
+      # Previews from main save; stable and beta tags only restore main's cache.
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          key: linux-release
+          save-if: ${{ github.ref == 'refs/heads/main' }}
       - run: pnpm install --frozen-lockfile
       - name: Install pinned AppImage repacking tools
         run: |

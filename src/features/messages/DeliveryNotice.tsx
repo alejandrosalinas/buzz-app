@@ -21,10 +21,20 @@ export function DeliveryNotice({
     const timer = setTimeout(() => setNow(Date.now()), remaining);
     return () => clearTimeout(timer);
   }, [row.createdAt, row.delivery]);
-  const feedback = deliveryFeedback(row, now);
+  // A refused retry explains itself until the delivery changes.
+  const [refusal, setRefusal] = useState<{
+    delivery: ChannelMessage["delivery"];
+    reason: string;
+  }>();
+  const refused =
+    refusal && refusal.delivery === row.delivery ? refusal.reason : undefined;
+  const status = deliveryFeedback(row, now);
+  const feedback = status && refused ? `${status} ${refused}` : status;
   if (!feedback) return null;
   const canRetry =
-    (row.delivery === "failed" || row.delivery === "unknown") && retry;
+    !refused &&
+    (row.delivery === "failed" || row.delivery === "unknown") &&
+    retry;
   return (
     <div className={styles.delivery}>
       <span role="status" className={canRetry ? "sr-only" : undefined}>
@@ -35,7 +45,16 @@ export function DeliveryNotice({
           size="inline"
           variant="ghost"
           title={feedback}
-          onClick={() => retry(row.id)}
+          onClick={() => {
+            try {
+              retry(row.id);
+            } catch (error) {
+              setRefusal({
+                delivery: row.delivery,
+                reason: error instanceof Error ? error.message : String(error),
+              });
+            }
+          }}
         >
           <ArrowsClockwiseIcon size={12} aria-hidden="true" /> Retry
         </Button>

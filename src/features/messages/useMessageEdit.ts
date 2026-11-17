@@ -51,6 +51,22 @@ export type DraftMessageEdit = {
   cancelDraft(): void;
 };
 
+/** Closes a task after the next frame, so the optimistic row paints first. */
+export function useCloseAfterPaint(active: boolean, close: () => void) {
+  const finish = useEffectEvent(close);
+  useEffect(() => {
+    if (!active) return;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const frame = requestAnimationFrame(() => {
+      timer = setTimeout(finish);
+    });
+    return () => {
+      cancelAnimationFrame(frame);
+      clearTimeout(timer);
+    };
+  }, [active]);
+}
+
 /** Edit delivery uses the session outbox; the composer owns input and draft restoration. */
 export function useMessageEdit(session: ComposerSession, restore: () => void) {
   const [target, setTarget] = useState<ChannelMessage | DraftMessageEdit>();
@@ -83,16 +99,9 @@ export function useMessageEdit(session: ComposerSession, restore: () => void) {
     initial.current = undefined;
     setError(undefined);
   };
-  const finish = useEffectEvent(close);
-  useEffect(() => {
-    if (
-      operation &&
-      (!delivery ||
-        delivery.delivery === "accepted" ||
-        delivery.delivery === "seen")
-    )
-      finish();
-  }, [operation, delivery]);
+  // The row shows the edit optimistically; MessageManagementStatus owns
+  // failures.
+  useCloseAfterPaint(!!operation && !retryable, close);
   return {
     target,
     busy,

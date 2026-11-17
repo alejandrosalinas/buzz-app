@@ -4,11 +4,7 @@
 import { createRoot } from "react-dom/client";
 import styles from "../../src/bundled/agents/AgentsPage.module.css";
 import { bestieTab, formerBestieTab } from "../../src/bundled/bestie/BestieTab";
-import {
-  checkinHourly,
-  memory,
-  withFeature,
-} from "../../src/bundled/bestie/features";
+import { memory, withFeature } from "../../src/bundled/bestie/features";
 import type { Agent } from "../../src/features/agents/service";
 import type { RelayData } from "../../src/features/relay/service";
 import "../../src/shared/styles/globals.css";
@@ -97,15 +93,11 @@ const agent = {
   place: "here",
   attentionEnabled: true,
   attention: {
-    "interest/bestie-hourly-check-in": { value: { type: "interest" } },
-    "watch/bestie-hourly-check-in": { value: { type: "timer" } },
+    "interest/bestie-notes": { value: { type: "interest" } },
+    "watch/bestie-notes": { value: { type: "timer" } },
   },
   config: {
-    instructions: withFeature(
-      withFeature("Be brief.", memory, true),
-      checkinHourly,
-      true,
-    ).replace(
+    instructions: withFeature("Be brief.", memory, true).replace(
       "<!-- /buzz:bestie/memory -->",
       edited ? "<!-- /buzz:bestie/memory--> Also answer in French." : "$&",
     ),

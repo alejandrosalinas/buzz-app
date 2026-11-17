@@ -92,7 +92,7 @@ test("Outbox Retry reconciles a recorded then removed Solo invitation without re
       json: { accepted: true, event_id: event.id, message: "" },
     });
   });
-  await page.route("**/api/relay/**/query", async (route) => {
+  await page.route("**/api/relay/primary/query", async (route) => {
     const filters = route.request().postDataJSON();
     if (
       filters.some(
@@ -149,12 +149,13 @@ test("Outbox Retry reconciles a recorded then removed Solo invitation without re
   const summary = panel.locator("summary").filter({ hasText: /^Outbox ·/ });
   const outbox = summary.locator("..");
   for (const mode of ["dark", "light"]) {
-    await page.goto(app.origin);
-    await page.evaluate(
+    // Seed before boot: a reload during boot can fail the document request
+    // in WebKit. Later scripts run after earlier ones, so the last mode wins.
+    await page.addInitScript(
       (mode) => localStorage.setItem("buzz-appearance.v1", mode),
       mode,
     );
-    await page.reload();
+    await page.goto(app.origin);
     await expect(page.locator("html")).toHaveAttribute("data-color-mode", mode);
     await openPage(page, "Messages");
     await page

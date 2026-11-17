@@ -29,7 +29,8 @@ pub(crate) fn onboarding_preserve_window<R: Runtime>(
     if window.label() != "main" {
         return Err("Main window required".into());
     }
-    #[cfg(target_os = "macos")]
+    // MockRuntime has no NSView to receive AppKit messages.
+    #[cfg(all(target_os = "macos", not(test)))]
     {
         let native = window.ns_window().map_err(|error| error.to_string())?;
         let native: &objc2_app_kit::NSWindow = unsafe { &*native.cast() };

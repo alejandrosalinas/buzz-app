@@ -546,9 +546,33 @@
   .buzz-button[data-icon-shape="round"] {
     border-radius: var(--radius-pill);
   }
+  .buzz-icon-button-emoji {
+    display: block;
+    font-family: var(--font-emoji);
+    font-size: var(--size-emoji-inline);
+    line-height: 1;
+  }
 
   .buzz-button[data-color-swatch] .buzz-button-label {
     color: var(--text-on-accent);
+  }
+  /* A transparent swatch shows a checkerboard in every state, with ink that
+     reads on it. */
+  .buzz-button[data-color-swatch="transparent"],
+  .buzz-button[data-color-swatch="transparent"]:is(
+    :hover,
+    :active,
+    [aria-expanded="true"]
+  ):not([data-disabled]) {
+    background:
+      repeating-conic-gradient(
+        var(--border-primary) 0 25%,
+        var(--surface-panel) 0 50%
+      )
+      50% / 0.75rem 0.75rem;
+  }
+  .buzz-button[data-color-swatch="transparent"] .buzz-button-label {
+    color: var(--text-primary);
   }
 
   .buzz-button[data-color-swatch] .buzz-button-label > svg {

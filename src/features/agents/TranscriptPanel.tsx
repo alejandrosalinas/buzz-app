@@ -321,8 +321,8 @@ export function TranscriptPanel<T extends Transcript>({
   });
   const { transcript, error } = shown;
   return (
-    <div className={activityStyles.transcript}>
-      <div className={activityStyles.transcriptHeader}>
+    <div className={activityStyles.transcript} data-transcript>
+      <div className={activityStyles.transcriptHeader} data-transcript-header>
         <InlineHeader
           title="Transcript"
           actions={

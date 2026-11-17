@@ -395,6 +395,24 @@ export class GooseSetup {
     })();
   }
 
+  /** Whether `provider` is set up here, lists `model` in its live list, as
+   * the model picker reads it, and offers `effort` on it, which goose would
+   * otherwise refuse each turn. */
+  async offers({
+    provider = "",
+    model,
+    effort,
+  }: Readonly<{ provider?: string; model: string; effort: string }>) {
+    const listed = (await this.providers()).providers.find(
+      (item) => item.id === provider,
+    );
+    return (
+      !!listed?.configured &&
+      (await this.models(provider)).some((item) => item.id === model) &&
+      (await this.efforts({ provider, model })).levels.includes(effort)
+    );
+  }
+
   /** Databricks catalogs can lag its endpoints and AI Gateway services;
    * configured providers use live discovery for both Databricks versions.
    * A provider not set up offers none: its catalog's would not run. */

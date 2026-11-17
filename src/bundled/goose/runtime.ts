@@ -21,7 +21,7 @@ import {
   turnNote,
 } from "../../buzz-mcp/session-tools";
 import {
-  fromOwner,
+  mentionAuthority,
   type Agent,
   type AgentHandle,
   type Agents,
@@ -30,6 +30,12 @@ import {
   type TurnResult,
 } from "../../features/agents/service";
 import { ownerReads } from "../../features/agents/reads";
+import {
+  followRecommended,
+  onRecommended,
+  type RecommendedCandidate,
+  type RecommendedRun,
+} from "../../features/agents/recommended";
 import { soloChat } from "../../features/agents/solo-chat";
 import { SessionControls } from "../../features/agent-harness/session-control";
 import type {
@@ -92,6 +98,12 @@ export const config = (value: unknown): Config => ({
   ...DEFAULT_CONFIG,
   ...(value && typeof value === "object" ? (value as Partial<Config>) : {}),
 });
+/** What an agent runs on: its config, with `candidate`'s provider, model and
+ * thinking level in place of its own while it is on Recommended. */
+export const running = (
+  value: unknown,
+  candidate: RecommendedCandidate | null | undefined,
+): Config => followRecommended(value, config(value), candidate);
 
 const CONVERSATION_READ_TIMEOUT_MS = 4_000;
 const CHAT = [9, 40002];
@@ -175,7 +187,25 @@ export class GooseRuntime {
       "",
     /** Agent storage, where what each session started with is kept. */
     private readonly agentStore: AgentStore = localStore(),
-  ) {}
+    /** What agents on Recommended run on; found at the first such run. */
+    private readonly recommended?: RecommendedRun,
+  ) {
+    // Once found, agents on Recommended take it up.
+    this.unfollow = recommended?.subscribe(() => this.sync(this.synced));
+  }
+  private readonly unfollow: (() => void) | undefined;
+  private synced: readonly Agent[] = [];
+  private settings(raw: unknown) {
+    return running(raw, this.recommended?.current());
+  }
+  /** Finds what agents on Recommended run on before `raw`'s first run. */
+  private async follow(raw: unknown) {
+    if (!this.recommended || !onRecommended(raw)) return;
+    // Only the first waits; a later retry, after nothing was offered, runs
+    // alongside.
+    const finding = this.recommended.find();
+    if (this.recommended.current() === undefined) await finding;
+  }
 
   /** What each of the agent's sessions started with. */
   prompts(agent: AgentKey) {
@@ -253,12 +283,13 @@ export class GooseRuntime {
     }
   }
   sync(agents: readonly Agent[]) {
+    this.synced = agents;
     const current = new Set(agents.map((agent) => agent.key));
     for (const key of this.agents.keys())
       if (!current.has(key)) void this.retire(key).catch(() => undefined);
     for (const agent of agents) {
       if (this.retirements.has(agent.key)) continue;
-      const next = config(agent.config);
+      const next = this.settings(agent.config);
       const entry = this.agents.get(agent.key);
       if (!entry) {
         const created = this.entry(agent.key, next);
@@ -339,7 +370,7 @@ export class GooseRuntime {
   ) {
     const key = this.controlKey(agent, place);
     const control = `${agent.key}/${key}`;
-    const entry = this.entry(agent.key, config(agent.config));
+    const entry = this.entry(agent.key, this.settings(agent.config));
     if (action === "interrupt") {
       this.controls.interrupt(control);
       entry.policies.get(key)?.cancel();
@@ -357,6 +388,7 @@ export class GooseRuntime {
   }
 
   dispose() {
+    this.unfollow?.();
     for (const entry of this.agents.values()) {
       entry.lifetime.abort(new Error("The Goose runtime was disposed"));
       entry.sessions.dispose();
@@ -386,7 +418,6 @@ export class GooseRuntime {
     interruptible,
     named,
   }: Delivery) {
-    const settings = config(raw);
     // Unaddressed watches and timers come as standalone turns (`runOnce`).
     if (
       trigger.type !== "mention" &&
@@ -402,26 +433,21 @@ export class GooseRuntime {
     // goose runs commands as you; mentions need owner or delegated authority.
     if (trigger.type === "mention") {
       const snapshot = this.relay(agent.key)?.snapshot();
-      if (
-        !(await fromOwner(trigger.event, agent.owner, {
-          agent: agent.pubkey,
-          community: snapshot?.origin,
-          authority:
-            snapshot?.status === "ready"
-              ? snapshot.session.workflowAuthority
-              : undefined,
-          profiles:
-            snapshot?.status === "ready"
-              ? snapshot.session.profiles
-              : undefined,
-        }))
-      ) {
-        ignored?.();
-        return;
-      }
+      const authority = await mentionAuthority(trigger.event, agent.owner, {
+        agent: agent.pubkey,
+        authority:
+          snapshot?.status === "ready"
+            ? snapshot.session.workflowAuthority
+            : undefined,
+        profiles:
+          snapshot?.status === "ready" ? snapshot.session.profiles : undefined,
+      });
+      if (authority !== "owner") return ignored?.(authority);
       signal.throwIfAborted();
     }
-    const entry = this.entry(agent.key, settings);
+    // Found only for a delivery it takes, so nothing it drops starts goose.
+    await this.follow(raw);
+    const entry = this.entry(agent.key, this.settings(raw));
     entry.handle = agent;
     entry.team = team ?? "";
     const event =
@@ -618,7 +644,8 @@ export class GooseRuntime {
     prompt,
   }: StandaloneTurn): Promise<TurnResult> {
     const { agent, team } = delivery;
-    const entry = this.entry(agent.key, config(delivery.config));
+    await this.follow(delivery.config);
+    const entry = this.entry(agent.key, this.settings(delivery.config));
     entry.handle = agent;
     entry.team = team ?? "";
     const done = entry.sessions.runOnce(

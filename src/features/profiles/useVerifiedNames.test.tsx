@@ -357,7 +357,8 @@ it.each([
             }),
           ),
         );
-        expect(directory.queries.verifiedHeld?.(person.pubkey)).toBe(true);
+        // Neither the head nor its projection is published yet.
+        expect(directory.queries.verifiedHeld?.(person.pubkey)).toBe(false);
         // Unrelated people evict the revoking head before it is published.
         await directory.ensure(
           Array.from({ length: 1024 }, (_, n) => key(n + 1)),

@@ -6,12 +6,30 @@ import {
   matchesConversation,
   soloDraft,
   soloDraftTarget,
+  resumeSoloDraftTarget,
 } from "./routes";
 
 const viewer = "c".repeat(64);
 const scope = { viewer, communityOrigin: "https://relay.test" };
 const partition = `https://relay.test:${viewer}`;
 const agent = "a".repeat(64);
+it("New resumes the current ordinary draft only in its own scope and workspace", () => {
+  const target = soloDraftTarget(partition, { project: "work", agent });
+  expect(resumeSoloDraftTarget(partition, target)).toBe(target);
+  expect(resumeSoloDraftTarget(partition, target, "work")).toBe(target);
+  expect(resumeSoloDraftTarget(partition, target, "other")).toEqual(
+    soloDraftTarget(partition, { project: "other" }),
+  );
+  expect(resumeSoloDraftTarget(`https://other.test:${viewer}`, target)).toEqual(
+    soloDraftTarget(`https://other.test:${viewer}`),
+  );
+  const region = soloDraftTarget(partition, {
+    region: "buzz.region:example:tasks",
+  });
+  expect(resumeSoloDraftTarget(partition, region)).toEqual(
+    soloDraftTarget(partition),
+  );
+});
 it("matches reopened conversations only in the original community and viewer", () => {
   const target = conversationTarget(partition, "chat");
   expect(matchesConversation(target, partition, "chat")).toBe(true);

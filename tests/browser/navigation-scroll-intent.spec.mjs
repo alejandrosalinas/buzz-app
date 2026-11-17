@@ -1,8 +1,7 @@
-import { selectCommunity } from "./navigation.mjs";
+import { communitySwitcher, selectCommunity } from "./navigation.mjs";
 import { test, expect } from "./fixture.mjs";
 import { open } from "./timeline.mjs";
 
-const button = (page, name) => page.getByRole("button", { name, exact: true });
 test.use({
   largeSidebar: true,
   productionBroker: true,
@@ -42,9 +41,7 @@ for (const cachedStartup of [false, true]) {
         element.dispatchEvent(new Event("scroll"));
       });
       await selectCommunity(page, "Personal space");
-      await expect(
-        button(page, "Community switcher: Personal space"),
-      ).toBeVisible();
+      await expect(communitySwitcher(page, "Personal space")).toBeVisible();
       // Preserve delayed-first-layout coverage on a genuine cold launch too.
       // Without a saved roster/preferences record, the first layout waits for
       // fresh preferences; the cached case intentionally restores immediately.

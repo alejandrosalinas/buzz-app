@@ -3,7 +3,7 @@
 Dialogs and content tabs follow the [navigation history and dismissal contract](navigation-history.md).
 The integrated families are Members, Settings sections, provider controls opened
 within Settings or through Agents-page links, agent config version inspectors,
-and thread, Profile and GitHub tabs.
+the community join dialog, and thread, Profile and GitHub tabs.
 
 Plugin account-action dialogs in the profile menu are a documented exception.
 They live in the profile menu's own state and create no visit: Back/Forward
@@ -64,9 +64,11 @@ its destination when the channel opener is known; cold handoffs retain a channel
 visit beneath the new destination.
 
 Settings Close retires its known section visits for the same account/community
-scope and returns to the covered workspace. Back/Forward between sections remains
-reversible until Close. Back/Forward to Manage plugins reopens the plugin
-details that visit showed; opening it from another section starts at the list.
+scope and returns to the covered workspace. A visit that names no community, as
+links and shortcuts to Settings do, counts as Settings for whatever is selected
+when Settings closes. Back/Forward between sections remains reversible until
+Close. Back/Forward to Manage plugins reopens the plugin details that visit
+showed; opening it from another section starts at the list.
 Profile discard confirmation precedes dismissal and Back/Forward departure.
 Keep editing preserves the mounted draft and current visit; Discard changes
 continues the requested traversal without retiring the Settings visit.
@@ -89,6 +91,37 @@ The shared Dialog blocks explicit dismissal during a revert; passive traversal
 can hide it while the existing write continues. Completion retires its presentation
 even after Back. A cold or reloaded address reloads history; Load older remains
 available in the dialog if the selected revision is beyond the loaded page.
+
+The community join dialog is a `join` presentation (`{ viewer, visit, community? }`)
+on the visit beneath it: a page, conversation or Settings section. `visit` is an
+opaque token for one opening of the dialog. Invite links, the picker's **Join a
+community** (no address yet) and the `communityJoin` capability (Builderlab's
+Settings **Create community**) open it as a new visit. The visit beneath stays
+presented and keeps its own visit, as it does under Settings. Back closes the
+dialog and returns to that visit; Forward reopens it. Close and Escape retire
+that opening's visits and return to the visit beneath. Closing the view beneath
+(for example Settings Close) also retires the joins presented over it; a close
+by id can also retire a join over a later visit of the same view. A finished
+join replaces its visit with the joined community's page, so Back returns to the
+view beneath the dialog, and retires every other opening that now offers that
+viewer the community actually joined (its edited address, else its original).
+The target holds the address only. The invite code, the one-use instruction to
+connect at once (for a community just created) and the dialog's form as edited
+(address, code, and the profile once changed) stay in memory, keyed by the
+opening's token: Back and Forward in the running app restore that opening's form
+only. Editing the address clears the code, so a code never returns beside
+another address. A restored profile applies only to the community it was edited
+for, and gives way to a profile a later publish attempt recorded in the join
+journal. Reload and a restored link show the target's address, with no code and no
+form. Forward, reload and a restored link never look up,
+claim or publish by themselves; they wait for Continue. The dialog shows only
+for the viewer it was opened for, and a change of viewer discards the other
+viewer's codes. While the access or profile step writes, Close is disabled and
+Back/Forward bounces back to the dialog. Two cases open without a visit: first
+run's landing (no community yet) keeps its pasted address in its own state, as
+there is no view beneath it; and while a failed link waits for Retry, the
+picker's **Join a community** opens in place, because a new visit would replace
+the failure and its Retry.
 
 ## History and lifetime boundaries
 

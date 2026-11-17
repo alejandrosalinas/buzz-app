@@ -93,8 +93,10 @@ const OVERRIDES = new Map([
 const RULES = [
   {
     id: "arbitrary-text-size",
-    // text-[...] with any unit, plus raw CSS font-size declarations.
-    pattern: /\btext-\[[^\]]*(?:px|rem|em|pt|%)[^\]]*\]|font-size\s*:/g,
+    // text-[...] with any unit, plus raw CSS font-size declarations. The
+    // emoji size roles (`--size-emoji-*`) are named glyph sizes, not text.
+    pattern:
+      /\btext-\[[^\]]*(?:px|rem|em|pt|%)[^\]]*\]|font-size\s*:(?!\s*var\(--size-emoji-)/g,
     message:
       "arbitrary text size — use a named role (text-body, text-label, …). px freezes against zoom; arbitrary rem re-fragments the scale.",
   },

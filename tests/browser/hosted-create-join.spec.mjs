@@ -141,7 +141,70 @@ test("creating a hosted community joins it and lists it in the picker", async ({
   ).toHaveCount(0);
   await settleDialogMotion(setup);
   await shot("3-join-profile.png");
-  await setup.getByRole("button", { name: "Continue", exact: true }).click();
+
+  // Reload restores the join over Settings, not the Create form it came from.
+  await page.reload();
+  const joining = page.getByRole("dialog", { name: "Join a community" });
+  await expect(
+    joining.getByRole("textbox", { name: "Community URL", exact: true }),
+  ).toHaveValue("https://secondary.example");
+  await expect(settings).toHaveCount(1);
+  await expect(create).toHaveCount(0);
+  // Back from the restored join reaches Settings, not the spent Create form.
+  await page.goBack();
+  await expect(joining).toHaveCount(0);
+  await expect(settings).toBeVisible();
+  // The card shows its overview, listing the new community, not the form.
+  await expect(
+    settings.getByText("secondary", { exact: true }).first(),
+  ).toBeVisible();
+  await expect(create).toHaveCount(0);
+  await page.goForward();
+  await joining.getByRole("button", { name: "Continue", exact: true }).click();
+  const name = setup.getByRole("textbox", {
+    name: "Display name",
+    exact: true,
+  });
+  await expect(name).toHaveValue("Fixture Reader");
+
+  // While the profile publishes, Escape cannot close Settings beneath the
+  // join: a refusal must leave the join and its draft to retry.
+  await name.fill("Fixture Owner");
+  const publish = setup.getByRole("button", {
+    name: "Publish profile & open",
+    exact: true,
+  });
+  const published = Promise.withResolvers();
+  const release = Promise.withResolvers();
+  await page.route("**/api/relay/secondary/profile", async (route) => {
+    published.resolve();
+    await release.promise;
+    // The relay answers but does not accept the profile.
+    await route.fulfill({
+      json: { accepted: false, event_id: "", message: "Profile refused" },
+    });
+  });
+  try {
+    await publish.click();
+    await published.promise;
+    // Back is refused while the join writes, as its Close is.
+    await page.evaluate(
+      () =>
+        new Promise((resolve) => {
+          addEventListener("popstate", resolve, { once: true });
+          history.back();
+        }),
+    );
+    await expect(name).toHaveValue("Fixture Owner");
+    await page.keyboard.press("Escape");
+  } finally {
+    release.resolve();
+  }
+  await expect(setup.getByText("Profile refused")).toBeVisible();
+  await expect(name).toHaveValue("Fixture Owner");
+  await expect(settings).toHaveCount(1);
+  await page.unroute("**/api/relay/secondary/profile");
+  await publish.click();
   await expect(setup).toHaveCount(0);
 
   await expect(

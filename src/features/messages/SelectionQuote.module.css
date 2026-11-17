@@ -1,0 +1,13 @@
+@reference "../../shared/styles/globals.css";
+
+/* Anchored to a text selection, painted like the message action bar. */
+.selectionQuote {
+  position: fixed;
+  display: flex;
+  padding: var(--space-half);
+  /* Not conversation text: copying a selection never includes this label. */
+  user-select: none;
+  @apply popover-surface;
+  --floating-radius: var(--radius-control);
+  --floating-inset: var(--space-half);
+}

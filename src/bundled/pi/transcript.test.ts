@@ -79,7 +79,7 @@ it("shows a turn's prompt, thinking, tools, sends and answer, steers included", 
         },
         { type: "toolCall", id: "c4", name: "buzz_read", arguments: {} },
       ]),
-      result(7, "c2", "sent"),
+      result(7, "c2", `sent ${"c".repeat(64)}`),
       result(8, "c3", "Not allowed", true),
       result(9, "c4", "messages"),
       assistant(10, [{ type: "text", text: "Done" }]),
@@ -112,7 +112,7 @@ it("shows a turn's prompt, thinking, tools, sends and answer, steers included", 
               item.paths,
             ]
           : item.type === "message"
-            ? ["message", item.text, item.posted]
+            ? ["message", item.text, item.posted, item.messageId]
             : [item.type, "text" in item ? item.text : ""],
     ),
   ).toEqual([
@@ -120,11 +120,11 @@ it("shows a turn's prompt, thinking, tools, sends and answer, steers included", 
     ["thought", "Let me write it"],
     ["tool", "write", "edit", "completed", "Wrote a.txt", ["a.txt"]],
     ["prompt", "and read it", "Sal", true],
-    ["message", "On it", true],
-    ["message", "Lost", undefined],
+    ["message", "On it", true, "c".repeat(64)],
+    ["message", "Lost", undefined, undefined],
     ["tool", "buzz.read", "other", "completed", "messages", []],
     ["status", "The message above was not posted: Not allowed"],
-    ["message", "Done", undefined],
+    ["message", "Done", undefined, undefined],
   ]);
 });
 

@@ -1,5 +1,6 @@
 import { test, expect } from "./fixture.mjs";
 import { openPage } from "./navigation.mjs";
+import { releasing } from "./reading.mjs";
 
 const windowRoom = "00000000-0000-0000-0000-000000000123";
 
@@ -41,13 +42,15 @@ test("a live reply in the open Activity conversation is read while focus stays o
     name: "Thread messages",
     exact: true,
   });
-  // Opening reveals the exact message, which takes focus once it settles;
-  // move focus back to the row only after that, so nothing takes it again.
-  await expect
-    .poll(() =>
-      detail.evaluate((element) => element.contains(document.activeElement)),
-    )
-    .toBe(true);
+  // Opening finds the first unread reply, paging older, and focuses the
+  // composer; move focus back to the row only after that, so nothing takes
+  // it again.
+  await releasing(app, () =>
+    expect(scroller).not.toHaveAttribute("data-positioning", { timeout: 100 }),
+  );
+  await expect(
+    detail.getByRole("textbox", { name: "Reply to thread" }),
+  ).toBeFocused();
   await open.focus();
   await expect(open).toBeFocused();
   app.reply(app.inboxWindow.root.id);

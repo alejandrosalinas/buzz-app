@@ -74,6 +74,30 @@ describe("channel store", () => {
     failing.queries.ensureList();
     expect(failing.queries.list().status).toBe("loading");
   });
+  it("does not republish the list when a channel lookup changes nothing", async () => {
+    let clock = 0;
+    const { queries, next } = setup(2, () => ++clock);
+    queries.ensureList();
+    next().respond([
+      roster(relay, "b", [viewer.pubkey]),
+      metadata(relay, "b", "Beta"),
+    ]);
+    await flush();
+    // An open channel the viewer has not joined is looked up again on every
+    // search or catch-up page that mentions it.
+    const lookUp = async () => {
+      const resolving = queries.resolve?.(["open"]);
+      next().respond([metadata(relay, "open", "Open")]);
+      await resolving;
+    };
+    await lookUp();
+    const listener = vi.fn();
+    queries.subscribeList(listener);
+    const before = queries.list();
+    await lookUp();
+    expect(listener).not.toHaveBeenCalled();
+    expect(queries.list()).toBe(before);
+  });
   it("replaces a channel summary when only its private visibility changes", async () => {
     const { store, queries, next } = setup();
     queries.ensureList();
@@ -525,6 +549,28 @@ it("refreshes one channel's roster with an exact read and merges it without drop
     test.store.dispose();
   }
 });
+it("stamps rosterAsOf only when a complete roster read commits", async () => {
+  let clock = 1_000;
+  const test = setup(2, () => ++clock);
+  try {
+    await discovered(test);
+    const complete = test.queries.list().rosterAsOf;
+    expect(complete).toBeDefined();
+    // An exact roster read commits the list again, but proves no absence.
+    const refreshing = test.queries.refreshRoster?.("a");
+    test
+      .next()
+      .respond([
+        roster(relay, "a", [viewer.pubkey, alice.pubkey], 1_700_000_001),
+      ]);
+    await expect(refreshing).resolves.toBe(true);
+    const exact = test.queries.list();
+    expect(exact.asOf).toBeGreaterThan(complete ?? Infinity);
+    expect(exact.rosterAsOf).toBe(complete);
+  } finally {
+    test.store.dispose();
+  }
+});
 it("reports no fresh roster evidence when an exact read omits the cached channel", async () => {
   const test = setup();
   try {
@@ -714,6 +760,66 @@ it("writes one startup snapshot with the final content after a burst of discover
     ]);
     vi.advanceTimersByTime(5_000);
     expect(writeStartup).toHaveBeenCalledTimes(1);
+  } finally {
+    vi.useRealTimers();
+    owner.dispose();
+  }
+});
+it("rewrites the startup snapshot only when its roster changes or ages", () => {
+  vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
+  const wire = scriptedTransport(viewer.pubkey, relay.pubkey);
+  const writeStartup = vi.fn(async (_patch: SavedStartup) => {});
+  let live!: LiveCallbacks;
+  const owner = createRelaySession(
+    {
+      ...wire.transport,
+      subscribe(callbacks) {
+        live = callbacks;
+        return { update() {}, retry() {}, dispose() {} };
+      },
+    },
+    {
+      persistence: {
+        read: async () => [],
+        readStartup: async () => undefined,
+        writeStartup,
+        write: async () => {},
+        remove: async () => {},
+        retain: async () => {},
+        clear: async () => {},
+        close: () => {},
+      },
+      prepared: true,
+    },
+  );
+  const discoveryWrites = () =>
+    writeStartup.mock.calls.filter(([patch]) => patch.discovery).length;
+  try {
+    const first = roster(relay, "a", [viewer.pubkey]);
+    live.receive([first]);
+    vi.advanceTimersByTime(500);
+    expect(discoveryWrites()).toBe(1);
+    // Catch-up delivers the same version again.
+    live.receive([first]);
+    vi.advanceTimersByTime(500);
+    expect(discoveryWrites()).toBe(1);
+    live.receive([roster(relay, "b", [viewer.pubkey])]);
+    vi.advanceTimersByTime(500);
+    expect(discoveryWrites()).toBe(2);
+    // An unchanged roster is written again after ten minutes, and after the
+    // clock moves back, so restore never meets a stale or future copy.
+    vi.advanceTimersByTime(599_000);
+    live.receive([first]);
+    vi.advanceTimersByTime(500);
+    expect(discoveryWrites()).toBe(2);
+    vi.advanceTimersByTime(500);
+    live.receive([first]);
+    vi.advanceTimersByTime(500);
+    expect(discoveryWrites()).toBe(3);
+    vi.setSystemTime(Date.now() - 60_000);
+    live.receive([first]);
+    vi.advanceTimersByTime(500);
+    expect(discoveryWrites()).toBe(4);
   } finally {
     vi.useRealTimers();
     owner.dispose();

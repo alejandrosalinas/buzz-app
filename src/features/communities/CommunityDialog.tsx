@@ -12,6 +12,7 @@ import type { Communities, PersonalProfile } from "./service";
 import { canSaveProfile, ProfileFields, profilesEqual } from "./ProfileFields";
 import { communityDestination } from "./destination";
 import { parsePastedInvite, pastedInviteError } from "./invite-link";
+import type { JoinForm } from "./invite-intent";
 import { nativeIdentityEnabled } from "../identity/service";
 import { isTransientFailure, readErrorKind } from "../relay/errors";
 import { createJoinJournal, type PendingJoin } from "./join-journal";
@@ -27,6 +28,12 @@ import { OnboardingBack } from "../identity/OnboardingBack";
 import { OnboardingScreen } from "../identity/OnboardingScreen";
 import styles from "./Communities.module.css";
 
+/** What the join dialog reports to the app that owns its visit. */
+export type JoinReports = {
+  onWritingChange?: ((writing: boolean) => void) | undefined;
+  onFormChange?: ((form: JoinForm) => void) | undefined;
+};
+
 export function CommunityDialog({
   communities,
   mode,
@@ -37,6 +44,8 @@ export function CommunityDialog({
   submittedDestination = false,
   onboarding = false,
   federatedIdentity,
+  onWritingChange,
+  onFormChange,
 }: {
   communities: Communities;
   /** Offers protected-community sign-in when admission refuses for it. */
@@ -49,10 +58,17 @@ export function CommunityDialog({
   /** The landing form already submitted this destination. */
   submittedDestination?: boolean;
   onboarding?: boolean;
+  /** True from before an admission or profile write is sent until it settles;
+   * Close is disabled meanwhile. */
+  onWritingChange?: ((writing: boolean) => void) | undefined;
+  /** The form as edited, to restore when the dialog returns. */
+  onFormChange?: ((form: JoinForm) => void) | undefined;
   invite?:
     | Readonly<{
         community: string;
         code: string;
+        /** Profile edits restored for the destination they were made for. */
+        profile?: JoinForm["profile"];
       }>
     | undefined;
 }) {
@@ -97,10 +113,56 @@ export function CommunityDialog({
     useState<Awaited<ReturnType<typeof inspectProfile>>>();
   const [code, setCode] = useState(invite?.code ?? "");
   const [needsInvite, setNeedsInvite] = useState(!!invite?.code);
+  const [profileDraft, setProfileDraft] = useState(invite?.profile);
+  // Report edits, not the form the dialog opened with.
+  const reportForm = useRef(onFormChange);
+  reportForm.current = onFormChange;
+  const formShown = useRef({ url, code, profileDraft });
+  useEffect(() => {
+    const shown = formShown.current;
+    if (
+      shown.url === url &&
+      shown.code === code &&
+      shown.profileDraft === profileDraft
+    )
+      return;
+    formShown.current = { url, code, profileDraft };
+    reportForm.current?.({
+      address: url,
+      code,
+      ...(profileDraft ? { profile: profileDraft } : {}),
+    });
+  }, [url, code, profileDraft]);
   const [agreed, setAgreed] = useState(false);
   const [adult, setAdult] = useState(false);
   const [uploading, setUploading] = useState(false);
   const [busy, setBusy] = useState(false);
+  // The opening's instruction to connect at once is read at mount only.
+  const [submitted] = useState(submittedDestination);
+  // Writes are tracked by what was sent, not by the step on screen: an
+  // account's consent admits from the destination step.
+  const [writing, setWriting] = useState(false);
+  const writes = useRef(false);
+  const reportWriting = useRef(onWritingChange);
+  reportWriting.current = onWritingChange;
+  function beginWrite() {
+    if (writes.current) return;
+    writes.current = true;
+    reportWriting.current?.(true);
+    setWriting(true);
+  }
+  function endWrite() {
+    if (!writes.current) return;
+    writes.current = false;
+    reportWriting.current?.(false);
+    if (mounted.current) setWriting(false);
+  }
+  useEffect(
+    () => () => {
+      if (writes.current) reportWriting.current?.(false);
+    },
+    [],
+  );
   const [error, setError] = useState(recovery.error);
   const mounted = useRef(true);
   const attempt = useRef<AbortController>(undefined);
@@ -131,6 +193,7 @@ export function CommunityDialog({
         setError(reason instanceof Error ? reason.message : String(reason));
       }
     } finally {
+      endWrite();
       if (mounted.current && !signal.aborted) setBusy(false);
     }
   }
@@ -155,8 +218,7 @@ export function CommunityDialog({
   }, [busy, step]);
   const startedDestination = useRef(false);
   useEffect(() => {
-    if (!submittedDestination || startedDestination.current || unavailable)
-      return;
+    if (!submitted || startedDestination.current || unavailable) return;
     startedDestination.current = true;
     void submit();
   });
@@ -170,12 +232,22 @@ export function CommunityDialog({
   const current: Current = (entry) =>
     mounted.current && (!entry || journal?.current(entry) === true);
   function showProfile(
+    url: string,
     found: Awaited<ReturnType<typeof inspectProfile>>,
     pending?: PendingJoin,
   ) {
     setOriginal(found);
+    // An edit restored for this destination wins unless the journal recorded
+    // a profile since (a later publish attempt, here or in another opening).
+    const edited =
+      profileDraft?.destination === url &&
+      (!pending || pending.id === profileDraft.after)
+        ? profileDraft.profile
+        : undefined;
     setProfile(
-      pending?.profile ?? (found.exists ? found.profile : client.profile),
+      edited ??
+        pending?.profile ??
+        (found.exists ? found.profile : client.profile),
     );
     focusProfile.current = true;
     setStep("profile");
@@ -190,6 +262,7 @@ export function CommunityDialog({
     joinPolicy: JoinPolicy | null | undefined,
     inviteCode = code,
   ) {
+    beginWrite();
     const admission = await admitCommunity({
       community,
       journal,
@@ -200,7 +273,7 @@ export function CommunityDialog({
         : { adult, agreed },
       current,
     });
-    if (admission) showProfile(admission.found, admission.entry);
+    if (admission) showProfile(url, admission.found, admission.entry);
   }
   async function submit() {
     if (uploading || unavailable) return;
@@ -223,6 +296,9 @@ export function CommunityDialog({
         // This submission uses it directly; the state serves later retries.
         const inviteCode = entered.code || code;
         if (entered.code) {
+          // The code moves to Invite code, where it can be edited; leaving it
+          // in the address would bring it back on the next Continue.
+          setUrl(next.url);
           setCode(entered.code);
           setNeedsInvite(true);
         }
@@ -261,7 +337,8 @@ export function CommunityDialog({
         });
         if (!signal.aborted && current(pending)) {
           setInfo(value);
-          if (found && (found.exists || pending)) showProfile(found, pending);
+          if (found && (found.exists || pending))
+            showProfile(next.url, found, pending);
           else if (
             !accountConsents(federatedIdentity, next.url) ||
             (!found && !inviteCode.trim())
@@ -290,12 +367,15 @@ export function CommunityDialog({
     } else if (step === "access") {
       if (!allowed || !destination) return;
       await work(async () => {
+        // The admission follows the issuer reset, so Close waits from here.
+        beginWrite();
         await askAgain(destination.url);
         await admit(id, destination.url, policy);
       });
     } else {
       if (!profile.name.trim()) return;
       await work(async () => {
+        beginWrite();
         if (mode === "profile")
           communities.saveProfile({ ...profile, name: profile.name.trim() });
         else {
@@ -337,7 +417,8 @@ export function CommunityDialog({
     federatedIdentity;
   // An explained refusal replaces the raw error, so it shows once.
   const explained = useExplainedRefusal(refusalIdentity, error);
-  const looking = busy && step === "destination";
+  // A lookup only reads, so it can be cancelled; an admission it led to cannot.
+  const looking = busy && step === "destination" && !writing;
   // While busy, the primary action names the operation its step started.
   const [action, actionPending] =
     step === "destination"
@@ -358,8 +439,8 @@ export function CommunityDialog({
       onOpenChange={(next) => {
         if (!next) leave();
       }}
-      // A lookup only reads, so it can be left; access and profile steps write.
-      preventClose={busy && !looking}
+      // A lookup only reads, so it can be left; an admission or publish cannot.
+      preventClose={writing}
       initialFocus={(type) => {
         // Controlled entry has no Base UI trigger to report touch modality.
         touchOpening.current =
@@ -423,7 +504,7 @@ export function CommunityDialog({
               } else if (
                 step === "destination" ||
                 mode === "profile" ||
-                (submittedDestination && step === "access")
+                (submitted && step === "access")
               )
                 leave();
               else {
@@ -488,7 +569,7 @@ export function CommunityDialog({
           </p>
         ) : (
           <>
-            {step === "destination" && submittedDestination && busy ? (
+            {step === "destination" && submitted && busy ? (
               <p role="status">Finding your community…</p>
             ) : (
               step === "destination" && (
@@ -514,6 +595,7 @@ export function CommunityDialog({
                     value={url}
                     onChange={(e) => {
                       setUrl(e.target.value);
+                      setProfileDraft(undefined);
                       setDestination(undefined);
                       setCode("");
                       setNeedsInvite(false);
@@ -599,7 +681,16 @@ export function CommunityDialog({
                 community={mode === "profile" ? undefined : id}
                 onBusyChange={setUploading}
                 profile={profile}
-                onChange={setProfile}
+                onChange={(next) => {
+                  setProfile(next);
+                  if (!destination) return;
+                  const after = journal?.get(destination.id)?.id;
+                  setProfileDraft({
+                    destination: destination.url,
+                    profile: next,
+                    ...(after ? { after } : {}),
+                  });
+                }}
                 disabled={busy}
               />
             )}

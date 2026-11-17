@@ -1,4 +1,5 @@
 import { pauseClock } from "./clock.mjs";
+import { settleDialogMotion } from "./navigation.mjs";
 import { test, expect } from "./source-fixture.mjs";
 
 test("create-time Thinking uses each provider control in the Agents shell", async ({
@@ -37,6 +38,11 @@ test("create-time Thinking uses each provider control in the Agents shell", asyn
           .click();
         const dialog = page.getByRole("dialog", { name: "Create agent" });
         await expect(dialog).toBeVisible();
+        // The sticky-footer check compares two client rects, so the enter
+        // transform must have finished (overlays.css) and be gone before
+        // the control is focused and measured.
+        await settleDialogMotion(dialog);
+        await expect(dialog).toHaveCSS("transform", "none");
         const thinking = dialog.getByRole("combobox", { name: "Thinking" });
         await expect(thinking).toBeVisible();
         await expect(thinking).toBeEnabled();

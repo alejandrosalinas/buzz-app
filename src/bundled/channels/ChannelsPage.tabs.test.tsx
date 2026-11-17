@@ -48,6 +48,23 @@ import { BrowserHostView } from "../../features/browser/BrowserHostView";
 import { BrowserSessions } from "../../features/browser/sessions";
 import type { BrowserPlatform } from "../../features/browser/platform";
 
+const highlighted = vi.hoisted(() => ({
+  root: undefined as string | undefined,
+}));
+// Observe the page → timeline boundary; jsdom does not lay out virtual rows.
+vi.mock("./ChannelBody", async (original) => {
+  const actual = await original<typeof import("./ChannelBody")>();
+  return {
+    ...actual,
+    ChannelBody(
+      props: import("react").ComponentProps<typeof actual.ChannelBody>,
+    ) {
+      highlighted.root = props.openThreadRootId;
+      return <actual.ChannelBody {...props} />;
+    },
+  };
+});
+
 composerDOMFixture();
 
 const owners: ReturnType<typeof createRelaySession>[] = [];
@@ -262,6 +279,39 @@ async function page(
     present: (request: PageNavigation) => mounted.rerender(view(request)),
   };
 }
+
+it("passes only the visible side thread's root to the timeline and clears it when hidden or moved", async () => {
+  const h = await page("stream", undefined, true);
+  await screen.findByRole("tab", { name: "Initiating thread" });
+  const tabs = renderHook(() => useChannelTabState(h.session, "alpha"));
+  expect(highlighted.root).toBe(h.root);
+  const id = tabs.result.current.tabs.find((tab) => tab.kind === "thread")?.id;
+  if (!id || !h.root) throw new Error("Missing thread tab");
+  const root = h.root;
+
+  act(() => tabs.result.current.setPaneOpen(false));
+  expect(highlighted.root).toBeUndefined();
+  act(() => tabs.result.current.setPaneOpen(true));
+  expect(highlighted.root).toBe(h.root);
+
+  await h.open();
+  expect(highlighted.root).toBeUndefined();
+  act(() => tabs.result.current.select(id));
+  expect(highlighted.root).toBe(h.root);
+
+  act(() => tabs.result.current.moveTab(id, "main", 0));
+  expect(highlighted.root).toBeUndefined();
+  act(() => tabs.result.current.moveTab(id, "side", 0));
+  expect(highlighted.root).toBe(h.root);
+
+  // Retained tabs belonging to another conversation never mark this one.
+  act(() => tabs.result.current.openThreadTab("beta", root, root));
+  expect(highlighted.root).toBeUndefined();
+  act(() => tabs.result.current.select(id));
+  expect(highlighted.root).toBe(h.root);
+  act(() => tabs.result.current.setTabs(() => []));
+  expect(highlighted.root).toBeUndefined();
+});
 
 it.each([
   { link: "channel", direction: "Back" },

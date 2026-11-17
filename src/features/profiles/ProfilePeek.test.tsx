@@ -16,6 +16,7 @@ import { createAgentChoices } from "../agents/choices";
 import { createAgentLibrary } from "../agents/library";
 import { localAgentsFixture } from "../agents/local-testing";
 import { createRelaySession, type RelaySession } from "../relay/session";
+import { PREVIEW_REST_MS } from "../../shared/design-system/ui/hoverIntent";
 import { ProfilePeek } from "./ProfilePeek";
 
 beforeEach(() => {
@@ -222,5 +223,36 @@ it("records the originating avatar as the profile navigation focus target", asyn
   } finally {
     f.view.unmount();
     f.owner.dispose();
+  }
+});
+
+it("opens on hover over revealed message actions only in compact density", async () => {
+  vi.useFakeTimers();
+  const rest = () => act(() => vi.advanceTimersByTimeAsync(PREVIEW_REST_MS));
+  const f = fixture();
+  const avatar = screen.getByRole("button", { name: "Avatar" });
+  // The row's hover toolbar is showing, as it is while the pointer is anywhere
+  // in a compact row.
+  f.view.container.setAttribute("data-actions-revealed", "");
+  try {
+    fireEvent.mouseEnter(avatar);
+    fireEvent.mouseMove(avatar, { movementX: 4 });
+    await rest();
+    expect(avatar).not.toHaveAttribute("data-popup-open");
+    fireEvent.mouseLeave(avatar);
+    act(() =>
+      document.documentElement.setAttribute("data-message-density", "compact"),
+    );
+    fireEvent.mouseEnter(avatar);
+    fireEvent.mouseMove(avatar, { movementX: 4 });
+    await rest();
+    expect(
+      screen.getByRole("dialog", { name: "Morgan profile preview" }),
+    ).toBeVisible();
+  } finally {
+    document.documentElement.removeAttribute("data-message-density");
+    f.view.unmount();
+    f.owner.dispose();
+    vi.useRealTimers();
   }
 });

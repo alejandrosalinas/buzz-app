@@ -100,7 +100,7 @@ for (const owner of [undefined, "page draft", "menu", "dialog"]) {
     const pending = new Promise((resolve) => {
       started = resolve;
     });
-    await page.route("**/api/relay/**/query", async (route) => {
+    await page.route("**/api/relay/primary/query", async (route) => {
       if (
         route
           .request()

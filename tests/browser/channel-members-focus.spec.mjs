@@ -1378,6 +1378,62 @@ test("removing the last page's only member focuses the member before it", async 
   expect(errors).toEqual([]);
 });
 
+// Native disabling/focus trapping differs from jsdom, especially in Chromium.
+test("plugin additions retain Search focus unless it was deliberately moved", async ({
+  page,
+}) => {
+  for (const action of ["pointer", "retry", "moved", "enter"]) {
+    await test.step(action, async () => {
+      await page.goto(`${url}?plugin`);
+      await page.getByRole("button", { name: "Access", exact: true }).click();
+      const dialog = page.getByRole("dialog", {
+        name: "Manage members",
+        exact: true,
+      });
+      const search = dialog.getByRole("searchbox");
+      await search.fill("Morgan");
+      const add = dialog.getByRole("button", { name: /^Add Morgan \(.*\)$/ });
+      await expect(add).toBeEnabled();
+      if (action === "enter") await search.press("Enter");
+      else await add.click();
+      await page.evaluate(() => window.focusFixture.published);
+      await expect(add).toBeDisabled();
+      await expect(search).toBeFocused();
+      let attempt = 0;
+      if (action === "retry") {
+        await page.evaluate(() => window.focusFixture.settleAddition(0, true));
+        await expect(
+          dialog.getByText("Addition rejected", { exact: true }),
+        ).toBeVisible();
+        await expect(add).toBeEnabled();
+        await add.click();
+        await expect
+          .poll(() => page.evaluate(() => window.focusFixture.additions.length))
+          .toBe(2);
+        attempt = 1;
+      }
+      // Search remains editable during the write; changing its focus is intentional.
+      const moved = dialog.getByRole("button", {
+        name: "Copy link",
+        exact: true,
+      });
+      if (action === "moved") {
+        await moved.focus();
+        await expect(moved).toBeFocused();
+      }
+      await page.evaluate(
+        (index) => window.focusFixture.settleAddition(index),
+        attempt,
+      );
+      await expect(search).toHaveValue("");
+      await expect(action === "moved" ? moved : search).toBeFocused();
+      await expect(
+        dialog.getByText("Morgan added.", { exact: true }),
+      ).toHaveAttribute("role", "status");
+    });
+  }
+});
+
 // Browser layout is required to prove the helper inset and role-label geometry.
 test("member helper aligns with content and Owner stays beside a person's name", async ({
   page,

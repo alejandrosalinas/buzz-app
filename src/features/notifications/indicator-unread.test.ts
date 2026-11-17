@@ -247,16 +247,20 @@ it.each(["huddle", "metadataPending"] as const)(
   },
 );
 
-it("removes muted channel activity from the Dock indicator without marking it read", async () => {
-  const h = setup({
+function mutedSetup() {
+  return setup({
     decode: async () => ({
       sections: [],
       assignments: {},
       starred: [],
       muted: [],
     }),
-    write: async ({ muted }) => (muted ? ["room"] : []),
+    write: async ({ channelId, muted }) => (muted ? [channelId] : []),
   });
+}
+
+it("follows the sidebar row for a muted channel: mentions light the Dock, ordinary activity doesn't", async () => {
+  const h = mutedSetup();
   h.grant();
   await h.session.sidebarPreferences.ensure();
   h.bind();
@@ -273,10 +277,40 @@ it("removes muted channel activity from the Dock indicator without marking it re
   expect(h.session.unread.snapshot(target).observedCount).toBe(1);
   expect(h.project).toHaveBeenLastCalledWith(false);
 
-  await h.session.unread.markUnreadLocal(target);
+  const mention = message(h.peer, "room", "muted mention", 13, [
+    ["p", h.viewer.pubkey],
+  ]);
+  h.emit([mention]);
+  expect(h.project).toHaveBeenLastCalledWith(true);
+
+  await h.session.unread.markThrough(target, mention.id);
   expect(h.project).toHaveBeenLastCalledWith(false);
 
-  await h.session.sidebarPreferences.setMute("room", false);
+  // Manual unread makes a muted row bold, so it lights the Dock too.
+  await h.session.unread.markUnreadLocal(target);
+  expect(h.project).toHaveBeenLastCalledWith(true);
+});
+
+it("lights the Dock for a muted DM, as its sidebar row shows it", async () => {
+  const h = mutedSetup();
+  h.emit([
+    roster(h.relay, "room", [h.viewer.pubkey, h.peer.pubkey], 10),
+    signed(h.relay, {
+      kind: 39000,
+      content: JSON.stringify({ name: "room", channel_type: "dm" }),
+      tags: [
+        ["d", "room"],
+        ["name", "room"],
+        ["t", "dm"],
+      ],
+      created_at: 10,
+    }),
+  ]);
+  await h.session.sidebarPreferences.ensure();
+  await h.session.sidebarPreferences.setMute("room", true);
+  h.bind();
+  expect(h.project).toHaveBeenLastCalledWith(false);
+  h.emit([message(h.peer, "room", "muted DM", 11)]);
   expect(h.project).toHaveBeenLastCalledWith(true);
 });
 

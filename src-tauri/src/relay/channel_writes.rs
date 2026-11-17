@@ -132,9 +132,26 @@ fn member_administration(event: &EventTemplate) -> bool {
         && event.created_at <= 9_007_199_254_740_991
         && event.tags.len() == if event.kind == 9000 { 3 } else { 2 }
         && tag(event, 0, "h").is_some_and(uuid)
-        && tag(event, 1, "p").is_some_and(super::hex_key)
-        && (event.kind == 9001
-            || matches!(tag(event, 2, "role"), Some("admin" | "member" | "guest")))
+        && (ownership_transfer(event).is_some()
+            || (tag(event, 1, "p").is_some_and(super::hex_key)
+                && (event.kind == 9001
+                    || matches!(tag(event, 2, "role"), Some("admin" | "member" | "guest")))))
+}
+/// The stepping-down owner of `[h, ["p", heir, "owner"], ["p", owner, "admin"]]`.
+fn ownership_transfer(event: &EventTemplate) -> Option<&str> {
+    let [_, heir, owner] = event.tags.as_slice() else {
+        return None;
+    };
+    (event.kind == 9000
+        && matches!(heir.as_slice(), [p, key, role] if p == "p" && role == "owner" && super::hex_key(key))
+        && matches!(owner.as_slice(), [p, key, role] if p == "p" && role == "admin" && super::hex_key(key))
+        && heir[1] != owner[1])
+        .then(|| owner[1].as_str())
+}
+/// A member command may change only others, except an owner stepping down.
+fn member_signer_mismatch(event: &EventTemplate, viewer: &str) -> bool {
+    tag(event, 1, "p") == Some(viewer)
+        || ownership_transfer(event).is_some_and(|owner| owner != viewer)
 }
 fn valid(route: &str, event: &EventTemplate) -> bool {
     match route {
@@ -153,7 +170,7 @@ fn validate(route: &str, event: &Value, viewer: Option<&str>) -> Result<EventTem
     if !valid(route, &parsed)
         || viewer.is_some_and(|v| event.get("pubkey").and_then(Value::as_str) != Some(v))
         || (route == "member-administration"
-            && viewer.is_some_and(|v| tag(&parsed, 1, "p") == Some(v)))
+            && viewer.is_some_and(|v| member_signer_mismatch(&parsed, v)))
     {
         return Err("Invalid channel lifecycle command".into());
     }
@@ -172,9 +189,7 @@ pub(crate) async fn relay_channel_sign(
 ) -> Result<Value> {
     origin(&community)?;
     let parsed = validate(&route, &event, None)?;
-    if route == "member-administration"
-        && tag(&parsed, 1, "p") == Some(host.viewer().await?.as_str())
-    {
+    if route == "member-administration" && member_signer_mismatch(&parsed, &host.viewer().await?) {
         return Err("Invalid member administration command".into());
     }
     host.sign(parsed).await
@@ -972,6 +987,34 @@ mod member_administration_tests {
             );
             let error = invoke("relay_channel_sign", event).unwrap_err();
             assert!(!error.to_string().contains("not allowed"), "{error}");
+        }
+        let viewer = invoke("relay_channel_sign", cases["accepted"][0]["event"].clone())
+            .unwrap()
+            .deserialize::<Value>()
+            .unwrap()["pubkey"]
+            .as_str()
+            .unwrap()
+            .to_owned();
+        let transfer = |case: &Value| -> Value {
+            serde_json::from_str(&case["event"].to_string().replace("$viewer", &viewer)).unwrap()
+        };
+        for case in cases["transfer"]["accepted"].as_array().unwrap() {
+            let template = transfer(case);
+            let event: Value = invoke("relay_channel_sign", template.clone())
+                .unwrap()
+                .deserialize()
+                .unwrap();
+            assert_eq!(event["tags"], template["tags"]);
+            assert!(validate("member-administration", &event, Some(&viewer)).is_ok());
+            assert!(validate("member-administration", &event, Some(&"f".repeat(64))).is_err());
+        }
+        for case in cases["transfer"]["rejected"].as_array().unwrap() {
+            let error = invoke("relay_channel_sign", transfer(case)).unwrap_err();
+            assert!(
+                error.to_string().contains("Invalid"),
+                "{}: {error}",
+                case["name"]
+            );
         }
     }
 }

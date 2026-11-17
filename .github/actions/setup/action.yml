@@ -10,13 +10,24 @@ inputs:
 runs:
   using: composite
   steps:
+    # Only main saves caches; other refs restore main's. Per-PR copies of these
+    # caches evicted main's release Rust caches within the hour.
     - name: Cache Hermit packages
+      if: github.ref == 'refs/heads/main'
       uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
       with:
         path: ${{ runner.os == 'macOS' && '~/Library/Caches/hermit/pkg' || '~/.cache/hermit/pkg' }}
         # Cache contents depend on which tools this job actually provisions.
         # A faster JS-only job must not freeze an incomplete cache for Rust jobs.
         key: hermit-${{ runner.os }}-${{ runner.arch }}-${{ github.job }}-${{ hashFiles('bin/**') }}
+    - name: Restore Hermit packages
+      if: github.ref != 'refs/heads/main'
+      uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+      with:
+        path: ${{ runner.os == 'macOS' && '~/Library/Caches/hermit/pkg' || '~/.cache/hermit/pkg' }}
+        key: hermit-${{ runner.os }}-${{ runner.arch }}-${{ github.job }}-${{ hashFiles('bin/**') }}
+        # PR-only jobs have no main cache of their own; Hermit fetches the rest.
+        restore-keys: hermit-${{ runner.os }}-${{ runner.arch }}-
     - uses: cashapp/activate-hermit@cea9af7913204a965fd488637a8d1811bba2e616 # v1
     # A cache miss downloads each tool here; bound and retry a stalled fetch.
     - name: Verify pinned tool entry points
@@ -32,7 +43,15 @@ runs:
         test -n "$store"
         echo "path=$store" >> "$GITHUB_OUTPUT"
     - name: Cache pnpm store
+      if: github.ref == 'refs/heads/main'
       uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+      with:
+        path: ${{ steps.pnpm.outputs.path }}
+        key: pnpm-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('pnpm-lock.yaml', 'bin/.pnpm-*.pkg') }}
+        restore-keys: pnpm-${{ runner.os }}-${{ runner.arch }}-
+    - name: Restore pnpm store
+      if: github.ref != 'refs/heads/main'
+      uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
       with:
         path: ${{ steps.pnpm.outputs.path }}
         key: pnpm-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('pnpm-lock.yaml', 'bin/.pnpm-*.pkg') }}

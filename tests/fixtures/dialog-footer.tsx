@@ -85,6 +85,10 @@ function Fixture() {
     </Field>
   ));
   const props: Partial<DialogProps> = {
+    ...(params.get("headerGap") === "compact" ? { headerGap: "compact" } : {}),
+    ...(params.has("artwork")
+      ? { artwork: <div>Illustrated introduction</div> }
+      : {}),
     ...(layout === "padded" ? { chromeSpacing: "padded" } : {}),
     ...(layout === "stable" ? { height: "stable" } : {}),
     ...(layout === "stable-tall" ? { height: "stable-tall" } : {}),

@@ -3,8 +3,8 @@
 `pnpm test` and therefore `just scan` now run the checked-in Chromium and WebKit
 journeys in `tests/browser/`. `just iterate` remains the fast, browser-free loop.
 [GitHub Actions](../.github/workflows/ci.yml) runs these gates on PRs and main
-pushes: an isolated serial measurement job runs alongside twenty-seven Linux functional jobs
-(nine Chromium and eighteen WebKit file-level shards, two workers per runner) and one macOS WebKit
+pushes: an isolated serial measurement job runs alongside twenty-nine Linux functional jobs
+(eleven Chromium and eighteen WebKit file-level shards, two workers per runner) and one macOS WebKit
 recording job. Both engines remain
 mandatory for the [CI-selected coverage](#ci-coverage-and-local-only-webkit-checks);
 `CI required` fails if any lane or shard fails, is cancelled, or is skipped.
@@ -130,16 +130,16 @@ are unchanged, and no recording cases become local-only. Both engines, serial
 measurement order, zero retries, the documented functional assertions and
 measurement ceilings, and the strict `CI required` aggregate remain in place.
 
-CI shards Chromium across nine runners and the slower WebKit across eighteen,
+CI shards Chromium across eleven runners and the slower WebKit across eighteen,
 without waiting for the separate measurement runner. Each job selects its engine
-with `--no-deps` and `--shard=N/9` (Chromium) or `--shard=N/18` (WebKit);
+with `--no-deps` and `--shard=N/11` (Chromium) or `--shard=N/18` (WebKit);
 measurement success is enforced by `CI required`, not job ordering.
 This preserves measurement isolation while spending more setup/runner minutes,
 including when measurements fail. Local same-runner dependencies remain unchanged.
 Artifacts include engine and shard so parallel jobs never overwrite one another.
 
 The Node integration gate lists tests without launching browsers and checks that
-the workflow's twenty-three Linux selections plus macOS recording cover every functional
+the workflow's twenty-nine Linux selections plus macOS recording cover every functional
 test/project from the full local config exactly once, with no measurements included.
 It also exercises the required
 check's shell against failed, skipped, cancelled and missing lane results.

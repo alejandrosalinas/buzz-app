@@ -11,6 +11,7 @@ import type { PluginModule } from "../../plugins/api";
 import { PiLogoIcon } from "../../shared/design-system/icons";
 import { type Config, config, DEFAULT_CONFIG, PiRuntime } from "./runtime";
 import { createTabs } from "./tabs";
+import { readModelSettings } from "../../features/agents/model-settings";
 
 export const TYPE_ID = "pi";
 /** A turn's run returns once Pi has it, so this bounds only the hand-over,
@@ -97,6 +98,8 @@ export const apply: PluginModule["apply"] = (ctx) => {
     description:
       "Pi on this computer, with any provider Pi supports. Each thread it is mentioned in is one continuing conversation.",
     defaults: () => ({ config: DEFAULT_CONFIG }),
+    readModelSettings: (saved) =>
+      readModelSettings(config(saved), { provider: true }),
     Create,
     CreateModel,
     createModelReportsReadiness: true,

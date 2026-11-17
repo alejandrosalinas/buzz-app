@@ -44,6 +44,9 @@ const identity: FederatedIdentity = {
       failure: null,
     });
   },
+  async signInLink() {
+    return null;
+  },
   async signOut() {
     publish({
       status: "signed-out",

@@ -226,11 +226,9 @@ test("channel activity consumes telemetry, opens each agent's profile, and reset
     await expect(agentRow(popup, agent)).toHaveAccessibleName(
       /^View .+ activity$/,
     );
-    await expect(agentRow(popup, agent)).toContainText(
-      "No current step details received.",
-    );
-    await expect(agentRow(popup, agent)).toContainText(
-      "Work with unconfirmed thread",
+    // Unscoped work has no conversation to name, so the status ends the row.
+    await expect(agentRow(popup, agent)).toHaveText(
+      /No current step details received\.$/,
     );
     await expect(agentActivityAction(popup, agent)).toHaveCount(1);
   }
@@ -269,7 +267,9 @@ test("channel activity consumes telemetry, opens each agent's profile, and reset
     .click();
   await expect(trigger).toBeFocused();
 
-  const sockets = app.relay.sockets.length;
+  const sockets = app.relay.sockets.filter(
+    (s) => s.community === "primary",
+  ).length;
   await page.getByRole("button", { name: "Your profile", exact: true }).click();
   await page.getByRole("menuitem", { name: "Settings", exact: true }).click();
   await page
@@ -289,7 +289,9 @@ test("channel activity consumes telemetry, opens each agent's profile, and reset
   await expect
     .poll(() => app.relay.hasRoute("primary", "observer"))
     .toBe(false);
-  expect(app.relay.sockets).toHaveLength(sockets);
+  expect(
+    app.relay.sockets.filter((s) => s.community === "primary"),
+  ).toHaveLength(sockets);
   await closeSettings(page);
   await page.locator('[data-channel-id="alpha"]').click();
   await expect(
@@ -599,8 +601,8 @@ test.describe("thread activity", () => {
     app.observer(activity("turn_liveness", "alpha", "parallel-two"), key);
     sendTyping(root.id);
     await openWorkingNow(page, composer);
-    await expect(agentRow(popup, agent)).toContainText(
-      "Work with unconfirmed thread",
+    await expect(agentRow(popup, agent)).toHaveText(
+      /No current step details received\.$/,
     );
     await expect(agentRow(popup, agent)).not.toContainText("Thread ·");
     await expect(threadTrigger).toHaveAccessibleName(onlyAgent);

@@ -804,7 +804,7 @@ across cached, parallel jobs rather than running the entire recipe several times
 [Three documented WebKit cases remain local-only](browser-testing.md#ci-coverage-and-local-only-webkit-checks);
 the complete correctness suite still runs with `pnpm test` / `just scan`:
 
-- **JavaScript:** four runners, each with Biome, one TypeScript check and a frontend
+- **JavaScript:** eight runners, each with Biome, one TypeScript check and a frontend
   build. Vitest splits all test files across the runners, with two workers each;
   every shard must succeed. Timing artifacts include the shard number.
 - **Rust and tool integration:** workspace formatting, Clippy, all Rust tests and
@@ -812,8 +812,10 @@ the complete correctness suite still runs with `pnpm test` / `just scan`:
   tests build Rust and install scaffold dependencies; they are intentionally CI-only
   rather than part of pre-push.
 - **Browser measurements:** Chromium then WebKit, serially on an isolated runner.
-  It also runs all [perf scenarios](performance.md) once in Chromium.
-- **Browser journeys:** twenty-seven runners (nine Chromium and eighteen WebKit
+  It also runs all [perf scenarios](performance.md) once in Chromium, and the
+  broker's 100,000-channel scale check in `browser-host/relay-broker-live.test.mjs`
+  alone, with `BUZZ_BROKER_SCALE` set; the JavaScript shards skip that test.
+- **Browser journeys:** twenty-nine runners (eleven Chromium and eighteen WebKit
   file-level shards), each with two workers. They start alongside measurements on separate
   runners; `CI required` still requires both lanes. A separate required Ubuntu
   job builds the native plugin-manager fixture once with Hermit's pinned Cargo.

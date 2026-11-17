@@ -1,6 +1,11 @@
 import { expect, it } from "vitest";
 import type { RelaySession } from "../relay/session";
-import { mentionAdmission, pastedMentionRecipient } from "./mention-admission";
+import {
+  allowsOutsideMentions,
+  mentionAdmission,
+  outsideMentionReferences,
+  pastedMentionRecipient,
+} from "./mention-admission";
 
 const member = "a".repeat(64);
 const outside = "b".repeat(64);
@@ -10,6 +15,7 @@ const archived = "e".repeat(64);
 function session(
   channel: Record<string, unknown> | undefined,
   viewer?: string,
+  complete = true,
 ): RelaySession {
   return {
     viewer,
@@ -22,7 +28,10 @@ function session(
       }),
     },
     agentChoices: {
-      snapshot: () => ({ identities: [{ pubkey: library, name: "Honey" }] }),
+      snapshot: () => ({
+        identities: [{ pubkey: library, name: "Honey" }],
+        complete,
+      }),
     },
     archives: {
       state: (key: string) => (key === archived ? "archived" : "active"),
@@ -44,12 +53,45 @@ it("keeps Solo chat, roster and agent-invite limits", () => {
   const sessionChannel = session({ channelType: "solo" });
   const plain = mentionAdmission(sessionChannel, "channel");
   expect(plain(member)).toBe(true);
+  // Without Solo mode (media comments, edits) only members are offered.
   expect(plain(outside)).toBe(false);
   expect(plain(library)).toBe(false);
+  // In Solo mode outside keys are references; delivery never adds them.
   const inviting = mentionAdmission(sessionChannel, "channel", true);
   expect(inviting(library)).toBe(true);
-  expect(inviting(outside)).toBe(false);
-  // Agent invitation never admits directory people, even in a stream.
+  expect(inviting(outside)).toBe(true);
+  // Until the agent read is complete, an outside key may be the viewer's
+  // agent, so none is admitted; the agents it lists still are.
+  const reading = mentionAdmission(
+    session({ channelType: "solo" }, undefined, false),
+    "channel",
+    true,
+  );
+  expect(reading(library)).toBe(true);
+  expect(reading(outside)).toBe(false);
+  // The owner's roster leaves a member out on purpose; naming outside people
+  // does not bring that member back.
+  const owned = mentionAdmission(sessionChannel, "channel", true, [
+    { pubkey: library, name: "Honey" },
+  ]);
+  expect(owned(library)).toBe(true);
+  expect(owned(outside)).toBe(true);
+  expect(owned(member)).toBe(false);
+  // A roster that leaves out one of the viewer's agents (a region's plugin
+  // refuses it) keeps it out: the send would add it, not reference it.
+  const narrowed = mentionAdmission(sessionChannel, "channel", true, []);
+  expect(narrowed(library)).toBe(false);
+  expect(narrowed(outside)).toBe(true);
+  // Unknown Solo membership cannot tell outside keys from left-out members.
+  expect(
+    mentionAdmission(
+      session({ channelType: "solo", members: undefined }),
+      "channel",
+      true,
+      [{ pubkey: library, name: "Honey" }],
+    )(outside),
+  ).toBe(false);
+  // Agent invitation never admits directory people in other channels.
   expect(
     mentionAdmission(
       session({ channelType: "stream" }),
@@ -109,4 +151,39 @@ it("names a pasted recipient from current state, and leaves an unknown outsider 
     null,
   );
   expect(pastedMentionRecipient(withProfiles, "channel", archived)).toBe(null);
+});
+
+it("names outsiders only as references in DMs and Solo chats", () => {
+  const agents = [{ pubkey: library }];
+  expect(outsideMentionReferences({ channelType: "dm" }, agents, library)).toBe(
+    true,
+  );
+  expect(
+    outsideMentionReferences({ channelType: "solo" }, agents, outside),
+  ).toBe(true);
+  // The viewer's own agent joins a Solo chat instead.
+  expect(
+    outsideMentionReferences({ channelType: "solo" }, agents, library),
+  ).toBe(false);
+  // Streams and forums ask whether to add outside people.
+  for (const channelType of ["stream", "forum"] as const)
+    expect(outsideMentionReferences({ channelType }, agents, outside)).toBe(
+      false,
+    );
+});
+
+it("opens Solo chats to outside names only in Solo mode", () => {
+  const solo = { channelType: "solo" as const };
+  const roster = [{ pubkey: library, name: "Honey" }];
+  // Media comments and edits do not invite agents, even under the owner's
+  // roster.
+  expect(allowsOutsideMentions(solo)).toBe(false);
+  expect(allowsOutsideMentions(solo, roster)).toBe(false);
+  expect(allowsOutsideMentions(solo, undefined, true)).toBe(true);
+  expect(allowsOutsideMentions(solo, roster, true)).toBe(true);
+  const stream = { channelType: "stream" as const };
+  expect(allowsOutsideMentions(stream)).toBe(true);
+  expect(allowsOutsideMentions(stream, roster)).toBe(false);
+  expect(allowsOutsideMentions(stream, undefined, true)).toBe(false);
+  expect(allowsOutsideMentions(undefined, roster, true)).toBe(false);
 });

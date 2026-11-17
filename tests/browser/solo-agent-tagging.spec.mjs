@@ -56,7 +56,10 @@ test("a Solo chat alone with an agent tags it while a background read-state snap
   await page.route("**/query", async (route) => {
     const filters = route.request().postDataJSON();
     if (isSnapshot(filters)) {
-      if (gapped) {
+      // Only primary has the gap. Secondary's badge session waits for
+      // primary's first repair, so its foreground startup snapshot can land
+      // after the gap too; holding it would test the wrong read.
+      if (gapped && route.request().url().includes("/api/relay/primary/")) {
         held.resolve(route.request());
         await gate.promise;
       }

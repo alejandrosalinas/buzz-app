@@ -15,10 +15,49 @@
       "allowedVersions": "<0.11"
     },
     {
+      "description": "hmac and hkdf 0.13 need digest 0.11, which the sha2 hold above keeps out.",
+      "matchManagers": ["cargo"],
+      "matchPackageNames": ["hmac", "hkdf"],
+      "allowedVersions": "<0.13"
+    },
+    {
+      "description": "Huddle audio passes WebSocket streams to buzz-audio-client, so tokio-tungstenite must match the version it uses.",
+      "matchManagers": ["cargo"],
+      "matchPackageNames": ["tokio-tungstenite"],
+      "allowedVersions": "<0.30"
+    },
+    {
+      "description": "secp256k1 0.32+ changes signing and key APIs, and pairing must match nostr's version, so it gets its own PR.",
+      "matchManagers": ["cargo"],
+      "matchPackageNames": ["secp256k1"],
+      "groupName": "secp256k1",
+      "groupSlug": "secp256k1"
+    },
+    {
+      "description": "Pairing passes nostr's keys to secp256k1 directly, so it stays on the 0.30 that nostr 0.45 links.",
+      "matchManagers": ["cargo"],
+      "matchFileNames": ["crates/pairing/Cargo.toml"],
+      "matchPackageNames": ["secp256k1"],
+      "allowedVersions": "<0.31"
+    },
+    {
+      "description": "mesh-llm's log store requires rusqlite 0.40, and only one libsqlite3-sys may link sqlite3.",
+      "matchManagers": ["cargo"],
+      "matchPackageNames": ["rusqlite"],
+      "allowedVersions": "<0.41"
+    },
+    {
       "description": "Upgrade virtua only with a reviewed port of its WebKit scroll patch.",
       "matchManagers": ["npm"],
       "matchPackageNames": ["virtua"],
       "allowedVersions": "0.53.5"
+    },
+    {
+      "description": "Biome minor releases change formatting and lint results across the tree, so each gets its own PR.",
+      "matchManagers": ["npm"],
+      "matchPackageNames": ["@biomejs/biome"],
+      "groupName": "biome",
+      "groupSlug": "biome"
     },
     {
       "description": "Update packageManager together with the Hermit pnpm pin in bin/.",

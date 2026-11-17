@@ -16,6 +16,7 @@ import {
 } from "./administration";
 import {
   authorizeMemberChange,
+  canTransferOwnership,
   memberAuthority,
   validateMemberAdministrationTemplate,
   type MemberChange,
@@ -82,13 +83,15 @@ function harness(actor = "owner", role: string | undefined = "member") {
     finalizeEvent(structuredClone(template), key),
   );
   const publish = vi.fn(async (event: RelayEvent) => {
+    const named = (pubkey: string) =>
+      event.tags.find(([tag, key]) => tag === "p" && key === pubkey)?.[2];
     events = [
       required(events[0]),
       ...roster(
-        actor,
+        named(viewer) ?? actor,
         event.kind === 9001
           ? undefined
-          : event.tags.find(([tag]) => tag === "role")?.[1],
+          : (named(target) ?? event.tags.find(([tag]) => tag === "role")?.[1]),
       ),
     ];
   });
@@ -1137,12 +1140,91 @@ it("retains uncertain owned-agent removal for explicit readback, never replay", 
 });
 
 it("shares exact native/broker command admission fixtures", () => {
-  for (const { event } of contract.accepted)
+  const signedBy = (event: EventTemplate): EventTemplate =>
+    JSON.parse(JSON.stringify(event).replaceAll("$viewer", viewer));
+  for (const { event } of [
+    ...contract.accepted,
+    ...contract.transfer.accepted.map((c) => ({ event: signedBy(c.event) })),
+  ])
     expect(() =>
       validateMemberAdministrationTemplate(event, viewer),
     ).not.toThrow();
-  for (const { event } of contract.rejected)
+  for (const { event } of [
+    ...contract.rejected,
+    ...contract.transfer.rejected.map((c) => ({ event: signedBy(c.event) })),
+  ])
     expect(() => validateMemberAdministrationTemplate(event, viewer)).toThrow();
+});
+
+const transfer: MemberChange = {
+  pubkey: target,
+  expectedRole: "member",
+  role: "owner",
+};
+const personProfile = () =>
+  finalizeEvent(
+    { kind: 0, created_at: 200, content: "{}", tags: [] },
+    new Uint8Array(32).fill(4),
+  );
+function transferHarness(
+  actor = "owner",
+  role = "member",
+  profiles: RelayEvent[] = [personProfile()],
+) {
+  const h = ownedAgent(actor, role);
+  h.setProfiles(profiles);
+  return h;
+}
+it("transfers ownership in one event that steps the viewer down to admin", async () => {
+  const h = transferHarness();
+  await h.owner.capability.run(id, transfer);
+  expect(h.publish).toHaveBeenCalledOnce();
+  expect(h.publish.mock.calls[0]?.[0].tags).toEqual([
+    ["h", id],
+    ["p", target, "owner"],
+    ["p", viewer, "admin"],
+  ]);
+  const { operation, authority } = h.owner.capability.snapshot(id);
+  expect(operation?.status).toBe("confirmed");
+  expect(authority.roles).toEqual({ [viewer]: "admin", [target]: "owner" });
+});
+it.each([
+  ["the viewer is an admin", "admin", "member", [personProfile()]],
+  ["the heir is a bot", "owner", "bot", [personProfile()]],
+  ["the heir has no profile", "owner", "member", []],
+  ["the heir's profile is an agent's", "owner", "member", [agentProfile()]],
+] as const)("refuses a transfer when %s", async (_, actor, role, profiles) => {
+  const h = transferHarness(actor, role, [...profiles]);
+  await h.owner.capability.run(id, { ...transfer, expectedRole: role });
+  expect(h.sign).not.toHaveBeenCalled();
+});
+it("never offers a transfer to a co-owner", () => {
+  const state = {
+    roles: { [viewer]: "owner" as const, [target]: "owner" as const },
+    canManage: true,
+    canRemove: true,
+    canRemoveOwnedAgent: false,
+    system: false,
+  };
+  expect(canTransferOwnership(state, viewer, target, false)).toBe(false);
+});
+it("refuses a transfer in a system channel", async () => {
+  const h = transferHarness();
+  h.setEvents([
+    h.record(39000, [
+      ["d", id],
+      ["t", "system"],
+    ]),
+    ...h.events().slice(1),
+  ]);
+  await h.owner.capability.run(id, transfer);
+  expect(h.sign).not.toHaveBeenCalled();
+});
+it("leaves a transfer uncertain when only the heir's promotion lands", async () => {
+  const h = transferHarness();
+  h.publish.mockImplementationOnce(async () => h.setRoles("owner", "owner"));
+  await h.owner.capability.run(id, transfer);
+  expect(h.owner.capability.snapshot(id).operation?.status).toBe("uncertain");
 });
 
 it("authorizes a system-channel add only for a non-member other than the viewer with an editable role", () => {

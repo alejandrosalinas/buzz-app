@@ -4,7 +4,7 @@ import { Field } from "../../shared/design-system/ui/Field";
 import { Input } from "../../shared/design-system/ui/Input";
 import { OnboardingScreen } from "../identity/OnboardingScreen";
 import type { SettingsCards } from "../settings/service";
-import { CommunityDialog } from "./CommunityDialog";
+import { CommunityDialog, type JoinReports } from "./CommunityDialog";
 import type { FederatedIdentity } from "../federated-identity/service";
 import {
   type InviteLink,
@@ -20,14 +20,17 @@ export function CommunityLanding({
   federatedIdentity,
   invite,
   onInviteClose,
+  joinReports,
   settingsCards,
   onJoined,
   onCreate,
 }: {
   communities: Communities;
   federatedIdentity?: FederatedIdentity | undefined;
-  invite?: (JoinRequest & { requestId: number }) | undefined;
-  onInviteClose(requestId: number): void;
+  invite?: (JoinRequest & { requestId: string }) | undefined;
+  onInviteClose(requestId: string): void;
+  /** The open join dialog's reports to the app: writes and the typed address. */
+  joinReports?: JoinReports | undefined;
   settingsCards: Pick<SettingsCards, "subscribe" | "has">;
   onJoined(id: string): void;
   onCreate(): void;
@@ -47,6 +50,7 @@ export function CommunityLanding({
         federatedIdentity={federatedIdentity}
         mode="join"
         onboarding
+        {...joinReports}
         submittedDestination={!invite || invite.submitted === true}
         invite={opened}
         onJoined={onJoined}

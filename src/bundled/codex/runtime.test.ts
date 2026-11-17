@@ -782,6 +782,46 @@ it("hands over promptly and runs conversations independently on one server", asy
     tags: expect.arrayContaining([["e", root, "", "reply"]]),
   });
 });
+it("leaves Codex's Apps and plugins to its configuration only for an agent that allows them", async () => {
+  const f = fixture();
+  const delivery = f.delivery("@Codex check my mail");
+  await f.runtime.run({
+    ...delivery,
+    config: { ...(delivery.config as object), apps: true },
+  });
+  await vi.waitFor(() => expect(f.starts()).toHaveLength(1));
+  const started = f.sent.find((wire) => wire.method === "thread/start")
+    ?.params as { config: Record<string, unknown> };
+  const { config } = started;
+  expect(config).not.toHaveProperty("features.apps");
+  expect(config).not.toHaveProperty("features.plugins");
+  // Everything else inherited stays off.
+  expect(config).toMatchObject({
+    web_search: "disabled",
+    mcp_servers: { "company.tools": { enabled: false } },
+  });
+  f.complete(0, "DONE");
+  await vi.waitFor(() => expect(f.publish).toHaveBeenCalledTimes(1));
+});
+it("keeps Codex's Apps and plugins off for a protected agent that allows them", async () => {
+  const f = protectedPreview();
+  try {
+    await f.runtime.run({
+      ...f.delivery("@Codex check my mail"),
+      agent: f.handle as unknown as Delivery["agent"],
+      config: { ...(f.agent.config as object), apps: true },
+    });
+    await vi.waitFor(() => expect(f.worker.starts()).toHaveLength(1));
+    expect(
+      f.worker.sent.find((wire) => wire.method === "thread/start")?.params,
+    ).toMatchObject({
+      config: { "features.apps": false, "features.plugins": false },
+    });
+    await f.worker.complete(0, "");
+  } finally {
+    f.runtime.dispose();
+  }
+});
 /** A second agent on the same runtime, with its own identity and publisher. */
 function second(f: ReturnType<typeof fixture>) {
   const other = "9".repeat(64);
@@ -2317,33 +2357,32 @@ it("runs a mid-turn pick that differs from the running turn as the next turn ins
     f.publish.mock.calls.map(([event]) => (event as EventData).content),
   ).toEqual(["FIRST", "SECOND", "THIRD"]);
 });
-it("keeps a plain follow-up behind a queued differing pick instead of steering past it", async () => {
+it("steers plain follow-ups behind a queued differing pick into that turn once it starts", async () => {
   const f = fixture();
+  const steers = () => f.sent.filter((wire) => wire.method === "turn/steer");
   await f.runtime.run(f.delivery("first"));
   await vi.waitFor(() => expect(f.starts()).toHaveLength(1));
   await f.runtime.run({ ...f.delivery("deeper"), model: "deep-model" });
+  // Steering "plain" now would run it before "deeper", so it waits to join it.
   await f.runtime.run(f.delivery("plain"));
-  await f.complete(0, "FIRST");
-  await vi.waitFor(() => expect(f.starts()).toHaveLength(2));
-  // "plain" is still queued while "deeper" runs, so this cannot steer either.
-  await f.runtime.run(f.delivery("later"));
   await new Promise((resolve) => setTimeout(resolve, 0));
-  await f.complete(1, "SECOND");
-  await vi.waitFor(() => expect(f.starts()).toHaveLength(3));
-  await f.complete(2, "THIRD");
-  await vi.waitFor(() => expect(f.starts()).toHaveLength(4));
-  expect(f.sent.filter((wire) => wire.method === "turn/steer")).toHaveLength(0);
-  const input = (index: number) => JSON.stringify(f.starts()[index]?.params);
-  expect(input(1)).toContain("deeper");
-  expect(input(1)).toContain('"model":"deep-model"');
-  expect(input(2)).toContain("plain");
-  expect(input(2)).toContain('"model":"test-model"');
-  expect(input(3)).toContain("later");
-  f.complete(3, "FOURTH");
-  await vi.waitFor(() => expect(f.publish).toHaveBeenCalledTimes(4));
+  expect(steers()).toHaveLength(0);
+  await f.complete(0, "FIRST");
+  await vi.waitFor(() => expect(steers()).toHaveLength(1));
+  await f.runtime.run(f.delivery("later"));
+  await vi.waitFor(() => expect(steers()).toHaveLength(2));
+  expect(f.starts()).toHaveLength(2);
+  expect(JSON.stringify(f.starts()[1]?.params)).toContain("deeper");
+  expect(JSON.stringify(f.starts()[1]?.params)).toContain(
+    '"model":"deep-model"',
+  );
+  expect(JSON.stringify(steers()[0]?.params)).toContain("plain");
+  expect(JSON.stringify(steers()[1]?.params)).toContain("later");
+  f.complete(1, "SECOND");
+  await vi.waitFor(() => expect(f.publish).toHaveBeenCalledTimes(2));
   expect(
     f.publish.mock.calls.map(([event]) => (event as EventData).content),
-  ).toEqual(["FIRST", "SECOND", "THIRD", "FOURTH"]);
+  ).toEqual(["FIRST", "SECOND"]);
 });
 it("steers a mid-turn message whose pick matches the running turn, or has none", async () => {
   const f = fixture();
@@ -2641,6 +2680,87 @@ it("refuses to stop a request queued behind a finished turn that is still cleani
   await vi.waitFor(() => expect(f.publish).toHaveBeenCalledTimes(2));
 });
 
+it("takes messages that arrive behind a queued turn into it once it starts", async () => {
+  const f = fixture();
+  await f.runtime.run(f.delivery("first"));
+  await vi.waitFor(() => expect(f.starts()).toHaveLength(1));
+  const cleanup = deferred<void>();
+  f.held.set("thread/unsubscribe", cleanup.promise);
+  await f.complete(0, "FIRST");
+  await vi.waitFor(() =>
+    expect(f.sent.some((wire) => wire.method === "thread/unsubscribe")).toBe(
+      true,
+    ),
+  );
+  // "missed" arrives as the turn ends, so it queues; the rest wait behind it.
+  await f.runtime.run(f.delivery("missed"));
+  await f.runtime.run(f.delivery("then"));
+  await f.runtime.run(f.delivery("last"));
+  cleanup.resolve();
+  await vi.waitFor(() =>
+    expect(f.sent.filter((wire) => wire.method === "turn/steer")).toHaveLength(
+      2,
+    ),
+  );
+  expect(f.starts()).toHaveLength(2);
+  expect(inputText(f.starts()[1])).toContain("missed");
+  const steered = f.sent
+    .filter((wire) => wire.method === "turn/steer")
+    .map((wire) => JSON.stringify(wire.params));
+  expect(steered[0]).toContain("then");
+  expect(steered[1]).toContain("last");
+  f.complete(1, "SECOND");
+  await vi.waitFor(() => expect(f.publish).toHaveBeenCalledTimes(2));
+  expect(f.starts()).toHaveLength(2);
+});
+
+it("takes messages behind one that missed the ending turn into its turn", async () => {
+  const f = fixture();
+  await f.runtime.run(f.delivery("first"));
+  await vi.waitFor(() => expect(f.starts()).toHaveLength(1));
+  const cleanup = deferred<void>();
+  f.held.set("thread/unsubscribe", cleanup.promise);
+  await f.complete(0, "FIRST");
+  // All three were already behind the turn that ended, so "missed" starts
+  // the next one and the others join it.
+  await Promise.all(
+    ["missed", "then", "last"].map((text) => f.runtime.run(f.delivery(text))),
+  );
+  cleanup.resolve();
+  await vi.waitFor(() =>
+    expect(f.sent.filter((wire) => wire.method === "turn/steer")).toHaveLength(
+      2,
+    ),
+  );
+  expect(f.starts()).toHaveLength(2);
+  expect(inputText(f.starts()[1])).toContain("missed");
+  const steered = f.sent
+    .filter((wire) => wire.method === "turn/steer")
+    .map((wire) => JSON.stringify(wire.params));
+  expect(steered[0]).toContain("then");
+  expect(steered[1]).toContain("last");
+});
+
+it("starts a turn for a message that joined a turn that failed to start", async () => {
+  const f = fixture();
+  await f.runtime.run(f.delivery("first"));
+  await vi.waitFor(() => expect(f.starts()).toHaveLength(1));
+  const cleanup = deferred<void>();
+  f.held.set("thread/unsubscribe", cleanup.promise);
+  await f.complete(0, "FIRST");
+  await f.runtime.run(f.delivery("missed"));
+  await f.runtime.run(f.delivery("then"));
+  f.failures.set("turn/start", "model busy");
+  cleanup.resolve();
+  await vi.waitFor(() => expect(f.starts()).toHaveLength(3));
+  expect(inputText(f.starts()[1])).toContain("missed");
+  expect(inputText(f.starts()[2])).toContain("then");
+  expect(f.sent.some((wire) => wire.method === "turn/steer")).toBe(false);
+  expect(
+    f.publish.mock.calls.map(([event]) => (event as EventData).content),
+  ).not.toContainEqual(expect.stringContaining("Steering was not accepted"));
+});
+
 it("sends one interrupt for stops pressed together, and settles each with it", async () => {
   const f = fixture();
   const interruptible = vi.fn<NonNullable<Delivery["interruptible"]>>();
@@ -2843,7 +2963,8 @@ it("ignores non-owner messages without spawning", async () => {
   if ("event" in other.trigger) other.trigger.event.pubkey = "f".repeat(64);
   const ignored = vi.fn();
   await f.runtime.run({ ...other, ignored });
-  expect(ignored).toHaveBeenCalledOnce();
+  // No reason, so no note for its owner.
+  expect(ignored).toHaveBeenCalledExactlyOnceWith(undefined);
   expect(f.spawn).not.toHaveBeenCalled();
   expect(f.publish).not.toHaveBeenCalled();
 });
@@ -2871,6 +2992,28 @@ it("runs a verified relay workflow mention for its owner", async () => {
   expect(ignored).not.toHaveBeenCalled();
   await f.complete();
   expect(f.publish).toHaveBeenCalled();
+});
+it("gives the workflow reason for its owner's workflow mention that doesn't name it", async () => {
+  const f = fixture();
+  const relay = keypair();
+  f.snapshot.session.workflowAuthority = relay.pubkey;
+  const ask = f.delivery("@Codex workflow");
+  const event = eventDto(
+    signed(relay, {
+      kind: 9,
+      content: "@Agent workflow",
+      tags: [
+        ["h", "channel"],
+        ["p", pubkey],
+        ["buzz:workflow", "true"],
+        ["buzz:workflow-owner", owner],
+      ],
+    }),
+  );
+  const ignored = vi.fn();
+  await f.runtime.run({ ...ask, trigger: { type: "mention", event }, ignored });
+  expect(ignored).toHaveBeenCalledExactlyOnceWith("workflow");
+  expect(f.spawn).not.toHaveBeenCalled();
 });
 it.each([false, true])(
   "handles sibling workflow authorization with cancellation=%s",
@@ -5345,13 +5488,20 @@ it("titles a new Solo chat once, from its first message on an ephemeral read-onl
         wire.method === "thread/start" &&
         (wire.params as { ephemeral?: boolean }).ephemeral,
     );
-  await f.runtime.run({ ...f.delivery("@Codex fix the login bug"), named });
+  const delivery = f.delivery("@Codex fix the login bug");
+  // Even when the conversation allows Codex apps and plugins.
+  await f.runtime.run({
+    ...delivery,
+    config: { ...(delivery.config as object), apps: true },
+    named,
+  });
   await vi.waitFor(() => expect(f.starts()).toHaveLength(2));
   // Without Codex's title model in the catalog, the chat's own model titles it.
   expect(titling()[0]?.params).toMatchObject({
     model: "test-model",
     approvalPolicy: "never",
     sandbox: "read-only",
+    config: { "features.apps": false, "features.plugins": false },
   });
   expect(f.starts()[1]?.params).toMatchObject({
     threadId: "thread-2",

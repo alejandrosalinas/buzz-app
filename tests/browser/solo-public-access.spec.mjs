@@ -286,13 +286,13 @@ test.describe("owner", () => {
       await page.reload();
       await openAccess();
       await expect(audience).toBeEnabled();
-      await expect(audience).toHaveText("Public (existing)");
+      await expect(audience).toHaveText("Public");
       await audience.click();
       await page
         .getByRole("option", { name: "View only", exact: true })
         .click();
       await expect(confirm).toHaveAccessibleDescription(
-        "Everyone in this community will be able to read this chat’s full history and Canvas, including its workspace folders and agent instructions. People already in the chat keep their access.",
+        "Everyone in this community will be able to read this chat’s full history and Canvas, including its workspace folders and agent instructions. People already in the chat keep their access. You won’t be able to switch back to Public here.",
       );
       await expect(
         confirm.getByRole("button", { name: "Change access", exact: true }),
@@ -307,7 +307,7 @@ test.describe("owner", () => {
       await audience.click();
       await page.getByRole("option", { name: "Private", exact: true }).click();
       await expect(confirm).toHaveAccessibleDescription(
-        "Only chat members will have access. People who already joined remain members and keep their access until you remove them in People.",
+        "Only chat members will have access. People who already joined remain members and keep their access until you remove them in People. You won’t be able to switch back to Public here.",
       );
       await expect(
         confirm.getByRole("button", { name: "Change access", exact: true }),

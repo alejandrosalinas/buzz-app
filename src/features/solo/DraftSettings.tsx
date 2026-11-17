@@ -83,11 +83,13 @@ export function DraftSettings({
           (projectId ? (await loadChatSetup(session, projectId)).canvas : "");
         if (!active) return;
         try {
-          setWorkspace(readWorkspace(content));
+          const workspace = readWorkspace(content);
+          setWorkspace(workspace);
+          setOpened(workspaceCanvas(workspace));
         } catch {
           setRaw(content);
+          setOpened(content);
         }
-        setOpened(content);
       } catch (reason) {
         if (active)
           setError(reason instanceof Error ? reason.message : String(reason));

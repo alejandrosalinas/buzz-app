@@ -14,6 +14,43 @@ async function settledDialog(page, role = "dialog") {
   return dialog;
 }
 
+async function headingGap(dialog, scale) {
+  await expect
+    .poll(() =>
+      dialog.evaluate((popup) => {
+        const header = popup.querySelector(".buzz-dialog-header");
+        const body = popup.querySelector(".buzz-dialog-body");
+        return (
+          parseFloat(getComputedStyle(header).paddingBottom) +
+          parseFloat(getComputedStyle(body).paddingTop)
+        );
+      }),
+    )
+    .toBe(12 * scale);
+  await expect
+    .poll(() =>
+      dialog.evaluate((popup) => {
+        const header = popup.querySelector(".buzz-dialog-header");
+        const body = popup.querySelector(".buzz-dialog-body");
+        return (
+          body.firstElementChild.getBoundingClientRect().top >=
+          header.getBoundingClientRect().bottom
+        );
+      }),
+    )
+    .toBe(true);
+  if (await dialog.locator('[data-chrome-spacing="padded"]').count()) {
+    await expect(dialog.locator(".buzz-dialog-body")).toHaveCSS(
+      "padding-top",
+      "0px",
+    );
+    await expect(dialog.locator(".buzz-dialog-header")).toHaveCSS(
+      "padding-bottom",
+      `${12 * scale}px`,
+    );
+  }
+}
+
 for (const layout of ["flow", "padded", "compact", "wide"]) {
   test(`${layout} footer passes only its gradient gutter through`, async ({
     page,
@@ -124,6 +161,25 @@ for (const layout of [
         page,
         layout === "alert" ? "alertdialog" : "dialog",
       );
+      // Reuse these rendered layouts for body spacing and focus reveal too.
+      // Real CSS geometry and browser focus scrolling cannot be proved in jsdom.
+      const body = dialog.locator(".buzz-dialog-body");
+      if (layout === "header-only") {
+        await expect(body).toHaveCount(0);
+      } else if (["alert", "navigation", "search"].includes(layout)) {
+        const inset = (width <= 480 ? 16 : 32) * scale;
+        await expect(body).toHaveCSS(
+          "padding-top",
+          `${layout === "navigation" ? 0 : layout === "search" ? 12 * scale : inset}px`,
+        );
+        if (layout === "navigation") {
+          await expect(
+            dialog.locator(".buzz-dialog-navigation-detail"),
+          ).toHaveCSS("padding-top", `${inset}px`);
+        }
+      } else {
+        await headingGap(dialog, scale);
+      }
       const save = dialog.getByRole("button", { name: "Save", exact: true });
       await expect(save).toBeEnabled();
       await expect(
@@ -168,6 +224,53 @@ for (const layout of [
     }
   });
 }
+
+test("legacy compact gap and artwork use the default spacing recipe", async ({
+  page,
+}) => {
+  for (const layout of [
+    "flow",
+    "compact",
+    "wide",
+    "padded",
+    "stable",
+    "stable-tall",
+    "flex",
+    "right",
+    "expanded",
+    "stepped",
+  ]) {
+    for (const [width, scale, theme] of [
+      [1280, 1, "light"],
+      [390, 2, "dark"],
+    ]) {
+      await page.setViewportSize({ width, height: 900 });
+      await page.goto(
+        `${fixture}?layout=${layout}&theme=${theme}&scale=${scale}&headerGap=compact`,
+      );
+      const dialog = await settledDialog(page);
+      await headingGap(dialog, scale);
+      if (scale === 2) {
+        // Preserve the original spacing suite's button-footer focus scenario.
+        const last = dialog.getByRole("textbox", {
+          name: "Field 16",
+          exact: true,
+        });
+        await last.focus();
+        await expect(last).toBeInViewport({ ratio: 1 });
+        await page.keyboard.press("Tab");
+        await expect(
+          dialog.getByRole("button", { name: "Save", exact: true }),
+        ).toBeFocused();
+      }
+    }
+  }
+  await page.setViewportSize({ width: 1280, height: 900 });
+  await page.goto(`${fixture}?artwork&theme=light`);
+  const dialog = await settledDialog(page);
+  await expect(dialog.locator(".buzz-dialog-artwork")).toBeVisible();
+  await headingGap(dialog, 1);
+});
 
 for (const content of ["wrapped", "portal", "leading-only"]) {
   test(`${content} footer content remains clickable`, async ({ page }) => {

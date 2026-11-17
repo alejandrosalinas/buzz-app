@@ -1,4 +1,11 @@
-import { parseOpenTarget, targetKey, type OpenTarget } from "./targets";
+import {
+  coversWorkspace,
+  joinBeneath,
+  parseOpenTarget,
+  targetKey,
+  withoutJoin,
+  type OpenTarget,
+} from "./targets";
 import type {
   DismissedVisits,
   NavigationEntry,
@@ -467,12 +474,12 @@ export function createNavigationController(
           returningFocus = undefined;
           returningSidebar = undefined;
           // A passing visit leaves as a dismissal does: back to its opener when
-          // that is the page opening, else replaced by it. Settings returns to
-          // that visit, so it never replaces it. Any forward entries stay.
+          // that is the page opening, else replaced by it. Settings and the
+          // join dialog return to that visit, so they never replace it. Any
+          // forward entries stay.
           const dismiss =
             options?.dismiss ||
-            (target.kind !== "settings" &&
-              passes(history.snapshot().current.id));
+            (!coversWorkspace(target) && passes(history.snapshot().current.id));
           const previous = history.snapshot().previous;
           if (
             dismiss &&
@@ -487,8 +494,11 @@ export function createNavigationController(
           if (options?.replace || dismiss) history.replace(target);
           else {
             const { current, previous } = history.snapshot();
+            // Members hands off to what opens from it, but the join dialog
+            // presents over Members, which stays beneath it.
             if (
               !history.snapshot().invalidAddress &&
+              !target.join &&
               current.target.kind === "conversation" &&
               current.target.panel === "members"
             ) {
@@ -505,7 +515,27 @@ export function createNavigationController(
                 }
                 history.push(target);
               }
-            } else history.push(target);
+            } else {
+              // A join dialog keeps only the view beneath it. The visit it
+              // opens over drops one-shot data (a Settings card's route), so
+              // Close, Back and reload return to that view, never replay it.
+              const beneath = joinBeneath(current.target);
+              if (
+                target.join &&
+                !current.target.join &&
+                !history.snapshot().invalidAddress &&
+                targetKey(beneath) !== targetKey(current.target) &&
+                targetKey(beneath) === targetKey(withoutJoin(target))
+              ) {
+                resolving = active;
+                try {
+                  history.resolve(beneath);
+                } finally {
+                  resolving = undefined;
+                }
+              }
+              history.push(target);
+            }
           }
           return active.promise;
         } catch {
@@ -596,7 +626,13 @@ export function createNavigationController(
         )
           return false;
         try {
-          const target = parseOpenTarget(input);
+          // A join dialog over the visit stays over the one it resolves to.
+          const join = snapshot.entry.target.join;
+          const parsed = parseOpenTarget(input);
+          const target =
+            join && !parsed.join
+              ? parseOpenTarget({ ...parsed, join })
+              : parsed;
           if (targetKey(target) === targetKey(snapshot.entry.target))
             return true;
           resolving = active;

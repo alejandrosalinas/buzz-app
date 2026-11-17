@@ -2,6 +2,7 @@
 import { expect, it, vi } from "vitest";
 import { pngChunks, snapshotChunk } from "../messages/image-metadata";
 import {
+  avatarCropBox,
   avatarPictureError,
   avatarPreview,
   profilePictureError,
@@ -155,6 +156,24 @@ it("forwards the requested size so previews share the message-row thumbnail URL"
   );
   // The editor keeps the original for its large frame.
   expect(avatarPreview(picture, community)).toBe(proxied(picture));
+});
+
+it("keeps a panned and zoomed image covering the avatar frame", () => {
+  // A 2:1 image covers the frame at zoom 1 and pans only sideways.
+  expect(avatarCropBox(2, { zoom: 1, x: 0.8, y: 0.3 })).toEqual({
+    crop: { zoom: 1, x: 0.5, y: 0 },
+    width: 2,
+    height: 1,
+    left: 0,
+    top: 0,
+  });
+  expect(avatarCropBox(1, { zoom: 2, x: -0.2, y: 0.9 })).toEqual({
+    crop: { zoom: 2, x: -0.2, y: 0.5 },
+    width: 2,
+    height: 2,
+    left: -0.7,
+    top: 0,
+  });
 });
 
 it("saves Buzz mobile's emoji avatar as-is in a personal profile only", () => {

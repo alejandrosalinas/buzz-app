@@ -1,14 +1,20 @@
 import { expect, it } from "vitest";
+import { validateObject } from "../../features/agents/attention";
 import {
-  checkinHourly,
+  dream,
+  FEATURES,
   featureState,
   hasFeature,
+  LEGACY,
   memory,
+  notes,
   restoredFeature,
+  upgradedFeature,
   withFeature,
 } from "./features";
+import { v1CheckIn, v1Memory } from "./test-helpers";
 
-const OPEN = "<!-- buzz:bestie/memory v1 -->";
+const OPEN = `<!-- buzz:bestie/memory v${memory.version} -->`;
 const CLOSE = "<!-- /buzz:bestie/memory -->";
 
 it("adds memory once, at the end, and removes only what it added", () => {
@@ -93,9 +99,7 @@ it("shows a section whose markers were edited, and adds no second one", () => {
   }
   expect(featureState("Be brief.", memory)).toBe("off");
   // Another feature's markers are not this one's.
-  expect(featureState(withFeature("", checkinHourly, true), memory)).toBe(
-    "off",
-  );
+  expect(featureState(withFeature("", v1CheckIn, true), memory)).toBe("off");
 });
 
 it("restores an edited section only where its markers show it was", () => {
@@ -126,7 +130,7 @@ it("restores an edited section only where its markers show it was", () => {
       memory,
     ),
   ).toBeUndefined();
-  const other = withFeature("", checkinHourly, true);
+  const other = withFeature("", v1CheckIn, true);
   expect(
     restoredFeature(
       `${OPEN.replace(" v1", "")}\nrules\n\n${other}\n${CLOSE.replace(" -->", "-->")}`,
@@ -176,10 +180,175 @@ it("keeps the owner's line ending, or its absence, through on and off", () => {
   ).toBe("Be brief.\n");
 });
 
-it("has the check-in read the private channels Bestie was added to", () => {
-  const load = checkinHourly.text
-    .split("\n")
-    .find((line) => line.startsWith("1. LOAD."));
-  expect(load).toContain("each private channel you have been added to");
-  expect(load).toContain("you are a guest there and can't post");
+it("keeps the steps of Hourly notes and Nightly review out of the instructions every turn carries", () => {
+  // Only memory has a section; the other two are a timer and an Interest.
+  expect(FEATURES.filter(({ text }) => text).map(({ id }) => id)).toEqual([
+    "memory",
+  ]);
+  for (const feature of [notes, dream]) {
+    const owner = "Be brief.\n";
+    expect(withFeature(owner, feature, true)).toBe(owner);
+    expect(featureState(owner, feature)).toBe("off");
+    // Each wakes the agent with its steps, and needs memory, no other check-in.
+    expect(feature.requires).toBe("memory");
+    expect(feature.timer?.interest.length).toBeGreaterThan(1_000);
+    expect(
+      validateObject(`interest/${feature.timer?.id}`, {
+        type: "interest",
+        instructions: feature.timer?.interest,
+      }),
+    ).toBeUndefined();
+  }
+  // What every turn carries is small and has no wake's steps.
+  expect(memory.text?.length).toBeLessThan(4_000);
+  expect(memory.text).not.toMatch(/1\. LOOK|1\. READ/);
+});
+
+it("gives each check-in its own timer, and the nightly review a daily one at 03:00", () => {
+  const timers = FEATURES.flatMap(({ timer }) => (timer ? [timer] : []));
+  expect(timers.map(({ id }) => id)).toEqual(["bestie-notes", "bestie-dream"]);
+  expect(notes.timer).toMatchObject({ everySecs: 3600, id: "bestie-notes" });
+  expect(notes.timer?.atHour).toBeUndefined();
+  expect(dream.timer).toMatchObject({ everySecs: 86_400, atHour: 3 });
+  // The old hourly check-in is one to remove, not one to turn on.
+  expect(FEATURES.map(({ id }) => id)).not.toContain(LEGACY[0]?.id);
+  expect(timers.map(({ id }) => id)).not.toContain(LEGACY[0]?.timer?.id);
+});
+
+it("has no step that adds Bestie to a channel it was added to", () => {
+  const all = [memory.text, notes.timer?.interest, dream.timer?.interest].join(
+    "\n",
+  );
+  expect(all).not.toMatch(/added to|add .*to channels|you are a guest/i);
+  // Notes read the channels it is in, and say not to join others.
+  expect(notes.timer?.interest).toContain(
+    "Call channel_list: the channels you are in.",
+  );
+  expect(notes.timer?.interest).toContain(
+    "Never join a channel, add yourself to one or read one you are not in.",
+  );
+});
+
+it("has Hourly notes stop with no write when nothing is new, and message only for a due follow-up", () => {
+  const steps = notes.timer?.interest ?? "";
+  expect(steps).toContain("no memory write, no receipt, no message");
+  expect(steps).toContain("STOP, writing nothing and sending nothing");
+  expect(steps).toContain("Only if a follow-up the owner asked for is due now");
+  // The receipt is a step after the notes, which a stopped pass never reaches.
+  expect(steps.indexOf("STOP")).toBeLessThan(steps.indexOf("receipt (time"));
+});
+
+it("has Nightly review silent, strict about promotion and bounded in what it changes", () => {
+  const steps = dream.timer?.interest ?? "";
+  expect(steps).toContain("you never send a message");
+  expect(steps).toContain("Send no message.");
+  expect(steps).toContain(
+    "3 or more observations on 3 or more different days and none against",
+  );
+  expect(steps).toContain("read its source event");
+  expect(steps).toContain("at most 4 KB");
+  expect(steps).toContain("MOVED TO [[slug]]");
+  expect(steps).toContain('Append a "Dream" section');
+  // A reflection has explicit ends, and the stop check leaves out only what
+  // lies between them: a note holding only a reflection is no work, and a
+  // card link appended after its end line is.
+  const start = '"<!-- dream:start -->"';
+  const end = '"<!-- dream:end -->"';
+  expect(steps).toContain(
+    `Start it with a line ${start} and end it with a line ${end}, so later lines are not part of it.`,
+  );
+  expect(steps).toContain(
+    `no note line dated on or after last_dream outside a reflection (from a ${start} line to the next ${end} line; anything after that end line is new)`,
+  );
+  expect(steps).not.toContain('outside a "Dream" section');
+  // A night with no new note still retires stale hypotheses.
+  expect(steps).toContain("Stop and write nothing only if there is no note");
+  // Lines are dated by day, so a line from later on last_dream's day counts.
+  expect(steps).toContain("mem/notes/<date> dated on or after last_dream");
+  expect(steps).toContain("no line in mem/user dated on or after it");
+  expect(steps).not.toMatch(/since last_dream|dated after it/);
+  expect(steps).toContain("step 3 still marks and retires stale hypotheses");
+  // The cards it reads, and whether it stops, both come from the notes, so
+  // every card write links its card from a note: in chat and in Hourly notes.
+  const link = "[[mem/entities/<type>/<id>]]";
+  expect(steps).toContain(`each card those notes link as ${link}`);
+  expect(memory.text).toContain(
+    `Each time you write to a card, also append a line to mem/notes/<today> with the source event id that links the card as ${link}`,
+  );
+  expect(notes.timer?.interest).toContain(
+    `link the card from the note line as ${link}`,
+  );
+});
+
+it("takes the old hourly check-in's section away, as it was saved", () => {
+  const on = withFeature(
+    withFeature("Be brief.\n", memory, true),
+    v1CheckIn,
+    true,
+  );
+  expect(on).toContain("each private channel you have been added to");
+  const [old] = LEGACY;
+  expect(old && featureState(on, old)).toBe("on");
+  const off = old ? withFeature(on, old, false) : on;
+  expect(off).toBe(withFeature("Be brief.\n", memory, true));
+  expect(off).not.toContain("Hourly upkeep");
+});
+
+it("upgrades an earlier version's whole section where it is, and nothing else", () => {
+  const owner = (section: string) =>
+    `Be brief.\n\n${section}\n\nAlways answer in French.\n`;
+  const old = withFeature("", v1Memory, true).trimEnd();
+  const current = withFeature("", memory, true).trimEnd();
+  expect(upgradedFeature(owner(old), memory)).toBe(owner(current));
+  // The current version, an edited section and no section stay as they are.
+  expect(upgradedFeature(owner(current), memory)).toBe(owner(current));
+  const edited = owner(old).replace(CLOSE, "");
+  expect(upgradedFeature(edited, memory)).toBe(edited);
+  expect(upgradedFeature("Be brief.", memory)).toBe("Be brief.");
+  // Stock text in other line endings, or with trailing spaces, is still stock.
+  const crlf = owner(old)
+    .replace(/\n/g, "\r\n")
+    .replace(/\.\r\n/g, ".  \r\n");
+  expect(upgradedFeature(crlf, memory)).toContain(OPEN);
+  expect(upgradedFeature(crlf, memory)).not.toContain("memory v1");
+});
+
+it("leaves an earlier version's section the owner edited inside its markers as it is", () => {
+  const old = withFeature("Be brief.", v1Memory, true);
+  for (const edited of [
+    // A rule added, one changed and one removed, all between whole markers.
+    old.replace("Rules:", "Rules:\n- Never store my medical details."),
+    old.replace("Never duplicate a claim", "Always duplicate a claim"),
+    old.replace(/^- Quoted, forwarded.*\n/m, ""),
+  ]) {
+    expect(edited).not.toBe(old);
+    expect(featureState(edited, memory)).toBe("on");
+    expect(upgradedFeature(edited, memory)).toBe(edited);
+  }
+});
+
+it("pins version 1 of Remembers you as it shipped", () => {
+  const text = memory.earlier?.[1] ?? "";
+  expect(text.startsWith("# Memory\n")).toBe(true);
+  expect(text).toContain(
+    "- mem/memory: curated longer-term knowledge. Replace superseded claims; never duplicate.",
+  );
+  expect(text).not.toContain("mem/entities");
+});
+
+it("has Nightly review keep what an earlier version saved in mem/memory before rebuilding it", () => {
+  const steps = dream.timer?.interest ?? "";
+  // v1 chat turns kept prose there; the rebuild keeps only cards, Now and lessons.
+  expect(v1Memory.text).toContain("mem/memory: curated longer-term knowledge");
+  expect(steps).toContain(
+    'Before you write mem/memory again, move each claim in it that is not a card line, a "Now" line or a lesson, such as one an earlier version of your memory rules saved there, to its card, or to mem/hypotheses if it is a guess, with its date and source; never drop one.',
+  );
+  // Every night, not only the first: a v1 section may still be in the instructions.
+  const step = steps.slice(
+    steps.indexOf("5. ORGANIZE"),
+    steps.indexOf("6. REFLECT"),
+  );
+  expect(step.indexOf("Before you write mem/memory again")).toBeLessThan(
+    step.indexOf("Then write mem/memory again"),
+  );
 });

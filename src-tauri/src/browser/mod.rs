@@ -91,6 +91,8 @@ pub enum BrowserAction {
 struct BrowserSession {
     instance: String,
     host: Webview,
+    // Dropped before the guest: it ends the guest's fullscreen and observation.
+    fullscreen: platform::Fullscreen,
     guest: WebView,
     // WKWebView's UI and navigation delegate references are weak.
     _permissions: platform::Permissions,
@@ -100,6 +102,33 @@ struct BrowserSession {
     handoff: Rc<Handoff>,
     // WebKit requires suspend and resume calls in pairs.
     media_suspended: Cell<bool>,
+    presentation: Presentation,
+}
+
+/// The latest presentation the host asked for while WebKit owned a fullscreen
+/// guest, to apply when WebKit gives the guest back.
+#[derive(Default)]
+struct Presentation(Cell<Option<(BrowserBounds, bool)>>);
+
+impl Presentation {
+    /// What to apply now: nothing while fullscreen, where the request waits.
+    fn request(
+        &self,
+        fullscreen: bool,
+        bounds: BrowserBounds,
+        visible: bool,
+    ) -> Option<(BrowserBounds, bool)> {
+        if fullscreen {
+            self.0.set(Some((bounds, visible)));
+            return None;
+        }
+        self.0.set(None);
+        Some((bounds, visible))
+    }
+
+    fn after_fullscreen(&self) -> Option<(BrowserBounds, bool)> {
+        self.0.take()
+    }
 }
 
 impl BrowserSession {
@@ -144,6 +173,11 @@ impl BrowserSession {
     }
 
     fn set_media_suspended(&self, suspended: bool) -> Result<(), String> {
+        if suspended {
+            // Only detach suspends: no view shows the page any more, so it must
+            // not stay fullscreen. A suspend for another reason must not do this.
+            platform::leave_fullscreen(&self.guest);
+        }
         if self.media_suspended.get() == suspended {
             return Ok(());
         }
@@ -153,6 +187,20 @@ impl BrowserSession {
     }
 
     fn set_bounds(&self, bounds: BrowserBounds, visible: bool) -> Result<(), String> {
+        // A fullscreen page has left the panel: entering fullscreen hides the main
+        // window, and hiding or placing the guest would blank the fullscreen
+        // window. WebKit can also report the exit before the page is back in
+        // the panel. The latest request applies once WebKit gives the page back.
+        let fullscreen = platform::fullscreen(&self.guest);
+        let away = fullscreen
+            || (self.fullscreen.returning() && !platform::in_host_window(&self.guest, &self.host));
+        let Some((bounds, visible)) = self.presentation.request(away, bounds, visible) else {
+            if !fullscreen {
+                // No fullscreen change is left to report its return.
+                self.fullscreen.reconcile_soon();
+            }
+            return Ok(());
+        };
         self.guest
             .set_visible(false)
             .map_err(|error| error.to_string())?;
@@ -195,6 +243,31 @@ fn with_browser<T>(
     })
 }
 
+/// Applies what the host asked for while the guest was fullscreen, such as a
+/// hide from a view that closed meanwhile. Returns false to be asked again
+/// when the guest cannot be placed yet.
+fn present_after_fullscreen(instance: &str) -> bool {
+    BROWSERS.with(|browsers| {
+        let Ok(browsers) = browsers.try_borrow() else {
+            return false;
+        };
+        let Some(browser) = browsers.iter().find(|browser| browser.instance == instance) else {
+            return true;
+        };
+        // WebKit can report the exit before it puts the guest back in the panel;
+        // a request can arrive meanwhile.
+        if !platform::in_host_window(&browser.guest, &browser.host) {
+            return false;
+        }
+        if let Some((bounds, visible)) = browser.presentation.after_fullscreen() {
+            if let Err(error) = browser.set_bounds(bounds, visible) {
+                browser.snapshot.borrow_mut().error = Some(error);
+            }
+        }
+        true
+    })
+}
+
 pub(crate) fn shutdown() {
     BROWSERS.with(|browsers| browsers.borrow_mut().clear());
 }
@@ -220,6 +293,9 @@ pub(crate) fn window_event(window: &tauri::Window, event: &tauri::WindowEvent) {
         tauri::WindowEvent::Resized(_) | tauri::WindowEvent::ScaleFactorChanged { .. } => {
             BROWSERS.with(|browsers| {
                 for browser in browsers.borrow().iter() {
+                    if platform::fullscreen(&browser.guest) {
+                        continue;
+                    }
                     if let Err(error) = browser.guest.set_visible(false) {
                         browser.snapshot.borrow_mut().error = Some(error.to_string());
                     }
@@ -498,9 +574,14 @@ fn build_contents(
     let _ = handoff.location.set(platform::location(&guest));
     let permissions = platform::deny_permissions(&guest)?;
     let navigation = platform::observe_navigation(&guest)?;
+    let instance = uuid::Uuid::new_v4().to_string();
+    let exited = instance.clone();
+    let fullscreen =
+        platform::observe_fullscreen(&guest, move || present_after_fullscreen(&exited))?;
     let browser = BrowserSession {
-        instance: uuid::Uuid::new_v4().to_string(),
+        instance,
         host,
+        fullscreen,
         guest,
         _permissions: permissions,
         navigation,
@@ -508,6 +589,7 @@ fn build_contents(
         policy,
         handoff,
         media_suspended: Cell::new(false),
+        presentation: Presentation::default(),
     };
     platform::resize_guest(&browser.guest, &browser.host, bounds)?;
     if !defer_navigation {
@@ -1038,5 +1120,39 @@ mod handoff_tests {
             .error
             .as_deref()
             .is_some_and(|error| error.contains("gate?app=a.apps.builderlab.xyz")));
+    }
+}
+
+#[cfg(test)]
+mod presentation_tests {
+    use super::{BrowserBounds, Presentation};
+
+    fn bounds(x: f64) -> BrowserBounds {
+        BrowserBounds {
+            x,
+            y: 0.0,
+            width: 10.0,
+            height: 10.0,
+        }
+    }
+
+    #[test]
+    fn fullscreen_holds_the_latest_presentation_until_it_ends() {
+        let presentation = Presentation::default();
+        assert_eq!(presentation.request(true, bounds(1.0), false), None);
+        assert_eq!(presentation.request(true, bounds(2.0), true), None);
+        assert_eq!(presentation.after_fullscreen(), Some((bounds(2.0), true)));
+        assert_eq!(presentation.after_fullscreen(), None);
+    }
+
+    #[test]
+    fn a_presentation_applied_after_fullscreen_replaces_the_held_one() {
+        let presentation = Presentation::default();
+        assert_eq!(presentation.request(true, bounds(1.0), false), None);
+        assert_eq!(
+            presentation.request(false, bounds(2.0), true),
+            Some((bounds(2.0), true))
+        );
+        assert_eq!(presentation.after_fullscreen(), None);
     }
 }

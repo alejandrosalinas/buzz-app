@@ -147,10 +147,12 @@ sidebar coordinates must match what the sidebar signer produces, and every
 other coordinate must satisfy the recipe contract.
 
 Move channel, Create new, exclusive Starred placement and startup presentation also
-belong to this persistent sidebar. Rows in saved groups, **Starred** and **Channels**
-can also be dragged with a pointer onto another saved group, **Starred** or
-**Channels**; the drop is the same Move intent, with the same gate, optimistic
-placement, rollback notice and Retry.
+belong to this persistent sidebar. Rows in saved groups, **Starred**, **Channels**
+and **Direct messages** can also be dragged with a pointer onto another saved
+group or **Starred**, or back to their own home section: channels to **Channels**
+and DMs to **Direct messages**. Neither home section accepts the other's rows. The
+drop is the same Move intent, with the same gate, optimistic placement, rollback
+notice and Retry.
 The **Channels** ellipsis menu also offers **Create section**, which creates an
 empty section without moving a channel. Its dialog retains the name and section
 ID after an attempted write fails and waits for confirmation before closing.
@@ -163,7 +165,7 @@ an accepted save stays visible even after Cancel. If that read fails too, new
 creation is gated across menu, drop and create-and-move paths, and Retry retains
 writer routing until reconciliation succeeds. Recovery waits for all queued
 preference writes and repeats a writer read invalidated by a concurrent write.
-Ordinary startup remains replica-eligible. Dragging a channel into
+Ordinary startup remains replica-eligible. Dragging a channel or DM into
 the gap above the first custom section expands an **Add to new section** drop
 target inside the sidebar. With no custom sections, the target is above
 **Channels**; **Starred** keeps its pinned position. The created section appears
@@ -173,12 +175,12 @@ Dropping there opens the existing create-and-move dialog; cancelling leaves the
 channel in place, and no preference is written until submission. These entry
 points supplement the per-channel **Move channel → Create new…** route and use
 the existing gated preference queue and encrypted section record.
-Only a channel's select surface starts a drag, the surface its row menu wraps.
+Only a row's select surface starts a drag, the surface its row menu wraps.
 **Starred** accepts drops only when it is already visible; starting a drag does
 not reveal an empty section. Use the row menu to star the first channel.
 Dropping into Starred stars the channel; dropping out assigns the destination
-and clears its star, just like the row menu. Forums and Direct
-messages take no part in dragging, and the row menu remains the keyboard path.
+and clears its star, just like the row menu. Forums take no part in dragging,
+and the row menu remains the keyboard path.
 A saved group also drags by its header, expanded or collapsed, onto another saved
 group; an accent line shows where it lands, and Escape cancels. Its section menu's
 **Move up** and **Move down** are the keyboard and single-pointer path. Each move
@@ -526,16 +528,64 @@ message composer with the lower archived-channel notice. If that composer owned
 focus, focus moves to the retained message history. Nonempty unsent text, including
 an in-progress message edit, is offered through a host-owned **Copy text** toast;
 empty composers and focus elsewhere do not trigger it. Copy failure retains a retry
-action, and recovery stays available until used or dismissed. Unarchiving restores the
+action, and recovery stays available until used or dismissed. Above the history, an
+archived channel also shows an **Archived · view only** notice that names the
+state and, for members, says it is hidden from the sidebar until it is unarchived.
+A preview reader, who never had it in their sidebar, sees the title alone. Solo
+chats omit it because their header already marks them archived. Where live
+channel state already allows Unarchive (a direct owner/admin, or owner-agent
+evidence), the notice offers **Unarchive**, which opens the same confirmation as
+Settings and rechecks the relay when confirmed. Cancelling returns focus to that
+button; confirming removes it, so the restored composer takes focus. Archived
+and read-only histories drop the empty state's “Start the conversation below.”
+hint. Unarchiving restores the
 composer and its saved text draft. A remote unarchive in the same open conversation
 preserves the reader's focus instead of autofocus moving it into the restored composer.
 When refreshed Settings actions remount, focus
 returns to its persistent Settings-tab close control instead of an unrelated sidebar row;
 joined archived channels, including session conversations, remain available by name
 in search, labeled **Archived channel**, but stay out of the sidebar and Recent
-activity. After navigating away, open the search result and Settings to restore it.
+activity. After navigating away, open the search result and use the notice's
+**Unarchive** (or Settings) to restore it.
 This uses the existing membership discovery and exact
 navigation, not a new archived-channel directory.
+
+When a complete, ready roster drops the viewer from the channel they have open,
+the pane names it above the history: **You’re no longer a member of [channel]**,
+written as the channel was shown while joined (`#` only for public channels),
+with **Back to channels**. The wording is neutral because the roster cannot tell
+why: an admin's removal, the viewer leaving on another device and someone else
+deleting the channel all read the same. That button opens the sidebar neighbor
+Leave would choose, or the empty Channels route. A private channel shows only
+this notice in place of the generic empty pane. A public channel keeps its
+read-only preview below it, whose lower notice still offers Join where admission
+allows. Once shown, the notice stays while a later visit to the same channel,
+such as a thread or message link, rechecks access. If focus was in what the loss
+removes (the composer, the header's controls or the message history), it moves
+to **Back to channels** for a private channel, or to the preview's history for a
+public one; focus that moved elsewhere meanwhile stays there. A public preview
+that has to be read again first keeps focus in the history pane until it
+returns, rather than settling on **Back to channels** while it is away.
+
+Only relay-confirmed membership counts, in or out of the sidebar: an archived
+channel opened from search is explained too, while membership downloaded from
+disk that the live roster no longer lists at launch shows nothing. The viewer's
+own Leave or Delete for that channel, once confirmed in its dialog, suppresses
+the notice, because its access loss can arrive before its navigation. A
+confirmation still open suppresses nothing: a loss that arrives behind it is
+shown once it is cancelled. A Leave or Delete that fails before publishing,
+such as one its permission check refuses, took nothing away either: a loss
+that arrives while it runs is shown once it fails. When the relay cannot
+confirm a confirmed action
+(“Leave channel failed”, as it may have taken effect), the suppression lasts
+until the relay answers for the channel: a ready roster drops it, or a complete
+roster read after the failure still lists it. Live events and exact reads that
+still list it prove nothing, so a Leave the relay applies late is not reported
+as someone else's doing. Once answered, the suppression ends, so a later loss
+of the same channel is shown. A failed or partial roster read, a pending access
+check, a new session, Solo chats and DMs show nothing. Both notices render
+inside one status region that stays mounted above the history, so a loss that
+arrives while the channel is open is announced.
 
 Search also finds active public channels the viewer has not joined, by name,
 labeled **Public channel · not joined** after joined matches. Opening one shows the
@@ -830,7 +880,9 @@ keep their individual roles. Private is displayed for every private policy,
 including an older Guest admission default; opening or reselecting it never
 normalizes that stored default. Choosing Public or View only explicitly replaces
 it. The shared editor restricts Solo-labelled chats to Private / View only; a
-legacy public Member policy is shown as **Public (existing)** until changed.
+legacy public Member policy is shown as **Public** until changed. Leaving that
+policy confirms that you cannot switch back to Public here. The same warning
+applies when a plugin’s access policy omits Public.
 
 Each selection opens a consequence confirmation. Cancel/Escape returns focus to
 the unchanged Select. **Change access** saves immediately through the existing
@@ -1182,14 +1234,17 @@ ownership once per removal attempt, independently of display hints.
 
 DMs, archived channels and session channels have no administration actions.
 In a Solo chat only owners and admins can remove members, including other people's agents.
-No ownership transfer, community-admin override or new invitation restriction is
-introduced. Personal Leave remains a separate lifecycle operation; removing a
-member neither deletes their identity nor stops their agents.
+An owner can also transfer ownership to another person whose profile has loaded;
+until it has, the action is disabled with its reason. Transfer can't go to agents,
+Bots or other owners, and isn't offered in system channels. One `9000` makes that person Owner, then the previous owner Admin, so
+the relay's last-owner guard holds; success requires both roles in a fresh read. No community-admin override or new
+invitation restriction is introduced. Personal Leave remains a separate lifecycle
+operation; removing a member neither deletes their identity nor stops their agents.
 
-Role change and removal use deliberate confirmation steps in the same dialog,
-initially focused on Cancel. Removal shows only the avatar/name and actions;
-Cancel returns to the list. Leaving either step keeps the list's scroll position
-and returns focus to that member's actions, including while a confirmed change
+Role change, ownership transfer and removal use deliberate confirmation steps in
+the same dialog, initially focused on Cancel. Removal shows only the avatar/name
+and actions; Cancel returns to the list. Leaving any step keeps the list's scroll
+position and returns focus to that member's actions, including while a confirmed change
 is pending. When a confirmed removal takes the row away, focus moves to the
 actions of the member now in its place, the one before it, or Search when none
 is left, unless focus has moved elsewhere; a failed or uncertain removal leaves
@@ -1212,7 +1267,8 @@ recovery is in-memory, not durable across session disposal or restart.
 
 The development broker and native transport advertise a separate
 `memberAdministration` capability and admit only exact `9000` Admin/Member/Guest
-changes or `9001` other-member removals through purpose-bound routes. Generic
+changes, the signer's own ownership transfer or `9001` other-member removals
+through purpose-bound routes. Generic
 invitation signing is unchanged; the relay still enforces the authoritative ACL.
 Hosts without this writer can read verified roles but expose no management controls.
 Native support requires a rebuilt binary; no unrestricted writer fallback is used.
@@ -1253,12 +1309,13 @@ The port retains the prepared-store implementation and its behavior tests:
   limit × 2 KiB, evicting the least recently requested profile. While a channel is
   open and active (not a retained background tab), it reserves room for its whole
   roster on top of that base, up to 10,240 entries. Leaving gives the room back
-  after the current task, so a remount or a roster count change keeps the loaded
-  profiles; the shrink cancels background profile reads asked for before
-  leaving, not the next view's, and
-  stops the verified-name syncs it emptied. Verified-name syncs (128 people
-  each) have their own pool of 80, enough for the largest cache, apart from the
-  32 artifact syncs. A background profile read of many pages publishes once,
+  30 seconds later (a smaller view closing meanwhile does not extend it), so
+  switching back soon, a remount or a roster count change keeps the loaded
+  profiles. After the current task, leaving cancels background profile reads
+  asked for before it, not the next view's; the shrink stops the verified-name
+  syncs it emptied. Verified-name syncs (128 people each) have their own pool of
+  80, enough for the largest cache, apart from the 32 artifact syncs. A
+  background profile read of many pages publishes once,
   when its pages settle (a foreground read that joins it publishes at once), so
   an open mention menu re-ranks a large roster once instead of per page. The
   channel avatar preview reads at most the first 1,024 members; only the mention
@@ -1724,7 +1781,8 @@ terminal, which keeps Escape and Option+Arrow for the shell.
   conversation is not among the rows, next starts from the top and previous from the
   bottom. A conversation listed in two sections is stepped over once. The shortcuts
   are unavailable, leaving the key alone, while the sidebar renders no rows (for
-  example behind another page's own sidebar). Stepping activates the row's own
+  example behind another page's own sidebar) or focus is in a text field outside the
+  composer, which keeps Option+Arrow for editing. Stepping activates the row's own
   button, so it takes the exact path of a click: the saved selection, navigation
   intent, session staleness guard and Solo's immediate activation. The list scrolls
   just far enough to show the row, and nothing above it moves.

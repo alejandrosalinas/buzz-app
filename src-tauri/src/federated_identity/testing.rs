@@ -427,3 +427,37 @@ impl FederatedIdentity {
         state.restored = true;
     }
 }
+
+/// An issuer answering each connection with the next raw reply, after its
+/// delay; yields every request head and body it read.
+pub(crate) async fn scripted_issuer(
+    replies: Vec<(std::time::Duration, String)>,
+) -> (String, tokio::task::JoinHandle<Vec<String>>) {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let base = format!("http://{}/mount", listener.local_addr().unwrap());
+    let task = tokio::spawn(async move {
+        let mut seen = Vec::new();
+        for (delay, reply) in replies {
+            let (mut socket, _) = listener.accept().await.unwrap();
+            let mut head = Vec::new();
+            while !head.ends_with(b"\r\n\r\n") {
+                let mut byte = [0];
+                socket.read_exact(&mut byte).await.unwrap();
+                head.push(byte[0]);
+            }
+            seen.push(String::from_utf8(head).unwrap());
+            tokio::time::sleep(delay).await;
+            let _ = socket.write_all(reply.as_bytes()).await;
+            let _ = socket.shutdown().await;
+        }
+        seen
+    });
+    (base, task)
+}
+pub(crate) fn raw(status: &str, extra: &str, body: &str) -> String {
+    format!(
+        "HTTP/1.1 {status}\r\n{extra}Content-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+        body.len()
+    )
+}

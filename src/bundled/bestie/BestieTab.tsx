@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { watchSlug } from "../../features/agents/attention";
+import { interestSlug, watchSlug } from "../../features/agents/attention";
 import type {
   Agent,
   AgentAddedTab,
@@ -334,6 +334,8 @@ function FeatureSwitch({
     );
   const instructions = instructionsOf(agent);
   const timer = feature.timer && agent.attention[watchSlug(feature.timer.id)];
+  const part =
+    feature.timer && (timer || agent.attention[interestSlug(feature.timer.id)]);
   const required = FEATURES.find(({ id }) => id === feature.requires);
   const blocked = !!required && !featureOn(agent, required);
   const checked = featureOn(agent, feature);
@@ -425,12 +427,13 @@ function FeatureSwitch({
         disabled={saving || ((blocked || formerCheckIn) && !checked)}
         onCheckedChange={(on) => void save(on)}
       />
-      {/* A timer left without its section, as when undoing a failed On
-          failed too, still runs: Remove takes it away. */}
-      {timer && !checked && (
+      {/* A timer or Interest left without the rest, as when undoing a failed
+          On failed too, or one was deleted in Attention: Remove takes it
+          away. */}
+      {part && !checked && (
         <PreferenceRow
-          title={`${feature.title}'s timer is still saved`}
-          subtitle="Its section in Instructions is missing, so it reads as off."
+          title={`${feature.title} is partly saved`}
+          subtitle="Part of it is missing, so it reads as off. Remove clears the rest."
           trailing={(label) => (
             <Button
               variant="outline"

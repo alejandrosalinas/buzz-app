@@ -3,6 +3,7 @@
 // evidence (NIP-AP "Artifact state"), fences every writer so a late or stale
 // result never replaces newer state, and resolves start inputs synchronously
 // from storage.
+import { PRESET } from "./recommended";
 import { verifyEvent } from "nostr-tools";
 import type { RelayEvent } from "../relay/events";
 import { localStore, type AgentStore } from "./store";
@@ -327,18 +328,24 @@ export function syncedSettings(
   agentType: string,
   schema: SettingsSchema,
 ):
-  | Readonly<{ settings: Record<string, string> }>
+  | Readonly<{ settings: Record<string, string>; recommended?: true }>
   | Readonly<{ problem: string }> {
   const body = JSON.parse(content) as {
     agentType?: unknown;
     settings?: unknown;
+    preset?: unknown;
   };
   if (body.agentType !== undefined && body.agentType !== agentType)
     return { problem: "These settings are for another agent type" };
   const problem = settingsProblem(schema, body.settings);
   return problem
     ? { problem }
-    : { settings: body.settings as Record<string, string> };
+    : {
+        settings: body.settings as Record<string, string>,
+        // Beside `settings`, where versions without it keep and ignore it
+        // (NIP-AP "Editing"), so their strict settings check never sees it.
+        ...(body.preset === PRESET ? { recommended: true as const } : {}),
+      };
 }
 
 /** The error a launch shows instead of running a synced setting its runtime

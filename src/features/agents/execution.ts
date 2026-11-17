@@ -76,9 +76,32 @@ export function createAgentExecutions(root: Context, storage: AgentStore) {
       execution: AgentExecution | undefined;
     }
   >();
+  /** Each validated agent's last parsed binding with its text: name lookups
+   * read every agent's binding per label, so unchanged text skips the parse. */
+  const parsed = new Map<
+    AgentKey,
+    { text: string | null; binding: AgentExecutionBinding | undefined }
+  >();
+  /** Changes when a binding save starts and when it settles, and with each
+   * storage change another window reports, so callers can skip rereading
+   * every binding until it does. */
+  let bindingChanges = 0;
+  root.effect(() => {
+    const changed = (event: StorageEvent) => {
+      if (event.key === null || event.key.startsWith(PREFIX)) bindingChanges++;
+    };
+    globalThis.addEventListener?.("storage", changed);
+    return () => globalThis.removeEventListener?.("storage", changed);
+  });
   const read = (agent: AgentKey): AgentExecutionBinding | undefined => {
-    if (!AGENT_KEY.test(agent)) throw new Error("Invalid agent membership key");
-    return parse(storage.get(PREFIX + agent));
+    const last = parsed.get(agent);
+    if (!last && !AGENT_KEY.test(agent))
+      throw new Error("Invalid agent membership key");
+    const text = storage.get(PREFIX + agent);
+    if (last?.text === text) return last.binding;
+    const binding = parse(text);
+    parsed.set(agent, { text, binding });
+    return binding;
   };
   const parse = (text: string | null): AgentExecutionBinding | undefined => {
     if (text === null || text === LOCAL) return;
@@ -128,6 +151,7 @@ export function createAgentExecutions(root: Context, storage: AgentStore) {
   });
   return {
     read,
+    bindingChanges: () => bindingChanges,
     inspect,
     register(ctx: Context, provider: AgentExecutionProvider) {
       if (
@@ -169,11 +193,14 @@ export function createAgentExecutions(root: Context, storage: AgentStore) {
       try {
         if ((await storage.read(PREFIX + agent)) === LOCAL)
           await storage.set(PREFIX + agent, null);
+        // The copy holds the binding as soon as the save starts.
+        bindingChanges++;
         const saved = await storage.add(PREFIX + agent, text);
         if (saved !== text)
           throw new Error("The agent already has another execution binding");
       } finally {
         bindingInFlight.delete(agent);
+        bindingChanges++;
       }
     },
     async check(agent: AgentKey, harness: string) {

@@ -554,6 +554,11 @@ test("opens an active message's empty thread without losing its activity preview
   await expect(
     thread.getByRole("textbox", { name: "Reply to thread", exact: true }),
   ).toBeFocused();
+  // The composer takes focus before the rows finish positioning, and the
+  // rows stay inert until then, so a press on one would land in the composer.
+  await expect(
+    thread.getByRole("region", { name: "Thread messages", exact: true }),
+  ).toHaveAttribute("aria-busy", "false");
   await activity.press("Enter");
   await expect(
     page.getByRole("tab", { name: "Activity", selected: true }),
@@ -607,6 +612,11 @@ for (const focusOn of ["bubble", "stop", "composer"]) {
       name: /^View agent activity:/,
     });
     await expect(bubble).toBeVisible();
+    // Rows stay inert while the thread positions its first page, so focus()
+    // on a control inside one is a no-op until the region is no longer busy.
+    await expect(
+      thread.getByRole("region", { name: "Thread messages", exact: true }),
+    ).toHaveAttribute("aria-busy", "false");
     // Finish entrance and hold only the exit so the intermediate state is testable.
     await animationsSettled(message.locator("section"), { subtree: true });
     // Hold the actual exit animation before its first frame, rather than racing

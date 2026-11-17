@@ -8,6 +8,7 @@ import { createRelaySession } from "../relay/session";
 import type {
   SidebarDecoder,
   SidebarMuteMutator,
+  SidebarPreferences,
 } from "../relay/sidebar-preferences";
 import type { LiveCallbacks } from "../relay/live";
 import type { ReadFilter } from "../relay/events";
@@ -44,7 +45,12 @@ export async function setup(
     channelsMounted?: boolean;
     deferRoster?: boolean;
   },
-  sidebar?: { decode: SidebarDecoder; write?: SidebarMuteMutator },
+  sidebar?: {
+    decode: SidebarDecoder;
+    write?: SidebarMuteMutator;
+    /** Preferences an earlier launch saved on this device. */
+    saved?: SidebarPreferences;
+  },
   /** A signing host, so visible rows publish read intent as in production. */
   readIntent = false,
 ) {
@@ -95,6 +101,7 @@ export async function setup(
       ? markerQuery()
       : ([] as ReturnType<typeof message>[]),
   );
+  const saved = sidebar?.saved;
   const owner = createRelaySession(
     {
       viewer: viewer.pubkey,
@@ -164,6 +171,21 @@ export async function setup(
         },
         close() {},
       },
+      ...(saved
+        ? {
+            persistence: {
+              read: async () => [],
+              readStartup: async () => ({
+                preferences: { savedAt: Date.now(), data: saved },
+              }),
+              write: async () => {},
+              remove: async () => {},
+              retain: async () => {},
+              clear: async () => {},
+              close() {},
+            },
+          }
+        : {}),
     },
   );
   cleanups.push(owner.dispose);

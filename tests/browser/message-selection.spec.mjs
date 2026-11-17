@@ -1,7 +1,80 @@
 import { test, expect } from "./fixture.mjs";
-import { open } from "./timeline.mjs";
+import { frames, open } from "./timeline.mjs";
 
 test.use({ historyCounts: { alpha: 3, beta: 0 } });
+
+// Native selection, portal hit-testing and focus restoration need real engines.
+for (const [scheme, width, scale] of [
+  ["light", 1440, 1],
+  ["dark", 800, 1.25],
+]) {
+  test(`selected links yield Quote to their context menu (${scheme})`, async ({
+    page,
+    app,
+  }) => {
+    await page.emulateMedia({ colorScheme: scheme });
+    await page.setViewportSize({ width, height: 950 });
+    await open(page, app);
+    await page.evaluate(
+      (scale) =>
+        document.documentElement.style.setProperty(
+          "--buzz-text-scale",
+          String(scale),
+        ),
+      scale,
+    );
+    const message = app.append(
+      "primary",
+      "alpha",
+      "[Example link](https://example.org/pull/1)",
+    );
+    const link = page
+      .locator(`[data-channel-timeline] [data-message-id="${message.id}"]`)
+      .getByRole("link", {
+        name: "Example link",
+        exact: true,
+        includeHidden: true,
+      });
+    await expect(link).toBeVisible();
+    const selectLink = () =>
+      link.evaluate((element) => {
+        const range = document.createRange();
+        range.selectNodeContents(element);
+        const selection = getSelection();
+        selection.removeAllRanges();
+        selection.addRange(range);
+      });
+    await selectLink();
+    const quote = page.getByRole("button", {
+      name: "Quote",
+      exact: true,
+      includeHidden: true,
+    });
+    await expect(quote).toBeVisible();
+    await link.click({ button: "right" });
+    const menu = page.getByRole("menu");
+    await expect(
+      menu.getByRole("menuitem", { name: "Copy link" }),
+    ).toBeVisible();
+    // Engines can update the link selection after the menu has taken focus.
+    // Keep that ordering explicit instead of relying on a platform's timing.
+    await selectLink();
+    await expect
+      .poll(() => page.evaluate(() => getSelection()?.toString()))
+      .toBe("Example link");
+    await frames(page);
+    await expect(quote).toHaveCount(0);
+    await page.keyboard.press("Escape");
+    await expect(menu).toHaveCount(0);
+    await expect(quote).toBeVisible();
+    await quote.click();
+    await expect(
+      page
+        .getByRole("textbox", { name: "Message #Alpha", exact: true })
+        .locator("blockquote"),
+    ).toContainText("Example link");
+  });
+}
 
 // Engines copy Selection.toString(): button labels, hover-only clocks and
 // visually hidden text all count unless user-select excludes them. jsdom has

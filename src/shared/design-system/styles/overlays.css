@@ -210,7 +210,9 @@
   .buzz-dialog-content {
     padding-block: var(--dialog-padding);
   }
-  .buzz-dialog-content[data-header-gap="compact"] {
+  /* Dialog uses one heading-to-body gap; AlertDialog retains its body inset.
+     Keep the compact attribute as a compatible alias for existing callers. */
+  .buzz-dialog-content[data-header-gap] {
     padding-block-start: var(--space-3);
   }
   .buzz-dialog-content[data-footer-gap="compact"] {
@@ -388,7 +390,10 @@
     min-height: 0;
     min-width: 0;
     display: grid;
-    grid-template-columns: var(--size-navigator) minmax(0, 1fr);
+    /* The dialog inset and a classic scrollbar come out of this column. The
+       scrollbar (13px in macOS WebKit) does not scale with interface size;
+       1rem keeps labels such as "Channel templates" whole down to 80%. */
+    grid-template-columns: calc(var(--size-navigator) + 1rem) minmax(0, 1fr);
   }
   .buzz-dialog-navigation,
   .buzz-dialog-navigation-detail {
@@ -761,10 +766,12 @@ html[data-keyboard-navigation]
       padding-bottom: var(--space-6);
     }
 
-    > .buzz-dialog-header:has(
-        + .buzz-dialog-content[data-header-gap="compact"]
-      ) {
+    > .buzz-dialog-header:has(+ .buzz-dialog-content[data-header-gap]) {
       padding-bottom: 0;
+
+      &[data-chrome-spacing="padded"] {
+        padding-bottom: var(--space-3);
+      }
     }
 
     > .buzz-dialog-actions {

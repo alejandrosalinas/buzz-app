@@ -396,5 +396,200 @@
         ]
       }
     }
-  ]
+  ],
+  "transfer": {
+    "accepted": [
+      {
+        "name": "transfer",
+        "event": {
+          "kind": 9000,
+          "created_at": 1700000010,
+          "content": "",
+          "tags": [
+            ["h", "11111111-1111-4111-8111-111111111111"],
+            [
+              "p",
+              "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+              "owner"
+            ],
+            ["p", "$viewer", "admin"]
+          ]
+        }
+      }
+    ],
+    "rejected": [
+      {
+        "name": "another owner steps down",
+        "event": {
+          "kind": 9000,
+          "created_at": 1700000010,
+          "content": "",
+          "tags": [
+            ["h", "11111111-1111-4111-8111-111111111111"],
+            [
+              "p",
+              "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+              "owner"
+            ],
+            [
+              "p",
+              "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+              "admin"
+            ]
+          ]
+        }
+      },
+      {
+        "name": "viewer as heir",
+        "event": {
+          "kind": 9000,
+          "created_at": 1700000010,
+          "content": "",
+          "tags": [
+            ["h", "11111111-1111-4111-8111-111111111111"],
+            ["p", "$viewer", "owner"],
+            ["p", "$viewer", "admin"]
+          ]
+        }
+      },
+      {
+        "name": "step down first",
+        "event": {
+          "kind": 9000,
+          "created_at": 1700000010,
+          "content": "",
+          "tags": [
+            ["h", "11111111-1111-4111-8111-111111111111"],
+            ["p", "$viewer", "admin"],
+            [
+              "p",
+              "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+              "owner"
+            ]
+          ]
+        }
+      },
+      {
+        "name": "heir as admin",
+        "event": {
+          "kind": 9000,
+          "created_at": 1700000010,
+          "content": "",
+          "tags": [
+            ["h", "11111111-1111-4111-8111-111111111111"],
+            [
+              "p",
+              "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+              "admin"
+            ],
+            ["p", "$viewer", "admin"]
+          ]
+        }
+      },
+      {
+        "name": "co-ownership",
+        "event": {
+          "kind": 9000,
+          "created_at": 1700000010,
+          "content": "",
+          "tags": [
+            ["h", "11111111-1111-4111-8111-111111111111"],
+            [
+              "p",
+              "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+              "owner"
+            ],
+            ["p", "$viewer", "owner"]
+          ]
+        }
+      },
+      {
+        "name": "step down to member",
+        "event": {
+          "kind": 9000,
+          "created_at": 1700000010,
+          "content": "",
+          "tags": [
+            ["h", "11111111-1111-4111-8111-111111111111"],
+            [
+              "p",
+              "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+              "owner"
+            ],
+            ["p", "$viewer", "member"]
+          ]
+        }
+      },
+      {
+        "name": "removal",
+        "event": {
+          "kind": 9001,
+          "created_at": 1700000010,
+          "content": "",
+          "tags": [
+            ["h", "11111111-1111-4111-8111-111111111111"],
+            [
+              "p",
+              "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+              "owner"
+            ],
+            ["p", "$viewer", "admin"]
+          ]
+        }
+      },
+      {
+        "name": "role fallback",
+        "event": {
+          "kind": 9000,
+          "created_at": 1700000010,
+          "content": "",
+          "tags": [
+            ["h", "11111111-1111-4111-8111-111111111111"],
+            [
+              "p",
+              "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+              "owner"
+            ],
+            ["p", "$viewer", "admin"],
+            ["role", "owner"]
+          ]
+        }
+      },
+      {
+        "name": "short final tag",
+        "event": {
+          "kind": 9000,
+          "created_at": 1700000010,
+          "content": "",
+          "tags": [
+            ["h", "11111111-1111-4111-8111-111111111111"],
+            [
+              "p",
+              "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+              "owner"
+            ],
+            ["p"]
+          ]
+        }
+      },
+      {
+        "name": "long heir tag",
+        "event": {
+          "kind": 9000,
+          "created_at": 1700000010,
+          "content": "",
+          "tags": [
+            ["h", "11111111-1111-4111-8111-111111111111"],
+            [
+              "p",
+              "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+              "owner",
+              ""
+            ],
+            ["p", "$viewer", "admin"]
+          ]
+        }
+      }
+    ]
+  }
 }

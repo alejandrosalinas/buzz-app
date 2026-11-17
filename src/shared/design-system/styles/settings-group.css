@@ -139,4 +139,122 @@
       --settings-group-inset: var(--space-1);
     }
   }
+
+  /* Rows a choice above reveals in place. The wrapper is one group child, so
+   * the group's divider above it is dropped; its rows draw their own, starting
+   * at the revealing row's title so they read as part of that choice. */
+  .buzz-settings-group[data-layout="rows"] > .buzz-settings-group-expand {
+    display: grid;
+    grid-template-rows: 0fr;
+    border-block-start-color: transparent;
+    transition: grid-template-rows var(--duration-panel-enter)
+      var(--easing-enter);
+  }
+  .buzz-settings-group[data-layout="rows"]
+    > .buzz-settings-group-expand[data-open] {
+    grid-template-rows: 1fr;
+  }
+  .buzz-settings-group-expand-rows {
+    min-height: 0;
+    overflow: hidden;
+    opacity: 0;
+    transition: opacity var(--duration-panel-enter) var(--easing-enter);
+  }
+  .buzz-settings-group-expand[data-open] > .buzz-settings-group-expand-rows {
+    opacity: 1;
+  }
+  .buzz-settings-group[data-layout="rows"]
+    .buzz-settings-group-expand-rows
+    > * {
+    margin-inline-start: calc(var(--space-5) + var(--space-4));
+    border-block-start: 1px solid var(--border-standard);
+  }
+  .buzz-settings-group-expand[data-open]
+    > .buzz-settings-group-expand-rows
+    > * {
+    animation: buzz-settings-row-enter var(--duration-panel-enter)
+      var(--easing-enter) both;
+  }
+  @keyframes buzz-settings-row-enter {
+    from {
+      opacity: 0;
+      transform: translateY(-4px);
+    }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .buzz-settings-group[data-layout="rows"] > .buzz-settings-group-expand,
+    .buzz-settings-group-expand-rows {
+      transition: none;
+    }
+    .buzz-settings-group-expand[data-open]
+      > .buzz-settings-group-expand-rows
+      > * {
+      animation: none;
+    }
+  }
+
+  /* A short read-only value in running text, such as what a setting chose. */
+  /* A quiet fill, no border. */
+  .buzz-value-chip {
+    display: inline-flex;
+    align-items: center;
+    gap: var(--space-1);
+    box-sizing: border-box;
+    max-inline-size: 100%;
+    block-size: var(--space-5);
+    margin-block: -1px;
+    padding: 0 var(--space-2) 0 calc(var(--space-1) + var(--space-half));
+    border: 0;
+    border-radius: var(--radius-pill);
+    background: var(--affordance-subtle);
+    color: var(--text-standard);
+    font-weight: var(--type-weight-medium);
+    line-height: var(--space-5);
+    vertical-align: middle;
+  }
+  .buzz-value-chip-icon {
+    display: inline-flex;
+    flex: none;
+    width: 12px;
+    height: 12px;
+  }
+  .buzz-value-chip-icon > svg {
+    width: 100%;
+    height: 100%;
+  }
+  /* "Uses [chip] (i)": the chip's -1px margin keeps the line at 18px, so a
+   * result doesn't shift the row. */
+  .buzz-uses-line {
+    gap: calc(var(--space-1) + var(--space-half));
+    min-block-size: calc(var(--space-4) + var(--space-half));
+  }
+  /* The (i) after the chip when Automatic had to skip a harness. */
+  .buzz-uses-info {
+    display: inline-grid;
+    place-items: center;
+    inline-size: var(--space-5);
+    block-size: var(--space-5);
+    margin-block: -1px;
+    padding: 0;
+    border: 0;
+    border-radius: var(--radius-pill);
+    background: transparent;
+    color: var(--text-secondary);
+    cursor: help;
+  }
+  .buzz-uses-info:hover,
+  .buzz-uses-info:focus-visible {
+    background: var(--affordance-subtle-hover);
+    color: var(--text-standard);
+  }
+  .buzz-uses-info:focus-visible {
+    outline: 2px solid var(--border-focus);
+    outline-offset: 1px;
+  }
+  .buzz-value-chip-text {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
 }

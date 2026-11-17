@@ -9,6 +9,7 @@ import type { BuilderlabViewerSession } from "../../features/browser/api";
 import type { FederatedIdentity } from "../../features/federated-identity/service";
 import type { HostResponse } from "../../features/host/service";
 import { serverName } from "../../features/federated-identity/community-servers";
+import { oauthTarget } from "./oauth/browser";
 
 export type Account = Capabilities &
   Readonly<{
@@ -52,6 +53,9 @@ export type BuilderlabRequest = Readonly<{
 export type BuilderlabSession = Readonly<{
   /** Display name of the native sign-in provider, from its build configuration. */
   providerName?: string | undefined;
+  /** The API of the sign-in server it uses, when not the build's; see
+   * `sessionTarget`. */
+  target?: string | undefined;
   /** Also keeps permissions fresh: reading a signed-in snapshot whose
    * permissions are over a minute old starts re-reading them, and the
    * snapshot says `checkingPermissions` until that settles. */
@@ -407,4 +411,156 @@ export function createNativeSession(
     },
   };
   return session;
+}
+
+/** The Builderlab API a session's account belongs to: saved agents and
+ * registrations are scoped to it. */
+export const sessionTarget = (session: BuilderlabSession) =>
+  session.target ?? oauthTarget();
+
+/** The site of the session's Builderlab server, where its usage and billing
+ * are: the build's configured site, else that server's origin. */
+export const sessionSite = (session: BuilderlabSession) =>
+  session.target
+    ? `${new URL(session.target).origin}/`
+    : (import.meta.env.VITE_BUZZ_BUILDERLAB_URL ?? "");
+
+const unresolved = (): never => {
+  throw new Error(
+    "Builderlab is still finding this community's sign-in server. Try again.",
+  );
+};
+const PENDING_STATE: LoginSnapshot = Object.freeze({ status: "pending" });
+/** The selected community's session while its sign-in server is unknown. */
+const PENDING: BuilderlabSession = Object.freeze({
+  snapshot: () => PENDING_STATE,
+  subscribe: () => () => {},
+  credential: unresolved,
+  freshCredential: async () => unresolved(),
+  request: async () => unresolved(),
+  viewerSession: unresolved,
+  ensureSignedIn: async () => unresolved(),
+  signIn: async () => {},
+  cancel: () => {},
+  abandon: () => {},
+  signOut: () => {},
+  dispose: () => {},
+});
+
+/**
+ * The Builderlab session for the sign-in server of the selected community:
+ * `session`, the build's, unless that community names another server, then
+ * one native session per server, whose calls carry that community so native
+ * sends them with its server's session.
+ */
+export function followCommunity(
+  session: BuilderlabSession,
+  identity: FederatedIdentity,
+  relay: Readonly<{
+    snapshot(): Readonly<{ origin?: string }>;
+    subscribe(listener: () => void): () => void;
+    selected?(): string | undefined;
+  }>,
+): BuilderlabSession {
+  const servers = new Map<string, BuilderlabSession>();
+  let disposed = false;
+  const origin = () =>
+    relay.selected ? relay.selected() : relay.snapshot().origin;
+  const community = () => {
+    const named = origin();
+    return named ? identity.forCommunity?.(named) : undefined;
+  };
+  const current = (): BuilderlabSession => {
+    const named = origin();
+    const server = community();
+    if (disposed || !named || !server) return session;
+    const selected = server.snapshot();
+    const build = identity.snapshot();
+    // Until both servers are known it could be either; nothing runs on one.
+    if (!selected.authority || !build.authority)
+      return selected.status === "restoring" || build.status === "restoring"
+        ? PENDING
+        : session;
+    const authority = selected.authority;
+    if (authority.id === build.authority.id) return session;
+    let found = servers.get(authority.id);
+    if (!found) {
+      const native = createNativeSession({
+        apiAvailable: identity.apiAvailable,
+        snapshot: server.snapshot,
+        subscribe: server.subscribe,
+        signIn: () => server.signIn(),
+        cancelSignIn: () => server.cancelSignIn(),
+        signInLink: () => server.signInLink(),
+        signOut: (options) => server.signOut(options),
+        request: (input) => identity.request({ ...input, relay: named }),
+      });
+      const target =
+        `${authority.identityOrigin}${authority.apiBasePath}`.replace(
+          /\/$/,
+          "",
+        );
+      // Named apart from the build's even when both name one organization.
+      const providerName =
+        native.providerName === session.providerName
+          ? new URL(authority.identityOrigin).host
+          : native.providerName;
+      found = Object.freeze({ ...native, target, providerName });
+      servers.set(authority.id, found);
+    }
+    return found;
+  };
+  return {
+    get providerName() {
+      return current().providerName;
+    },
+    get target() {
+      return current().target;
+    },
+    snapshot: () => current().snapshot(),
+    subscribe(listener) {
+      let target = current();
+      let stop = target.subscribe(listener);
+      let watched = community();
+      let stopServer: () => void = () => {};
+      // Either server's authority, or the selection, can change the target.
+      const changed = () => {
+        const server = community();
+        if (server !== watched) {
+          stopServer();
+          watched = server;
+          stopServer = server?.subscribe(changed) ?? (() => {});
+        }
+        const next = current();
+        if (next === target) return;
+        stop();
+        target = next;
+        stop = target.subscribe(listener);
+        listener();
+      };
+      stopServer = watched?.subscribe(changed) ?? (() => {});
+      const stopBuild = identity.subscribe(changed);
+      const stopRelay = relay.subscribe(changed);
+      return () => {
+        stopRelay();
+        stopBuild();
+        stopServer();
+        stop();
+      };
+    },
+    credential: () => current().credential(),
+    freshCredential: (signal) => current().freshCredential(signal),
+    request: (credential, input) => current().request(credential, input),
+    viewerSession: () => current().viewerSession(),
+    ensureSignedIn: (signal) => current().ensureSignedIn(signal),
+    signIn: () => current().signIn(),
+    cancel: () => current().cancel(),
+    abandon: () => current().abandon(),
+    signOut: () => current().signOut(),
+    dispose() {
+      disposed = true;
+      for (const server of servers.values()) server.dispose();
+      servers.clear();
+    },
+  };
 }

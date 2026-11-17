@@ -28,7 +28,7 @@ import {
   type DepartureIntent,
   leaveUnsettled,
 } from "./departure";
-import { CommunityDialog } from "./CommunityDialog";
+import { CommunityDialog, type JoinReports } from "./CommunityDialog";
 import type { FederatedIdentity } from "../federated-identity/service";
 import type { JoinRequest } from "./invite-intent";
 import { CommunityPickerItem, MEMBERSHIP_SECTION } from "./CommunityPickerItem";
@@ -47,6 +47,12 @@ import {
   communityActionLabel,
 } from "./names";
 import { useCommunityRole } from "./useCommunityRole";
+import type {
+  CommunityUnread,
+  CommunityUnreads,
+} from "../notifications/community-unread";
+
+const noUnreads: ReadonlyMap<string, CommunityUnread> = new Map();
 
 const noSubscription = () => () => {};
 
@@ -65,8 +71,12 @@ type SwitcherState =
 /** Shell navigation only: selecting a community remains owned by Communities. */
 export function CommunityPicker({
   communities,
+  unreads,
   federatedIdentity,
   invite,
+  joinVisit,
+  onJoin,
+  joinReports,
   onInviteClose,
   onSelect,
   onOpenTarget,
@@ -75,9 +85,17 @@ export function CommunityPicker({
   onOpenChange,
 }: {
   communities: Communities;
+  /** Badges communities other than the selected one; absent shows none. */
+  unreads?: Pick<CommunityUnreads, "snapshot" | "subscribe"> | undefined;
   federatedIdentity?: FederatedIdentity | undefined;
-  invite?: (JoinRequest & { requestId: number }) | undefined;
-  onInviteClose?: ((requestId: number) => void) | undefined;
+  invite?: (JoinRequest & { requestId: string }) | undefined;
+  /** An open join visit with no address yet: the manual Join a community. */
+  joinVisit?: string | undefined;
+  /** Opens Join a community as a navigation visit; without it, local state. */
+  onJoin?: (() => void) | undefined;
+  /** The open join dialog's reports to the app: writes and the typed address. */
+  joinReports?: JoinReports | undefined;
+  onInviteClose?: ((requestId: string) => void) | undefined;
   settingsCards?: Pick<SettingsCards, "subscribe" | "has"> | undefined;
   onSelect?: ((id: string | null) => void) | undefined;
   /** Menu destinations (Invites, hosting) open through the host's navigation. */
@@ -87,7 +105,8 @@ export function CommunityPicker({
   const switcherOpen = open ?? localOpen;
   const setSwitcherOpen = onOpenChange ?? setLocalOpen;
   const triggerRef = useRef<HTMLButtonElement>(null);
-  const [joining, setJoining] = useState(false);
+  const [joiningHere, setJoining] = useState(false);
+  const joining = joiningHere || !!joinVisit;
   const navigated = useRef(false);
   // However it opened, a fresh switcher returns focus to its trigger until a
   // choice navigates.
@@ -205,6 +224,14 @@ export function CommunityPicker({
   const active = client.memberships.find(
     (membership) => membership.id === client.selected,
   );
+  const unread = useSyncExternalStore(
+    unreads?.subscribe ?? noSubscription,
+    () => unreads?.snapshot() ?? noUnreads,
+  );
+  const elsewhere = client.memberships.some(
+    (membership) =>
+      membership.id !== client.selected && unread.get(membership.id)?.unread,
+  );
   return (
     <>
       <nav aria-label="Communities" className={styles.picker}>
@@ -216,7 +243,7 @@ export function CommunityPicker({
                 size="md"
                 variant="avatar"
                 shape="round"
-                aria-label={`Community switcher: ${active ? communityName(active) : client.memberships.length === 0 ? "Communities" : "Personal space"}`}
+                aria-label={`Community switcher: ${active ? communityName(active) : client.memberships.length === 0 ? "Communities" : "Personal space"}${elsewhere ? ", unread in other communities" : ""}`}
                 title={
                   active
                     ? communityName(active)
@@ -225,17 +252,22 @@ export function CommunityPicker({
                       : "Personal space"
                 }
                 icon={
-                  active ? (
-                    <Avatar
-                      size="small"
-                      shape="squircle"
-                      alt=""
-                      fallback={communityName(active)}
-                      src={active.publishedIcon ?? active.icon}
-                    />
-                  ) : (
-                    <GlobeIcon size={22} aria-hidden="true" />
-                  )
+                  <span className={styles.trigger}>
+                    {active ? (
+                      <Avatar
+                        size="small"
+                        shape="squircle"
+                        alt=""
+                        fallback={communityName(active)}
+                        src={active.publishedIcon ?? active.icon}
+                      />
+                    ) : (
+                      <GlobeIcon size={22} aria-hidden="true" />
+                    )}
+                    {elsewhere && (
+                      <span className={styles.triggerDot} aria-hidden="true" />
+                    )}
+                  </span>
                 }
               />
             }
@@ -293,6 +325,7 @@ export function CommunityPicker({
                   selected={selected}
                   viewer={client.viewer}
                   session={selected ? session : undefined}
+                  unread={selected ? undefined : unread.get(membership.id)}
                   manager={selected && invites && role.manager}
                   leaving={
                     leaving?.membership.id === membership.id && leaving.pending
@@ -326,7 +359,8 @@ export function CommunityPicker({
               icon={<UsersPlusIcon size={20} />}
               onClick={() => {
                 setSwitcherOpen(false);
-                setJoining(true);
+                if (onJoin) onJoin();
+                else setJoining(true);
               }}
             />
             {onOpenTarget && hostedAvailable && (
@@ -350,16 +384,18 @@ export function CommunityPicker({
       </nav>
       {(joining || invite) && (
         <CommunityDialog
-          key={invite ? invite.requestId : "manual"}
+          key={invite ? invite.requestId : (joinVisit ?? "manual")}
           communities={communities}
           federatedIdentity={federatedIdentity}
           mode="join"
           invite={invite}
+          {...joinReports}
           submittedDestination={invite?.submitted === true}
           onJoined={(id) => select(id)}
           close={() => {
             setJoining(false);
-            if (invite) onInviteClose?.(invite.requestId);
+            const visit = invite?.requestId ?? joinVisit;
+            if (visit) onInviteClose?.(visit);
           }}
         />
       )}

@@ -100,6 +100,16 @@ pub(super) fn make_room(count: &super::Notifications) -> Option<String> {
     None
 }
 
+/// How a notification is presented while Buzz is the active application.
+/// `Banner` interrupts, `List` keeps the Notification Center entry so a missed
+/// banner stays reachable. `Sound` and `Badge` are deliberately absent: alert
+/// audio is app-owned (the renderer plays the chosen sound, and submissions are
+/// always silent so the OS cannot play a second one), and the Dock badge is
+/// projected from unread state rather than individual notifications.
+fn foreground_presentation() -> UNNotificationPresentationOptions {
+    UNNotificationPresentationOptions::Banner | UNNotificationPresentationOptions::List
+}
+
 struct DelegateIvars {
     registry: Arc<Registry>,
 }
@@ -123,8 +133,14 @@ define_class!(
             _notification: &objc2_user_notifications::UNNotification,
             completion: &Block<dyn Fn(UNNotificationPresentationOptions)>,
         ) {
-            // Notification Center list only, never a foreground banner.
-            completion.call((UNNotificationPresentationOptions::List,));
+            // The frontend's notification policy already decided this alert is
+            // worth interrupting for: it drops candidates for the conversation
+            // in view unless Notify while viewing is on, and applies the
+            // read/mute/category gates. Suppressing the banner here would
+            // overrule that decision and leave Notify while viewing with no
+            // visible effect on macOS. Sound stays app-owned, so the banner is
+            // presented silently and the renderer plays the chosen alert.
+            completion.call((foreground_presentation(),));
         }
 
         #[unsafe(method(userNotificationCenter:didReceiveNotificationResponse:withCompletionHandler:))]
@@ -477,6 +493,18 @@ mod permission_tests {
             notification_error("Dock permission requires a bundled macOS app".into()),
             "macOS notifications are unavailable when Buzz is not running from an app bundle"
         );
+    }
+    #[test]
+    fn foreground_presentation_banners_without_borrowing_sound_or_badge() {
+        let options = foreground_presentation();
+        // The frontend's policy, not this delegate, decides whether an alert is
+        // worth interrupting for; a foreground alert that reached the OS shows.
+        assert!(options.contains(UNNotificationPresentationOptions::Banner));
+        // A missed banner stays reachable in Notification Center.
+        assert!(options.contains(UNNotificationPresentationOptions::List));
+        // Alert audio is app-owned and the Dock badge comes from unread state.
+        assert!(!options.contains(UNNotificationPresentationOptions::Sound));
+        assert!(!options.contains(UNNotificationPresentationOptions::Badge));
     }
     #[test]
     fn authorization_projection() {

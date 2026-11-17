@@ -19,7 +19,10 @@
 .emojiPicker[data-external-trigger] {
   position: absolute;
 }
+/* Emoji and GIF panels share one height, tall enough to browse; short
+   windows still cap it by the viewport and the popover's available space. */
 .emojiContent {
+  --picker-panel-height: min(26rem, 55vh);
   display: flex;
   flex-direction: column;
   max-height: calc(var(--available-height) - 2px);
@@ -28,9 +31,11 @@
 .emojiContent[data-tabs] {
   --picker-search-top: 0px;
 }
+/* The tab list's own ring inset already clears the popover's top edge; a
+   top margin would leave the labels lower than they are inset from the side. */
 .emojiContent [role="tablist"] {
   flex-shrink: 0;
-  margin: var(--space-3) var(--space-3) 0;
+  margin: 0 var(--space-3);
 }
 .emojiContent > :first-child,
 .emojiContent [role="tabpanel"] {
@@ -50,7 +55,11 @@
 }
 .emojiMart {
   position: relative;
-  height: var(--emoji-picker-height, min(21.75rem, 40vh));
+  /* Avatar pickers mount outside .emojiContent and keep their earlier height. */
+  height: var(
+    --emoji-picker-height,
+    var(--picker-panel-height, min(21.75rem, 40vh))
+  );
   min-height: 0;
 }
 .emojiMart > div {
@@ -75,7 +84,7 @@
   min-height: 0;
   position: relative;
   display: flex;
-  height: min(21.75rem, 40vh);
+  height: var(--picker-panel-height);
   flex-direction: column;
 }
 .gifSearch {

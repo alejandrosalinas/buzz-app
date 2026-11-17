@@ -14,6 +14,10 @@ import {
 // null is an ordinary menu; a boolean is a context menu's visible lifetime.
 const ContextMenuPresence = createContext<boolean | null>(null);
 
+export type MenuHandle<Payload = unknown> = BaseMenu.Handle<Payload>;
+/** Connects one MenuRoot to detached MenuTriggers, such as a list's rows. */
+export const createMenuHandle = BaseMenu.createHandle;
+
 export function MenuRoot<Payload>(props: BaseMenu.Root.Props<Payload>) {
   return (
     <ContextMenuPresence value={null}>

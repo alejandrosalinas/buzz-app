@@ -11,7 +11,7 @@ import {
   waitFor,
   within,
 } from "@testing-library/react";
-import { useEffect, useState, type ReactNode } from "react";
+import { useContext, useEffect, useState, type ReactNode } from "react";
 import { afterEach, expect, it, vi } from "vitest";
 import { createRelaySession } from "../../features/relay/session";
 import type { RelayData } from "../../features/relay/service";
@@ -23,6 +23,7 @@ import {
   profileHistoryTarget,
 } from "../../features/profiles/target";
 import { ProfilePanel } from "./ProfilePanel";
+import { TranscriptFocus } from "../../features/agents/ActivityTranscript";
 import { createAgentMemories } from "../../features/agents/memory";
 import { resolveMatch } from "../../plugins/contributions";
 import { parseEntityLink } from "../../features/repos/routes";
@@ -461,6 +462,8 @@ function renderAgentActivity(
       }) {
         // Like a type's Activity tab: it acts on the request as it shows.
         const [first] = useState(!!initialTranscript);
+        // Like its transcript: it shows the opening's message.
+        const focus = useContext(TranscriptFocus);
         // Like a settings section, it can hold an unsaved change.
         const [dirty, setDirty] = useState(false);
         useAgentSaveState(dirty, false, role === "settings");
@@ -479,6 +482,11 @@ function renderAgentActivity(
               </button>
             )}
             {first && <p>Transcript first</p>}
+            {focus && (
+              <button type="button" onClick={focus.done}>
+                Show {focus.events.join(" and ")}
+              </button>
+            )}
             {conversation && (
               <p>
                 Opened from {conversation.channelId}/
@@ -782,6 +790,30 @@ it("keeps a new opening for a profile on another section to itself, so a remount
     await user.click(screen.getByRole("tab", { name: "Identity" }));
     await user.click(screen.getByRole("tab", { name: "Activity" }));
     expect(screen.queryByText("Transcript first")).toBeNull();
+  } finally {
+    dispose();
+  }
+});
+
+it("gives each opening's message to its transcript until it is shown", async () => {
+  const dispose = renderAgentActivity(
+    [{ title: "Activity", role: "activity" }],
+    "thread-root",
+  );
+  const user = userEvent.setup();
+  try {
+    act(
+      () => void openProfileTranscript(dispose.target, () => true, ["reply"]),
+    );
+    await user.click(screen.getByRole("button", { name: "Show reply" }));
+    expect(screen.queryByRole("button", { name: /^Show / })).toBeNull();
+    act(
+      () => void openProfileTranscript(dispose.target, () => true, ["prompt"]),
+    );
+    expect(screen.getByRole("button", { name: "Show prompt" })).toBeVisible();
+    // An opening without a message replaces the one not yet shown.
+    act(() => void openProfileTranscript(dispose.target, () => true));
+    expect(screen.queryByRole("button", { name: /^Show / })).toBeNull();
   } finally {
     dispose();
   }
@@ -1289,6 +1321,47 @@ it("leaves an agent-hinted profile outside person Info composition", () => {
     );
     expect(screen.getByRole("button", { name: "Copy npub" })).toBeTruthy();
     expect(renderPersonInfo).not.toHaveBeenCalled();
+  } finally {
+    owner.dispose();
+  }
+});
+
+it("marks an agent's name with the robot icon, and not a person's", () => {
+  const owner = createRelaySession(null);
+  const snapshot = {
+    status: "ready" as const,
+    generation: 1,
+    session: owner.session,
+  };
+  const relay: RelayData = {
+    snapshot: () => snapshot,
+    subscribe: () => () => {},
+    retry() {},
+    tryAgain() {},
+    disconnect() {},
+    clearCache: async () => {},
+  };
+  try {
+    const { rerender } = render(
+      <ProfilePanel
+        relay={relay}
+        target={`buzz:agent-profile:${key}`}
+        close={() => {}}
+      />,
+    );
+    expect(
+      screen.getByRole("heading", { level: 2 }).querySelector("svg"),
+    ).not.toBeNull();
+    rerender(
+      <ProfilePanel
+        relay={relay}
+        target={profileTarget(key) ?? ""}
+        close={() => {}}
+      />,
+    );
+    expect(
+      screen.getByRole("heading", { level: 2 }).querySelector("svg"),
+    ).toBeNull();
   } finally {
     owner.dispose();
   }

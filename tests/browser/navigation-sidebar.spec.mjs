@@ -841,7 +841,7 @@ test("invalid saved sidebar fields fall back", async ({ page, app }) => {
   ).toBeVisible();
 });
 
-test("rail loads relay-owned image icons for inactive communities without acquiring sessions", async ({
+test("rail loads relay-owned image icons for inactive communities", async ({
   page,
   app,
 }) => {
@@ -858,6 +858,13 @@ test("rail loads relay-owned image icons for inactive communities without acquir
       : emojiIcon;
     return route.fulfill({ json: { icon } });
   });
+  // The inactive community's background unread session is held: its icon
+  // must load without it.
+  const background = Promise.withResolvers();
+  await page.route("**/api/relay/secondary/session", async (route) => {
+    await background.promise;
+    await route.fallback().catch(() => {});
+  });
   await open(page, app);
   const rail = await openCommunityPicker(page);
   for (const [name, icon] of [
@@ -872,6 +879,10 @@ test("rail loads relay-owned image icons for inactive communities without acquir
   }
   expect(infoRequests).toHaveLength(2);
   expect(app.report.sessions).toEqual(["primary"]);
+  background.resolve();
+  await expect
+    .poll(() => app.report.sessions)
+    .toEqual(["primary", "secondary"]);
 });
 
 // Same-page navigation must update the remembered selection without a remount.

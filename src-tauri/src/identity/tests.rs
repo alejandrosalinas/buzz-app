@@ -146,7 +146,7 @@ fn legacy_binding_signs_with_the_old_key_but_never_saves_it() {
     let other = Key::new(Zeroizing::new([2; 32])).nsec().unwrap();
     let template = || {
         parse_challenge(builderlab_challenge())
-            .template(1_700_000_000, "")
+            .template(1_700_000_000, &[])
             .unwrap()
     };
     // An unreadable old key is Ok(None), so first run makes a new key; a
@@ -186,7 +186,7 @@ fn a_busy_legacy_store_is_an_error_so_a_retry_signs_with_the_old_key() {
     let mut owner = identity(&store);
     let template = || {
         parse_challenge(builderlab_challenge())
-            .template(1_700_000_000, "")
+            .template(1_700_000_000, &[])
             .unwrap()
     };
     assert_eq!(owner.sign_legacy(template()).unwrap_err(), "busy");
@@ -203,7 +203,7 @@ fn a_linked_legacy_key_is_saved_from_the_one_read_that_signed() {
     *store.legacy.lock().unwrap() = Some(nsec.clone());
     let mut owner = identity(&store);
     let template = parse_challenge(builderlab_challenge())
-        .template(1_700_000_000, "")
+        .template(1_700_000_000, &[])
         .unwrap();
     owner.sign_legacy(template).unwrap();
     // Old Buzz's storage changing after the link can't change what is saved.
@@ -517,7 +517,7 @@ fn parse_challenge(value: serde_json::Value) -> BuilderlabChallenge {
 #[test]
 fn builderlab_binding_signs_the_reference_kind_24243_shape() {
     let template = parse_challenge(builderlab_challenge())
-        .template(1_700_000_000, "")
+        .template(1_700_000_000, &[])
         .unwrap();
     let event: Event = serde_json::from_value(fixture().sign(template).unwrap()).unwrap();
     event.verify().unwrap();
@@ -560,7 +560,7 @@ fn builderlab_binding_rejects_invalid_or_foreign_challenges() {
         challenge[field] = value.into();
         assert_eq!(
             parse_challenge(challenge)
-                .template(now, "")
+                .template(now, &[])
                 .err()
                 .as_deref(),
             Some("Invalid Nostr identity challenge"),
@@ -573,7 +573,7 @@ fn builderlab_binding_rejects_invalid_or_foreign_challenges() {
 }
 
 #[test]
-fn builderlab_binding_accepts_only_production_or_the_configured_origin() {
+fn builderlab_binding_accepts_only_production_or_a_configured_origin() {
     let now = 1_700_000_000;
     let staging = "https://login.example";
     let with_origin = |origin: &str| {
@@ -581,19 +581,26 @@ fn builderlab_binding_accepts_only_production_or_the_configured_origin() {
         challenge["origin"] = origin.into();
         parse_challenge(challenge)
     };
-    let template = with_origin(staging).template(now, staging).unwrap();
+    let template = with_origin(staging)
+        .template(now, &[staging.to_owned()])
+        .unwrap();
     assert!(template
         .tags
         .contains(&vec!["origin".to_owned(), staging.to_owned()]));
     assert!(with_origin("https://app.builderlab.xyz")
-        .template(now, staging)
+        .template(now, &[staging.to_owned()])
         .is_ok());
+    // Each sign-in server's identity origin is configured, not just the first.
+    assert!(with_origin("https://peer.example")
+        .template(now, &[staging.to_owned(), "https://peer.example".into()])
+        .is_ok());
+    let staging = [staging.to_owned()];
     for (origin, configured) in [
-        (staging, ""),
-        ("https://example.com", staging),
-        ("https://login.example/", staging),
-        ("https://login.example:8443", staging),
-        ("", ""),
+        (staging[0].as_str(), &[][..]),
+        ("https://example.com", &staging[..]),
+        ("https://login.example/", &staging[..]),
+        ("https://login.example:8443", &staging[..]),
+        ("", &[][..]),
     ] {
         assert_eq!(
             with_origin(origin)
@@ -611,6 +618,7 @@ fn builderlab_binding_reaches_signer_through_production_ipc() {
     use tauri::test::{get_ipc_response, mock_builder, INVOKE_KEY};
     let app = mock_builder()
         .manage(IdentityHost::fixture())
+        .manage(crate::federated_identity::FederatedIdentity::unconfigured())
         .invoke_handler(crate::commands())
         .build(crate::app_context())
         .unwrap();

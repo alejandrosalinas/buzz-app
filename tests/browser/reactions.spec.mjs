@@ -5,6 +5,7 @@ import {
 import { test, expect } from "./source-fixture.mjs";
 import { watchPageErrors } from "./page-errors.mjs";
 import { animationsSettled } from "./animations.mjs";
+import { chooseDefaultSkinTone } from "./skin-tone.mjs";
 
 test("reaction plus opens a visible emoji-only picker, restores focus and publishes custom emoji", async ({
   page,
@@ -16,6 +17,7 @@ test("reaction plus opens a visible emoji-only picker, restores focus and publis
       body: '<svg xmlns="http://www.w3.org/2000/svg" width="22" height="22"><circle cx="11" cy="11" r="10" fill="purple"/></svg>',
     }),
   );
+  await chooseDefaultSkinTone(page);
   await page.goto("/tests/fixtures/emoji.html?reactions");
   const root = page
     .locator("[data-message-id]")

@@ -65,6 +65,7 @@ export function BuilderlabSettings({
   communities,
   agents,
   summaries,
+  agentServer,
 }: {
   active(): boolean;
   account: ReactNode;
@@ -74,6 +75,8 @@ export function BuilderlabSettings({
   communities(navigation: ReactNode): ReactNode;
   agents: ReactNode;
   summaries?: Record<Section, OverviewSnapshot>;
+  /** The sign-in server remote agents use, when it is not this account's. */
+  agentServer?: string | undefined;
 }) {
   const [selected, setSelected] = useState(initialSection);
   const triggers = useRef<Partial<Record<Section, HTMLElement | null>>>({});
@@ -129,7 +132,7 @@ export function BuilderlabSettings({
           id="builderlab-title"
           title={
             selected === "agents"
-              ? `Remote agents${agentCount === undefined ? "" : ` (${agentCount})`}`
+              ? `Remote agents${agentCount === undefined ? "" : ` (${agentCount})`}${agentServer ? ` · ${agentServer}` : ""}`
               : "Builderlab"
           }
         />

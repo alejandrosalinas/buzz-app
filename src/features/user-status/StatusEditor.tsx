@@ -297,17 +297,11 @@ export function StatusEditor({
                   }}
                   aria-label="Duration"
                 >
-                  {statusDurations
-                    .filter(
-                      ([value]) =>
-                        value !== "never" ||
-                        (current && current.expiresAt === undefined),
-                    )
-                    .map(([value, label]) => (
-                      <MenuRadioItem key={value} value={value} closeOnClick>
-                        {label}
-                      </MenuRadioItem>
-                    ))}
+                  {statusDurations.map(([value, label]) => (
+                    <MenuRadioItem key={value} value={value} closeOnClick>
+                      {label}
+                    </MenuRadioItem>
+                  ))}
                 </MenuRadioGroup>
               </MenuPopup>
             </MenuRoot>

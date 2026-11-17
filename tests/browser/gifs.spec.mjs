@@ -191,6 +191,7 @@ test("relay-backed GIF tab searches KLIPY and inserts URL-only media", async ({
     .locator("em-emoji-picker .scroll")
     .boundingBox();
   const emojiPickerBox = await picker.boundingBox();
+  const emojiPanelBox = await picker.getByRole("tabpanel").boundingBox();
   const emojiFooterBox = await picker
     .locator("em-emoji-picker #nav")
     .boundingBox();
@@ -328,7 +329,11 @@ test("relay-backed GIF tab searches KLIPY and inserts URL-only media", async ({
   const gifResults = page.getByTestId("klipy-gif-grid").locator("..");
   const gifResultsBox = await gifResults.boundingBox();
   expect(gifResultsBox.y).toBeCloseTo(emojiResultsBox.y, 1);
-  expect(gifResultsBox.height).toBeCloseTo(emojiResultsBox.height, 1);
+  // Emoji results sit above their category bar and preview footer, GIFs above
+  // their attribution; the panel itself keeps the same box across tabs.
+  expect(await picker.getByRole("tabpanel").boundingBox()).toEqual(
+    emojiPanelBox,
+  );
   expect(await picker.boundingBox()).toEqual(emojiPickerBox);
   await expect(gifResults).toHaveCSS("scrollbar-width", "thin");
   await expect(gifResults).toHaveCSS(

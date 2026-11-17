@@ -60,26 +60,83 @@ export function openMetadata(event: RelayEvent): boolean {
   );
 }
 
+/** A Set that reports each change it takes. */
+class CountedSet<T> extends Set<T> {
+  constructor(private readonly changed: () => void) {
+    super();
+  }
+  override add(value: T) {
+    if (!this.has(value)) this.changed();
+    return super.add(value);
+  }
+  override delete(value: T) {
+    const deleted = super.delete(value);
+    if (deleted) this.changed();
+    return deleted;
+  }
+  override clear() {
+    if (this.size) this.changed();
+    super.clear();
+  }
+}
+
+/** A Map that reports each change it takes. */
+class CountedMap<K, V> extends Map<K, V> {
+  constructor(private readonly changed: () => void) {
+    super();
+  }
+  override set(key: K, value: V) {
+    if (!this.has(key) || this.get(key) !== value) this.changed();
+    return super.set(key, value);
+  }
+  override delete(key: K) {
+    const deleted = super.delete(key);
+    if (deleted) this.changed();
+    return deleted;
+  }
+  override clear() {
+    if (this.size) this.changed();
+    super.clear();
+  }
+}
+
 /** NIP-29 discovery: relay-authored replaceable metadata (39000) and rosters (39002). */
 export class DiscoveryState {
-  private denied = new Set<string>();
+  /** Counts changes to the state `get` reads, so `readable` can reuse its
+   * last result: catch-up repeats lookups that change nothing. Every field
+   * `get` reads must be counted. */
+  private changes = 0;
+  private readonly changed = () => {
+    this.changes++;
+  };
+  private lastReadable:
+    | { changes: number; channels: readonly ChannelSummary[] }
+    | undefined;
+  private denied = new CountedSet<string>(this.changed);
   /** Denied only because a complete read omitted them; a later one can list them again. */
-  private absent = new Set<string>();
+  private absent = new CountedSet<string>(this.changed);
   /** Fresh public resolution can restore reading while membership remains denied. */
-  private confirmedPreviews = new Set<string>();
-  private suspended = new Set<string>();
-  private complete = false;
-  private cached = new Set<string>();
+  private confirmedPreviews = new CountedSet<string>(this.changed);
+  private suspended = new CountedSet<string>(this.changed);
+  private closed = false;
+  private get complete() {
+    return this.closed;
+  }
+  private set complete(value: boolean) {
+    if (value !== this.closed) this.changed();
+    this.closed = value;
+  }
+  private cached = new CountedSet<string>(this.changed);
   accessRevision = 0;
   /** A scan that drops evidence cannot certify completeness. */
   overflowRevision = 0;
-  private rosters = new Map<string, RelayEvent>();
-  private metadata = new Map<string, RelayEvent>();
-  private creations = new Map<string, RelayEvent>();
+  private rosters = new CountedMap<string, RelayEvent>(this.changed);
+  private metadata = new CountedMap<string, RelayEvent>(this.changed);
+  private creations = new CountedMap<string, RelayEvent>(this.changed);
   /** Solo chats this device started whose signed metadata and roster have not
    * both arrived. Local display and intent only: never saved, never proof.
    * It stands in for access only until a signed roster decides it. */
-  private starting = new Map<string, ChannelSummary>();
+  private starting = new CountedMap<string, ChannelSummary>(this.changed);
   private retainedBytes = 0;
   private rejectedVersions = new Map<
     string,
@@ -509,16 +566,22 @@ export class DiscoveryState {
   }
   /** Every roster channel get() serves, system channels included. Membership,
    * not listing, decides what the device may keep. */
-  readable(): ChannelSummary[] {
-    return [
-      ...new Set([
-        ...[...this.rosters.keys()].filter((id) => this.authorized(id)),
-        ...this.starting.keys(),
-      ]),
-    ].flatMap((id) => {
-      const channel = this.get(id);
-      return channel ? [channel] : [];
-    });
+  readable(): readonly ChannelSummary[] {
+    if (this.lastReadable?.changes === this.changes)
+      return this.lastReadable.channels;
+    const channels = Object.freeze(
+      [
+        ...new Set([
+          ...[...this.rosters.keys()].filter((id) => this.authorized(id)),
+          ...this.starting.keys(),
+        ]),
+      ].flatMap((id) => {
+        const channel = this.get(id);
+        return channel ? [channel] : [];
+      }),
+    );
+    this.lastReadable = { changes: this.changes, channels };
+    return channels;
   }
   /** The channel list. System channels (NIP-CL) hold app data, not
    * conversation: they stay readable through get() but never list here. */

@@ -403,6 +403,33 @@ it("signs in to a community's own server and follows only that server", async ()
   });
 });
 
+it("sends a plugin's community call with that community's server session", async () => {
+  const { root, service } = setup();
+  const a = await plugin(root);
+  publish({ payload: signedIn });
+  vi.mocked(invoke).mockResolvedValue({
+    ...signedIn,
+    authority: peer,
+    revision: "peer-in",
+  });
+  const relay = "wss://team.communities.example";
+  service.forCommunity?.(relay).subscribe(() => {});
+  await vi.waitFor(() =>
+    expect(service.forCommunity?.(relay).snapshot().revision).toBe("peer-in"),
+  );
+  vi.mocked(invoke).mockResolvedValue({ status: 200, headers: {}, body: "{}" });
+  await a.service.request({ path: "/api/list", relay });
+  await a.service.request({ path: "/api/list" });
+  const requests = vi
+    .mocked(invoke)
+    .mock.calls.filter(([command]) => command === "federated_identity_request")
+    .map(([, args]) => args as { session: string; request: object });
+  expect(requests.map(({ session, request }) => [session, request])).toEqual([
+    ["peer-in", { path: "/api/list", relay }],
+    ["in", { path: "/api/list" }],
+  ]);
+});
+
 it("addresses a server by id, for its own Settings row", async () => {
   const handlers = new Map<string, typeof publish>();
   vi.mocked(listen).mockImplementation(async (name, handler) => {

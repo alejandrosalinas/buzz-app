@@ -14,9 +14,10 @@ export function geometryFor(queries: ChannelQueries) {
   const entries = sessions.get(queries) ?? new Map<string, Entry>();
   sessions.set(queries, entries);
   return {
-    get(channelId: string, signature: string, width: number) {
+    /** The signature is built only when a saved entry could match it. */
+    get(channelId: string, signature: () => string, width: number) {
       const entry = entries.get(channelId);
-      return entry?.signature === signature && entry.width === width
+      return entry?.width === width && entry.signature === signature()
         ? entry.cache
         : undefined;
     },

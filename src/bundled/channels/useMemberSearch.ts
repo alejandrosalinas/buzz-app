@@ -6,6 +6,8 @@ import {
 } from "../../features/channel-members/search";
 import { searchDebounce, searchable } from "../../shared/search-debounce";
 
+const noPeople: MemberSearchResult["people"] = [];
+
 /** Dialog-owned search intent. The session owns transport, verification and profiles. */
 export function useMemberSearch(
   session: RelaySession,
@@ -66,7 +68,7 @@ export function useMemberSearch(
   }, [session, request, text, enabled]);
   const visible = result.text === text && enabled;
   return {
-    people: visible ? result.people : [],
+    people: visible ? result.people : noPeople,
     loading: searchable(text) && enabled && (!visible || result.loading),
     more: visible && result.more,
     /** Typed text is too short to search, so only local choices are offered. */

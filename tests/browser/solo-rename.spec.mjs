@@ -17,8 +17,10 @@ test.use({
 
 const sidebar = (page) =>
   page.getByRole("navigation", { name: "Solo conversations" });
-const row = (page, id) =>
+const rowCopies = (page, id) =>
   sidebar(page).locator(`[data-solo-channel-id="${id}"]`);
+const row = (page, id) =>
+  sidebar(page).locator(`[data-solo-channel-id="${id}"]:not([inert] *)`);
 const input = (page) =>
   sidebar(page).getByRole("textbox", { name: "Chat name", exact: true });
 const composer = (page) =>
@@ -166,7 +168,7 @@ async function holdDetails(page) {
     started = resolve;
   });
   let holding = true;
-  await page.route("**/api/relay/**/query", async (route) => {
+  await page.route("**/api/relay/primary/query", async (route) => {
     const filters = route.request().postDataJSON();
     if (
       holding &&
@@ -455,6 +457,12 @@ test("live conversion removes the old editor and permits renaming another Solo c
   await row(page, alpha).dblclick();
   await expect(input(page)).toHaveValue("Alpha");
   await expect(input(page)).toHaveAttribute("aria-disabled", "false");
+  await input(page).fill("Unsubmitted name");
+  const signatures = [];
+  page.on("request", (request) => {
+    if (request.url().endsWith("/channel-details-sign"))
+      signatures.push(request.postDataJSON());
+  });
   await expect.poll(() => app.relay.hasRoute("primary", alpha)).toBe(true);
   app.relay.publish(
     "primary",
@@ -471,12 +479,61 @@ test("live conversion removes the old editor and permits renaming another Solo c
       content: "",
     }),
   );
+  // Inert exit copies are already absent from role queries but can still move
+  // the next row when they unmount. Wait for the actual editor to leave.
+  await expect(
+    sidebar(page).locator('form[aria-label="Rename Alpha"]'),
+  ).toHaveCount(0);
   await expect(input(page)).toHaveCount(0);
-  await expect(row(page, alpha)).toHaveCount(0);
+  await expect(rowCopies(page, alpha)).toHaveCount(0);
+  // Actual unmount retires the editor's save lifetime, including native blur
+  // caused by making its retained exit inert. No draft may reach the signer.
+  expect(signatures).toEqual([]);
+  expect(app.report.detailsPublications ?? []).toHaveLength(0);
   await row(page, beta).dblclick();
   await expect(input(page)).toHaveValue("Beta");
   await expect(input(page)).toBeFocused();
   await input(page).press("Escape");
+});
+
+// Native inert focus loss and the handoff across the presence exit require a
+// browser. Reuse one app for both motion preferences and the no-steal guard.
+test("passive conversion hands off row focus without stealing it elsewhere", async ({
+  page,
+  app,
+}) => {
+  await page.goto(app.origin);
+  await newChat(page);
+  await row(page, beta).click();
+  await expect(composer(page)).toBeVisible();
+  await expect.poll(() => app.relay.hasRoute("primary", alpha)).toBe(true);
+  const metadata = [
+    ["name", "Alpha"],
+    ["about", ""],
+    ["t", "stream"],
+    ["private"],
+    ["P", app.viewer],
+  ];
+  for (const reducedMotion of ["no-preference", "reduce"]) {
+    await page.emulateMedia({ reducedMotion });
+    for (const movedElsewhere of [false, true]) {
+      await test.step(`${reducedMotion}, focus moved: ${movedElsewhere}`, async () => {
+        app.setChannelMetadata(alpha, [...metadata, ["t", "buzz.solo"]]);
+        await expect(row(page, alpha)).toBeVisible();
+        await animationsSettled(sidebar(page), { subtree: true });
+        await row(page, alpha).focus();
+        await expect(row(page, alpha)).toBeFocused();
+        await expect(row(page, beta)).toHaveAttribute("aria-current", "page");
+        if (movedElsewhere) await composer(page).focus();
+        app.setChannelMetadata(alpha, metadata);
+        await expect(rowCopies(page, alpha)).toHaveCount(0);
+        await expect(
+          movedElsewhere ? composer(page) : row(page, beta),
+        ).toBeFocused();
+        await expect(row(page, beta)).toHaveAttribute("aria-current", "page");
+      });
+    }
+  }
 });
 
 // A DOM emulator cannot establish Collapsible's real hide/unmount transition
@@ -531,7 +588,7 @@ test("collapsing a workspace waits for its rename save before hiding the editor"
     await expect(input(page)).toHaveCount(0);
     // The editor closes before its panel finishes collapsing. Wait for the
     // panel's unmount so the next double-click has a stationary target.
-    await expect(row(page, alpha)).toHaveCount(0);
+    await expect(rowCopies(page, alpha)).toHaveCount(0);
     await expect(row(page, beta)).toBeFocused();
     await row(page, beta).dblclick();
     await expect(input(page)).toHaveValue("Beta");
@@ -558,7 +615,7 @@ test("collapsing a workspace waits for its rename save before hiding the editor"
           .getByRole("button", { name: cancellation, exact: true })
           .click();
       // Wait for the closing transition's actual unmount, not just aria-expanded.
-      await expect(row(page, alpha)).toHaveCount(0);
+      await expect(rowCopies(page, alpha)).toHaveCount(0);
       await expect(work).toBeFocused();
       await work.click();
       await expect(row(page, alpha)).toBeVisible();
@@ -586,7 +643,7 @@ test("collapsing a workspace waits for its rename save before hiding the editor"
       await work.click();
       await input(page).focus();
       finishSave();
-      await expect(row(page, alpha)).toHaveCount(0);
+      await expect(rowCopies(page, alpha)).toHaveCount(0);
       await expect(work).toBeFocused();
     } finally {
       finishSave();

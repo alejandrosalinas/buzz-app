@@ -80,6 +80,9 @@ test("a remote failure shares its expandable history and preserves its message a
     history.locator('[data-message-activity] [data-state="working"]'),
   ).toHaveCount(0);
   await page.clock.resume();
+  // The jump froze wall time while the broker kept real time; if it ran long,
+  // signed read-state events would now exceed the broker's 60 s clock skew.
+  await page.clock.setSystemTime(Date.now());
   await toggle.focus();
   await page.keyboard.press("Enter");
   await expect(toggle).toHaveAttribute("aria-expanded", "true");
@@ -88,6 +91,9 @@ test("a remote failure shares its expandable history and preserves its message a
   ).toBeVisible();
   await expect(history.getByRole("button", { name: /Retry/ })).toHaveCount(0);
   await toggle.click();
+  // 120 s of browser time outran the broker's real 15 s keepalive, so the live
+  // stream's 45 s heartbeat restarted it; publish once a channel REQ is back.
+  await expect.poll(() => app.relay.hasRoute("primary", "alpha")).toBe(true);
   const publish = (content, tags, offset) => {
     const event = finalizeEvent(
       {

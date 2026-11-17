@@ -82,6 +82,12 @@ export function ConversationTab({
   );
   if (reply !== restoredReply.current) restoredReply.current = undefined;
   const soloConversation = channel.channelType === "solo";
+  // Likewise a saved unread request.
+  const unread = tab.kind === "thread" ? tab.unreadRequest : undefined;
+  const restoredUnread = useRef(
+    initial?.kind === "thread" ? initial.unreadRequest : undefined,
+  );
+  if (unread !== restoredUnread.current) restoredUnread.current = undefined;
   // Likewise a saved reveal belongs to the opening that asked for it.
   const restoredReveal = useRef(initial?.revealRequest);
   if (tab.revealRequest !== restoredReveal.current)
@@ -171,6 +177,9 @@ export function ConversationTab({
             focusRequest={focusRequest}
             revealSelected={threadReveal !== undefined}
             revealRequest={threadReveal}
+            unreadRequest={
+              unread === restoredUnread.current ? undefined : unread
+            }
             close={close}
             parent={parent}
           />

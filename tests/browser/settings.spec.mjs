@@ -1269,6 +1269,75 @@ test("plugin details preserves the catalog scroll position on open and close", a
   await expect(button(page, "More actions for Usage")).toHaveCount(0);
 });
 
+// WebKit keeps the offset it clamps to when a shorter pane replaces a longer
+// one, which jsdom cannot show.
+test("each Settings section keeps its own scroll place while Settings is open", async ({
+  page,
+  app,
+}) => {
+  await page.goto(app.origin);
+  await openSettings(page);
+  await selectSettingsSection(page, "Shortcuts");
+  const port = settingsDialog(page).locator(".buzz-dialog-navigation-detail");
+  const offset = (scroller) =>
+    scroller.evaluate((element) => element.scrollTop);
+  // WebKit animates wheel scrolling: wait until two reads agree.
+  const settled = async (scroller = port) => {
+    let last;
+    await expect
+      .poll(
+        async () => {
+          const previous = last;
+          last = await offset(scroller);
+          return last === previous;
+        },
+        { intervals: [200] },
+      )
+      .toBe(true);
+    return last;
+  };
+  const near = (place, scroller = port) =>
+    expect
+      .poll(async () => Math.abs((await offset(scroller)) - place))
+      .toBeLessThanOrEqual(1);
+  // Wheel over the port's own padding, so no nested scroller takes it.
+  const box = await port.boundingBox();
+  await page.mouse.move(box.x + 8, box.y + box.height / 2);
+  for (let notch = 0; notch < 6; notch++) await page.mouse.wheel(0, 120);
+  const shortcuts = await settled();
+  expect(shortcuts).toBeGreaterThan(400);
+  await selectSettingsSection(page, "Appearance");
+  await near(0);
+  await port.evaluate((element) => {
+    element.scrollTop = 120;
+  });
+  const appearance = await settled();
+  expect(appearance).toBeGreaterThan(0);
+  await selectSettingsSection(page, "Shortcuts");
+  await near(shortcuts);
+  await page.goBack();
+  await expect(
+    page.getByRole("region", { name: "Appearance", exact: true }),
+  ).toBeVisible();
+  await near(appearance);
+  // Side by side, the plugin catalog scrolls in the detail, not the port.
+  await selectSettingsSection(page, "Manage plugins");
+  const catalog = settingsDialog(page).locator(".buzz-settings-page");
+  await catalog.evaluate((element) => {
+    element.scrollTop = 240;
+  });
+  const plugins = await settled(catalog);
+  expect(plugins).toBeGreaterThan(0);
+  await selectSettingsSection(page, "Appearance");
+  await near(appearance);
+  await selectSettingsSection(page, "Manage plugins");
+  await near(plugins, catalog);
+  await closeSettings(page);
+  await openSettings(page);
+  await selectSettingsSection(page, "Shortcuts");
+  await near(0);
+});
+
 // Real shell + shared presentation + browser storage across reload. State/error
 // permutations stay in the communities and Local settings component tests.
 test("Local settings saves a device name without changing the community identity", async ({

@@ -73,6 +73,10 @@ pub(crate) struct Snapshot {
     /// Signing in again waits on the browser while this session stays live;
     /// `cancel_sign_in` ends only that wait. False once it commits.
     renewing: bool,
+    /// The latest issuer or relay refusal's response `Date` minus this
+    /// clock, in seconds, when far enough off to suggest this clock is wrong
+    /// (`protocol::clock_offset`). The refusal itself is reported unchanged.
+    clock_offset: Option<i64>,
 }
 
 // No Debug, no IPC serialization. Only the secure store serializes this record.
@@ -105,6 +109,21 @@ impl Drop for CallbackGuard {
         let _ = self.0.cancel(&self.1);
     }
 }
+const OPEN_LIMIT: std::time::Duration = std::time::Duration::from_secs(5);
+/// macOS `open` waits for the browser to take the URL. A hung browser must
+/// not hold sign-in, so after `limit` the attempt goes on and the person can
+/// copy the link instead; only a reported failure stops it.
+fn open_within(
+    limit: std::time::Duration,
+    open: impl FnOnce() -> bool + Send + 'static,
+) -> Result<(), &'static str> {
+    let (send, receive) = std::sync::mpsc::channel();
+    std::thread::spawn(move || send.send(open()));
+    match receive.recv_timeout(limit) {
+        Ok(true) | Err(std::sync::mpsc::RecvTimeoutError::Timeout) => Ok(()),
+        _ => Err("browser-unavailable"),
+    }
+}
 struct State {
     snapshot: Snapshot,
     session: Option<Arc<Session>>,
@@ -115,7 +134,8 @@ struct State {
     restore_retry_at: Option<tokio::time::Instant>,
     closed: bool,
     cancellation: CancellationToken,
-    callback: Option<CallbackGuard>,
+    /// The pending browser sign-in and the page it opened, for copying by hand.
+    callback: Option<(CallbackGuard, String)>,
     /// A sign-in started while signed in; the current session stays live.
     renewal: Option<CancellationToken>,
     /// Last account seen signed in this run; tells a refresh from a new account.
@@ -298,6 +318,7 @@ impl FederatedIdentity {
             expiring: false,
             cleanup: false,
             renewing: false,
+            clock_offset: None,
         };
         let (changes, _) = watch::channel(snapshot.clone());
         let (account_changes, _) = watch::channel(None);
@@ -432,6 +453,13 @@ impl FederatedIdentity {
             (Some(_), Some(_)) => Err("Name a community or a sign-in server, not both".into()),
         }
     }
+    /// Every configured sign-in server's identity origin.
+    pub(crate) fn identity_origins(&self) -> Vec<String> {
+        self.servers()
+            .iter()
+            .filter_map(|server| Some(server.config()?.identity_origin.clone()))
+            .collect()
+    }
     pub(crate) fn is(&self, other: &Self) -> bool {
         Arc::ptr_eq(&self.0, &other.0)
     }
@@ -464,6 +492,15 @@ impl FederatedIdentity {
     }
     fn publish(&self, state: &State) {
         self.0.changes.send_replace(state.snapshot.clone());
+    }
+    /// Records the clock offset the latest refusal's response suggested, or
+    /// clears it after an answer that suggested none.
+    pub(crate) fn note_clock_offset(&self, offset: Option<i64>) {
+        let mut state = self.state();
+        if state.snapshot.clock_offset != offset {
+            state.snapshot.clock_offset = offset;
+            self.publish(&state);
+        }
     }
     /// A build without NIP-FI configuration.
     #[cfg(test)]
@@ -525,6 +562,7 @@ impl FederatedIdentity {
         state.snapshot.revision = session.record.revision.clone();
         state.snapshot.email = session.record.email.clone();
         state.snapshot.failure = None;
+        state.snapshot.clock_offset = None;
         state.snapshot.expires_at = Some(session.record.expires_at.clone());
         state.snapshot.expiring = false;
         state.snapshot.cleanup = false;
@@ -643,6 +681,7 @@ impl FederatedIdentity {
         }
         state.snapshot.status = status;
         state.snapshot.failure = failure;
+        state.snapshot.clock_offset = None;
         state.snapshot.cleanup = false;
         self.publish(&state);
     }
@@ -654,6 +693,7 @@ impl FederatedIdentity {
         }
         state.snapshot.status = Status::Unavailable;
         state.snapshot.failure = Some(failure);
+        state.snapshot.clock_offset = None;
         state.snapshot.cleanup = true;
         self.publish(&state);
     }
@@ -677,6 +717,7 @@ impl FederatedIdentity {
         state.snapshot.status = status;
         state.snapshot.email = None;
         state.snapshot.failure = failure;
+        state.snapshot.clock_offset = None;
         state.snapshot.expires_at = None;
         state.snapshot.expiring = false;
         state.snapshot.cleanup = false;
@@ -742,8 +783,8 @@ impl FederatedIdentity {
     async fn verify(&self, record: &Record) -> Result<Option<String>, Failure> {
         if expiry(&record.expires_at)? <= now()? {
             return Err(Failure {
-                code: "reauthentication-required",
                 session_denied: true,
+                ..Failure::from("reauthentication-required")
             });
         }
         #[derive(Deserialize)]
@@ -1078,14 +1119,14 @@ impl FederatedIdentity {
             .unwrap_or_else(std::sync::PoisonError::into_inner)
             .push(login.to_string());
         let callback = app.state::<crate::oauth_callback::OAuthCallbackHost>();
+        let mut link = String::new();
         let attempt = callback
             .begin_federated(
                 &self.0.fingerprint,
                 login.to_string(),
                 |url| {
-                    app.opener()
-                        .open_url(url, None::<&str>)
-                        .map_err(|_| "browser-unavailable".into())
+                    link = url.to_owned();
+                    Ok(())
                 },
                 crate::oauth_callback::capture_browser(app, login.as_str()),
             )
@@ -1097,7 +1138,15 @@ impl FederatedIdentity {
             if state.closed || state.snapshot.revision != revision || cancel.is_cancelled() {
                 return Err("sign-in-canceled".into());
             }
-            state.callback = Some(_guard.clone());
+            // Copyable before the browser opens, so a slow launch still offers it.
+            state.callback = Some((_guard.clone(), link.clone()));
+        }
+        let opener = app.clone();
+        if let Err(code) = open_within(OPEN_LIMIT, move || {
+            opener.opener().open_url(link, None::<&str>).is_ok()
+        }) {
+            self.clear_callback(&attempt.id);
+            return Err(code.into());
         }
         // Serialize callback registration, not the user's browser interaction.
         drop(operation);
@@ -1138,7 +1187,11 @@ impl FederatedIdentity {
 
     fn clear_callback(&self, id: &str) {
         let mut state = self.state();
-        if state.callback.as_ref().is_some_and(|guard| guard.1 == id) {
+        if state
+            .callback
+            .as_ref()
+            .is_some_and(|(guard, _)| guard.1 == id)
+        {
             state.callback.take();
         }
     }
@@ -1296,6 +1349,9 @@ impl FederatedIdentity {
         };
         self.storage(move |store| store.compare(None, Some(&replaced)))
             .await
+    }
+    pub(crate) fn sign_in_link(&self) -> Option<String> {
+        self.state().callback.as_ref().map(|(_, link)| link.clone())
     }
     pub(crate) fn cancel_sign_in(&self) {
         let mut state = self.state();
@@ -1578,6 +1634,16 @@ pub(crate) fn federated_identity_cancel_sign_in(
     host.server_for_command(relay.as_deref(), server.as_deref())?
         .cancel_sign_in();
     Ok(())
+}
+#[tauri::command]
+pub(crate) fn federated_identity_sign_in_link(
+    host: tauri::State<'_, FederatedIdentity>,
+    relay: Option<String>,
+    server: Option<String>,
+) -> Result<Option<String>, String> {
+    Ok(host
+        .server_for_command(relay.as_deref(), server.as_deref())?
+        .sign_in_link())
 }
 #[tauri::command]
 pub(crate) async fn federated_identity_sign_out(

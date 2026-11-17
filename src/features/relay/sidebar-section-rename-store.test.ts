@@ -46,6 +46,11 @@ it("publishes the confirmed name only after the host accepts the rename", async 
     "Projects",
     "B",
   ]);
+  await queries.renameSection("a", "Work", "Projects");
+  expect(rename).toHaveBeenLastCalledWith(
+    { sectionId: "a", name: "Work", expectedName: "Projects" },
+    expect.any(AbortSignal),
+  );
 });
 
 it("keeps the old name when the rename fails and is unavailable without a writer", async () => {

@@ -34,9 +34,10 @@ test("Buzz channel and message links render, reveal verified targets, and preser
   await open(page, app);
   const libraryReads = () =>
     app.report.brokerRequests.filter(({ url }) =>
-      url.endsWith("/agent-library"),
+      url.endsWith("/primary/agent-library"),
     ).length;
   // Owner inventory survives the startup roster; previews add no further read.
+  // Each joined community reads its own inventory; count the one under test.
   await expect.poll(libraryReads).toBe(1);
   const href = `buzz://message?channel=alpha&id=${target.id}`;
   const message = app.append(

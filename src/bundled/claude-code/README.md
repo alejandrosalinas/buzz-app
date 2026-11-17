@@ -4,7 +4,7 @@ Create agents that run Claude on your computer and answer you in Buzz. Each agen
 
 ## Getting started
 
-1. Go to **Settings** → **Agent setup** → **Harness defaults** → **Claude** to install Claude and paste an Anthropic API key from [console.anthropic.com](https://console.anthropic.com/settings/keys). Buzz keeps it in the OS credential store (Keychain on macOS), and native code gives it to every Claude process, security reviews included.
+1. Go to **Settings** → **Agent setup** → **Harness defaults** → **Claude** to install Claude. If Claude already works on this computer (such as Amazon Bedrock or Google Vertex AI, set up with the Claude CLI), Buzz uses that setup as it is. Otherwise, paste an Anthropic API key from [console.anthropic.com](https://console.anthropic.com/settings/keys), or set up your own with the Claude CLI and choose **Refresh**. Buzz keeps a key in the OS credential store (Keychain on macOS), and native code gives it to Claude processes that have no setup of their own. Security reviews always use the key.
 2. Choose **New agent** → **Create a new agent**, and pick **Claude** as the **Harness**.
 3. Mention your agent in a conversation to give it work.
 

@@ -49,6 +49,11 @@ account-isolated guest opens through browser login. Other errors stay closed.
 A 401 from the exchange also asks the sign-in adapter's session route once, as
 other granted calls do. Only when the adapter confirms the session ended does the
 shared NIP-FI session move to reauthentication required, so Settings matches.
+While the session stands, or when the exchange returns a viewer credential that
+has already expired or outlasts the eight-hour limit, the panel shows
+**Sign in again to open this app** with **Try again** and **Open settings**,
+which opens Identity in an FI build and the Builderlab card in live
+development, where you sign out and back in.
 When the exchange refuses the viewer (403), the panel shows **You can’t open this
 app** with **Try again** in place of the website instead of the error bar. It
 gives no reason for the refusal. When the exchange cannot be reached, fails on

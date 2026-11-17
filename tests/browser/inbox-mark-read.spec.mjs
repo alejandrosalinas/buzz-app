@@ -1,6 +1,6 @@
 import { test, expect } from "./fixture.mjs";
 import { openPage } from "./navigation.mjs";
-import { readJournal } from "./reading.mjs";
+import { readJournal, releasing } from "./reading.mjs";
 
 const channel = "f12918e7-88d0-4ddd-aa6b-d4888ff6d3bd";
 const conversations = (inbox) =>
@@ -467,7 +467,7 @@ test("with Unread off, an unselected row's ✓ reads it in place and preserves t
   const target = conversations(inbox).locator(
     `[data-message-id="${app.inboxWindow.replies[0].id}"]`,
   );
-  await expect(target).toBeInViewport();
+  await releasing(app, () => expect(target).toBeInViewport({ timeout: 100 }));
   // Finish entry reveal and its next-frame acknowledgement before taking the
   // editor/row-focus baseline; list aria-busy does not cover reader positioning.
   await page.evaluate(

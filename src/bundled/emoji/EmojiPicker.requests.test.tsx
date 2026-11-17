@@ -14,6 +14,7 @@ import type { EmojiSnapshot } from "../../features/relay/emoji-directory";
 import { relayGifRequests } from "../../features/relay/gifs";
 import { createGifShortcut } from "./gif-shortcut";
 import { EmojiPicker } from "./EmojiPicker";
+import { createAddEmoji, PREVIEW_ACTION_SLOT } from "./add-emoji";
 
 afterEach(() => {
   cleanup();
@@ -505,6 +506,67 @@ it("keeps the newest composer shortcut target when older discovery completes", a
     act(() => shortcut.run());
     await screen.findByRole("searchbox", { name: "Search GIFs" });
     expect(newerSupports).toHaveBeenCalledOnce();
+  } finally {
+    owner.dispose();
+  }
+});
+
+it("offers Add emoji in the preview only while the Settings card can open", async () => {
+  for (const name of ["ResizeObserver", "IntersectionObserver"])
+    vi.stubGlobal(
+      name,
+      class {
+        observe() {}
+        unobserve() {}
+        disconnect() {}
+      },
+    );
+  const owner = createRelaySession(null);
+  const addEmoji = createAddEmoji();
+  const open = vi.fn();
+  const insert = vi.fn();
+  try {
+    render(
+      <EmojiPicker
+        session={owner.session}
+        scope="a"
+        disabled={false}
+        insert={insert}
+        addEmoji={addEmoji}
+        reaction
+      />,
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Add reaction" }));
+    const picker = await vi.waitFor(() => {
+      const element = document.querySelector("em-emoji-picker");
+      if (!element?.shadowRoot?.querySelector("#preview"))
+        throw new Error("Preview has not rendered");
+      return element;
+    });
+    expect(screen.queryByRole("button", { name: "Add emoji" })).toBeNull();
+    let withdraw = () => {};
+    act(() => {
+      withdraw = addEmoji.provide(open);
+    });
+    const add = await screen.findByRole("button", { name: "Add emoji" });
+    // The light-DOM action is projected through the slot in Mart's preview row.
+    expect(add.closest("[slot]")?.parentElement).toBe(picker);
+    expect(
+      picker.shadowRoot?.querySelector(
+        `#preview slot[name="${PREVIEW_ACTION_SLOT}"]`,
+      ),
+    ).not.toBeNull();
+    act(() => withdraw());
+    expect(screen.queryByRole("button", { name: "Add emoji" })).toBeNull();
+    act(() => {
+      addEmoji.provide(open);
+    });
+    fireEvent.click(await screen.findByRole("button", { name: "Add emoji" }));
+    expect(open).toHaveBeenCalledTimes(1);
+    expect(insert).not.toHaveBeenCalled();
+    await vi.waitFor(() =>
+      expect(screen.queryByRole("dialog", { name: "Emoji picker" })).toBeNull(),
+    );
   } finally {
     owner.dispose();
   }

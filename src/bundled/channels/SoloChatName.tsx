@@ -1,4 +1,5 @@
 import { useEffect, useLayoutEffect, useRef } from "react";
+import { useIsPresent } from "motion/react";
 import type { RelaySession } from "../../features/relay/session";
 import { useLifetime } from "../../features/solo/Lifetime";
 import { Button } from "../../shared/design-system/ui/Button";
@@ -20,6 +21,7 @@ export function SoloChatName({
   title: string;
   close(focus: boolean): void;
 }) {
+  const present = useIsPresent();
   const name = useLifetime({ session, id, enabled: true });
   const input = useRef<HTMLInputElement>(null);
   const form = useRef<HTMLFormElement>(null);
@@ -47,6 +49,7 @@ export function SoloChatName({
   };
   const save = async (focus: boolean) => {
     if (
+      !present ||
       !active.current ||
       saving.current ||
       name.busy ||

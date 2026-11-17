@@ -45,12 +45,9 @@ test("Inbox edits an owned reply in place and restores the reply draft", async (
   const own = app.reply(root.id, true);
   const row = detail.locator(`[data-message-id="${own.id}"]`);
   await expect(row).toBeVisible();
-  // Opening the conversation reveals its entry reply by focusing that row. In
-  // WebKit the focus clears the editor selection, so a fill racing the reveal
-  // types nothing: let the focus and its next-frame acknowledgement land first.
-  await expect(
-    detail.locator('[data-message-id][tabindex="-1"]'),
-  ).toBeFocused();
+  // Opening the thread focuses its composer; let that and its next-frame
+  // acknowledgement land before typing.
+  await expect(reply).toBeFocused();
   await frames(page);
   await reply.fill("Unsent Inbox reply");
   const originalNode = await reply.elementHandle();
@@ -60,6 +57,11 @@ test("Inbox edits an owned reply in place and restores the reply draft", async (
     await page
       .getByRole("menuitem", { name: "Edit message", exact: true })
       .click();
+    // Both opens must complete the menu's focus handoff before fill selects
+    // the content: focusing ProseMirror restores its saved caret.
+    await expect(
+      detail.getByRole("textbox", { name: "Edit message", exact: true }),
+    ).toBeFocused();
   };
   await edit();
   const editor = detail.getByRole("textbox", {
@@ -84,6 +86,7 @@ test("Inbox edits an owned reply in place and restores the reply draft", async (
   ).toEqual([]);
 
   await edit();
+  await expect(editor).toHaveJSProperty("value", "My reply");
   await editor.fill("Corrected from Inbox");
   await detail.getByRole("button", { name: "Save changes" }).click();
   await expect(row).toContainText("Corrected from Inbox");

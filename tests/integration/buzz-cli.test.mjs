@@ -38,8 +38,8 @@ test("a manifest without a pinned revision is rejected", () => {
 test("linked worktrees share the main checkout's buzz CLI build", (t) => {
   const scratch = realpathSync(mkdtempSync(join(tmpdir(), "buzz-cli-")));
   t.after(() => rmSync(scratch, { recursive: true, force: true }));
-  // Without GIT_* from a calling hook, so git discovers the scratch repositories.
-  const env = { PATH: process.env.PATH };
+  // Drop a calling hook's GIT_* and isolate user config while allowing ~/ includes.
+  const env = { PATH: process.env.PATH, HOME: scratch };
   const main = join(scratch, "main");
   const linked = join(scratch, "linked");
   const git = (...args) =>

@@ -18,7 +18,9 @@ export function statusDeadline(duration: string, now: number) {
 }
 
 /** Presets are not saved, so infer the one whose deadline is closest to the
- * saved expiry. Near 16:00 both "8 hours" and "Today" fall within tolerance. */
+ * saved expiry. Near 16:00 both "8 hours" and "Today" fall within tolerance;
+ * at 16:00 exactly they end at the same midnight, as "This week" does on a
+ * Sunday, and Today wins the tie. */
 export function statusDuration(
   expiresAt: number | undefined,
   updatedAt: number,
@@ -29,7 +31,10 @@ export function statusDuration(
   for (const [value] of statusDurations) {
     if (value === "custom" || value === "never") continue;
     const distance = Math.abs(statusDeadline(value, updatedAt) - expiresAt);
-    if (distance < bestDistance) {
+    if (
+      distance < bestDistance ||
+      (distance === bestDistance && value === "today" && best !== "custom")
+    ) {
       best = value;
       bestDistance = distance;
     }

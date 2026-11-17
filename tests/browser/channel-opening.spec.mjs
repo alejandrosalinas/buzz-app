@@ -292,8 +292,9 @@ test.describe("large thread opening", () => {
         ...timing,
       });
       await expect(history.locator("[data-message-id]")).toHaveCount(301);
+      // Every reply is unread, so each opening starts at the first unread one.
       await expect(
-        history.getByText("Distinct author reply 299", { exact: true }),
+        history.locator("[data-new-messages-boundary]"),
       ).toBeInViewport();
       await page
         .locator(

@@ -21,6 +21,7 @@ import { GitHubPanel, REFRESH_MS } from "./index";
 import { createPanelMemory } from "./panel-memory";
 import { createPullStates } from "./pull-states";
 import { ToastProvider } from "../../shared/design-system/ui/Toast";
+import { PanelWorkspace } from "../../features/panels/PanelWorkspace";
 
 afterEach(() => {
   cleanup();
@@ -72,6 +73,42 @@ it.each([
     expect(changes.querySelector("dd")).toHaveTextContent("+174 / −28");
   },
 );
+
+it("names its tab with the pull request's number, then its title once read", async () => {
+  let answer!: (response: Response) => void;
+  vi.stubGlobal(
+    "fetch",
+    vi.fn().mockReturnValue(new Promise<Response>((done) => (answer = done))),
+  );
+  render(
+    <PanelWorkspace
+      value="pull"
+      select={() => {}}
+      items={[
+        {
+          id: "pull",
+          label: "GitHub",
+          content: (
+            <GitHubPanel
+              target="https://github.com/example/project/pull/12"
+              close={() => {}}
+            />
+          ),
+        },
+      ]}
+    />,
+  );
+  const tabs = screen.getByRole("tablist", { name: "Panel tabs" });
+  expect(within(tabs).getByRole("tab", { name: "#12" })).toBeInTheDocument();
+  answer(
+    new Response(
+      JSON.stringify({ title: "A small improvement", state: "open" }),
+    ),
+  );
+  expect(
+    await within(tabs).findByRole("tab", { name: "#12 A small improvement" }),
+  ).toBeInTheDocument();
+});
 
 it("preserves zero counts and leaves an open issue neutral", async () => {
   vi.stubGlobal(

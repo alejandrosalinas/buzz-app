@@ -36,14 +36,16 @@ import type { ChannelMessage, Profile } from "../relay/contracts";
 import { emojiMatches, linkPart, messageParts } from "../relay/emoji";
 import { safeLinkUrl, visibleHtmlSource } from "../relay/message-content";
 import styles from "./Messages.module.css";
-import { profileMentionNames, profileMentionParts } from "./profile-mentions";
+import {
+  profileMentionNames,
+  renderedProfileMentionParts,
+} from "./profile-mentions";
 import {
   isLiteralMarkdownContext,
   isPlainProse,
   plainProseTree,
   preparedMarkdown,
   recentResults,
-  type LiteralRange,
   type PreparedMarkdown,
 } from "./markdown-preparation";
 
@@ -83,13 +85,15 @@ function protectInlineContent(
     | "attachmentSeams"
     | "mentions"
     | "mentionReferences"
+    | "mentionLabels"
     | "emoji"
   >,
   profiles: ReadonlyMap<string, Profile> | undefined,
-  literalRanges: readonly LiteralRange[],
+  prepared: Extract<ReturnType<typeof preparedMarkdown>, { kind: "markdown" }>,
   agents: typeof emptyReferenceDirectory.agents,
   spoilerDelimiters: readonly number[],
 ): ProtectedContent {
+  const { literalRanges } = prepared;
   let rangeIndex = 0;
   const isLiteral = (start: number, end: number) => {
     while (
@@ -102,7 +106,7 @@ function protectInlineContent(
 
   // Numeric entities can manufacture private-use characters during parsing too.
   // Choose an unused prefix in that decoded source; never trust a fixed marker.
-  const decoded = row.content.replace(
+  const decoded = prepared.content.replace(
     /&#(x[a-f\d]{1,6}|\d{1,7});/gi,
     (entity, number: string) => {
       const code =
@@ -137,11 +141,11 @@ function protectInlineContent(
     return `${start}${parts.length - 1}${end}`;
   };
   let offset = 0;
-  const content = profileMentionParts(row, profiles, agents)
+  const content = renderedProfileMentionParts(row, profiles, agents, prepared)
     .map((segment) => {
       const start = offset;
       offset += segment.text.length;
-      if (segment.target && !isLiteral(start, offset)) return token(segment);
+      if (segment.target) return token(segment);
       let partOffset = start;
       return messageParts(segment.text)
         .map((part) => {
@@ -234,6 +238,7 @@ function inlineProtectionKey(
   const emoji = row.emoji?.map(({ shortcode, url }) => [shortcode, url]);
   return JSON.stringify([
     row.edited === true,
+    row.mentionLabels,
     row.attachmentSeams,
     mentions,
     agentNames,
@@ -633,22 +638,9 @@ function PreparedMessageMarkdown({
   const protectedContent = useMemo(
     () =>
       protectInlineContent(
-        {
-          content: prepared.content,
-          // Seams index the folded body. Leave link-repaired prose unbound, as edits are.
-          ...(sourceRow.edited ||
-          (sourceRow.attachmentSeams && prepared.content !== sourceRow.content)
-            ? { edited: true as const }
-            : {}),
-          ...(sourceRow.attachmentSeams
-            ? { attachmentSeams: sourceRow.attachmentSeams }
-            : {}),
-          mentions: sourceRow.mentions,
-          mentionReferences: sourceRow.mentionReferences ?? [],
-          ...(sourceRow.emoji ? { emoji: sourceRow.emoji } : {}),
-        },
+        sourceRow,
         profiles,
-        prepared.literalRanges,
+        prepared,
         directory.agents,
         prepared.spoilerDelimiters,
       ),

@@ -615,7 +615,7 @@ async function launch(options: Launch) {
     apply: (scope) =>
       void scope.notifications.gate({
         id: "solo",
-        allows: (to) => soloConversation(scope.relay, to),
+        allows: (to) => soloConversation(scope.relay.snapshot(), to),
       }),
   };
   const runtime = new PluginRuntime(ctx, async (plugin) =>

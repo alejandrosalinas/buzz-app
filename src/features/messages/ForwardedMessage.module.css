@@ -1,0 +1,56 @@
+@reference "../../shared/styles/globals.css";
+
+.card {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: var(--space-2);
+  padding: var(--space-3);
+  border: 1px solid var(--border-standard);
+  border-radius: var(--radius-lg);
+  background: var(--surface-panel);
+  color: var(--text-standard);
+  --message-link: var(--text-link);
+  --mention-fill: initial;
+  --mention-hover: initial;
+  --mention-text: initial;
+  --selection-fill: var(--surface-text-selection);
+  --selection-text: var(--text-on-selection);
+  min-width: 0;
+  width: 32.5rem;
+  max-width: 100%;
+}
+.card[data-fill] {
+  width: 100%;
+}
+.card > * {
+  min-width: 0;
+  max-width: 100%;
+}
+.byline {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+}
+.body {
+  width: 100%;
+  min-width: 0;
+  max-height: 30em;
+  overflow: hidden;
+}
+.body[data-compact] {
+  max-height: 4.5em;
+}
+.body[data-expanded] {
+  max-height: none;
+}
+
+.source {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+.body[data-overflows]:not([data-expanded]) {
+  mask-image: linear-gradient(to bottom, black calc(100% - 1.5em), transparent);
+}

@@ -1,4 +1,4 @@
-import type { RelayData } from "../../features/relay/service";
+import type { RelayData, RelaySnapshot } from "../../features/relay/service";
 import type { RelaySession } from "../../features/relay/session";
 import {
   type StatusInput,
@@ -209,16 +209,16 @@ export function bindFocusStatus(
   });
 }
 
-/** Focus lets through only conversations the selected community lists as Solo. */
+/** Focus lets through only conversations their own community lists as Solo;
+ * `community` is that community's retained session state, if any. */
 export function soloConversation(
-  relay: RelayData,
+  community: RelaySnapshot | undefined,
   target: { kind: string; channelId?: string },
 ) {
   if (target.kind !== "conversation" || !target.channelId) return false;
-  const { status, session } = relay.snapshot();
   return (
-    status === "ready" &&
-    session.channels
+    community?.status === "ready" &&
+    community.session.channels
       .list()
       .channels.some(
         (channel) =>

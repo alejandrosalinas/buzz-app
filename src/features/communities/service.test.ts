@@ -1,6 +1,11 @@
 import { Context } from "@deepseek-ai/cordis";
 import { assert, afterEach, expect, it, vi } from "vitest";
-import { createCommunities } from "./service";
+import {
+  BROKER_SESSION_LIMIT,
+  createCommunities,
+  SESSION_LIMIT,
+} from "./service";
+import { createCommunityUnreads } from "../notifications/community-unread";
 import { communityDestination } from "./destination";
 import { localCommunityNameKey } from "./names";
 import * as destinations from "./destination";
@@ -154,6 +159,287 @@ it("opens a joined community without selecting it, and never one that is not joi
     "/api/relay/secondary/session",
     "/api/relay/primary/session",
   ]);
+});
+/** A native client over a modeled host registry: one socket per connected
+ * transport until its scope aborts it, refused past `SESSION_LIMIT`. */
+async function nativeAtLimit() {
+  const nativeViewer = "c".repeat(64);
+  const ids = Array.from(
+    { length: SESSION_LIMIT + 2 },
+    (_, i) => `https://c${i}.example.test`,
+  );
+  const saved = {
+    profile: { name: "Native", picture: "" },
+    memberships: ids.map((id) => ({ id, name: id })),
+    selected: ids[0],
+  };
+  vi.stubGlobal("localStorage", {
+    getItem: (key: string) =>
+      key === `buzz-client.v1:${nativeViewer}` ? JSON.stringify(saved) : null,
+    setItem: vi.fn(),
+  });
+  const held = new Set<string>();
+  const refused: string[] = [];
+  const connect = vi.fn(
+    (id: string, signal: AbortSignal) =>
+      new Promise<ReadTransport>((_resolve, reject) => {
+        if (held.size >= SESSION_LIMIT) {
+          refused.push(id);
+          return reject(new Error("Native sockets are busy"));
+        }
+        held.add(id);
+        signal.addEventListener(
+          "abort",
+          () => {
+            held.delete(id);
+            reject(signal.reason);
+          },
+          { once: true },
+        );
+      }),
+  );
+  const ctx = new Context();
+  roots.push(ctx);
+  const client = createCommunities(
+    ctx,
+    false,
+    undefined,
+    "",
+    undefined,
+    Promise.resolve(nativeViewer),
+    connect,
+  );
+  await flush();
+  const id = (index: number) => ids[index] as string;
+  // Startup badges on c1–c8; visits fill all but the reserved last socket.
+  const badges = ids.slice(1, 9).map((each) => client.open(each, true));
+  for (const each of ids.slice(9, SESSION_LIMIT - 1)) client.select(each);
+  client.select(id(0));
+  await flush();
+  expect(badges.every(Boolean)).toBe(true);
+  expect(held.size).toBe(SESSION_LIMIT - 1);
+  return { client, id, held, refused, connect, badges };
+}
+it("a badge never takes the last native socket, which other work still gets", async () => {
+  const { client, id, held, refused } = await nativeAtLimit();
+  expect(client.open(id(SESSION_LIMIT - 1), true)).toBeUndefined();
+  client.select(id(SESSION_LIMIT - 1));
+  await flush();
+  expect(refused).toEqual([]);
+  expect(held.size).toBe(SESSION_LIMIT);
+  expect(held.has(id(1))).toBe(true);
+});
+it("closes the oldest badge-only session, never selected or agent work, when the native socket limit is full", async () => {
+  const { client, id, held, refused, badges } = await nativeAtLimit();
+  const agent = client.open(id(SESSION_LIMIT - 1));
+  await flush();
+  expect(held.size).toBe(SESSION_LIMIT);
+  const last = id(SESSION_LIMIT);
+  client.select(last);
+  await flush();
+  await flush();
+  expect(refused).toEqual([]);
+  expect(held.has(last)).toBe(true);
+  // Only the oldest badge-only session gave up its socket, and stays closed.
+  expect(held.has(id(1))).toBe(false);
+  expect(client.open(id(1), true)).toBeUndefined();
+  for (const [index, each] of [2, 3, 4, 5, 6, 7, 8].entries())
+    expect(client.open(id(each), true)).toBe(badges[index + 1]);
+  expect(client.open(id(SESSION_LIMIT - 1))).toBe(agent);
+  expect(held.has(id(0))).toBe(true);
+  // Selecting the closed community connects it again, closing the next oldest.
+  client.select(id(1));
+  await flush();
+  await flush();
+  expect(refused).toEqual([]);
+  expect(held.has(id(1))).toBe(true);
+  expect(held.has(id(2))).toBe(false);
+});
+it("a listener reopening a badge on the eviction notice cannot take the freed socket", async () => {
+  const { client, id, refused } = await nativeAtLimit();
+  client.open(id(SESSION_LIMIT - 1));
+  await flush();
+  // The unread projection reopens every eligible badge whenever notified.
+  const reopened: unknown[] = [];
+  client.subscribe(() =>
+    reopened.push(client.open(id(SESSION_LIMIT + 1), true)),
+  );
+  client.select(id(SESSION_LIMIT));
+  await flush();
+  await flush();
+  expect(reopened[0]).toBeUndefined();
+  expect(refused).toEqual([]);
+});
+it("an agent reopening its community on the eviction notice reuses the stored session", async () => {
+  const { client, id, refused, connect } = await nativeAtLimit();
+  client.open(id(SESSION_LIMIT - 1));
+  await flush();
+  const agent = id(SESSION_LIMIT);
+  const inner: unknown[] = [];
+  client.subscribe(() => inner.push(client.open(agent)));
+  const outer = client.open(agent);
+  await flush();
+  await flush();
+  expect(inner[0]).toBe(outer);
+  expect(connect.mock.calls.filter(([each]) => each === agent)).toHaveLength(1);
+  expect(refused).toEqual([]);
+});
+it("with the real unread projection, a broker selection gets one session, is never badge-only and is never evicted", async () => {
+  // Startup connects c0 (selected) and one badge, c1; selecting c2 takes the
+  // kept slot. c3 and c4 are opened later for their own work.
+  const ids = Array.from({ length: 5 }, (_, i) => `https://c${i}.example.test`);
+  const client = setup({
+    profile: { name: "Local", picture: "" },
+    memberships: ids.map((id) => ({ id, name: id })),
+    selected: ids[0],
+  });
+  await flush();
+  vi.spyOn(Math, "random").mockReturnValue(0);
+  const unreads = createCommunityUnreads(client);
+  await flush();
+  const opened = (id: string, path: string) =>
+    requests.filter(
+      (url) => url === `/api/relay/${encodeURIComponent(id)}/${path}`,
+    ).length;
+  const [, badge, chosen, work, later] = ids as [
+    string,
+    string,
+    string,
+    string,
+    string,
+  ];
+  // The badge opens after its start delay.
+  await vi.waitFor(() => expect(opened(badge, "session")).toBe(1));
+  expect(opened(chosen, "session")).toBe(0);
+  client.select(chosen);
+  await flush();
+  await flush();
+  const selected = client.open(chosen, true);
+  expect(selected).toBeDefined();
+  // A foreground open closes the only badge-only session, c1.
+  expect(client.open(work)).toBeDefined();
+  await flush();
+  await flush();
+  expect(client.open(badge, true)).toBeUndefined();
+  // None is left, so nothing more is closed; a badge-only c2 would be.
+  expect(client.open(later)).toBeDefined();
+  await flush();
+  await flush();
+  expect(client.open(chosen, true)).toBe(selected);
+  expect(opened(chosen, "session")).toBe(1);
+  expect(opened(chosen, "stream")).toBeLessThanOrEqual(1);
+  unreads.dispose();
+});
+it("with the real unread projection, a native selection at the full limit gets one connection, is never badge-only and is never evicted", async () => {
+  const { client, id, held, refused, connect } = await nativeAtLimit();
+  const unreads = createCommunityUnreads(client);
+  await flush();
+  const chosen = id(SESSION_LIMIT);
+  client.select(chosen);
+  await flush();
+  await flush();
+  expect(held.size).toBe(SESSION_LIMIT);
+  const selected = client.open(chosen, true);
+  // A foreground open at the limit closes the oldest badge, never the selection.
+  expect(client.open(id(SESSION_LIMIT + 1))).toBeDefined();
+  await flush();
+  await flush();
+  expect(refused).toEqual([]);
+  expect(held.has(id(1))).toBe(false);
+  expect(held.has(chosen)).toBe(true);
+  expect(client.open(chosen, true)).toBe(selected);
+  expect(connect.mock.calls.filter(([each]) => each === chosen)).toHaveLength(
+    1,
+  );
+  unreads.dispose();
+});
+it("with the real unread projection, a joined community is never badge-only and is never evicted", async () => {
+  const { client, id, held, refused } = await nativeAtLimit();
+  const unreads = createCommunityUnreads(client);
+  await flush();
+  // Room for one more: the join's notice opens it for a badge before the join
+  // acquires it.
+  await client.leave(id(9), { purge: false });
+  const joined = "https://joined.example.test";
+  client.joined({ id: joined, name: joined }, { name: "Native", picture: "" });
+  await flush();
+  expect(held.has(joined)).toBe(true);
+  // Every other badge-only session gives up its socket first; past them,
+  // nothing is closed and the host refuses.
+  const work = Array.from(
+    { length: 10 },
+    (_, i) => `https://w${i}.example.test`,
+  );
+  await client.applySync(client.snapshot().sync, work);
+  for (const each of work) {
+    client.open(each);
+    await flush();
+    await flush();
+  }
+  for (const each of [1, 2, 3, 4, 5, 6, 7, 8])
+    expect(held.has(id(each))).toBe(false);
+  expect(held.has(joined)).toBe(true);
+  expect(client.snapshot().selected).toBe(joined);
+  expect(refused).toEqual([work[9]]);
+  unreads.dispose();
+});
+it("with the real unread projection, rejoining a badge-only community promotes it", async () => {
+  const { client, id, held, refused } = await nativeAtLimit();
+  const unreads = createCommunityUnreads(client);
+  await flush();
+  // c1 is the oldest badge-only session.
+  client.joined({ id: id(1), name: id(1) }, { name: "Native", picture: "" });
+  await flush();
+  client.open(id(SESSION_LIMIT - 1));
+  await flush();
+  client.open(id(SESSION_LIMIT));
+  await flush();
+  await flush();
+  expect(refused).toEqual([]);
+  expect(held.has(id(1))).toBe(true);
+  expect(held.has(id(2))).toBe(false);
+  unreads.dispose();
+});
+it("reads a joined community's retained session for its viewer, and never opens one", async () => {
+  const { client, id, connect } = await nativeAtLimit();
+  const viewer = client.snapshot().viewer as string;
+  const scope = (index: number, as = viewer) => ({
+    viewer: as,
+    communityOrigin: communityDestination(id(index)).url,
+  });
+  expect(client.retained(scope(1))).toEqual(
+    client.open(id(1), true)?.snapshot(),
+  );
+  expect(client.retained(scope(1, "d".repeat(64)))).toBeUndefined();
+  const calls = connect.mock.calls.length;
+  expect(client.retained(scope(SESSION_LIMIT + 1))).toBeUndefined();
+  expect(
+    client.retained({ viewer, communityOrigin: "https://x.example" }),
+  ).toBeUndefined();
+  expect(connect.mock.calls.length).toBe(calls);
+});
+it("keeps badge-only sessions within the broker's session limit", async () => {
+  const ids = Array.from(
+    { length: BROKER_SESSION_LIMIT + 1 },
+    (_, i) => `https://c${i}.example.test`,
+  );
+  const client = setup({
+    profile: { name: "Local", picture: "" },
+    memberships: ids.map((id) => ({ id, name: id })),
+    selected: ids[0],
+  });
+  await flush();
+  await flush();
+  // The selected community and one kept free leave room for one badge.
+  const badges = ids.slice(1).map((id) => client.open(id, true));
+  expect(badges.filter(Boolean)).toHaveLength(BROKER_SESSION_LIMIT - 2);
+  client.select(ids[2] as string);
+  // Past the limit, a selection replaces the badge-only session.
+  client.select(ids[3] as string);
+  await flush();
+  await flush();
+  expect(client.relay.snapshot().status).toBe("ready");
+  expect(client.open(ids[1] as string, true)).toBeUndefined();
 });
 it("a failing community does not replace its healthy sibling or the local profile", async () => {
   const client = setup();
@@ -328,8 +614,11 @@ it("selects alternate URL spellings through the canonical retained session", asy
   const original = client.relay.snapshot();
   const connections = requests.filter((url) => url.endsWith("/session")).length;
   client.select(null);
+  expect(client.relay.selected?.()).toBeUndefined();
   client.select(" WSS://THIRD.example:443/ ");
   expect(client.snapshot().selected).toBe("https://third.example");
+  // Plugins follow the selection by the origin its connection names.
+  expect(client.relay.selected?.()).toBe(original.origin);
   expect(client.relay.snapshot()).toBe(original);
   expect(requests.filter((url) => url.endsWith("/session"))).toHaveLength(
     connections,

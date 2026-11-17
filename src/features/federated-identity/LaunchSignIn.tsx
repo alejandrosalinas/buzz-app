@@ -10,6 +10,7 @@ import {
 import { createPortal } from "react-dom";
 import { Button } from "../../shared/design-system/ui/Button";
 import { ToastNotice } from "../../shared/design-system/ui/Toast";
+import { writeClipboardText } from "../../shared/clipboard";
 import {
   launchVisible,
   setLaunchReady,
@@ -279,6 +280,7 @@ function SignInScreen({
   dismiss(): void;
 }) {
   const [failure, setFailure] = useState("");
+  const [copied, setCopied] = useState(false);
   // At launch the window is inert under the launch mark, where autofocus
   // can't land; focus the primary action once the mark leaves.
   const primary = useRef<HTMLButtonElement>(null);
@@ -304,6 +306,7 @@ function SignInScreen({
       : "");
   function run(operation: () => Promise<unknown>) {
     setFailure("");
+    setCopied(false);
     void operation().catch((error: unknown) =>
       setFailure(error instanceof Error ? error.message : "sign-in-failed"),
     );
@@ -346,6 +349,11 @@ function SignInScreen({
           {recoveryMessage(problem)}
         </p>
       )}
+      {copied && signingIn && (
+        <p role="status" className="text-body-sm">
+          Sign-in link copied. Paste it into your browser.
+        </p>
+      )}
       {signingIn ? (
         <>
           <p role="status" className="sr-only">
@@ -365,6 +373,24 @@ function SignInScreen({
             }
           >
             Open the sign-in page again
+          </Button>
+          <Button
+            size="lg"
+            variant="ghost"
+            onClick={() =>
+              run(async () => {
+                try {
+                  const link = await identity.signInLink();
+                  if (!link) throw new Error();
+                  await writeClipboardText(link);
+                } catch {
+                  throw new Error("sign-in-link-unavailable");
+                }
+                setCopied(true);
+              })
+            }
+          >
+            Copy sign-in link
           </Button>
           <Button
             size="lg"

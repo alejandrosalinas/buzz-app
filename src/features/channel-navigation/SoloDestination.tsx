@@ -166,7 +166,7 @@ export function RegionConversation(props: SoloConversationProps) {
         <>
           <MenuSeparator />
           <MenuGroup>
-            {props.menuActions.slice(0, 6).map((action) => (
+            {props.menuActions.map((action) => (
               <MenuItem
                 key={action.id}
                 onClick={(event) => {

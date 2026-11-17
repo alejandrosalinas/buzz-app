@@ -57,7 +57,7 @@ export function apply(ctx) {
 | Inject | Registers | Call and required fields |
 | --- | --- | --- |
 | `pages` | A page | `ctx.pages.register({ id, title, component, primary?, placement?, icon?, badge?, sidebar?, companion?, layout? })`. `id` must match the id pattern, `title` non-empty, `component` a function. `placement`: `"sidebar"` (default) or `"dock"` (only for `primary` pages; `"topbar"` and `"toolbar"` are accepted aliases for `"dock"`). `icon`: `data:image/...` URL. `badge`: component shown beside the nav entry. `sidebar`: component receiving `{ target, children }` that replaces the conversation sidebar (wrap content in `className="shell-sidebar-default"`). `layout`: `"document"` or `"workspace"`. |
-| `panels` | A panel for a link/target string | `ctx.panels.register({ id, title, matches(target) => boolean, component, order?, launcher?, channelLauncher?, channelPlacement?, keepOpen? })`. `component` receives `{ target, close, context?, channelContext? }`. `launcher: { icon: string, target: string }` adds a top-bar button (use `matches: () => false` for launcher-only). `channelLauncher` is a component for the channel header (`channelPlacement`: `"bottom"` default, `"side"`, `"tab"`). |
+| `panels` | A panel for a link/target string | `ctx.panels.register({ id, title, matches(target) => boolean, component, order?, launcher?, channelLauncher?, channelPlacement?, keepOpen? })`. `component` receives `{ target, close, context?, channelContext? }`. Inside `component`, call `ctx.panels.useTabTitle(label)` (a React hook; no-op outside a panel tab; check `typeof ctx.panels.useTabTitle === "function"` on older hosts) to name the tab per target; `title` stays the fallback. `launcher: { icon: string, target: string }` adds a top-bar button (use `matches: () => false` for launcher-only). `channelLauncher` is a component for the channel header (`channelPlacement`: `"bottom"` default, `"side"`, `"tab"`). |
 | `accountActions` | Account menu action | `ctx.accountActions.register({ id, title, icon?, component, placement? })`. The component receives `{ open, onOpenChange }`. Omit `placement` for the plugin section after Settings; use `"before-settings"` for a profile-related action directly above Settings. The host owns menu order, focus, and dismissal. |
 | `settingsCards` | A Settings destination | `ctx.settingsCards.register({ id, title, component, group?, personal?, identityRow? })`. `component` receives `{ active(), community?, navigation? }`; `navigation.target.route` can carry bounded, versioned presentation data for the card. Opening a route must never submit an operation. Optional `identityRow` receives `{ active() }` and contributes a compact account-status link inside Identity. Reuse the plugin’s existing session; check `active()` before navigation or an action. The row retires with its owning registration. Omit `icon` (it is a host icon component). The host supplies navigation and the content column, not a heading. |
 | `sidebarSections` (optional) | A section in the Team sidebar | `ctx.reflect.get("sidebarSections")?.register({ version: 1, id, title, icon, rows: { snapshot, subscribe }, select, actions? })`. `snapshot()` returns a stable array of `{ id, label, icon?, badge?, count?, status? }` until data changes, then notify subscribers. `select(row)` returns an open target such as `{ version: 1, kind: "home" }`. Actions: `{ id, label, icon: ReactElement, onSelect }`. |
@@ -71,9 +71,27 @@ export function apply(ctx) {
 | `decisions` | Typed judgments about text | `await ctx.decisions.decide({ state, questions, timeoutMs?, community? })`. `questions` maps 1 to 32 answer names to `{ type: "yes_no", instructions }`, `{ type: "choice", instructions, options }` (value -> when to pick it) or `{ type: "score", instructions, levels }` (lowest first). `timeoutMs` is in milliseconds (1000-30000). `community` is the relay URL the text came from; Builderlab fails without it (in an agent tool: `ctx.agents.snapshot().running.find((a) => a.key === client.key)?.relay`; in a channel panel: `channelContext.relayUrl`). Resolves `{ outcome: "answered", model, answers }` (for example `answers.urgent.probability`) or `{ outcome: "failed", reason }`; never rejects. By default Builderlab or TypeSafe answers, with Jev. |
 | `host` | Commands, HTTPS, processes, files | Requires `manifest.host` grants; see below. |
 | `subjectLift` (optional) | Lift a message image's subject | `const lift = ctx.reflect.get("subjectLift")`. `lift?.supports(source)`, then `await lift.lift(source, signal?)` resolves a transparent PNG `File` ready for `session.emoji.upload`, or rejects with a reason. `source` is `session.media(attachment.url)`. macOS 14+ only; see the plugin architecture's Subject lift contract. |
-| `pluginInstaller` (optional) | Ask the owner to install another plugin, check installation status, or access retained update reviews | `requestInstall(...)` resolves `"installed" \| "updated" \| "cancelled" \| "unavailable"` and never installs silently. Status methods are described below. `updates` is an optional, host-retained capability; see [Plugin architecture](plugin-architecture.md#plugin-installer). |
+| `pluginInstaller` (optional) | Ask the owner to install another plugin, compare a listed release, check installation status, or access retained update reviews | `requestInstall(...)` resolves `"installed" \| "updated" \| "cancelled" \| "unavailable"` and never installs silently. Status and release-comparison methods are described below. `updates` is an optional, host-retained capability; see [Plugin architecture](plugin-architecture.md#plugin-installer). |
 
-The installation-status methods may be missing on older hosts even when `pluginInstaller` is available, so feature-check each method before calling it. `getInstallationStatus` returns `"installed"` when the manifest ID is in the ready catalog, `"absent"` when it is not, and `"unavailable"` while the catalog is not ready. Installed status is independent of whether the plugin is enabled, contributes UI, or came from a particular install source. A subscription reports later status changes; subscribe first, then read the current status to avoid missing a change between the read and subscription. Own the subscription with `ctx.effect`:
+The installation-status and release-comparison methods may be missing on older
+hosts even when `pluginInstaller` is available, so feature-check each method
+before calling it. `getInstallationStatus` returns `"installed"` when the
+manifest ID is in the ready catalog, `"absent"` when it is not, and
+`"unavailable"` while the catalog is not ready. Installed status is independent
+of whether the plugin is enabled, contributes UI, or came from a particular
+install source.
+
+The optional `compareInstallationRelease` accepts one immutable Git or URL
+source plus its native release revision and publisher; it returns only
+`"current"`, `"different"`, `"review"` or `"unknown"` for caller-supplied
+values, not raw installed metadata. `"different"` means the release does not match,
+not that it is newer; use it as an update only when your catalog independently proves release order
+and authority. See the [full comparison contract](plugin-architecture.md#plugin-installer)
+for source, publisher and unknown-state rules. The status subscription is also a
+release/source identity invalidation signal: the callback may repeat
+`"installed"`, so re-read the comparison. Subscribe first, then read the current
+status to avoid missing a change between the read and subscription. Own the
+subscription with `ctx.effect`:
 
 ```js
 const installer = ctx.reflect.get("pluginInstaller");
@@ -88,7 +106,8 @@ ctx.effect(() => {
   const unsubscribe = installer.subscribeInstallationStatus(
     "example.hello",
     (status) => {
-      // Respond to a status change.
+      // Status may repeat "installed" when its release/source identity changes.
+      // Re-read current status and any release comparison.
     },
   );
   if (typeof installer.getInstallationStatus === "function") {
@@ -100,6 +119,82 @@ ctx.effect(() => {
 ```
 
 The table above covers the services most plugins use. The full contract for every service, with TypeScript types and examples, is in [Plugin architecture](https://github.com/block/buzz-app/blob/main/docs/plugin-architecture.md); the types are exported from [`src/plugins/author.ts`](https://github.com/block/buzz-app/blob/main/src/plugins/author.ts). Read it before you use a service that is not in this table. It describes the latest Buzz, which can have services this app does not. If a service in `inject` is missing, `apply` never runs, so check `plugin_status` after you install.
+
+## Reusing the member picker
+
+Installed plugins can render `ctx.conversation.ui.MembersDialog` and
+`ctx.conversation.ui.GeneralAccess` through the host React instance. Inject
+`react`, `conversation` and `relay`; runtime imports from app source are not
+supported. The type-only author package exports `ChannelMembersDialogProps`,
+`ChannelGeneralAccessProps`, `GeneralAccessPolicy` and `MemberChange`.
+
+```js
+// Inside a plugin component, using a session from ctx.relay.snapshot():
+const h = ctx.react.createElement;
+return h(ctx.conversation.ui.MembersDialog, {
+  key: session.scope + ":" + channelId,
+  session, channelId, trigger, close,
+  title: "Share access",
+  nonMemberLabel: "Not in this record",
+  shareLink: "buzz://plugin?id=example.records&record=design",
+  memberActions: {
+    canAdd: canManageRecord,
+    pending: recordAccessPending,
+    // Own stricter policy, write confirmation and readback here.
+    change: (change, signal) => updateRecordMember(change, signal),
+  },
+  accessSettings: h(ctx.conversation.ui.GeneralAccess, {
+    capability: recordAccess,
+    recovery: session.recovery,
+    channelId,
+    policy: {
+      subject: "record",
+      allowPublic: false,
+      visibilityDescription: (visibility) => visibility === "public"
+        ? "Everyone in this community can read this record and its revisions."
+        : "Only record members can read this record.",
+    },
+  }),
+});
+```
+
+The plugin owns opening/closing and the trigger ref for focus return; render the
+picker only while open. Keep it keyed to session/channel. Addressable openings
+must follow the [navigation contract](navigation-history.md); the component does
+not register a destination. Keep external operations in their existing owner if
+navigation can hide the dialog. The public picker props cover session/channel,
+trigger/close, title/description, non-member label, member actions, access settings
+and share link; host navigation and visit-lifetime props remain internal.
+
+`memberActions` routes individual additions, role changes and removals through
+the plugin, retaining host role checks; team additions and host-owned addition
+recovery are hidden. Retained host recovery state stays with its session owner. Its `canAdd`
+can restrict additions and `pending` blocks member mutations and local dismissal.
+The picker also locks while its callback is unresolved, shows callback errors,
+and passes an AbortSignal retired on unmount or session/channel change. The
+callback must confirm writes and refresh signed member roles before resolving;
+uncertain writes need recovery in the plugin's access settings, without resending
+blindly. These UI policies do not replace relay authorization.
+
+`nonMemberLabel` sets both the visible heading and accessible name of search
+results that are not members. With `memberActions`, the default is "Not yet
+added"; built-in channel/chat wording is unchanged. A blank label uses that
+default too.
+
+`accessSettings` replaces built-in General access (`null` hides it). The optional
+GeneralAccess policy supplies a generic subject and visibility-change disclosure;
+`allowPublic: false` removes Public participation while keeping Private and View
+only. Existing Public access is displayed as Public; reducing it confirms that
+the picker cannot restore it. Its capability retains signed fresh-read, save and
+uncertain-write recovery behavior. Switching to Private also warns that people
+who already joined keep access until removed, without naming a host screen. Pass
+`mayHaveGuestMembers: false` only when signed roles verify there are no Guests;
+this suppresses the View only reader warning, never the Public member warning.
+Copy link uses `shareLink` and grants no access. With `memberActions`, it is hidden
+unless the plugin supplies a nonempty `shareLink`; it never falls back to the backing
+channel. Without plugin-managed actions, the channel/chat link remains the default.
+Other omitted overrides preserve chat/channel behavior. Hosts predating this extension lack the two UI entries; check their
+presence before offering sharing when supporting those hosts.
 
 ## Host access (`manifest.host`)
 

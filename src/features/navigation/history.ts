@@ -1,4 +1,10 @@
-import { parseOpenTarget, targetKey, type OpenTarget } from "./targets";
+import {
+  joinBeneath,
+  parseOpenTarget,
+  targetKey,
+  withoutJoin,
+  type OpenTarget,
+} from "./targets";
 
 export const HISTORY_CAPACITY = 100;
 
@@ -8,6 +14,30 @@ export type NavigationEntry = Readonly<{ id: string; target: OpenTarget }>;
 export type DismissedVisits =
   | readonly string[]
   | ((target: OpenTarget) => boolean);
+/**
+ * Which entries a dismissal retires: the visits it names, and every join
+ * dialog presented over one of them, so Forward cannot reopen a closed view
+ * with its join. Closing one join leaves other openings over the same view.
+ */
+export function dismissalOf(
+  entries: readonly NavigationEntry[],
+  visits: DismissedVisits,
+) {
+  const named = (entry: NavigationEntry) =>
+    typeof visits === "function"
+      ? visits(entry.target) ||
+        (!!entry.target.join && visits(withoutJoin(entry.target)))
+      : visits.includes(entry.id);
+  const closedViews = new Set(
+    entries
+      .filter((entry) => !entry.target.join && named(entry))
+      .map((entry) => targetKey(joinBeneath(entry.target))),
+  );
+  return (entry: NavigationEntry) =>
+    named(entry) ||
+    (!!entry.target.join &&
+      closedViews.has(targetKey(joinBeneath(entry.target))));
+}
 export type HistorySnapshot = Readonly<{
   current: NavigationEntry;
   /** Managed, non-dismissed return window, including identities retained across reload. */
@@ -116,11 +146,7 @@ export function createMemoryHistory(
     dismiss(visits, input) {
       if (disposed || (typeof visits !== "function" && !visits.length)) return;
       const fallback = parseOpenTarget(input);
-      const closing = entries.filter((entry) =>
-        typeof visits === "function"
-          ? visits(entry.target)
-          : visits.includes(entry.id),
-      );
+      const closing = entries.filter(dismissalOf(entries, visits));
       for (const entry of closing) dismissed.add(entry.id);
       if (dismissed.has(snapshot.current.id)) {
         const previous = adjacent(-1);

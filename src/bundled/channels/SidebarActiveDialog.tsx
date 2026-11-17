@@ -49,7 +49,6 @@ export function SidebarActiveDialog({
       size="compact"
       open
       title="Active in the last"
-      headerGap="compact"
       footerGap="compact"
       onOpenChange={(open) => !open && close()}
       preventClose={pending}

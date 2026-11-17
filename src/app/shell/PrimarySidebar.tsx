@@ -2,13 +2,17 @@ import { soloNavigationFor } from "../../features/channel-navigation/solo-naviga
 import {
   useEffect,
   useLayoutEffect,
+  useMemo,
   useState,
   useSyncExternalStore,
   type ReactNode,
 } from "react";
 import { SoloRegions } from "../../features/channel-navigation/SoloRegions";
 import { SoloInventory } from "../../features/channel-navigation/SoloInventory";
-import { soloDraft } from "../../features/channel-navigation/routes";
+import {
+  sidebarTarget,
+  soloDraft,
+} from "../../features/channel-navigation/routes";
 import { RecoveryNotice } from "../../features/relay/RecoveryNotice";
 import {
   ChannelInventory,
@@ -52,6 +56,31 @@ import type { FederatedIdentity } from "../../features/federated-identity/servic
 import type { Membership } from "../../features/communities/service";
 
 const noSubscription = () => () => {};
+
+const sameConversation = (a: OpenTarget, b: OpenTarget) =>
+  a.kind === "conversation" &&
+  b.kind === "conversation" &&
+  targetKey(a) !== targetKey(b) &&
+  targetKey(sidebarTarget(a)) === targetKey(sidebarTarget(b));
+/** The latest attempt that opened a destination. Moving within the open
+ * conversation, as opening or closing a thread does, keeps the previous one,
+ * so it renders nothing here; reopening the same target is a new one. A
+ * preserved opening applies only to itself, so entering or leaving one is. */
+function destinationAttempt(navigator: Navigation) {
+  let previous = navigator.snapshot();
+  let shown = previous.attempt;
+  return () => {
+    const next = navigator.snapshot();
+    if (
+      next.attempt.id !== previous.attempt.id &&
+      (next.attempt.sidebar !== shown.sidebar ||
+        !sameConversation(previous.entry.target, next.entry.target))
+    )
+      shown = next.attempt;
+    previous = next;
+    return shown;
+  };
+}
 
 type Filter = "all" | "solo" | "team";
 const filters = [
@@ -100,12 +129,16 @@ function ScopedSidebar({
   scope: string;
   connection: ReturnType<typeof useRelayConnection>;
 }) {
-  const attempt = useSyncExternalStore(
-    props.navigator.subscribe,
-    () => props.navigator.snapshot().attempt.id,
+  const attemptView = useMemo(
+    () => destinationAttempt(props.navigator),
+    [props.navigator],
   );
-  const preserveSidebar =
-    props.navigator.snapshot().attempt.sidebar === "preserve";
+  const shownAttempt = useSyncExternalStore(
+    props.navigator.subscribe,
+    attemptView,
+  );
+  const attempt = shownAttempt.id;
+  const preserveSidebar = shownAttempt.sidebar === "preserve";
   const [observedAttempt, setObservedAttempt] = useState(attempt);
   const [view, setView] = useState(() => {
     const saved = readView<{ filter?: unknown; location?: unknown } | null>(

@@ -306,17 +306,24 @@ test("real same-origin windows queue one publisher and transfer its Web Lock on 
   app,
 }) => {
   await open(page, app);
-  const presenceLocks = (target) =>
-    target.evaluate(async () => {
+  // One publisher per community and viewer: every joined community has its
+  // own lock, so the handoff below follows one community's partition.
+  const presenceLocks = (target, partition) =>
+    target.evaluate(async (partition) => {
       const locks = await navigator.locks.query();
       const select = (entries) =>
-        entries.filter(({ name }) => name.startsWith("buzz-presence:"));
+        entries.filter(({ name }) =>
+          partition ? name === partition : name.startsWith("buzz-presence:"),
+        );
       return { held: select(locks.held), pending: select(locks.pending) };
-    });
+    }, partition);
   await expect
     .poll(async () => (await presenceLocks(page)).held.length)
-    .toBe(1);
-  const owner = (await presenceLocks(page)).held[0];
+    .toBeGreaterThan(0);
+  const startup = (await presenceLocks(page)).held;
+  expect(new Set(startup.map(({ name }) => name)).size).toBe(startup.length);
+  const owner = startup[0];
+  const locks = (target) => presenceLocks(target, owner.name);
   const second = await context.newPage();
   const pageErrors = app.watchPageErrors(second);
   const errors = [];
@@ -325,10 +332,8 @@ test("real same-origin windows queue one publisher and transfer its Web Lock on 
   });
   try {
     await open(second, app);
-    await expect
-      .poll(async () => (await presenceLocks(second)).pending.length)
-      .toBe(1);
-    const both = await presenceLocks(second);
+    await expect.poll(async () => (await locks(second)).pending.length).toBe(1);
+    const both = await locks(second);
     expect(both.held).toHaveLength(1);
     expect(both.held[0].clientId).toBe(owner.clientId);
     expect(both.pending[0].name).toBe(owner.name);
@@ -346,19 +351,17 @@ test("real same-origin windows queue one publisher and transfer its Web Lock on 
     await expect
       .poll(() => app.report.presencePublications.at(-1)?.event.content)
       .toBe("offline");
-    await expect
-      .poll(async () => (await presenceLocks(second)).pending.length)
-      .toBe(1);
-    const offlineLocks = await presenceLocks(second);
+    await expect.poll(async () => (await locks(second)).pending.length).toBe(1);
+    const offlineLocks = await locks(second);
     const firstHolds = offlineLocks.held[0].clientId === owner.clientId;
     const successor = offlineLocks.pending[0].clientId;
     const remaining = firstHolds ? second : page;
     const before = app.report.presencePublications.length;
     await (firstHolds ? page : second).close();
     await expect
-      .poll(async () => (await presenceLocks(remaining)).held[0]?.clientId)
+      .poll(async () => (await locks(remaining)).held[0]?.clientId)
       .toBe(successor);
-    expect((await presenceLocks(remaining)).pending).toHaveLength(0);
+    expect((await locks(remaining)).pending).toHaveLength(0);
     await expect
       .poll(() => app.report.presencePublications.length, { timeout: 75000 })
       .toBeGreaterThan(before);
@@ -412,11 +415,15 @@ test("presence becomes usable during held HTTP work and unfinished subscription 
     ).toBeVisible();
     expect(app.report.unreadHolds.some((hold) => hold.pending)).toBe(true);
     expect(
-      app.report.wireFrames.some(
-        ([kind, id]) =>
+      app.report.socketFrames.some(
+        ({ socket, frame: [kind, id] }) =>
           kind === "EOSE" &&
           app.relay.requests.some(
-            (req) => req.id === id && req.routes.includes("alpha"),
+            (req) =>
+              req.socket === socket &&
+              req.id === id &&
+              req.community === "primary" &&
+              req.routes.includes("alpha"),
           ),
       ),
     ).toBe(false);

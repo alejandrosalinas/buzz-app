@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createNavigationController, NAVIGATION_ABORTED } from "./controller";
 import { createMemoryHistory, homeTarget } from "./history";
-import type { OpenTarget } from "./targets";
+import { joinBeneath, type OpenTarget } from "./targets";
 const settings: OpenTarget = {
   version: 1,
   kind: "settings",
@@ -123,6 +123,80 @@ describe("navigation attempts over one history driver", () => {
       expect(nav.snapshot().entry.target).toEqual(homeTarget);
     },
   );
+
+  it.each([true, false])(
+    "the join dialog opens over Members and Back returns to Members (warm: %s)",
+    (warm) => {
+      const { navigation: nav } = setup();
+      const conversation: OpenTarget = {
+        version: 1,
+        kind: "conversation",
+        scope: {
+          viewer: "a".repeat(64),
+          communityOrigin: "https://relay.example",
+        },
+        channelId: "alpha",
+      };
+      const members: OpenTarget = { ...conversation, panel: "members" };
+      if (warm) void nav.open(conversation);
+      void nav.open(members);
+      const shown = nav.snapshot().entry;
+      void nav.open({
+        ...members,
+        join: { viewer: "a".repeat(64), visit: "v1" },
+      });
+      expect(nav.snapshot().entry.target.join?.visit).toBe("v1");
+      nav.back();
+      expect(nav.snapshot().entry).toEqual(shown);
+      nav.back();
+      expect(nav.snapshot().entry.target).toEqual(
+        warm ? conversation : homeTarget,
+      );
+    },
+  );
+
+  it("a join over a Settings card's action keeps the card's visit without the action, so Close and Back skip it", () => {
+    const { navigation: nav } = setup();
+    void nav.open(page);
+    const routed: OpenTarget = {
+      ...settings,
+      route: { version: 1, params: "create-community" },
+    };
+    void nav.open(routed);
+    const card = nav.snapshot().entry.id;
+    const join = { viewer: "a".repeat(64), visit: "v1" };
+    void nav.open({ ...settings, join });
+    // Back (or a reload's Back) reaches the same visit, spent action dropped.
+    nav.back();
+    expect(nav.snapshot().entry).toEqual({ id: card, target: settings });
+    nav.forward();
+    expect(nav.snapshot().entry.target.join).toEqual(join);
+    // Close returns to that visit, so Back leaves Settings.
+    nav.dismiss((target) => target.join?.visit === "v1", settings);
+    expect(nav.snapshot().entry.id).toBe(card);
+    nav.back();
+    expect(nav.snapshot().entry.target).toEqual(page);
+  });
+
+  it("a join over plugin details keeps the details visit, so Back returns to them", () => {
+    const { navigation: nav } = setup();
+    void nav.open(page);
+    const details: OpenTarget = {
+      version: 1,
+      kind: "settings",
+      section: "plugins",
+      pluginId: "example.notes",
+    };
+    void nav.open(details);
+    const visit = nav.snapshot().entry;
+    // As the join service builds it: the view beneath, plus the join.
+    void nav.open({
+      ...joinBeneath(nav.snapshot().entry.target),
+      join: { viewer: "a".repeat(64), visit: "v1" },
+    });
+    nav.back();
+    expect(nav.snapshot().entry).toEqual(visit);
+  });
 
   it("pushes, traverses without a push, preserves forward on retry, and truncates new branches", async () => {
     const { host, navigation: nav } = setup();

@@ -800,6 +800,7 @@ html[data-keyboard-navigation] .attachmentImage:focus-visible {
   padding-inline-start: var(--space-1);
 }
 .composerInput {
+  @apply text-message;
   box-sizing: border-box;
   position: relative;
   min-width: 0;
@@ -2932,44 +2933,56 @@ html[data-keyboard-navigation] .rawDiff:focus-visible {
   padding: 0;
   border-radius: 0;
 }
+/* The compact hover and open-thread marker share geometry and paint. A pseudo
+   element is generated only by the state selectors below. */
+:where(html[data-message-density="compact"])
+.message:not(.messageHighlight)::before {
+  position: absolute;
+  inset-block: 0;
+  inset-inline: calc(-1 * var(--message-hover-inset, 0px));
+  inset-inline-start: calc(
+    -1 *
+    var(--message-hover-start-inset, var(--message-hover-inset, 0px))
+  );
+  z-index: -1;
+  pointer-events: none;
+  background: var(--affordance-subtle-hover);
+  opacity: 0.5;
+}
+
+:where(html[data-message-density="compact"])
+  .message:not(.messageHighlight):is(
+    [data-actions-revealed],
+    [data-thread-open]
+  )::before {
+  content: "";
+}
 @media (hover: hover) and (pointer: fine) {
   :where(html[data-message-density="compact"])
-    .message:not(.messageHighlight):is(
-      :hover,
-      [data-actions-revealed]
-    )::before {
+    .message:not(.messageHighlight):hover::before {
     content: "";
-    position: absolute;
-    inset-block: 0;
-    inset-inline: calc(-1 * var(--message-hover-inset, 0px));
-    inset-inline-start: calc(
-      -1 *
-      var(--message-hover-start-inset, var(--message-hover-inset, 0px))
-    );
-    z-index: -1;
-    pointer-events: none;
-    background: var(--affordance-subtle-hover);
-    opacity: 0.5;
   }
-  /* An arrival cue replaces hover on its bubble rather than stacking on it. */
-  .message[data-actions-revealed]:not(.messageHighlight)
-    > .messageBody
-    > .messageContent
-    .messageBubble:not([data-emoji-only], [data-diff-only]):not(
-      :has(> .text > table:only-child),
-      :has(> .text > table:first-child + .edited:last-child)
-    ) {
-    background: var(--surface-message-hover);
-  }
-  .message[data-own][data-actions-revealed]:not(.messageHighlight)
-    > .messageBody
-    > .messageContent
-    .messageBubble:not([data-emoji-only], [data-diff-only]):not(
-      :has(> .text > table:only-child),
-      :has(> .text > table:first-child + .edited:last-child)
-    ) {
-    background: var(--surface-message-own-hover);
-  }
+}
+/* An arrival cue replaces hover on its bubble rather than stacking on it. */
+.message:is([data-actions-revealed], [data-thread-open]):not(.messageHighlight)
+  > .messageBody
+  > .messageContent
+  .messageBubble:not([data-emoji-only], [data-diff-only]):not(
+    :has(> .text > table:only-child),
+    :has(> .text > table:first-child + .edited:last-child)
+  ) {
+  background: var(--surface-message-hover);
+}
+.message[data-own]:is([data-actions-revealed], [data-thread-open]):not(
+    .messageHighlight
+  )
+  > .messageBody
+  > .messageContent
+  .messageBubble:not([data-emoji-only], [data-diff-only]):not(
+    :has(> .text > table:only-child),
+    :has(> .text > table:first-child + .edited:last-child)
+  ) {
+  background: var(--surface-message-own-hover);
 }
 .message[data-layout="continuation"] .messageBubble {
   margin-top: 0;
@@ -3574,7 +3587,9 @@ html[data-keyboard-navigation] .audienceEntry:has(.audienceLine:focus-visible) {
 .audienceRow:has(.audienceBody) .audiencePreviewText {
   display: none;
 }
-.audienceLine:hover {
+.audienceLine:hover,
+.audienceEntry:where([data-thread-open]):not(.messageHighlight)
+  > .audienceLine {
   background: var(--affordance-subtle-hover);
 }
 
@@ -4061,4 +4076,11 @@ html[data-keyboard-navigation] .activityExpansion {
 }
 .activityGroupHeader[data-expanded] > div:last-child {
   flex-shrink: 0;
+}
+.agentNote {
+  margin: var(--space-1h) 0 0;
+  color: var(--text-secondary);
+  font-size: var(--text-caption);
+  line-height: var(--text-caption--line-height);
+  letter-spacing: var(--text-caption--letter-spacing);
 }

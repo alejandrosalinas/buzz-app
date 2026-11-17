@@ -11,11 +11,12 @@ export async function pageChoices(page, query = "") {
   );
 }
 
-// Activity is a row at the top of the Messages sidebar.
+// Activity is a row at the top of the Messages sidebar; its name ends with its
+// unread count while conversations are unread.
 export function activityRow(page) {
   return page
     .getByRole("navigation", { name: "Pages", exact: true })
-    .getByRole("button", { name: "Activity", exact: true });
+    .getByRole("button", { name: /^Activity(?: \d+ unread)?$/ });
 }
 
 export async function openPage(page, name, { connected = true } = {}) {
@@ -246,20 +247,32 @@ export async function openCommunityPicker(page) {
   return picker;
 }
 
+/** The switcher trigger for `name`, with or without the elsewhere-unread suffix. */
+export function communitySwitcher(page, name) {
+  const escaped = name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  return page.getByRole("button", {
+    name: new RegExp(
+      `^Community switcher: ${escaped}(, unread in other communities)?$`,
+    ),
+  });
+}
+
 export async function selectCommunity(page, name) {
   const picker = await openCommunityPicker(page);
+  const escaped = name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  // A row's name carries its unread suffix once that community's unread is known.
   await picker
     .getByRole("button", {
-      name: name === "Personal space" ? name : `Switch to ${name}`,
+      name:
+        name === "Personal space"
+          ? name
+          : new RegExp(
+              `^Switch to ${escaped}(, unread|, \\d+ items? needs? you)?$`,
+            ),
       exact: true,
     })
     .click();
-  await expect(
-    page.getByRole("button", {
-      name: `Community switcher: ${name}`,
-      exact: true,
-    }),
-  ).toBeVisible();
+  await expect(communitySwitcher(page, name)).toBeVisible();
 }
 
 export function pageChoice(group, name) {

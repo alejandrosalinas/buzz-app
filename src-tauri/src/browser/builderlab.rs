@@ -67,12 +67,22 @@ pub enum ViewerPage {
     /// The exchange could not be reached or failed on its side; trying again,
     /// or opening the app in the system browser, may work.
     Unavailable,
+    /// The exchange refused the sign-in itself. Trying again, or signing out
+    /// and back in where this build signs in, may work.
+    SignIn,
 }
 
 fn unavailable(message: &str) -> ViewerError {
     ViewerError {
         message: message.into(),
         page: Some(ViewerPage::Unavailable),
+    }
+}
+
+fn sign_in(message: impl Into<String>) -> ViewerError {
+    ViewerError {
+        message: message.into(),
+        page: Some(ViewerPage::SignIn),
     }
 }
 
@@ -152,7 +162,7 @@ fn cookie(
     domain: &str,
     now: i64,
     federated: bool,
-) -> Result<Zeroizing<String>, String> {
+) -> Result<Zeroizing<String>, ViewerError> {
     if !(32..=512).contains(&credential.len())
         || !credential
             .bytes()
@@ -163,11 +173,11 @@ fn cookie(
     let expires_at = chrono::DateTime::parse_from_rfc3339(expires_at)
         .map_err(|_| "Invalid Builderlab sign-in expiry")?;
     if !(1..=8 * 60 * 60).contains(&(expires_at.timestamp() - now)) {
-        return Err(if federated {
+        return Err(sign_in(if federated {
             format!("Builderlab sign-in expired. {FI_SIGN_IN_AGAIN}")
         } else {
             "Builderlab sign-in expired. Sign in again in Settings".into()
-        });
+        }));
     }
     let expiry = expires_at
         .with_timezone(&chrono::Utc)
@@ -192,11 +202,10 @@ fn exchange_available(status: reqwest::StatusCode, federated: bool) -> Result<bo
         });
     }
     Err(match status.as_u16() {
-        401 if federated => {
-            "Sign in again in Settings → Identity → Organization sign-in, then reopen this app"
-                .into()
+        401 if federated => sign_in(format!("{FI_SIGN_IN_AGAIN}, then reopen this app")),
+        401 => {
+            sign_in("Sign out and sign in to Builderlab again in Settings, then reopen this app")
         }
-        401 => "Sign out and sign in to Builderlab again in Settings, then reopen this app".into(),
         _ => unavailable("Builderlab viewer sign-in is unavailable. Try reopening this app"),
     })
 }
@@ -206,7 +215,7 @@ fn exchange_available(status: reqwest::StatusCode, federated: bool) -> Result<bo
 fn exchange_request(
     auth: ViewerAuth,
     fi: &FederatedIdentity,
-) -> Result<(String, HeaderName, HeaderValue), String> {
+) -> Result<(String, HeaderName, HeaderValue), ViewerError> {
     const PATH: &str = "v1/auth/hosted-site/native-session";
     match auth {
         #[cfg(debug_assertions)]
@@ -242,7 +251,7 @@ fn exchange_request(
                 ))
             })
             .flatten()
-            .ok_or_else(|| FI_SIGN_IN_AGAIN.into()),
+            .ok_or_else(|| sign_in(FI_SIGN_IN_AGAIN)),
     }
 }
 
@@ -416,10 +425,9 @@ mod tests {
         assert_eq!(value.to_str().unwrap(), "fixture-session-token");
         assert!(value.is_sensitive());
         for stale in [revision(&fi) + "x", String::new()] {
-            assert_eq!(
-                exchange_request(ViewerAuth::Federated(stale), &fi).unwrap_err(),
-                FI_SIGN_IN_AGAIN
-            );
+            let error = exchange_request(ViewerAuth::Federated(stale), &fi).unwrap_err();
+            assert_eq!(error.message, FI_SIGN_IN_AGAIN);
+            assert_eq!(error.page, Some(ViewerPage::SignIn));
         }
         let current = revision(&fi);
         fi.sign_out_for_test();
@@ -462,7 +470,7 @@ mod tests {
                 let error = exchange_available(status, federated).unwrap_err();
                 let page = match code {
                     403 => Some(ViewerPage::Denied),
-                    401 => None,
+                    401 => Some(ViewerPage::SignIn),
                     _ => Some(ViewerPage::Unavailable),
                 };
                 assert_eq!(error.page, page, "{code}");
@@ -474,6 +482,14 @@ mod tests {
             serde_json::json!({
                 "message": "Your Builderlab account cannot open this app",
                 "page": "denied",
+            })
+        );
+        let refused = exchange_available(reqwest::StatusCode::UNAUTHORIZED, true).unwrap_err();
+        assert_eq!(
+            serde_json::to_value(&refused).unwrap(),
+            serde_json::json!({
+                "message": "Sign in again in Settings → Identity → Organization sign-in, then reopen this app",
+                "page": "sign-in",
             })
         );
         // Other failures carry only their message.
@@ -577,14 +593,20 @@ mod tests {
             )
             .unwrap_err()
         };
-        assert_eq!(
-            expired(true),
-            format!("Builderlab sign-in expired. {FI_SIGN_IN_AGAIN}")
-        );
-        assert_eq!(
-            expired(false),
-            "Builderlab sign-in expired. Sign in again in Settings"
-        );
+        for (federated, message) in [
+            (
+                true,
+                format!("Builderlab sign-in expired. {FI_SIGN_IN_AGAIN}"),
+            ),
+            (
+                false,
+                "Builderlab sign-in expired. Sign in again in Settings".into(),
+            ),
+        ] {
+            let error = expired(federated);
+            assert_eq!(error.message, message);
+            assert_eq!(error.page, Some(ViewerPage::SignIn));
+        }
     }
 
     /// The adapter's session route answers every request with `status`.

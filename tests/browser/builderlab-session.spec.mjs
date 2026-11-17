@@ -27,6 +27,10 @@ test.use({
   builderlabLogin: true,
   developmentReact: true,
   historyCounts: { alpha: 1, beta: 0 },
+  // One community: two pages' streams and EventSources then fit this
+  // harness's single HTTP/1.1 origin, as they did before every saved
+  // community connected at startup. Native streams use IPC, not this pool.
+  savedCommunities: ["primary"],
 });
 
 // Two real EventSources share the production broker; a held HTTP failure must

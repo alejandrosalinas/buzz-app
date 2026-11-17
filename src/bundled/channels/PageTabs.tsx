@@ -227,7 +227,7 @@ export function PageTabs({
       return true;
     };
     opening.current = (
-      { channelId, threadId, messageId },
+      { channelId, threadId, messageId, unreadSince },
       { keep, markRead } = {},
     ) => {
       if (!mounted.current || !secondary.canOpenConversation(channelId))
@@ -245,6 +245,7 @@ export function PageTabs({
           messageId ?? threadId,
           (existing?.kind === "thread" && existing.rootId) || threadId,
           messageId ? "reveal" : "focus",
+          messageId ? undefined : unreadSince,
         );
       else {
         const tab = `conversation:${channelId}`;

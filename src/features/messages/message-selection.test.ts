@@ -42,6 +42,8 @@ function fixture(ids = ["one", "two", "three"], newest = ids.at(-1)) {
     canMarkUnread: () => false,
     markUnread: vi.fn(),
     composer: () => composer,
+    canQuote: () => false,
+    quote: vi.fn(),
   };
   cleanups.push(registerMessageList(list, controller));
   const box = (id: string) =>

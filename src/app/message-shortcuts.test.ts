@@ -49,6 +49,8 @@ function setup(own: boolean, reply = vi.fn()) {
     canMarkUnread: () => true,
     markUnread: vi.fn(),
     composer: () => null,
+    canQuote: vi.fn(() => false),
+    quote: vi.fn(() => true),
   };
   cleanups.push(registerMessageList(list, controller));
   const row = list.querySelector<HTMLElement>("[data-message-id]");
@@ -116,4 +118,20 @@ it("reacts to the latest message even while an older one is selected", () => {
   expect(reactions.latest).toHaveBeenCalledTimes(1);
   expect(reactions.older).not.toHaveBeenCalled();
   expect(reply).not.toHaveBeenCalled();
+});
+
+it("quotes selected message text with Q only when its composer can take it", () => {
+  const { controller } = setup(false);
+  const text = document.querySelector('[data-layout="timeline"]')?.firstChild;
+  if (!text) throw new Error("No message text");
+  const range = document.createRange();
+  range.selectNodeContents(text);
+  document.getSelection()?.removeAllRanges();
+  document.getSelection()?.addRange(range);
+  expect(press("q")).toBe(false);
+  vi.mocked(controller.canQuote).mockReturnValue(true);
+  expect(press("q")).toBe(true);
+  expect(controller.quote).toHaveBeenCalledWith(
+    '<div data-buzz-copy="timeline">One</div>',
+  );
 });

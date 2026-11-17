@@ -495,7 +495,7 @@ const elementOf = (node: Node) =>
   node instanceof Element ? node : node.parentElement;
 
 /** Message rows only; editors own their selections. */
-function messageSelection(range: Range): boolean {
+export function messageSelection(range: Range): boolean {
   const scope = elementOf(range.commonAncestorContainer);
   if (
     !scope ||
@@ -511,6 +511,10 @@ function messageSelection(range: Range): boolean {
     )
   );
 }
+
+/** A message selection as this app's `text/html` copy payload. */
+export const timelineCopy = (selection: Selection) =>
+  `<div data-buzz-copy="timeline">${serializeSelection(selection, "html")}</div>`;
 
 // Registered in the capture phase so it runs before `copyEmoji`
 // (src/bundled/emoji/copy-emoji.ts), which bubbles on the same document and
@@ -534,10 +538,7 @@ function copyMessageSelection(event: ClipboardEvent) {
     "text/plain",
     serializeSelection(selection, "text"),
   );
-  event.clipboardData.setData(
-    "text/html",
-    `<div data-buzz-copy="timeline">${serializeSelection(selection, "html")}</div>`,
-  );
+  event.clipboardData.setData("text/html", timelineCopy(selection));
   event.preventDefault();
 }
 

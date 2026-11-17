@@ -14,7 +14,7 @@ import {
   useRef,
   useSyncExternalStore,
 } from "react";
-import { afterEach, expect, it } from "vitest";
+import { afterEach, expect, it, vi } from "vitest";
 import {
   PanelWorkspace,
   usePanelTabTitle,
@@ -310,3 +310,95 @@ it("keeps a channel's menu tab while away and drops it if the channel became ine
   view.rerender(<Harness channelId="alpha" />);
   expect(screen.queryByText("Canvas contents")).not.toBeInTheDocument();
 });
+
+vi.mock("../../features/messages/MediaReviewViewer", () => ({
+  MediaReviewViewer: () => <div>Open media viewer</div>,
+}));
+
+it.each(["side", "main"] as const)(
+  "only allows visible %s panels to open media, including captured callbacks",
+  (pane) => {
+    let context: PanelProps["context"];
+    const panel = {
+      key: "media",
+      title: "Media",
+      keepOpen: true,
+      component: (props: PanelProps) => {
+        context = props.context;
+        return <p>Panel contents</p>;
+      },
+    } as RegisteredPanel;
+    const channels = [{ id: "alpha", name: "Alpha" }];
+    const available = [panel];
+    const panels = {
+      snapshot: () => available,
+      subscribe: () => () => {},
+    } as unknown as Panels;
+    const session = {
+      viewer: "viewer",
+      channels: { list: () => ({ channels }), window: () => ({ rows: [] }) },
+    } as unknown as RelaySession;
+    const relay = {
+      snapshot: () => ({ status: "ready", session }),
+    } as unknown as RelayData;
+    let state!: ReturnType<typeof useChannelTabState>;
+    let workspace!: ReturnType<typeof useConversationTabs>;
+    function Harness() {
+      state = useChannelTabState(session, "alpha");
+      workspace = useConversationTabs({
+        profiles: new Map(),
+        state,
+        relay,
+        session,
+        panels,
+        current: channels[0],
+        channels,
+        scope: "scope:viewer",
+        conversationIcon: () => null,
+        leadingIds: [],
+        continuingVisit: true,
+        mainPane: true,
+        isLive: () => true,
+        openLink: () => false,
+      });
+      return (
+        <PanelWorkspace
+          main={pane === "main"}
+          value={
+            pane === "main" ? workspace.selectedMain : workspace.selectedTab
+          }
+          select={() => {}}
+          items={pane === "main" ? workspace.mainItems : workspace.items}
+        />
+      );
+    }
+    render(<Harness />);
+    act(() => {
+      workspace.open({ panel, channelId: "alpha", target: "alpha" }, true);
+      if (pane === "main") state.moveEntry("media:alpha", "main");
+    });
+    const open = context?.openMedia;
+    expect(open).toBeDefined();
+    const attachment = {
+      url: "https://example.org/image.png",
+      kind: "image" as const,
+    };
+    act(() => {
+      expect(open?.("message", attachment)).toBe(true);
+    });
+    expect(screen.getByText("Open media viewer")).toBeInTheDocument();
+    act(() => state.setPaneOpen(false));
+    expect(screen.getByText("Panel contents")).toBeInTheDocument();
+    act(() => {
+      expect(open?.("message", attachment)).toBe(pane === "main");
+    });
+    if (pane === "side")
+      expect(screen.queryByText("Open media viewer")).toBeNull();
+    else expect(screen.getByText("Open media viewer")).toBeInTheDocument();
+    act(() => state.setPaneOpen(true));
+    act(() => {
+      expect(context?.openMedia?.("message", attachment)).toBe(true);
+    });
+    expect(screen.getByText("Open media viewer")).toBeInTheDocument();
+  },
+);

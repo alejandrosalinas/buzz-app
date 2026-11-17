@@ -78,7 +78,7 @@ for (const action of ["archive", "delete"]) {
         return route.continue();
       };
       if (action === "archive")
-        await page.route("**/api/relay/**/query", holdPermissions);
+        await page.route("**/api/relay/primary/query", holdPermissions);
       try {
         await openChannelDetails(page);
         if (action === "archive") {
@@ -101,7 +101,7 @@ for (const action of ["archive", "delete"]) {
         panel.getByRole("button", { name: "Edit description", exact: true }),
       ).toBeEnabled();
       if (action === "archive")
-        await page.unroute("**/api/relay/**/query", holdPermissions);
+        await page.unroute("**/api/relay/primary/query", holdPermissions);
       const trigger = panel.getByRole("button", { name: label, exact: true });
       await expect(trigger).toBeVisible();
       const variant = action === "delete" ? "destructive" : "subtle";

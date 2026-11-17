@@ -14,6 +14,15 @@ import activityStyles from "../../features/agents/ActivityLayout.module.css";
 import { TranscriptPanel } from "../../features/agents/TranscriptPanel";
 import { AgentSaveButton } from "../../features/agents/AgentSaveButton";
 import { AgentInstructions } from "../../features/agents/AgentInstructions";
+import { AISettings, runsOnDetails } from "../../features/agents/AISettings";
+import {
+  candidatesFor,
+  offRecommended,
+  onRecommended,
+  type RecommendedRun,
+  recommendedRun,
+  withRecommended,
+} from "../../features/agents/recommended";
 import {
   type ModelChoice,
   ModelPicker,
@@ -45,6 +54,7 @@ import {
   DEFAULT_CONFIG,
   type GooseRuntime,
   config as readConfig,
+  running,
 } from "./runtime";
 import {
   type GooseSetup,
@@ -213,11 +223,26 @@ export function createTabs({
   setup,
   runtime,
   history,
+  recommended = recommendedRun("goose", (candidate) => setup.offers(candidate)),
 }: Readonly<{
   setup: GooseSetup;
   runtime: GooseRuntime;
   history: GooseHistory;
+  /** What agents on Recommended run on; the plugin shares its runtime's. */
+  recommended?: RecommendedRun;
 }>) {
+  /** What an agent on Recommended runs on, found once it is shown on it. */
+  function useRecommended(on: boolean) {
+    const resolved = useSyncExternalStore(
+      recommended.subscribe,
+      recommended.current,
+    );
+    useEffect(() => {
+      if (on) void recommended.find();
+    }, [on]);
+    return resolved;
+  }
+
   function DefaultControl({ onConfigure }: { onConfigure(): void }) {
     const state = useSyncExternalStore(setup.subscribe, setup.snapshot);
     const [listing, reload] = useRead(
@@ -1142,7 +1167,9 @@ export function createTabs({
     modelAppearance,
     showEffort = true,
   }: AgentCreateProps<Config>) {
-    const current = readConfig(config);
+    // A pick here takes the agent off Recommended, from what it runs on.
+    const resolved = useRecommended(onRecommended(config));
+    const current = offRecommended(running(config, resolved));
     const [open, setOpen] = useState(false);
     const [listing, reload] = useRead(() => setup.providers(), "providers");
     const provider = current.provider || listing.value?.defaults.provider || "";
@@ -1314,6 +1341,29 @@ export function createTabs({
     }, [error]);
     const configChanged = JSON.stringify(draft) !== JSON.stringify(saved);
     const changed = configChanged || Boolean(settingsHost?.pendingSave);
+    // Inert in a build that recommends nothing for goose.
+    const following = onRecommended(draft) && candidatesFor("goose").length > 0;
+    const resolved = useRecommended(following);
+    const manual = (
+      <>
+        {settingsHost?.typeControl?.(configChanged)}
+        {/* A manual choice, even of the default, is never Recommended. */}
+        <ProviderFields
+          revision={providerRevision}
+          rows
+          value={draft}
+          onChange={(choice) =>
+            setDraft(offRecommended({ ...draft, ...choice }))
+          }
+        />
+        <ThinkingField
+          revision={providerRevision}
+          choice={draft}
+          value={draft.effort}
+          onChange={(effort) => setDraft(offRecommended({ ...draft, effort }))}
+        />
+      </>
+    );
     const submit = async () => {
       setSaving(true);
       setError("");
@@ -1321,7 +1371,10 @@ export function createTabs({
         const workspace = draft.workspace.trim() || DEFAULT_CONFIG.workspace;
         if (!validWorkspace(workspace))
           throw new Error("Enter an absolute or ~/… workspace path.");
-        await save({ ...draft, model: draft.model.trim(), workspace });
+        const next = { ...draft, model: draft.model.trim(), workspace };
+        // A Custom agent's save drops a mark left from before, which a later
+        // blank synced model would otherwise turn back on.
+        await save(onRecommended(next) ? next : offRecommended(next));
       } catch (reason) {
         setError(message(reason));
       } finally {
@@ -1350,19 +1403,28 @@ export function createTabs({
         {settingsSection !== "runtime" && (
           <>
             <SettingsGroup>
-              {settingsHost?.typeControl?.(configChanged)}
-              <ProviderFields
-                revision={providerRevision}
-                rows
-                value={draft}
-                onChange={(choice) => setDraft({ ...draft, ...choice })}
-              />
-              <ThinkingField
-                revision={providerRevision}
-                choice={draft}
-                value={draft.effort}
-                onChange={(effort) => setDraft({ ...draft, effort })}
-              />
+              {candidatesFor("goose").length ? (
+                <AISettings
+                  automatic={following}
+                  harnessIcon={GooseLogoIcon}
+                  {...runsOnDetails(
+                    { title: "Goose", icon: GooseLogoIcon },
+                    resolved,
+                  )}
+                  onChange={(on) =>
+                    // Manual starts from the recommendation it ran on.
+                    setDraft(
+                      on
+                        ? readConfig(withRecommended(draft))
+                        : offRecommended(running(draft, resolved)),
+                    )
+                  }
+                >
+                  {manual}
+                </AISettings>
+              ) : (
+                manual
+              )}
             </SettingsGroup>
             <AgentInstructions
               value={draft.instructions}
@@ -1374,7 +1436,7 @@ export function createTabs({
         {settingsSection !== "identity" && (
           <>
             <ProviderSetup
-              choice={draft}
+              choice={running(draft, resolved)}
               onSaved={() => setProviderRevision((value) => value + 1)}
             />
             <Field

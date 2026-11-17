@@ -1,6 +1,13 @@
 // @vitest-environment jsdom
 import "@testing-library/jest-dom/vitest";
-import { act, cleanup, render, within } from "@testing-library/react";
+import {
+  act,
+  cleanup,
+  fireEvent,
+  render,
+  screen,
+  within,
+} from "@testing-library/react";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { stubAvatarBrowserApis } from "../../features/agents/avatar-testing";
 import { RemoteAgentIntroduction } from "./RemoteAgentIntroduction";
@@ -212,4 +219,38 @@ it("describes another remote runtime without promising Builderlab capabilities",
     opacity: "1",
     transform: "none",
   });
+});
+
+it("shows an uploaded image with its framing", () => {
+  const { container } = render(
+    <RemoteAgentIntroduction
+      name="Nova"
+      avatar={{
+        kind: "image",
+        picture: "https://images.example/nova.png",
+        crop: { zoom: 2, x: 0.25, y: 0 },
+      }}
+      builderlab={false}
+    />,
+  );
+  expect(
+    container.querySelector('img[src="https://images.example/nova.png"]'),
+  ).toHaveStyle({ width: "200%", height: "200%", left: "-25%", top: "-50%" });
+});
+
+it("falls back to the retrying portrait when the framed image fails", () => {
+  const { container } = render(
+    <RemoteAgentIntroduction
+      name="Nova"
+      avatar={{
+        kind: "image",
+        picture: "https://images.example/nova.png",
+        crop: { zoom: 2, x: 0.25, y: 0 },
+      }}
+      builderlab={false}
+    />,
+  );
+  fireEvent.error(screen.getByAltText("Avatar preview"));
+  expect(screen.queryByAltText("Avatar preview")).toBeNull();
+  expect(container.querySelector(".buzz-avatar")).toBeInTheDocument();
 });

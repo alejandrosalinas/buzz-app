@@ -141,7 +141,8 @@ it("admits passive label lookups in the background, so an opened thread's read s
   };
   const opened = h.view.refresh();
   await flush();
-  expect(ids()).toEqual([[linked[0]?.id], [reply.id]]);
+  // The overlay read starts with the target read.
+  expect(ids()).toEqual([[linked[0]?.id], [reply.id], undefined]);
   take((filter) => filter.ids?.[0] === reply.id).respond([reply]);
   await flush();
   take((filter) => filter["#e"]?.[0] === reply.id).respond([]);
@@ -219,13 +220,19 @@ it("keeps a fetched root in the existing thread surface", async () => {
 it("distinguishes absent targets and failed lookup, then permits explicit retry", async () => {
   const h = setup();
   const missing = h.view.refresh();
-  h.next().respond([]);
+  const absent = h.next();
+  const absentOverlay = h.next();
+  absent.respond([]);
   await missing;
   expect(h.view.snapshot().targetStatus).toBe("unavailable");
+  expect(absentOverlay.signal?.aborted).toBe(true);
   const failed = h.view.refresh();
-  h.next().fail(new Error("offline"));
+  const offline = h.next();
+  const offlineOverlay = h.next();
+  offline.fail(new Error("offline"));
   await failed;
   expect(h.view.snapshot().targetStatus).toBe("error");
+  expect(offlineOverlay.signal?.aborted).toBe(true);
   await flush();
   const { loading } = await targetRead(h);
   h.next().respond([root]);
@@ -447,14 +454,18 @@ it("never retains a selected reply rejected by the shared dual-channel access ga
     roster(relay, "b", []),
   ]);
   const reading = h.view.refresh();
-  h.next().respond([denied]);
+  const target = h.next();
+  const overlay = h.next();
+  target.respond([denied]);
   await reading;
   expect(h.view.snapshot()).toMatchObject({
     targetStatus: "unavailable",
     target: undefined,
     replies: [],
   });
-  expect(h.pending).toHaveLength(0); // No overlay/traversal can authorize rejected content.
+  expect(h.pending).toHaveLength(0); // No traversal can authorize rejected content.
+  // The overlapped overlay read is stopped.
+  expect(overlay.signal?.aborted).toBe(true);
   h.traffic.receive([root]);
   expect(h.view.snapshot().target).toBeUndefined();
   expect(h.view.snapshot().replies).toEqual([]);
@@ -504,6 +515,7 @@ it.each(["different", "unavailable", "error", "cancelled"] as const)(
       signal.signal,
     );
     const pending = h.next();
+    const overlay = h.next();
     if (outcome === "different") {
       pending.respond([unrelated]);
     } else if (outcome === "error") pending.fail(new Error("offline"));
@@ -514,6 +526,8 @@ it.each(["different", "unavailable", "error", "cancelled"] as const)(
     expect(await selecting).toBe(outcome);
     expect(h.view.snapshot()).toBe(before);
     expect(h.pending).toHaveLength(0);
+    // The overlapped overlay read is stopped.
+    expect(overlay.signal?.aborted).toBe(true);
   },
 );
 
@@ -527,9 +541,12 @@ it("the newest retarget wins and access loss fences an in-flight target", async 
   const two = message(alice, "a", "Two", 4, [["e", root.id, "", "reply"]]);
   const first = h.view.retarget(one.id, new AbortController().signal);
   const stale = h.next();
+  const staleOverlay = h.next();
   const second = h.view.retarget(two.id, new AbortController().signal);
   expect(stale.signal?.aborted).toBe(true);
+  expect(staleOverlay.signal?.aborted).toBe(true);
   stale.respond([one]);
+  staleOverlay.respond([]);
   await flush();
   h.next().respond([two]);
   await flush();
@@ -539,8 +556,10 @@ it("the newest retarget wins and access loss fences an in-flight target", async 
   expect(h.view.snapshot().target?.id).toBe(two.id);
   const revoked = h.view.retarget(one.id, new AbortController().signal);
   const held = h.next();
+  const heldOverlay = h.next();
   h.traffic.receive([roster(relay, "a", [], 11)]);
   expect(held.signal?.aborted).toBe(true);
+  expect(heldOverlay.signal?.aborted).toBe(true);
   held.respond([one]);
   expect(await revoked).toBe("cancelled");
   expect(h.view.snapshot().root).toBeUndefined();
@@ -629,12 +648,14 @@ it("finishing an older refresh after a failed retarget keeps the previous target
   await loading;
   const refresh = h.view.refresh();
   const oldTarget = h.next();
+  const oldOverlay = h.next();
   const next = h.view.retarget("c".repeat(64), new AbortController().signal);
   h.next().respond([]);
   expect(await next).toBe("unavailable");
+  expect(h.next().signal?.aborted).toBe(true); // The failed target's overlay.
   oldTarget.respond([reply]);
   await flush();
-  h.next().respond([]);
+  oldOverlay.respond([]);
   await flush();
   h.next().respond([root]);
   await refresh;
@@ -651,21 +672,26 @@ it("a failed retarget cannot strand a pending missing-target repair in loading",
   h.next().respond([root]);
   await loading;
   const missing = h.view.refresh();
-  h.next().respond([]);
+  const absent = h.next();
+  const absentOverlay = h.next();
+  absent.respond([]);
   await missing;
+  expect(absentOverlay.signal?.aborted).toBe(true);
   expect(h.view.snapshot()).toMatchObject({
     root: { id: root.id },
     targetStatus: "unavailable",
   });
   const repair = h.view.refresh();
   const repairingTarget = h.next();
+  const repairingOverlay = h.next();
   expect(h.view.snapshot().targetStatus).toBe("loading");
   const invalid = h.view.retarget("c".repeat(64), new AbortController().signal);
   h.next().respond([]);
   expect(await invalid).toBe("unavailable");
+  expect(h.next().signal?.aborted).toBe(true); // The failed target's overlay.
   repairingTarget.respond([reply]);
   await flush();
-  h.next().respond([]);
+  repairingOverlay.respond([]);
   await flush();
   h.next().respond([root]);
   await repair;

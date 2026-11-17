@@ -1,13 +1,14 @@
 import type { Agent, Agents } from "../../features/agents/service";
 import type { RelayData, RelaySnapshot } from "../../features/relay/service";
 import type { RelaySession } from "../../features/relay/session";
-import { FEATURES, featureState, memory } from "./features";
+import { FEATURES, featureState, LEGACY, memory } from "./features";
 import { privateChannels } from "./PrivateChannels";
 import {
   cannotEdit,
   type FeatureAgents,
   featurePresent,
   instructionsOf,
+  replaceCheckIn,
   saveFeature,
 } from "./save";
 import { inCommunity, savedBestie } from "./saved";
@@ -262,7 +263,8 @@ export function subscribePrivateMembers(
 }
 
 /** Stops the check-ins of each agent here that isn't the community's Bestie,
- * whenever the saved Bestie or the agents change. A choice made on another
+ * and replaces the Bestie's old hourly check-in with Hourly notes and Nightly
+ * review (`replaceCheckIn`), whenever the saved Bestie or the agents change. A choice made on another
  * device counts once this device reads the account again, which it does once
  * per connection. It acts only on the account's choice once known: a Bestie,
  * or a saved none, when every agent here is stopped. An account with no
@@ -273,7 +275,7 @@ export function subscribePrivateMembers(
  * instructions are shared. Memory and channels stay as they are. */
 export function stopFormerCheckIns(relay: RelayData, agents: ReconcileAgents) {
   const bestie = savedBestie(relay);
-  const checkIns = FEATURES.filter(({ timer }) => timer);
+  const checkIns = [...FEATURES.filter(({ timer }) => timer), ...LEGACY];
   /** Agents being saved, and what each was like when last tried, so a state
    * is tried once per connection, and a save that left it as it was doesn't
    * loop. */
@@ -302,11 +304,17 @@ export function stopFormerCheckIns(relay: RelayData, agents: ReconcileAgents) {
       rememberBestie(relaySnapshot.scope, current);
     const { agents: here, running = [] } = agents.snapshot();
     for (const agent of here) {
-      const on = checkIns.filter((feature) => featurePresent(agent, feature));
+      // Bestie's old hourly check-in is replaced, anyone else's stopped.
+      const replacing =
+        agent.pubkey === current &&
+        LEGACY.some((feature) => featurePresent(agent, feature));
+      const on =
+        agent.pubkey === current
+          ? []
+          : checkIns.filter((feature) => featurePresent(agent, feature));
       const seen = JSON.stringify([instructionsOf(agent), agent.attention]);
       if (
-        !on.length ||
-        agent.pubkey === current ||
+        !(replacing || on.length) ||
         agent.place !== "here" ||
         saving.has(agent.key) ||
         tried.get(agent.key) === seen ||
@@ -323,7 +331,7 @@ export function stopFormerCheckIns(relay: RelayData, agents: ReconcileAgents) {
       // Not while the agents are telling their listeners of a change.
       void Promise.resolve()
         .then(async () => {
-          for (const feature of on) {
+          for (const feature of replacing ? [undefined] : on) {
             // Each save starts from the agent as the last one left it, and
             // stops if the saved Bestie changed or stopped being known
             // meanwhile, as when it is made Bestie again.
@@ -336,10 +344,12 @@ export function stopFormerCheckIns(relay: RelayData, agents: ReconcileAgents) {
               tried.delete(agent.key);
               return;
             }
-            await saveFeature(agents, fresh, feature, false, {
-              timerOnly,
-              signal,
-            });
+            if (feature)
+              await saveFeature(agents, fresh, feature, false, {
+                timerOnly,
+                signal,
+              });
+            else await replaceCheckIn(agents, fresh, { timerOnly, signal });
           }
         })
         .catch((error: unknown) => {

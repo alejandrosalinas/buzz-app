@@ -112,6 +112,97 @@ it("reads terminal task status only for the requested task IDs", async () => {
     ).rejects.toThrow("invalid turn status");
   }
 });
+it("reads one page of an agent's stored sessions, or one conversation's, and a session's messages", async () => {
+  const h = await fixture();
+  vi.mocked(h.host.request).mockResolvedValueOnce(
+    response({
+      sessions: [
+        {
+          session_id: "s-thread",
+          channel_id: "alpha",
+          thread_root_event_id: "r".repeat(64),
+          updated_at: "1767225602000",
+        },
+        { session_id: "dm", channel_id: "beta" },
+      ],
+      next_cursor: "older",
+    }),
+  );
+  expect(await h.client.sessions("agent-1", h.signal)).toEqual({
+    more: true,
+    sessions: [
+      {
+        sessionId: "s-thread",
+        channelId: "alpha",
+        threadRootId: "r".repeat(64),
+        updatedAt: 1_767_225_602_000,
+      },
+      { sessionId: "dm", channelId: "beta", updatedAt: 0 },
+    ],
+  });
+  vi.mocked(h.host.request).mockResolvedValue(response({ sessions: [] }));
+  expect(
+    await h.client.sessions("agent-1", h.signal, {
+      community: "wss://relay.example.org",
+      channelId: "alpha",
+      threadRootId: "r".repeat(64),
+    }),
+  ).toEqual({ more: false, sessions: [] });
+  await h.client.sessions("agent-1", h.signal, {
+    community: "wss://relay.example.org",
+    channelId: "beta",
+  });
+  const bodies = vi
+    .mocked(h.host.request)
+    .mock.calls.map(([input]) => [
+      input.url.split("/").at(-1),
+      JSON.parse(input.body ?? ""),
+    ]);
+  expect(bodies).toEqual([
+    ["list-agent-sessions", { agent_id: "agent-1", limit: 50 }],
+    [
+      "list-agent-sessions",
+      {
+        agent_id: "agent-1",
+        limit: 50,
+        community: "relay.example.org",
+        channel_id: "alpha",
+        thread_root_event_id: "r".repeat(64),
+      },
+    ],
+    [
+      "list-agent-sessions",
+      {
+        agent_id: "agent-1",
+        limit: 50,
+        community: "relay.example.org",
+        channel_id: "beta",
+      },
+    ],
+  ]);
+  await expect(
+    h.client.sessions("agent-1", h.signal, {
+      community: "relay.example.org",
+      channelId: "alpha",
+    }),
+  ).rejects.toThrow("The agent's community is not a URL: relay.example.org");
+  vi.mocked(h.host.request).mockResolvedValueOnce(
+    response({ sessions: [{ session_id: "s" }] }),
+  );
+  await expect(h.client.sessions("agent-1", h.signal)).rejects.toThrow(
+    "invalid session list",
+  );
+  vi.mocked(h.host.request).mockResolvedValueOnce(
+    response({ messages: [], turns: [] }),
+  );
+  expect(await h.client.sessionMessages("s", h.signal)).toEqual({
+    messages: [],
+    turns: [],
+  });
+  expect(
+    JSON.parse(vi.mocked(h.host.request).mock.calls.at(-1)?.[0].body ?? ""),
+  ).toEqual({ session_id: "s" });
+});
 it("lists the authenticated account through the configured native host", async () => {
   const h = await fixture();
   vi.mocked(h.host.request).mockResolvedValueOnce(
@@ -705,6 +796,30 @@ it("does not reuse a pending creation for another verified account with the same
   );
   expect(newBody.idempotency_key).not.toBe(oldBody.idempotency_key);
 });
+it("keeps each sign-in server's pending creation apart for the same account", async () => {
+  const first = await fixture("account-a");
+  vi.mocked(first.host.request).mockRejectedValueOnce(new Error("offline"));
+  await expect(
+    first.client.register("Helper", first.signal, first.retain),
+  ).rejects.toThrow("Retry the same name");
+  const peer = { ...first.session, target: "https://peer.example/goose" };
+  vi.mocked(first.host.request).mockResolvedValueOnce(
+    response({
+      status: 1,
+      agent_id: row.agent_id,
+      agent_pubkey: row.agent_pubkey,
+    }),
+  );
+  await createAgentClient(peer, first.owner).register(
+    "Helper",
+    first.signal,
+    first.retain,
+  );
+  const [oldBody, newBody] = vi
+    .mocked(first.host.request)
+    .mock.calls.map(([input]) => JSON.parse(input.body ?? "{}"));
+  expect(newBody.idempotency_key).not.toBe(oldBody.idempotency_key);
+});
 it.each([2, 3, 4, 5, "REGISTER_AGENT_STATUS_TOO_MANY_AGENTS"])(
   "reports a terminal registration status %s and allows a fresh retry",
   async (status) => {
@@ -788,6 +903,33 @@ it("links an unbound Buzz key to the account before attesting", async () => {
     nonce: challenge.nonce,
     signed_payload: JSON.stringify({ id: "signed-binding" }),
   });
+});
+it("asks another sign-in server's binding challenge for its own origin", async () => {
+  const h = await fixture();
+  vi.mocked(h.host.request)
+    .mockResolvedValueOnce(response({ identity: null }))
+    .mockResolvedValueOnce(response({ error: { code: "stop" } }, 400));
+  const peer = { ...h.session, target: "https://peer.example/goose" };
+  await expect(
+    createAgentClient(peer, h.owner).link(h.signal),
+  ).rejects.toThrow();
+  const calls = vi.mocked(h.host.request).mock.calls.map(([input]) => input);
+  expect(calls[1]?.headers?.Origin).toBe("https://peer.example");
+  expect(JSON.parse(calls[1]?.body ?? "")).toEqual({
+    origin: "https://peer.example",
+  });
+});
+it("never signs another site's challenge from a sign-in server", async () => {
+  const h = await fixture();
+  vi.mocked(h.host.request)
+    .mockResolvedValueOnce(response({ identity: null }))
+    .mockResolvedValueOnce(response({ ...challenge, kind: 24243 }));
+  const peer = { ...h.session, target: "https://peer.example/goose" };
+  await expect(createAgentClient(peer, h.owner).link(h.signal)).rejects.toThrow(
+    "challenge for another site",
+  );
+  expect(h.owner.signBinding).not.toHaveBeenCalled();
+  expect(h.host.request).toHaveBeenCalledTimes(2);
 });
 it("skips linking when this key is already bound", async () => {
   const h = await fixture();
@@ -900,6 +1042,28 @@ it("shares one binding attempt between overlapping links", async () => {
     .mockImplementationOnce(() => current.promise)
     .mockResolvedValueOnce(response({ status: 1 }));
   const signIn = h.client.link(h.signal);
+  const activation = h.client.activate(
+    row.agent_pubkey,
+    proof,
+    undefined,
+    h.signal,
+  );
+  current.resolve(bound());
+  await Promise.all([signIn, activation]);
+  expect(
+    vi
+      .mocked(h.host.request)
+      .mock.calls.map(([input]) => input.url.split("/").at(-1)),
+  ).toEqual(["current", "attest-agent"]);
+});
+
+it("shares one binding attempt across clients of one sign-in", async () => {
+  const h = await fixture();
+  const current = deferred<HostResponse>();
+  vi.mocked(h.host.request)
+    .mockImplementationOnce(() => current.promise)
+    .mockResolvedValueOnce(response({ status: 1 }));
+  const signIn = createAgentClient(h.session, h.owner).link(h.signal);
   const activation = h.client.activate(
     row.agent_pubkey,
     proof,

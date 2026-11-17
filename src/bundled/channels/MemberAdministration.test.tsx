@@ -19,11 +19,16 @@ import { keypair, profile, signed } from "../../features/relay/testing";
 import { matchesEvent } from "../../features/relay/projection";
 import type { RelayEvent } from "../../features/relay/events";
 import { PublishRejected } from "../../features/relay/outbox";
+import { createMemberAdditions } from "../../features/channel-members/operations";
 import type {
   Presence,
   PresenceStatus,
 } from "../../features/presence/presence";
-import { ChannelMembersButton } from "./ChannelMembersDialog";
+import {
+  ChannelMembersButton,
+  ChannelMembersDialog,
+  type ChannelMembersDialogProps,
+} from "./ChannelMembersDialog";
 import { ToastProvider } from "../../shared/design-system/ui/Toast";
 
 const stops: (() => void)[] = [];
@@ -60,6 +65,7 @@ async function setup(
   ownership?: "own" | "other" | "invalid",
   visibility: "private" | "public" = "private",
   targetPicture?: string,
+  targetProfiled = true,
 ) {
   const viewer = keypair(),
     relay = keypair(),
@@ -97,10 +103,11 @@ async function setup(
   const ownerProfile = profile(owner, { name: "Owner" });
   let role: string | undefined =
     targetRole === "absent" ? undefined : targetRole;
+  let viewerRole = actor;
   let tick = 1700000000;
   let lag = false;
   const members = () => [
-    [viewer.pubkey, actor],
+    [viewer.pubkey, viewerRole],
     [owner.pubkey, "owner"],
     ...(role ? [[target.pubkey, role]] : []),
   ];
@@ -132,15 +139,20 @@ async function setup(
       ],
     }),
     viewerProfile,
-    targetProfile,
+    ...(targetProfiled ? [targetProfile] : []),
     ownerProfile,
   ];
   const publish = vi.fn(async (event: RelayEvent) => {
-    if (!lag)
+    const named = (pubkey: string) =>
+      event.tags.find(([tag, key]) => tag === "p" && key === pubkey)?.[2];
+    if (!lag) {
       role =
         event.kind === 9001
           ? undefined
-          : event.tags.find(([key]) => key === "role")?.[1];
+          : (named(target.pubkey) ??
+            event.tags.find(([key]) => key === "role")?.[1]);
+      viewerRole = named(viewer.pubkey) ?? viewerRole;
+    }
     tick++;
   });
   const write = vi.fn();
@@ -222,7 +234,9 @@ async function setup(
   if (roleRead || initialReads)
     await screen.findByRole("status", { name: "Loading members" });
   else
-    await screen.findByText(targetRole === "absent" ? "Carl (you)" : "Morgan");
+    await screen.findByText(
+      targetRole === "absent" || !targetProfiled ? "Carl (you)" : "Morgan",
+    );
   if (!initialReads)
     await vi.waitFor(() =>
       expect(session.memberAdministration.snapshot(id).status).toBe(
@@ -272,10 +286,49 @@ async function setup(
         name:
           name === "Remove from channel"
             ? `Remove ${targetAgent ? "agent" : "member"} from channel`
-            : `Change access to ${name === "Set to viewing only" ? "Viewing only" : name === "Set to participating" ? "Participating" : "Admin"}?`,
+            : name === "Transfer ownership"
+              ? "Transfer ownership to Morgan?"
+              : `Change access to ${name === "Set to viewing only" ? "Viewing only" : name === "Set to participating" ? "Participating" : "Admin"}?`,
       });
     },
   };
+}
+async function openTransferMenu({
+  actor = "owner",
+  role = "member",
+  agent = false,
+  profiled = true,
+}: {
+  actor?: "owner" | "admin";
+  role?: "member" | "bot";
+  agent?: boolean;
+  profiled?: boolean;
+} = {}) {
+  const t = await setup(
+    actor,
+    role,
+    true,
+    undefined,
+    agent,
+    undefined,
+    false,
+    true,
+    undefined,
+    undefined,
+    "private",
+    undefined,
+    profiled,
+  );
+  await t.user.click(
+    await vi.waitFor(() => {
+      const actions = document.querySelector<HTMLElement>(
+        `[data-member="${t.target.pubkey}"]`,
+      );
+      expect(actions).not.toBeNull();
+      return actions as HTMLElement;
+    }),
+  );
+  await screen.findByRole("menuitem", { name: "Remove from channel" });
 }
 it.each([
   ["owner", "member", true],
@@ -378,7 +431,7 @@ it.each(["member", "guest"])(
     const t = await setup(actor, "absent");
     await t.user.type(screen.getByRole("searchbox"), "Morgan");
     if (actor === "member")
-      await screen.findByRole("button", { name: /^Add Morgan \(/ });
+      await screen.findByRole("button", { name: /^Add Morgan \(.*\)$/ });
     expect(
       screen.queryByRole("button", { name: /^Add Morgan .* as$/ }),
     ).not.toBeInTheDocument();
@@ -970,6 +1023,56 @@ it("keeps confirmation read-only when the verified target role changes", async (
   await screen.findByRole("searchbox");
 });
 
+it("transfers ownership from a Cancel-first confirmation and makes the viewer an admin", async () => {
+  const t = await setup();
+  const dialog = await t.choose("Transfer ownership");
+  expect(dialog).toHaveTextContent(
+    "Morgan becomes the owner of this channel and you'll become an admin. They can change your role, remove you or delete the channel. Only an owner can make you an owner again.",
+  );
+  await vi.waitFor(() =>
+    expect(
+      within(dialog).getByRole("button", { name: "Cancel" }),
+    ).toHaveFocus(),
+  );
+  await t.user.click(
+    within(dialog).getByRole("button", { name: "Transfer ownership" }),
+  );
+  await vi.waitFor(() =>
+    expect(t.session.memberAdministration.snapshot(id).operation?.status).toBe(
+      "confirmed",
+    ),
+  );
+  expect(t.publish).toHaveBeenCalledOnce();
+  expect(t.publish.mock.calls[0]?.[0].tags).toEqual([
+    ["h", id],
+    ["p", t.target.pubkey, "owner"],
+    ["p", t.viewer.pubkey, "admin"],
+  ]);
+  expect(
+    t.session.memberAdministration.snapshot(id).authority.roles,
+  ).toMatchObject({ [t.viewer.pubkey]: "admin", [t.target.pubkey]: "owner" });
+});
+it.each([
+  ["an admin", "admin", "member", false],
+  ["an agent", "owner", "member", true],
+  ["a bot", "owner", "bot", false],
+] as const)(
+  "offers no ownership transfer to %s",
+  async (_, actor, role, agent) => {
+    await openTransferMenu({ actor, role, agent });
+    expect(
+      screen.queryByRole("menuitem", { name: "Transfer ownership" }),
+    ).not.toBeInTheDocument();
+  },
+);
+it("disables ownership transfer with its reason for someone without a profile", async () => {
+  await openTransferMenu({ profiled: false });
+  const transfer = screen.getByRole("menuitem", { name: "Transfer ownership" });
+  expect(transfer).toHaveAttribute("aria-disabled", "true");
+  expect(transfer).toHaveAccessibleDescription(
+    "Ownership can only go to a person who has set up a profile.",
+  );
+});
 it("confirms removal and removes only the confirmed roster entry", async () => {
   const t = await setup();
   const membersDialog = screen.getByRole("dialog", { name: "Manage members" });
@@ -1706,7 +1809,7 @@ it.each(["ellipsis", "context", "keyboard", "context-key"])(
     }
     expect(
       (await screen.findAllByRole("menuitem")).map((item) => item.textContent),
-    ).toEqual(["View profile", "Remove from channel"]);
+    ).toEqual(["View profile", "Transfer ownership", "Remove from channel"]);
     expect(t.onOpenLink).not.toHaveBeenCalled();
     expect(t.publish).not.toHaveBeenCalled();
     await t.user.click(screen.getByRole("menuitem", { name: "View profile" }));
@@ -1913,6 +2016,8 @@ it("opens a confirmed human DM once, then hands navigation off without a members
     expect.any(AbortSignal),
   );
   expect(await screen.findByText("Opening conversation…")).toBeVisible();
+  await vi.waitFor(() => expect(screen.queryByRole("menu")).toBeNull());
+  expect(actions.closest("li")).not.toHaveAttribute("data-menu-open");
   await t.user.click(actions);
   expect(
     await screen.findByRole("menuitem", { name: "Send message" }),
@@ -2050,7 +2155,7 @@ it("shows action feedback above the member list so a long roster cannot hide it"
   );
   await t.user.type(screen.getByRole("searchbox"), "Morgan");
   await t.user.click(
-    await screen.findByRole("button", { name: /^Add Morgan \(/ }),
+    await screen.findByRole("button", { name: /^Add Morgan \(.*\)$/ }),
   );
   const refusal = await screen.findByText(/blocked: you are not allowed/);
   aboveList(refusal);
@@ -2413,4 +2518,439 @@ it("keeps an access filter visible and clearable after a failed refresh", async 
   );
   expect(filter()).toHaveAccessibleName("Filter members: All");
   expect(screen.getByText("Carl (you)")).toBeVisible();
+});
+
+function pluginPicker(
+  t: Awaited<ReturnType<typeof setup>>,
+  overrides: Partial<ChannelMembersDialogProps>,
+) {
+  cleanup();
+  const picker = (props: Partial<ChannelMembersDialogProps>) => (
+    <ToastProvider>
+      <ChannelMembersDialog
+        session={t.session}
+        channelId={id}
+        trigger={{ current: null }}
+        close={() => {}}
+        {...props}
+      />
+    </ToastProvider>
+  );
+  const view = render(picker(overrides));
+  return {
+    ...view,
+    rerenderPicker: (props: Partial<ChannelMembersDialogProps>) =>
+      view.rerender(picker(props)),
+  };
+}
+
+it("keeps grouped host recovery and its receipts with the host owner in plugin mode", async () => {
+  const t = await setup("owner", "absent");
+  const lifetime = new AbortController();
+  stops.push(() => lifetime.abort());
+  let refused = true;
+  const hostAdd = vi.fn<Parameters<typeof createMemberAdditions>[1]>(
+    async (_channel, key, intent) => {
+      intent.id ??= `receipt-${key}`;
+      if (refused) throw new Error("Confirmation unavailable");
+    },
+  );
+  const additions = createMemberAdditions(lifetime.signal, hostAdd);
+  const keys = [t.target.pubkey, keypair().pubkey];
+  await Promise.allSettled(keys.map((key) => additions.add(id, key)));
+  const retained = additions.snapshot();
+  expect(retained).toHaveLength(2);
+  const session = { ...t.session, memberAdditions: additions };
+  const change = vi.fn(async () => {});
+  pluginPicker(t, {
+    session,
+    memberActions: { canAdd: true, pending: true, change },
+  });
+  expect(
+    screen.queryByRole("button", { name: /^Retry adding / }),
+  ).not.toBeInTheDocument();
+  expect(additions.snapshot()).toBe(retained);
+  expect(hostAdd).toHaveBeenCalledTimes(2);
+  expect(change).not.toHaveBeenCalled();
+
+  // Returning to the host exposes its recovery without losing either receipt.
+  pluginPicker(t, { session });
+  const retry = await screen.findByRole("button", { name: /^Retry adding / });
+  expect(
+    screen.getAllByRole("button", { name: /^Retry adding / }),
+  ).toHaveLength(1);
+  expect(retry).toBeEnabled();
+  refused = false;
+  await t.user.click(retry);
+  await vi.waitFor(() => expect(additions.snapshot()).toEqual([]));
+  expect(hostAdd).toHaveBeenCalledTimes(4);
+  for (const key of keys) {
+    const calls = hostAdd.mock.calls.filter((call) => call[1] === key);
+    expect(calls[1]?.[2]).toBe(calls[0]?.[2]);
+    expect(calls[1]?.[2].id).toBe(`receipt-${key}`);
+  }
+  expect(change).not.toHaveBeenCalled();
+});
+
+it.each(["Directory Morgan", "Directory <b>Morgan</b>"])(
+  "announces the literal cold-directory label %s after plugin addition",
+  async (name) => {
+    const t = await setup("owner", "absent");
+    const person = keypair();
+    const result = profile(person, { name });
+    const change = vi.fn(async () => {
+      // The directory label must survive dispatch before background enrichment.
+      expect(t.session.profiles.snapshot().has(person.pubkey)).toBe(false);
+    });
+    pluginPicker(t, {
+      session: { ...t.session, searchProfiles: async () => [result] },
+      memberActions: { canAdd: true, pending: false, change },
+    });
+    expect(t.session.profiles.snapshot().has(person.pubkey)).toBe(false);
+    await t.user.type(screen.getByRole("searchbox"), "Directory");
+    const results = await screen.findByRole("region", {
+      name: "Not yet added",
+    });
+    await t.user.click(
+      await within(results).findByRole("button", { name: /^Add .*\)$/ }),
+    );
+    const notice = await screen.findByText(`${name} added.`, { exact: true });
+    expect(notice).toHaveAttribute("role", "status");
+    expect(notice.children).toHaveLength(0);
+    expect(change).toHaveBeenCalledOnce();
+    expect(t.publish).not.toHaveBeenCalled();
+  },
+);
+
+it.each([
+  ["default", {}, "Not yet added"],
+  ["custom", { nonMemberLabel: "Not in this record" }, "Not in this record"],
+  ["blank", { nonMemberLabel: "   " }, "Not yet added"],
+] as const)(
+  "labels %s plugin search results without changing additions",
+  async (_name, labels, expected) => {
+    const t = await setup("owner", "absent");
+    const change = vi.fn(async () => {});
+    pluginPicker(t, {
+      ...labels,
+      memberActions: { canAdd: true, pending: false, change },
+    });
+    await t.user.type(screen.getByRole("searchbox"), "Morgan");
+    const results = await screen.findByRole("region", {
+      name: expected,
+    });
+    expect(within(results).getByText(expected, { exact: true })).toBeVisible();
+    await t.user.click(
+      await within(results).findByRole("button", {
+        name: /^Add Morgan \(.*\)$/,
+      }),
+    );
+    expect(change).toHaveBeenCalledExactlyOnceWith(
+      { pubkey: t.target.pubkey, expectedRole: "absent", role: "member" },
+      expect.any(AbortSignal),
+    );
+    expect(await screen.findByText("Morgan added.")).toHaveAttribute(
+      "role",
+      "status",
+    );
+    expect(t.publish).not.toHaveBeenCalled();
+  },
+);
+
+it.each([undefined, ""])(
+  "hides Copy link for a plugin without a record destination: %s",
+  async (shareLink) => {
+    const t = await setup("owner", "absent");
+    pluginPicker(t, {
+      memberActions: { canAdd: true, pending: false, change: vi.fn() },
+      ...(shareLink === undefined ? {} : { shareLink }),
+    });
+    expect(
+      screen.queryByRole("button", { name: "Copy link" }),
+    ).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Done" })).toBeEnabled();
+  },
+);
+
+it("routes plugin additions, retains failed input, locks pending work, and copies the plugin link", async () => {
+  const t = await setup("owner", "absent");
+  let reject!: (reason: Error) => void;
+  const gate = new Promise<void>((_, fail) => {
+    reject = fail;
+  });
+  const change = vi.fn(() => gate);
+  const close = vi.fn();
+  const props = {
+    close,
+    shareLink: "buzz://plugin?id=example.records&record=design",
+    accessSettings: <p>Record access settings</p>,
+    memberActions: { canAdd: true, pending: true, change },
+  };
+  const view = pluginPicker(t, props);
+  expect(screen.getByText("Record access settings")).toBeVisible();
+  expect(
+    screen.queryByRole("combobox", { name: "General access" }),
+  ).not.toBeInTheDocument();
+  await t.user.click(screen.getByRole("button", { name: "Copy link" }));
+  expect(await navigator.clipboard.readText()).toBe(
+    "buzz://plugin?id=example.records&record=design",
+  );
+  await t.user.type(screen.getByRole("searchbox"), "Morgan");
+  const add = await screen.findByRole("button", {
+    name: /^Add Morgan \(.*\)$/,
+  });
+  expect(add).toBeDisabled();
+  expect(screen.getByRole("button", { name: "Done" })).toBeDisabled();
+  fireEvent.click(add);
+  await t.user.keyboard("{Enter}{Escape}");
+  expect(close).not.toHaveBeenCalled();
+  expect(change).not.toHaveBeenCalled();
+  view.rerenderPicker({
+    ...props,
+    memberActions: { ...props.memberActions, pending: false },
+  });
+  expect(add).toBeEnabled();
+  expect(screen.getByRole("button", { name: "Done" })).toBeEnabled();
+  try {
+    await t.user.click(add);
+    expect(screen.getByRole("searchbox")).toHaveFocus();
+    expect(change).toHaveBeenCalledExactlyOnceWith(
+      { pubkey: t.target.pubkey, expectedRole: "absent", role: "member" },
+      expect.any(AbortSignal),
+    );
+    expect(screen.getByRole("button", { name: "Done" })).toBeDisabled();
+    fireEvent.click(add);
+    await t.user.keyboard("{Escape}");
+    expect(close).not.toHaveBeenCalled();
+    expect(change).toHaveBeenCalledTimes(1);
+    expect(screen.queryByText("Morgan added.")).not.toBeInTheDocument();
+  } finally {
+    await act(async () => reject(new Error("Record access unavailable")));
+  }
+  expect(await screen.findByText("Record access unavailable")).toBeVisible();
+  expect(screen.getByRole("searchbox")).toHaveValue("Morgan");
+  expect(screen.getByRole("button", { name: "Done" })).toBeEnabled();
+  expect(screen.queryByText("Morgan added.")).not.toBeInTheDocument();
+  change.mockResolvedValue(undefined);
+  screen.getByRole("searchbox").focus();
+  await t.user.keyboard("{Enter}");
+  await vi.waitFor(() => expect(screen.getByRole("searchbox")).toHaveValue(""));
+  expect(await screen.findByText("Morgan added.")).toHaveAttribute(
+    "role",
+    "status",
+  );
+  expect(screen.getByRole("searchbox")).toHaveFocus();
+  expect(change).toHaveBeenCalledTimes(2);
+  expect(t.publish).not.toHaveBeenCalled();
+  expect(t.write).not.toHaveBeenCalled();
+});
+
+it.each([
+  ["Set to viewing only", "Set to viewing only", "guest"],
+  ["Remove from channel", "Remove member", "remove"],
+])(
+  "routes plugin %s through the checked confirmation",
+  async (choice, button, role) => {
+    const t = await setup();
+    const change = vi.fn(async () => {});
+    pluginPicker(t, {
+      memberActions: { canAdd: false, pending: false, change },
+      accessSettings: null,
+    });
+    await screen.findByText("Morgan");
+    const dialog = await t.choose(choice);
+    expect(change).not.toHaveBeenCalled();
+    await t.user.click(within(dialog).getByRole("button", { name: button }));
+    await vi.waitFor(() =>
+      expect(change).toHaveBeenCalledExactlyOnceWith(
+        { pubkey: t.target.pubkey, expectedRole: "member", role },
+        expect.any(AbortSignal),
+      ),
+    );
+    expect(t.publish).not.toHaveBeenCalled();
+    expect(t.write).not.toHaveBeenCalled();
+  },
+);
+
+it("does not offer plugin additions to a plain member", async () => {
+  const t = await setup("member", "absent");
+  const change = vi.fn(async () => {});
+  pluginPicker(t, { memberActions: { canAdd: true, pending: false, change } });
+  await t.user.type(screen.getByRole("searchbox"), "Morgan");
+  await vi.waitFor(() =>
+    expect(t.session.memberAdministration.snapshot(id).status).toBe("ready"),
+  );
+  expect(screen.getByRole("searchbox")).toHaveAttribute(
+    "placeholder",
+    "Search members",
+  );
+  expect(
+    screen.queryByRole("button", { name: /^Add Morgan/ }),
+  ).not.toBeInTheDocument();
+  expect(change).not.toHaveBeenCalled();
+  expect(t.publish).not.toHaveBeenCalled();
+  expect(t.write).not.toHaveBeenCalled();
+});
+
+it("cannot grant a plugin guest member-management authority", async () => {
+  const t = await setup("guest");
+  const change = vi.fn(async () => {});
+  pluginPicker(t, { memberActions: { canAdd: true, pending: false, change } });
+  await screen.findByText("Morgan");
+  await expectProfileOnly(t.user, "Morgan");
+  expect(screen.getByRole("searchbox")).toHaveAttribute(
+    "placeholder",
+    "Search members",
+  );
+  expect(change).not.toHaveBeenCalled();
+});
+
+it("rechecks plugin add policy while its confirmation is open", async () => {
+  const t = await setup("owner", "absent");
+  const change = vi.fn(async () => {});
+  const props: ChannelMembersDialogProps = {
+    session: t.session,
+    channelId: id,
+    close() {},
+    trigger: { current: null },
+    memberActions: { canAdd: true, pending: false, change },
+  };
+  const view = pluginPicker(t, props);
+  await t.user.type(screen.getByRole("searchbox"), "Morgan");
+  await t.user.click(
+    await screen.findByRole("button", { name: /^Add Morgan .* as$/ }),
+  );
+  await t.user.click(
+    await screen.findByRole("menuitem", {
+      name: "Admin Manage this channel and its members.",
+    }),
+  );
+  const confirm = await screen.findByRole("button", { name: "Add as admin" });
+  expect(confirm).toBeEnabled();
+  view.rerender(
+    <ToastProvider>
+      <ChannelMembersDialog
+        {...props}
+        memberActions={{ canAdd: false, pending: false, change }}
+      />
+    </ToastProvider>,
+  );
+  expect(confirm).toBeDisabled();
+  fireEvent.click(confirm);
+  expect(change).not.toHaveBeenCalled();
+  expect(t.publish).not.toHaveBeenCalled();
+});
+
+it.each(["failed", "settled"] as const)(
+  "keeps plugin member-change scrolling scoped to its own completion (%s)",
+  async (outcome) => {
+    const t = await setup();
+    const gate = deferred();
+    const change = vi.fn(async () => {
+      await gate.promise;
+      if (outcome === "failed") throw new Error("Record access unavailable");
+    });
+    pluginPicker(t, {
+      memberActions: { canAdd: false, pending: false, change },
+      accessSettings: null,
+    });
+    const scrolls = vi.mocked(HTMLElement.prototype.scrollIntoView);
+    memberData().scrollTop = 24;
+    const dialog = await t.choose("Set to viewing only");
+    await settledStep();
+    try {
+      await t.user.click(
+        within(dialog).getByRole("button", { name: "Set to viewing only" }),
+      );
+      expect(change).toHaveBeenCalledOnce();
+      expect(memberData().scrollTop).toBe(24);
+      expect(actionsFor("Morgan")).toHaveFocus();
+    } finally {
+      await act(async () => gate.resolve());
+    }
+    if (outcome === "settled") {
+      await vi.waitFor(() =>
+        expect(screen.getByRole("button", { name: "Done" })).toBeEnabled(),
+      );
+      t.query.mockRejectedValue(new Error("Read failed"));
+      await act(async () => t.session.memberAdministration.refresh(id));
+    }
+    await screen.findAllByText(
+      outcome === "failed" ? "Record access unavailable" : "Read failed",
+    );
+    const actions = actionsFor("Morgan");
+    expect(actions).toHaveFocus();
+    expect(memberData().scrollTop).toBe(24);
+    expect(
+      scrolls.mock.calls.filter(
+        (_, call) => scrolls.mock.contexts[call] === actions,
+      ),
+    ).toEqual(outcome === "failed" ? [[{ block: "nearest" }]] : []);
+    expect(t.publish).not.toHaveBeenCalled();
+  },
+);
+
+it("opens the list's one menu for the row under the press and leaves the native menu elsewhere", async () => {
+  const t = await setup();
+  const rowOf = (name: string) =>
+    required(screen.getByText(name).closest("li"));
+  expect(
+    fireEvent.contextMenu(screen.getByRole("heading", { name: /^People/ }), {
+      button: 2,
+    }),
+  ).toBe(true);
+  expect(screen.queryByRole("menu")).toBeNull();
+
+  expect(fireEvent.contextMenu(rowOf("Morgan"), { button: 2 })).toBe(false);
+  const menu = await screen.findByRole("menu", { name: "Actions for Morgan" });
+  expect(rowOf("Morgan")).toHaveAttribute("data-menu-open", "context");
+  expect(
+    within(menu).getByRole("menuitem", { name: "Remove from channel" }),
+  ).toBeVisible();
+  fireEvent.keyDown(menu, { key: "Escape" });
+  await vi.waitFor(() => expect(screen.queryByRole("menu")).toBeNull());
+  expect(rowOf("Morgan")).not.toHaveAttribute("data-menu-open");
+
+  fireEvent.contextMenu(rowOf("Carl (you)"), { button: 2 });
+  await screen.findByRole("menu", { name: "Actions for Carl" });
+  expect(
+    screen.queryByRole("menuitem", { name: "Remove from channel" }),
+  ).toBeNull();
+  expect(t.publish).not.toHaveBeenCalled();
+});
+
+it("closes the list's menu when its row is filtered away", async () => {
+  const t = await setup();
+  fireEvent.contextMenu(required(screen.getByText("Morgan").closest("li")), {
+    button: 2,
+  });
+  await screen.findByRole("menu", { name: "Actions for Morgan" });
+  fireEvent.change(screen.getByRole("searchbox", { hidden: true }), {
+    target: { value: "Carl" },
+  });
+  await vi.waitFor(() => expect(screen.queryByText("Morgan")).toBeNull());
+  await vi.waitFor(() => expect(screen.queryByRole("menu")).toBeNull());
+  expect(t.publish).not.toHaveBeenCalled();
+});
+
+it("opens the Actions button's menu with menu-button semantics and returns focus to it", async () => {
+  await setup();
+  const actions = screen.getByRole("button", { name: "Actions for Morgan" });
+  expect(actions).toHaveAttribute("aria-haspopup", "menu");
+  expect(actions).toHaveAttribute("aria-expanded", "false");
+  expect(actions).not.toHaveAttribute("aria-controls");
+  actions.focus();
+  fireEvent.keyDown(actions, { key: "ArrowDown" });
+  const menu = await screen.findByRole("menu", { name: "Actions for Morgan" });
+  await vi.waitFor(() =>
+    expect(
+      within(menu).getByRole("menuitem", { name: "View profile" }),
+    ).toHaveFocus(),
+  );
+  expect(actions).toHaveAttribute("aria-expanded", "true");
+  expect(actions).toHaveAttribute("aria-controls", menu.id);
+  fireEvent.keyDown(menu, { key: "Escape" });
+  await vi.waitFor(() => expect(screen.queryByRole("menu")).toBeNull());
+  expect(actions).toHaveAttribute("aria-expanded", "false");
+  await vi.waitFor(() => expect(actions).toHaveFocus());
 });

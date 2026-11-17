@@ -1,3 +1,5 @@
+import { AISettingsIcon } from "../../features/agents/AISettings";
+import { candidatesFor, onAutomatic } from "../../features/agents/recommended";
 import { visibleTeams } from "../../features/agents/visible-teams";
 import { profileKey } from "../../features/profiles/target";
 import type { JsonValue } from "../../features/navigation/targets";
@@ -41,6 +43,7 @@ import styles from "./AgentsPage.module.css";
 import cardStyles from "./AgentCard.module.css";
 import {
   AgentBrowse,
+  NoImportTypes,
   SharedAgentPanel,
   type SharedAgentSelection,
   SharedImportDialog,
@@ -926,6 +929,7 @@ export function AgentsPage({
                         onImported={leaveListing}
                         // Stays on the listing if an unsaved draft is kept.
                         onOpen={(agent) => browse(agent.pubkey, leaveListing)}
+                        openSettings={openSettings}
                       />
                     ),
                   },
@@ -988,6 +992,16 @@ export function AgentsPage({
               flow === "import" ? () => changeTab("yours") : returnTo("teams")
             }
             onPendingChange={setImporting}
+            // Settings opens in place of the dialog, not over it, so while
+            // an import keeps the dialog open the link is plain text.
+            openSettings={
+              openSettings && !importing
+                ? (section) => {
+                    setFlow(undefined);
+                    openSettings(section);
+                  }
+                : undefined
+            }
           />
         </Dialog>
       )}
@@ -1031,6 +1045,7 @@ export function AgentsPage({
             changeTab("yours");
             build(agent.pubkey);
           }}
+          openSettings={openSettings}
         />
       )}
       {card && (
@@ -1442,6 +1457,18 @@ function InventoryCard({
   const [sharing, setSharing] = useState(false);
   const editable = agent.place !== "elsewhere" && !agent.unfinished;
   const Model = editable ? type?.CreateModel : undefined;
+  const automatic =
+    !!type && !type.remote && onAutomatic(agent.config, type.id);
+  const summary = summaryOf(agent, type);
+  const modelLabel =
+    automatic && type
+      ? (candidatesFor(type.id).find(
+          (candidate) =>
+            summary === candidate.model ||
+            summary ===
+              [candidate.provider, candidate.model].filter(Boolean).join(" · "),
+        )?.label ?? summary)
+      : summary;
   const save = async (config: unknown) => {
     setSaving(true);
     setError("");
@@ -1504,8 +1531,22 @@ function InventoryCard({
       card={
         <AgentCard
           {...props}
-          icon={Model ? undefined : props.icon}
-          detail={Model ? undefined : props.detail}
+          icon={
+            automatic ? (
+              <span className="inline-flex text-primary">
+                <AISettingsIcon automatic harnessIcon={type?.icon} compact />
+              </span>
+            ) : Model ? undefined : (
+              props.icon
+            )
+          }
+          detail={
+            automatic ? (
+              <span className="text-primary">{modelLabel} (Automatic)</span>
+            ) : Model ? undefined : (
+              props.detail
+            )
+          }
           menu={
             <MenuRoot>
               <MenuTrigger
@@ -1522,12 +1563,12 @@ function InventoryCard({
             </MenuRoot>
           }
         >
-          {(Model || error) && (
+          {((Model && !automatic) || error) && (
             <div
               data-card-control=""
               className="flex min-w-0 max-w-full flex-col items-center gap-2"
             >
-              {Model && (
+              {Model && !automatic && (
                 <Model
                   agent={agent}
                   openSettings={onBuild}
@@ -1788,6 +1829,7 @@ function ImportAgents({
   only,
   onImported,
   onPendingChange,
+  openSettings,
 }: {
   agents: Agents;
   community: string | undefined;
@@ -1798,6 +1840,7 @@ function ImportAgents({
   only: "agents" | "teams";
   onImported(): void;
   onPendingChange(pending: boolean): void;
+  openSettings: ((section: string) => void) | undefined;
 }) {
   const [found, setFound] = useState<FoundAgents>();
   const [confirming, setConfirming] = useState<SharedImport>();
@@ -1990,11 +2033,7 @@ function ImportAgents({
     });
   }, [agents, snapshot]);
   if (!types.length)
-    return (
-      <p className="m-0 text-body-sm text-secondary">
-        Enable an agent type plugin to import agents.
-      </p>
-    );
+    return <NoImportTypes agents={agents} openSettings={openSettings} />;
   const elsewhere = only === "agents" ? offered : [];
   const teamsElsewhere =
     only === "teams" ? teamsToJoin(snapshot.teams, agents.joinable()) : [];
@@ -2270,7 +2309,6 @@ function CommunityImportDialog({
     <Dialog
       open
       size="compact"
-      headerGap="compact"
       footerGap="compact"
       title={`Import ${name}`}
       artwork={

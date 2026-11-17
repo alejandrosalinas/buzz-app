@@ -10,6 +10,7 @@ import {
   type SettingsSchema,
   type Subject,
 } from "./agent-config";
+import { offRecommended, PRESET } from "./recommended";
 import type { Team } from "./store";
 
 export type Mode = "local" | "migrating" | "synced";
@@ -104,6 +105,10 @@ export function resolveStart<C extends object>(input: StartInput<C>): Start<C> {
     );
     if ("problem" in read) return blocked("invalid", read.problem, "Settings");
     config = settings.withSynced(config, read.settings);
+    // The synced Recommended mark is the agent's on every device.
+    config = read.recommended
+      ? { ...config, preset: PRESET }
+      : offRecommended(config);
     applied = read.settings;
     revisions.push(entry.head.id);
   }

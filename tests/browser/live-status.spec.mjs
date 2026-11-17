@@ -43,7 +43,9 @@ test.describe("held setup", () => {
     await expect.poll(() => app.relay.hasRoute("primary", "beta")).toBe(true);
     await expect(warning).toHaveCount(0);
     const streams = () =>
-      app.report.brokerRequests.filter((r) => r.url.endsWith("/stream")).length;
+      app.report.brokerRequests.filter(
+        (r) => r.url === "/api/relay/primary/stream",
+      ).length;
     const before = streams();
     await page.getByRole("button", { name: "Beta", exact: true }).click();
     await expect(
@@ -142,9 +144,13 @@ for (const target of ["alpha", "profiles"]) {
         (r) => r.community === "primary" && r.routes.includes(target),
       );
     const streams = () =>
-      app.report.brokerRequests.filter((r) => r.url.endsWith("/stream")).length;
+      app.report.brokerRequests.filter(
+        (r) => r.url === "/api/relay/primary/stream",
+      ).length;
     const streamCount = streams();
-    const sockets = app.relay.sockets.length;
+    const sockets = app.relay.sockets.filter(
+      (s) => s.community === "primary",
+    ).length;
     for (let attempt = 0; attempt < 4; attempt++) {
       const before = requests().length;
       app.relay.failRoute("primary", target, rejected);
@@ -216,7 +222,9 @@ for (const target of ["alpha", "profiles"]) {
     ).toBeVisible();
     await expect(warning).toHaveCount(0);
     expect(streams()).toBe(streamCount);
-    expect(app.relay.sockets).toHaveLength(sockets);
+    expect(
+      app.relay.sockets.filter((s) => s.community === "primary"),
+    ).toHaveLength(sockets);
   });
 }
 
@@ -332,7 +340,7 @@ test.describe("public preview recovery", () => {
     const headGate = new Promise((resolve) => {
       releaseHead = resolve;
     });
-    await page.route("**/api/relay/**/query", async (route) => {
+    await page.route("**/api/relay/primary/query", async (route) => {
       const isPreviewHead = route
         .request()
         .postDataJSON()

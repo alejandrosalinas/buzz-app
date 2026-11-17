@@ -24,14 +24,12 @@
   max-width: 100%;
 }
 .emoji {
+  display: inline-block;
   width: var(--user-status-emoji-size, 1.25rem);
   height: var(--user-status-emoji-size, 1.25rem);
   flex: 0 0 var(--user-status-emoji-size, 1.25rem);
   object-fit: contain;
   vertical-align: middle;
-}
-.emoji[data-pending] {
-  display: inline-block;
 }
 .emojiFallback {
   white-space: nowrap;

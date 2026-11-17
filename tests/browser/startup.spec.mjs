@@ -264,41 +264,50 @@ test("fresh roster omission removes cached conversation and its next-launch reco
   }
 });
 
-test("offline reload remains readable and recovers in place on the browser online signal", async ({
-  page,
-  app,
-}) => {
-  await open(page, app);
-  await expect
-    .poll(async () =>
-      (await cached(page)).heads.some((h) => h.channelId === "alpha"),
-    )
-    .toBe(true);
-  await page.route("**/api/relay/*/session", async (route) => {
-    app.report.startupFailures ??= [];
-    app.report.startupFailures.push(route.request().url());
-    await route.fulfill({ status: 502, json: { error: "Fixture offline" } });
+test.describe("one saved community", () => {
+  // The reloaded page's session requests share this harness's HTTP/1.1 origin
+  // with the old page's streams, which WebKit releases late; a second
+  // community's streams can then queue them past the paint deadline. Native
+  // streams use IPC, not this pool.
+  test.use({ savedCommunities: ["primary"] });
+  test("offline reload remains readable and recovers in place on the browser online signal", async ({
+    page,
+    app,
+  }) => {
+    await open(page, app);
+    await expect
+      .poll(async () =>
+        (await cached(page)).heads.some((h) => h.channelId === "alpha"),
+      )
+      .toBe(true);
+    await page.route("**/api/relay/*/session", async (route) => {
+      app.report.startupFailures ??= [];
+      app.report.startupFailures.push(route.request().url());
+      await route.fulfill({ status: 502, json: { error: "Fixture offline" } });
+    });
+    await page.reload({ waitUntil: "domcontentloaded" });
+    const history = page.getByRole("region", {
+      name: "Channel message history",
+    });
+    await expect(history).toContainText("primary alpha message 0");
+    await expect(
+      page.getByRole("button", { name: "Retry connection", exact: true }),
+    ).toBeVisible();
+    await expect(
+      page.getByRole("textbox", { name: "Message #Alpha", exact: true }),
+    ).toBeDisabled();
+    const retained = await history.elementHandle();
+    await page.unroute("**/api/relay/*/session");
+    await page.evaluate(() => window.dispatchEvent(new Event("online")));
+    await expect(
+      page.getByRole("textbox", { name: "Message #Alpha", exact: true }),
+    ).toBeEditable();
+    await expect(
+      page.getByRole("button", { name: "Retry connection", exact: true }),
+    ).toHaveCount(0);
+    expect(await retained.evaluate((node) => node.isConnected)).toBe(true);
+    await retained.dispose();
   });
-  await page.reload({ waitUntil: "domcontentloaded" });
-  const history = page.getByRole("region", { name: "Channel message history" });
-  await expect(history).toContainText("primary alpha message 0");
-  await expect(
-    page.getByRole("button", { name: "Retry connection", exact: true }),
-  ).toBeVisible();
-  await expect(
-    page.getByRole("textbox", { name: "Message #Alpha", exact: true }),
-  ).toBeDisabled();
-  const retained = await history.elementHandle();
-  await page.unroute("**/api/relay/*/session");
-  await page.evaluate(() => window.dispatchEvent(new Event("online")));
-  await expect(
-    page.getByRole("textbox", { name: "Message #Alpha", exact: true }),
-  ).toBeEditable();
-  await expect(
-    page.getByRole("button", { name: "Retry connection", exact: true }),
-  ).toHaveCount(0);
-  expect(await retained.evaluate((node) => node.isConnected)).toBe(true);
-  await retained.dispose();
 });
 
 for (const theme of ["light", "dark"]) {
@@ -368,7 +377,7 @@ test("launch waits for the initial sidebar and message history before revealing 
   app.relay.holdUnread();
   const head = held();
   let requested = false;
-  await page.route("**/api/relay/**/query", async (route) => {
+  await page.route("**/api/relay/primary/query", async (route) => {
     if (
       route
         .request()
@@ -622,7 +631,7 @@ test.describe("pending startup navigation", () => {
   }) => {
     const gate = held();
     let requested = false;
-    await page.route("**/api/relay/**/query", async (route) => {
+    await page.route("**/api/relay/primary/query", async (route) => {
       if (
         route
           .request()

@@ -76,6 +76,31 @@ it.each([
   },
 );
 
+it("does not prompt for untouched legacy worktree instructions, but protects a real edit", async () => {
+  const user = userEvent.setup();
+  const canvas = [
+    '<!-- buzz-session-workspace:v1 {"folders":["/repo"],"worktree":{"location":"~/trees","baseBranch":"main"}} -->',
+    "## Workspace instructions",
+    "",
+    "- Use `/repo` for review only. Do not make changes directly in it.",
+    "- Before starting new work, fetch the latest `main` branch from origin.",
+    "- For each repository that needs changes, create a new worktree under `~/trees` from `origin/main`.",
+    "- Make all changes in that new worktree.",
+    "<!-- /buzz-session-workspace -->",
+    "",
+    "Instructions",
+  ].join("\n");
+  const h = await view(canvas);
+  await user.keyboard("{Escape}");
+  expect(h.close).toHaveBeenCalledOnce();
+  expect(screen.queryByRole("alertdialog")).toBeNull();
+  change(/^Instructions/, "An edit");
+  await user.keyboard("{Escape}");
+  expect(await prompt()).toBeVisible();
+  expect(h.close).toHaveBeenCalledOnce();
+  expect(h.save).not.toHaveBeenCalled();
+});
+
 it("asks before dropping an edited raw Canvas, but not for opening one", async () => {
   const user = userEvent.setup();
   const { close } = await view("<!-- buzz-session-workspace:v1 hand edited");

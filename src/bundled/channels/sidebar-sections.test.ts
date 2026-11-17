@@ -2,8 +2,8 @@ import { expect, it } from "vitest";
 import type { ChannelSummary } from "../../features/relay/contracts";
 import {
   orderContributedSidebarSections,
-  isChannelDropSectionKey,
   isChannelSectionKey,
+  sidebarDropRowKinds,
   sidebarSections,
 } from "./sidebar-sections";
 
@@ -31,11 +31,15 @@ it("identifies custom and general channel sections", () => {
   expect(isChannelSectionKey("forums")).toBe(false);
   expect(isChannelSectionKey("dms")).toBe(false);
 });
-it("allows channel drops into Starred without making it a persistent empty section", () => {
-  for (const key of ["starred", "channels", "group:work"])
-    expect(isChannelDropSectionKey(key)).toBe(true);
-  for (const key of ["forums", "dms"])
-    expect(isChannelDropSectionKey(key)).toBe(false);
+it("allows channel and DM drops into Starred and groups, and each back to its own section", () => {
+  for (const [key, kinds] of [
+    ["starred", ["channel", "dm"]],
+    ["group:work", ["channel", "dm"]],
+    ["channels", ["channel"]],
+    ["dms", ["dm"]],
+    ["forums", []],
+  ] as const)
+    expect(sidebarDropRowKinds(key)).toEqual(kinds);
   expect(isChannelSectionKey("starred")).toBe(false);
 });
 it("hides empty Starred and shows it only for an authorized starred row", () => {

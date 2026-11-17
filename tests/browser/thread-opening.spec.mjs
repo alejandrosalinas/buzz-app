@@ -20,7 +20,7 @@ test("ordinary thread reveals its first content already positioned at the bottom
   const seen = new Promise((resolve) => {
     intercepted = resolve;
   });
-  await page.route("**/api/relay/**/query", async (route) => {
+  await page.route("**/api/relay/primary/query", async (route) => {
     if (
       !route
         .request()

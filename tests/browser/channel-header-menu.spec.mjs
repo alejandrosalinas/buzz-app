@@ -534,7 +534,7 @@ test.describe("dialog origin retirement", () => {
   async function start(page, app) {
     await page.goto(app.origin);
     await openPage(page, "Messages");
-    await page.locator('button[data-channel-id="beta"]').click();
+    await page.getByRole("button", { name: "Beta", exact: true }).click();
     await expect(
       page.getByRole("button", { name: "Manage members of Beta", exact: true }),
     ).toBeVisible();

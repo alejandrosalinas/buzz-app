@@ -2,6 +2,8 @@ import { Context } from "@deepseek-ai/cordis";
 import { afterEach, expect, it, vi } from "vitest";
 import { PluginRuntime } from "../../plugins/runtime";
 import { ConversationService } from "./service";
+import { ChannelMembersDialog } from "../../bundled/channels/ChannelMembersDialog";
+import { ChannelGeneralAccess } from "../../bundled/channels/ChannelGeneralAccess";
 import { inlineMatches } from "./InlineText";
 import type { PluginModule } from "../../plugins/api";
 import type { ChannelMessage } from "../relay/contracts";
@@ -46,6 +48,8 @@ it("registers both surfaces under the injecting plugin scope, removes and replac
     inject: ["conversation"],
     apply(ctx) {
       const conversation = ctx.conversation;
+      expect(conversation.ui.MembersDialog).toBe(ChannelMembersDialog);
+      expect(conversation.ui.GeneralAccess).toBe(ChannelGeneralAccess);
       expect(conversation.ui.Composer).toBe(conversation.ui.Composer);
       expect(conversation.ui.Message).toBe(conversation.ui.Message);
       expect(conversation.ui.Thread).toBe(conversation.ui.Thread);

@@ -7,6 +7,7 @@ import type { HostRequest, HostResponse } from "../../../features/host/service";
 import { deferred, createTestSession } from "../test-helpers";
 import { createAgentClient } from "./client";
 import { RemoteAgents } from "./RemoteAgents";
+import { Login } from "../login/Login";
 import { ToastProvider } from "../../../shared/design-system/ui/Toast";
 
 afterEach(() => {
@@ -83,6 +84,84 @@ it("asks for sign-in only when signed out, not while a sign-in is pending", asyn
   });
   expect(screen.getByText(prompt)).toBeVisible();
   session.dispose();
+});
+it("offers the sign-in it is given for its own server when signed out", async () => {
+  const h = await fixture();
+  h.session.signOut();
+  render(
+    <RemoteAgents
+      {...h}
+      active={() => true}
+      signIn={<button type="button">Sign in to peer</button>}
+    />,
+  );
+  expect(screen.getByRole("button", { name: "Sign in to peer" })).toBeVisible();
+});
+it("keeps its own server's sign-in status and Cancel while that sign-in is pending", async () => {
+  vi.stubEnv("VITE_BUZZ_BUILDERLAB_URL", "https://builderlab.example");
+  const held = deferred<never>();
+  const peer = createTestSession(() => held.promise);
+  render(
+    <RemoteAgents
+      session={peer}
+      client={createAgentClient(peer)}
+      active={() => true}
+      signIn={
+        <Login
+          session={peer}
+          available
+          active={() => true}
+          showHeading={false}
+        />
+      }
+    />,
+  );
+  const signingIn = peer.signIn();
+  await waitFor(() => expect(peer.snapshot().status).toBe("pending"));
+  expect(await screen.findByRole("status")).toHaveTextContent(
+    "Finish sign-in in your browser",
+  );
+  await userEvent.click(screen.getByRole("button", { name: "Cancel sign-in" }));
+  await waitFor(() => expect(peer.snapshot().status).toBe("signed-out"));
+  held.reject(new Error("Sign-in canceled."));
+  await signingIn.catch(() => {});
+  peer.dispose();
+});
+it("reloads the list when the session moves to another server with the same account", async () => {
+  const h = await fixture();
+  let target: string | undefined;
+  let snapshot = h.session.snapshot();
+  const listeners = new Set<() => void>();
+  const session = {
+    ...h.session,
+    get target() {
+      return target;
+    },
+    snapshot: () => snapshot,
+    subscribe(listener: () => void) {
+      listeners.add(listener);
+      return () => listeners.delete(listener);
+    },
+  };
+  render(
+    <RemoteAgents
+      session={session}
+      client={createAgentClient(session)}
+      active={() => true}
+    />,
+  );
+  expect(await screen.findByText("Helper")).toBeInTheDocument();
+  h.request.mockResolvedValueOnce(
+    response([{ ...row, agent_id: "two", agent_name: "Peer helper" }]),
+  );
+  act(() => {
+    target = "https://peer.example/goose";
+    snapshot = { ...snapshot };
+    for (const listener of listeners) listener();
+  });
+  expect(await screen.findByText("Peer helper")).toBeInTheDocument();
+  expect(screen.queryByText("Helper")).toBeNull();
+  expect(h.request).toHaveBeenCalledTimes(2);
 });
 it("omits the agent summary when remote agents are unavailable", async () => {
   const h = await fixture(false);

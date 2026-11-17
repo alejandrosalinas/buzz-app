@@ -4,7 +4,6 @@
   display: flex;
   flex-direction: column;
   gap: var(--space-4);
-  margin-top: calc(-1 * var(--space-3));
 }
 
 .preview {
@@ -15,4 +14,26 @@
   border: 1px solid var(--border-standard);
   border-radius: var(--radius-lg);
   background: var(--surface-inset);
+}
+
+.privacy {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-2);
+}
+.privacy > svg {
+  flex-shrink: 0;
+  margin-top: var(--space-half);
+}
+
+.composerPreview {
+  position: relative;
+  width: 32.5rem;
+  max-width: 100%;
+}
+.removeForward {
+  position: absolute;
+  top: var(--space-1);
+  right: var(--space-1);
+  z-index: 1;
 }

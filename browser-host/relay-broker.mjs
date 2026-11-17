@@ -997,7 +997,9 @@ export function relayBrokerPlugin({
         return gifSearchPaths.get(relay);
       };
       const stats = { queries: 0, errors: 0, media: 0, connects: 0 };
-      let inflight = 0;
+      // Queries in flight per community: one community's load must not refuse
+      // another's, as natively each has its own socket.
+      const inflight = new Map();
       let gitReads = 0;
       let presenceFlight = false;
       let sidebarUploads = 0;
@@ -3248,12 +3250,12 @@ export function relayBrokerPlugin({
             }
             presenceFlight = true;
           }
-          if (!presence && inflight >= MAX_INFLIGHT)
+          if (!presence && (inflight.get(relay) ?? 0) >= MAX_INFLIGHT)
             return json(res, 429, {
               error: "Query concurrency limit",
               sent: false,
             });
-          if (!presence) inflight++;
+          if (!presence) inflight.set(relay, (inflight.get(relay) ?? 0) + 1);
           try {
             const body = workflowPath ? undefined : JSON.stringify(filters);
             const admissionStart = performance.now();
@@ -3415,7 +3417,11 @@ export function relayBrokerPlugin({
             if (presence) {
               presenceFlight = false;
               releasePresence();
-            } else inflight--;
+            } else {
+              const left = inflight.get(relay) - 1;
+              if (left) inflight.set(relay, left);
+              else inflight.delete(relay);
+            }
           }
         } catch (error) {
           if (res.destroyed) return; // The browser gave up first; nothing to answer.

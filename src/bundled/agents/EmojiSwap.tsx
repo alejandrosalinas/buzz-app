@@ -1,5 +1,9 @@
 import { AnimatePresence, motion, useReducedMotion } from "motion/react";
 import { EmojiArtwork } from "../../features/profiles/AvatarEditor";
+import {
+  type AvatarCrop,
+  emojiAvatarScale,
+} from "../../features/profiles/avatar-upload";
 import styles from "./AgentCreate.module.css";
 
 const settings = {
@@ -15,9 +19,11 @@ const settings = {
 
 export function EmojiSwap({
   emoji,
+  crop,
   animate,
 }: {
   emoji: string;
+  crop?: AvatarCrop | undefined;
   animate: boolean;
 }) {
   const reducedMotion = useReducedMotion();
@@ -66,7 +72,13 @@ export function EmojiSwap({
                 }
           }
         >
-          <EmojiArtwork emoji={emoji} animate={false} />
+          <EmojiArtwork
+            emoji={emoji}
+            scale={crop && emojiAvatarScale * crop.zoom}
+            offset={crop?.y}
+            x={crop?.x}
+            animate={false}
+          />
         </motion.span>
       </AnimatePresence>
     </span>

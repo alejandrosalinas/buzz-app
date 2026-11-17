@@ -200,8 +200,9 @@ for (const phase of ["open", "close", "reopen"])
         await expect(
           history.getByRole("button", { name: /^View 1 reply/ }),
         ).toHaveCount(20);
+        // Every reply is unread, so each opening starts at the first unread one.
         await expect(
-          history.getByText(`Rich reply ${replyCount - 1}`, { exact: false }),
+          history.locator("[data-new-messages-boundary]"),
         ).toBeInViewport();
         await expect
           .poll(() =>

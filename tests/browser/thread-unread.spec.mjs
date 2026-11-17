@@ -321,7 +321,7 @@ test.describe("mentioned reply priority", () => {
     const read = new Promise((resolve) => {
       sawRead = resolve;
     });
-    await page.route("**/api/relay/**/query", async (route) => {
+    await page.route("**/api/relay/primary/query", async (route) => {
       if (held) {
         sawRead();
         await gate;
@@ -350,7 +350,7 @@ test.describe("mentioned reply priority", () => {
     await expect(composer).toHaveText("Still typing");
   });
 
-  test("search's Unread row opens the previewed thread reply with focus, and reading it updates the row", async ({
+  test("search's Unread row opens the previewed thread at its first unread reply with focus, and reading it updates the row", async ({
     page,
     app,
   }) => {
@@ -397,8 +397,9 @@ test.describe("mentioned reply priority", () => {
       name: "Thread",
       exact: true,
     });
+    // It opens at the thread's first unread reply, below a line.
     await expect(
-      thread.locator(`[data-message-id="${newest.latestMessageId}"]`),
+      thread.getByRole("separator", { name: "New messages" }),
     ).toBeVisible();
     // The thread takes focus from search, so it reads without another gesture.
     await expect
@@ -408,6 +409,11 @@ test.describe("mentioned reply priority", () => {
         ),
       )
       .toBe(true);
+    // Unread replies nested under another reply wait in their branch.
+    for (const branch of await thread
+      .getByRole("button", { name: /new in available replies/ })
+      .all())
+      await branch.click();
     await expect
       .poll(async () => (await unread()).items.map(({ rootId }) => rootId))
       .toEqual([other.rootId]);
@@ -754,7 +760,7 @@ test("same-thread sidebar activity replaces timeline focus return", async ({
     release = resolve;
   });
   let requested = false;
-  await page.route("**/api/relay/**/query", async (route) => {
+  await page.route("**/api/relay/primary/query", async (route) => {
     if (
       route
         .request()
@@ -900,6 +906,123 @@ test("opening a fitting thread reads after unchanged-row continuation without an
       ),
     )
     .toBe(false);
+});
+
+test("a line placed just short of the latest reply stays in view", async ({
+  page,
+  app,
+}) => {
+  await open(page, app);
+  const root = app.histories
+    .get("primary/alpha")
+    .find((row) => row.content === "Thread root 1");
+  const button = page
+    .locator(`[data-channel-timeline] [data-message-id="${root.id}"]`)
+    .getByRole("button", { name: /^View thread:/ });
+  const panel = page.getByRole("complementary", {
+    name: "Thread",
+    exact: true,
+  });
+  const history = panel.getByRole("region", { name: "Thread messages" });
+  const line = panel.getByRole("separator", { name: "New messages" });
+  const close = async () => {
+    await history.evaluate((element) => {
+      element.scrollTop = element.scrollHeight;
+    });
+    await expect(button).not.toHaveAccessibleName(/Observed unread replies/);
+    await page
+      .locator(
+        '.buzz-tabs-item:has([data-tab-value^="thread:"][aria-selected="true"]) > button:not([role="tab"])',
+      )
+      .click();
+    await expect(panel).toHaveCount(0);
+  };
+  const reopen = async () => {
+    for (let index = 0; index < 6; index++) app.reply(root.id);
+    await expect(button).toHaveAccessibleName(/Observed unread replies/);
+    await virtuaIdle(page);
+    await button.click();
+    await expect(line).toBeVisible();
+    await expect(history).not.toHaveAttribute("data-positioning");
+    return measure();
+  };
+  const measure = async () => {
+    // Scroll events and resize observations of the placement have run.
+    await page.evaluate(
+      () =>
+        new Promise((resolve) =>
+          requestAnimationFrame(() => requestAnimationFrame(resolve)),
+        ),
+    );
+    return history.evaluate((element) => {
+      const top =
+        element
+          .querySelector("[data-new-messages-boundary]")
+          .getBoundingClientRect().top - element.getBoundingClientRect().top;
+      return {
+        top,
+        block: element.scrollHeight - element.scrollTop - top,
+        height: element.clientHeight,
+        below: element.scrollHeight - element.clientHeight - element.scrollTop,
+      };
+    });
+  };
+  await button.click();
+  await close();
+  // Six new replies well over the viewport start at their line.
+  const { width } = page.viewportSize();
+  await page.setViewportSize({ width, height: 400 });
+  const overflowing = await reopen();
+  expect(overflowing.block - overflowing.height).toBeGreaterThan(80);
+  expect(Math.abs(overflowing.top)).toBeLessThan(1);
+  await close();
+  // The next six overflow it by less than the bottom tolerance.
+  await page.setViewportSize({
+    width,
+    height: Math.round(400 + overflowing.block - overflowing.height - 40),
+  });
+  const placed = await reopen();
+  expect(placed.below).toBeGreaterThan(0);
+  expect(placed.below).toBeLessThan(80);
+  expect(Math.abs(placed.top)).toBeLessThan(1);
+  // Its placement did not make the reader follow the latest reply on reflow.
+  await page.setViewportSize({
+    width: width - 40,
+    height: page.viewportSize().height,
+  });
+  expect(Math.abs((await measure()).top)).toBeLessThan(1);
+  // Nor does the panel's own correction for a row above growing, as late
+  // media would.
+  await history.evaluate((element) => {
+    element.querySelector("[data-message-id]").style.paddingBottom = "30px";
+  });
+  expect(Math.abs((await measure()).top)).toBeLessThan(1);
+  await page.setViewportSize({ width, height: page.viewportSize().height });
+  expect(Math.abs((await measure()).top)).toBeLessThan(1);
+  // The reader's own scrolling still decides following: back at the latest
+  // reply, a new one is followed.
+  const rows = history.locator("[data-message-id]");
+  const arrive = async () => {
+    const count = await rows.count();
+    app.reply(root.id);
+    await expect(rows).toHaveCount(count + 1);
+    return measure();
+  };
+  await history.hover();
+  await page.mouse.wheel(0, -200);
+  await expect.poll(async () => (await measure()).below).toBeGreaterThan(100);
+  await page.mouse.wheel(0, 1000);
+  await expect.poll(async () => (await measure()).below).toBeLessThan(1);
+  expect((await arrive()).below).toBeLessThan(1);
+  await close();
+  // Scrolled up from a fitting line that follows, a new reply leaves it there.
+  await page.setViewportSize({ width, height: 950 });
+  expect((await reopen()).below).toBeLessThan(1);
+  await history.hover();
+  await page.mouse.wheel(0, -200);
+  await expect.poll(async () => (await measure()).below).toBeGreaterThan(100);
+  const away = (await measure()).below;
+  expect((await arrive()).below).toBeGreaterThan(away);
 });
 
 test("channel bottom quiets ordinary replies newer than the latest top-level message without reading their threads", async ({

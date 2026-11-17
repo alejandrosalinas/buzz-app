@@ -59,7 +59,8 @@ export function AgentCardAttachment({
 }: AttachmentRendererProps & {
   agents: Agents;
   relay: RelayData;
-  /** Opens an agent of yours on the Agents page; absent, nothing offers to. */
+  /** Opens an agent of yours on the Agents page, or a Settings section;
+   * absent, nothing offers to. */
   navigator?: Navigation | undefined;
 }) {
   const connection = useRelayConnection(relay);
@@ -157,6 +158,8 @@ export function AgentCardAttachment({
               setAdding(false);
               opener(agent)?.();
             },
+            openSettings: (section: string) =>
+              void navigator.open({ version: 1, kind: "settings", section }),
           })}
           onClose={() => setAdding(false)}
           finalFocus={trigger}

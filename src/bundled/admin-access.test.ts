@@ -65,6 +65,7 @@ function setup(available = true) {
     tryAgain: vi.fn(),
   } as unknown as RelayData;
   const reader: CommunityReader = {
+    retained: () => undefined,
     snapshot: () => client,
     subscribe: (f) => {
       clientListeners.add(f);

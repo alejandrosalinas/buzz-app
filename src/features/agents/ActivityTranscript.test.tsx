@@ -11,10 +11,12 @@ import userEvent from "@testing-library/user-event";
 import { afterEach, expect, it, vi } from "vitest";
 import { AgentsContext } from "./react";
 import type { Agents } from "./service";
-import { ActivityTranscript } from "./ActivityTranscript";
+import { ActivityTranscript, TranscriptFocus } from "./ActivityTranscript";
+import { readerInputs } from "../profiles/target";
 import type { TranscriptTurn } from "./activity-transcript";
 import { activityTranscript } from "./activity-transcript";
 import { withSessionPrompts } from "./session-prompts";
+import { eventBody } from "../agent-harness/turn-records";
 import { codexTurns } from "../../bundled/codex/transcript";
 import { restoreRecordedTools } from "../../bundled/codex/recorded-tools";
 import {
@@ -500,6 +502,210 @@ it("opens at the latest turn and follows new ones until the reader scrolls up", 
   expect(shared.scrollTop).toBe(0);
   view.remove();
   shared.remove();
+});
+
+it("shows the turn a message began, its prompt open, instead of the latest, once", async () => {
+  const id = (n: number) => String(n).repeat(64);
+  // A retry asks the same message again, so `event` can repeat.
+  const turn = (n: number, event = n): TranscriptTurn => ({
+    turnId: `t${n}`,
+    channelId: "channel",
+    threadRootId: null,
+    triggeringEventIds: [],
+    newSession: false,
+    config: [],
+    startedAt: n,
+    endedAt: n + 1000,
+    partial: false,
+    items: [
+      {
+        id: `p${n}`,
+        at: n,
+        type: "prompt",
+        text: `Prompt ${n}`,
+        sections: [
+          {
+            tag: "buzz-event",
+            body: eventBody(
+              {
+                id: id(event),
+                pubkey: "a".repeat(64),
+                kind: 9,
+                created_at: event,
+                content: `Prompt ${n}`,
+                tags: [],
+              },
+              `Prompt ${n}`,
+            ),
+          },
+        ],
+        steer: false,
+      },
+    ],
+  });
+  const view = document.createElement("div");
+  view.style.overflowY = "auto";
+  Object.defineProperty(view, "scrollHeight", { get: () => 1000 });
+  document.body.appendChild(view);
+  const shown: string[] = [];
+  const margins: string[] = [];
+  Element.prototype.scrollIntoView = function (this: HTMLElement) {
+    shown.push(this.dataset.entry ?? "");
+    margins.push(this.style.scrollMarginBlockStart);
+  };
+  const done = vi.fn();
+  // The panel's sticky header, 40px tall.
+  const header = (node: HTMLDivElement | null) => {
+    if (node) Object.defineProperty(node, "offsetHeight", { value: 40 });
+  };
+  const show = (turns: TranscriptTurn[], events: string[]) => (
+    <TranscriptFocus.Provider value={{ events, inputs: readerInputs(), done }}>
+      <div data-transcript>
+        <div data-transcript-header ref={header} />
+        <ActivityTranscript
+          transcript={{ turns }}
+          agentName="Sol"
+          state={() => "ended"}
+        />
+      </div>
+    </TranscriptFocus.Provider>
+  );
+  try {
+    // Not loaded yet: it opens at the latest and waits.
+    const { rerender } = render(show([turn(1)], ["reply", id(2)]), {
+      container: view,
+    });
+    expect(view.scrollTop).toBe(1000);
+    expect(done).not.toHaveBeenCalled();
+    // Focus the menu put back on its trigger, outside the panel, is not the
+    // reader's own move.
+    const trigger = document.body.appendChild(document.createElement("button"));
+    trigger.focus();
+    rerender(show([turn(1), turn(2), turn(3)], ["reply", id(2)]));
+    expect(shown).toEqual(["item:p2"]);
+    // It starts below the sticky header, with room for its focus ring, and
+    // keeps no margin afterwards.
+    expect(margins).toEqual(["calc(40px + var(--space-2))"]);
+    expect(
+      view.querySelector<HTMLElement>('[data-entry="item:p2"]')?.style
+        .scrollMarginBlockStart,
+    ).toBe("");
+    expect(done).toHaveBeenCalledOnce();
+    const prompt = screen.getByText("Prompt 2", { selector: "p" });
+    expect(prompt.closest("details")).toHaveAttribute("open");
+    // Its text is marked, not its title.
+    expect(prompt).toHaveAttribute("data-arrived");
+    expect(view.querySelectorAll("[data-arrived]")).toHaveLength(1);
+    // Keyboard focus follows it, after the panel's own handoff.
+    await act(() => new Promise(requestAnimationFrame));
+    expect(
+      prompt.closest("details")?.querySelector(":scope > summary"),
+    ).toHaveFocus();
+    trigger.remove();
+    // Once shown, the mark is gone, so the transcript shown again (a hidden
+    // pane reopened) does not replay it.
+    fireEvent.animationEnd(prompt);
+    expect(view.querySelectorAll("[data-arrived]")).toHaveLength(0);
+    // New turns no longer pull it to the latest.
+    view.scrollTop = 0;
+    rerender(show([turn(1), turn(2), turn(3), turn(4)], ["reply", id(2)]));
+    expect(view.scrollTop).toBe(0);
+    // A retried request shows its latest attempt, the one that answered.
+    // Focus the reader has since moved elsewhere stays there.
+    const retried = show([turn(1), turn(2), turn(5, 2)], ["retry", id(2)]);
+    const elsewhere = document.body.appendChild(
+      document.createElement("button"),
+    );
+    fireEvent.pointerDown(elsewhere);
+    elsewhere.focus();
+    rerender(retried);
+    expect(shown.at(-1)).toBe("item:p5");
+    await act(() => new Promise(requestAnimationFrame));
+    expect(elsewhere).toHaveFocus();
+    elsewhere.remove();
+    // A reply lands on itself before the prompt it answered, its bubble
+    // marked.
+    const replied = turn(6);
+    rerender(
+      show(
+        [
+          turn(1),
+          {
+            ...replied,
+            items: [
+              ...replied.items,
+              {
+                id: "m6",
+                at: 7,
+                type: "message",
+                text: "Reply 6",
+                messageId: "reply",
+              },
+            ],
+          },
+        ],
+        ["reply", id(6)],
+      ),
+    );
+    expect(shown.at(-1)).toBe("item:m6");
+    expect(
+      screen
+        .getByText("Reply 6", { selector: "p" })
+        .closest("[data-arrival-surface]"),
+    ).toHaveAttribute("data-arrived");
+    expect(view.querySelectorAll("[data-arrived]")).toHaveLength(1);
+    // A reply a script sent lands on the call that ran it.
+    const scripted = turn(7);
+    rerender(
+      show(
+        [
+          {
+            ...scripted,
+            items: [
+              ...scripted.items,
+              {
+                id: "x7",
+                at: 8,
+                type: "tool",
+                toolCallId: "x7",
+                title: "exec",
+                kind: "execute",
+                status: "completed",
+                input: "",
+                output: "",
+                diffs: [],
+                paths: [],
+                truncated: false,
+                children: [
+                  {
+                    id: "s7",
+                    at: 9,
+                    type: "message",
+                    text: "Reply 7",
+                    posted: true,
+                    messageId: id(8),
+                  },
+                ],
+              },
+            ],
+          },
+        ],
+        [id(8), id(7)],
+      ),
+    );
+    expect(shown.at(-1)).toBe("item:x7");
+    // The call itself is marked, not the reply recorded inside it.
+    const call = view.querySelector('[data-entry="item:x7"] > details');
+    expect(call).toHaveProperty("open", true);
+    expect(call?.querySelector(":scope > summary")).toHaveAttribute(
+      "data-arrived",
+    );
+    expect(view.querySelectorAll("[data-arrived]")).toHaveLength(1);
+  } finally {
+    // jsdom has no scrollIntoView of its own.
+    Reflect.deleteProperty(Element.prototype, "scrollIntoView");
+    view.remove();
+  }
 });
 
 it("divides sessions, and shows each one's prompt once at its top", () => {

@@ -360,6 +360,119 @@ it("holds navigation pending for Git content, then opens the exact commit change
   ).toHaveTextContent("+actual selected change");
   await expect(t.promise).resolves.toEqual({ status: "opened" });
 });
+const history = (...authors: string[]) =>
+  authors.map((author, index) => ({
+    hash: String(index + 1).repeat(40),
+    author,
+    date: 2,
+    subject: `Change ${index + 1}`,
+  }));
+it.each([
+  { authors: [], summary: "Latest 0 commits" },
+  { authors: ["Ada"], summary: "Latest 1 commit" },
+  { authors: ["Ada", "Grace", "Ada"], summary: "Latest 3 commits" },
+])("summarises the Commits tab as $summary", async ({ authors, summary }) => {
+  const t = setup({ type: "repo", owner, dtag: "repo", tab: "commits" });
+  t.readGit.mockResolvedValue({ ...git, commits: history(...authors) });
+  t.mount();
+  await expect(t.promise).resolves.toEqual({ status: "opened" });
+  expect(
+    within(screen.getByRole("region", { name: "Commits" })).getByText(summary),
+  ).toBeVisible();
+});
+it.each([
+  {
+    authors: ["Ada"],
+    summary: "Contributors in the latest 1 commit",
+    rows: ["Ada1 commit"],
+  },
+  {
+    authors: ["Ada", "Grace", "Ada"],
+    summary: "Contributors in the latest 3 commits",
+    rows: ["Ada2 commits", "Grace1 commit"],
+  },
+])(
+  "summarises the Contributors tab as $summary",
+  async ({ authors, summary, rows }) => {
+    const t = setup({ type: "repo", owner, dtag: "repo", tab: "contributors" });
+    t.readGit.mockResolvedValue({ ...git, commits: history(...authors) });
+    t.mount();
+    await expect(t.promise).resolves.toEqual({ status: "opened" });
+    const content = within(
+      screen.getByRole("region", { name: "Contributors" }),
+    );
+    expect(content.getByText(summary)).toBeVisible();
+    expect(
+      content.getAllByRole("listitem").map((row) => row.textContent),
+    ).toEqual(rows);
+  },
+);
+it("shows file sizes in units, in the file list and for a file just too large to show", async () => {
+  // One byte over the hosts' 1 MiB text limit: the size rounds to the limit.
+  const log = {
+    path: "docs/build.log",
+    hash: "d".repeat(40),
+    size: 1024 * 1024 + 1,
+  };
+  const t = setup({ type: "repo", owner, dtag: "repo", tab: "files" });
+  t.readGit.mockImplementation(async (input) => ({
+    ...git,
+    files: [
+      ...git.files,
+      { path: "docs/architecture.md", hash: "c".repeat(40), size: 184320 },
+      log,
+    ],
+    file: input.path
+      ? { path: input.path, content: null, size: log.size }
+      : null,
+  }));
+  t.mount();
+  await expect(t.promise).resolves.toEqual({ status: "opened" });
+  const content = within(screen.getByRole("region", { name: "Files" }));
+  expect(
+    content.getAllByRole("listitem").map((row) => row.textContent),
+  ).toEqual([
+    "README.md6 B",
+    "docs/architecture.md180 KB",
+    "docs/build.log1 MB",
+  ]);
+  await userEvent.click(content.getByRole("button", { name: log.path }));
+  expect(
+    await screen.findByText("Binary file, or text too large to show (1 MB)."),
+  ).toBeVisible();
+});
+it("heads a commit with the short hash its row shows, keeping the full hash in its title and link", async () => {
+  const hash = "3f9c2a7e1b4d8065c7a9e2f14b6d0c38a5e791f2";
+  const t = setup({ type: "repo", owner, dtag: "repo", tab: "commits" });
+  t.readGit.mockImplementation(async (input) => ({
+    ...git,
+    head: hash,
+    commits: [
+      { hash, author: "Contributor", date: 2, subject: "Selected commit" },
+    ],
+    diff: input.commit ? "+actual selected change" : null,
+  }));
+  t.mount();
+  await expect(t.promise).resolves.toEqual({ status: "opened" });
+  expect(screen.getByText("Contributor · 3f9c2a7e1b")).toBeVisible();
+  await userEvent.click(
+    screen.getByRole("button", { name: "Selected commit" }),
+  );
+  const heading = await screen.findByRole("heading", {
+    name: "Commit 3f9c2a7e1b",
+    level: 2,
+  });
+  expect(within(heading).getByText("3f9c2a7e1b")).toHaveAttribute(
+    "title",
+    hash,
+  );
+  expect(t.host.navigation.snapshot().entry.target).toEqual(
+    entityTarget(
+      { type: "repo", owner, dtag: "repo", tab: "commits", commit: hash },
+      scope,
+    ),
+  );
+});
 it("reports missing entities and retries the same destination", async () => {
   const t = setup({ type: "issue", owner, dtag: "repo", id: "f".repeat(64) });
   t.mount();

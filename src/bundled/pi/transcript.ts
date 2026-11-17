@@ -4,6 +4,7 @@
 import { isMessageTool } from "../../buzz-mcp/session-tools";
 import { readEventBody } from "../../features/agent-harness/turn-records";
 import {
+  postedAs,
   promptMessage,
   promptSections,
   STEER,
@@ -128,7 +129,10 @@ export function piTurns(
   /** Messages sent with send, until their result says whether they were posted. */
   const sends = new Map<
     string,
-    { turn: TranscriptTurn; message: { posted?: boolean } }
+    {
+      turn: TranscriptTurn;
+      message: { posted?: boolean; messageId?: string };
+    }
   >();
   let last = 0;
   /** The aborted answer the turn ends with so far, by its message's id. */
@@ -179,7 +183,8 @@ export function piTurns(
       last = at;
       if (message.role === "toolResult") {
         const sent = sends.get(message.toolCallId ?? "");
-        if (sent && !message.isError) sent.message.posted = true;
+        if (sent && !message.isError)
+          Object.assign(sent.message, postedAs(text(message.content)));
         else if (sent)
           sent.turn.items.push({
             id,

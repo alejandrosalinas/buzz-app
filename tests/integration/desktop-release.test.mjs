@@ -8,6 +8,7 @@ import {
   readdirSync,
   renameSync,
   rmSync,
+  symlinkSync,
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
@@ -232,6 +233,7 @@ for (const failure of [
 }
 
 test("actual publication retries a failed create, deleting only a draft it left", (t) => {
+  if (process.platform === "win32") return t.skip("POSIX shell fixture");
   const publication = jobs.publish.steps.find(
     (step) => step.name === "Publish desktop release",
   ).run;
@@ -248,6 +250,7 @@ test("actual publication retries a failed create, deleting only a draft it left"
   ) => {
     const dir = temp(t);
     mkdirSync(join(dir, "bin"));
+    symlinkSync("/usr/bin/grep", join(dir, "bin", "grep"));
     mkdirSync(join(dir, "release-assets"));
     writeFileSync(join(dir, "release-assets", "SHA256SUMS"), "");
     writeFileSync(
@@ -276,22 +279,30 @@ esac
       '#!/bin/sh\necho "sleep $1" >> "$DIR/calls"\n',
       { mode: 0o755 },
     );
-    const result = spawnSync("bash", ["-eo", "pipefail", "-c", publication], {
-      cwd: dir,
-      env: {
-        ...process.env,
-        PATH: `${join(dir, "bin")}:${process.env.PATH}`,
-        DIR: dir,
-        SUCCEED_ON: String(succeedOn),
-        LEFT: left,
-        DELETE_STATUS: String(deleteStatus),
-        VERSION: release,
-        SOURCE_SHA: sha,
-        GITHUB_RUN_ID: "42",
+    const result = spawnSync(
+      "/bin/bash",
+      ["--noprofile", "--norc", "-p", "-eo", "pipefail", "-c", publication],
+      {
+        cwd: dir,
+        env: {
+          PATH: join(dir, "bin"),
+          DIR: dir,
+          SUCCEED_ON: String(succeedOn),
+          LEFT: left,
+          DELETE_STATUS: String(deleteStatus),
+          VERSION: release,
+          SOURCE_SHA: sha,
+          GITHUB_RUN_ID: "42",
+        },
+        encoding: "utf8",
+        timeout: 10_000,
       },
-      encoding: "utf8",
-      timeout: 10_000,
-    });
+    );
+    assert.equal(
+      result.status,
+      succeedOn <= 3 && left !== "false" ? 0 : 1,
+      result.stderr,
+    );
     const calls = readFileSync(join(dir, "calls"), "utf8").trim().split("\n");
     const args = readFileSync(join(dir, "args"), "utf8").trim().split("\n");
     publish.args = args;

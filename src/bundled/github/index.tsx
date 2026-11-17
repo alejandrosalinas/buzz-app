@@ -21,6 +21,7 @@ import {
 } from "../../shared/design-system/icons/index";
 import type { PluginModule } from "../../plugins/api";
 import type { PanelProps } from "../../features/panels/service";
+import { usePanelTabTitle } from "../../features/panels/PanelWorkspace";
 import { parseGitHubReference, type GitHubReference } from "./references";
 import {
   gitHubCli,
@@ -419,6 +420,14 @@ function ObjectPanel({
   const load = isPull ? pull.load : other.load;
   const link = reference.url;
   const result = typeof loaded === "object" ? loaded.details : loaded;
+  // The number leads, so tabs of several pull requests stay apart when narrow.
+  usePanelTabTitle(
+    reference.kind === "repository"
+      ? reference.repository
+      : typeof result === "object" && result.title
+        ? `${reference.label} ${result.title}`
+        : reference.label,
+  );
   const Icon = icons[reference.kind];
   const state = typeof result === "object" ? result.state.toLowerCase() : "";
   const StateIcon =

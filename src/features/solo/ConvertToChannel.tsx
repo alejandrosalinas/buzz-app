@@ -292,7 +292,6 @@ export function ConvertToChannel({
       initialFocus={cancel}
       title="Convert to channel"
       size="compact"
-      headerGap="compact"
       footerGap="compact"
       description={
         base?.visibility === "private" && selectedAccess !== "private"

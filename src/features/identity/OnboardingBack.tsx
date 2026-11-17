@@ -7,7 +7,9 @@ import {
 export function OnboardingBack({
   "aria-label": label = "Back",
   ...props
-}: Omit<IconButtonProps, "icon" | "aria-label"> & { "aria-label"?: string }) {
+}: Omit<IconButtonProps, "icon" | "emoji" | "aria-label"> & {
+  "aria-label"?: string;
+}) {
   return (
     <IconButton
       {...props}

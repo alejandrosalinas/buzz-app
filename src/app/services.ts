@@ -19,6 +19,10 @@ import {
 } from "../features/federated-identity/service";
 import { HostService } from "../features/host/service";
 import { bindUnreadIndicator } from "../features/notifications/indicator-unread";
+import {
+  createCommunityUnreads,
+  type UnreadGates,
+} from "../features/notifications/community-unread";
 import { provideNavigation } from "../features/navigation/service";
 import {
   bindDeepLinks,
@@ -40,8 +44,20 @@ import { createShortcutBindings } from "../features/shortcuts/preferences";
 import { ConversationService } from "../features/conversation/service";
 import { createAppearance } from "../shared/theme/service";
 import { createCommunities } from "../features/communities/service";
-import { createInviteIntent } from "../features/communities/invite-intent";
-import type { JoinRequest } from "../features/communities/invite-intent";
+import {
+  createInviteIntent,
+  offeredCommunity,
+} from "../features/communities/invite-intent";
+import type {
+  JoinRequest,
+  JoinForm,
+  JoinVisitState,
+} from "../features/communities/invite-intent";
+import {
+  joinBeneath,
+  withoutJoin,
+  type OpenTarget,
+} from "../features/navigation/targets";
 import {
   connectNativeTransport,
   verifyNativeStored,
@@ -134,6 +150,7 @@ export function createServices() {
   ctx.provide("communityReader", {
     snapshot: communities.snapshot,
     subscribe: communities.subscribe,
+    retained: communities.retained,
   });
   ctx.provide("knownCommunities", {
     snapshot: communities.snapshot,
@@ -188,15 +205,71 @@ export function createServices() {
     bindMessageNotifications(notifications, communities, localActivity.reader),
   );
   const inviteIntent = createInviteIntent();
+  // Every visit of one opening carries its token: the opening's in-memory
+  // state, retirement and completion follow it, not the address it started on.
+  const openJoin = (viewer: string, state: JoinVisitState) => {
+    const visit = crypto.randomUUID();
+    inviteIntent.set(visit, state);
+    const target: OpenTarget = {
+      ...joinBeneath(navigation.snapshot().entry.target),
+      join: {
+        viewer,
+        visit,
+        ...(state.community ? { community: state.community } : {}),
+      },
+    };
+    void navigation.open(target).then((result) => {
+      // A refused or cancelled opening keeps no code. A superseded one may
+      // still stand in history (Back landed first), so it keeps its state.
+      if (result.status === "failed" || result.status === "cancelled")
+        inviteIntent.delete((key) => key === visit);
+    });
+  };
   const invites = {
-    ...inviteIntent,
-    // With no code to claim, an existing membership just opens its community.
+    subscribe: inviteIntent.subscribe,
+    /** In-memory state of the join visit `target`, for its viewer only. */
+    state(target: OpenTarget, viewer: string | undefined) {
+      const state = target.join && inviteIntent.get(target.join.visit);
+      return state?.viewer === viewer ? state : undefined;
+    },
+    consume(target: OpenTarget) {
+      if (target.join) inviteIntent.consume(target.join.visit);
+    },
+    /** The form as edited in the shown opening's dialog, restored without
+     * submitting. A late report from a dialog no longer shown is ignored. */
+    edit(target: OpenTarget, form: JoinForm) {
+      const join = target.join;
+      if (
+        !join ||
+        navigation.snapshot().entry.target.join?.visit !== join.visit
+      )
+        return;
+      inviteIntent.edit(
+        join.visit,
+        {
+          viewer: join.viewer,
+          ...(join.community ? { community: join.community } : {}),
+          code: "",
+          connect: false,
+        },
+        form,
+      );
+    },
+    // The join dialog is a visit over the current one, so Back closes it and
+    // Forward reopens it. With no code to claim, an existing membership just
+    // opens its community.
     open(invite: JoinRequest, viewer: string) {
       const { memberships } = communities.snapshot();
       const id = communityDestination(invite.community).id;
-      if (invite.code || !memberships.some((m) => m.id === id))
-        return inviteIntent.open(invite, viewer);
-      inviteIntent.clear();
+      if (invite.code || !memberships.some((m) => m.id === id)) {
+        openJoin(viewer, {
+          viewer,
+          community: communityDestination(invite.community).url,
+          code: invite.code,
+          connect: invite.submitted === true,
+        });
+        return;
+      }
       // Select now, not in the navigation effect, so a link read in the
       // meantime is not discarded as a community switch.
       communities.select(id);
@@ -208,7 +281,73 @@ export function createServices() {
         scope: { viewer, communityOrigin: invite.community },
       });
     },
+    /** Join a community with no address yet, as a visit over the current one. */
+    start(viewer: string) {
+      openJoin(viewer, { viewer, code: "", connect: false });
+    },
+    /** Explicit Close: retire this opening's visits, keeping the visit beneath. */
+    close(target: OpenTarget) {
+      const join = target.join;
+      if (!join) return;
+      inviteIntent.delete((visit) => visit === join.visit);
+      navigation.dismiss(
+        (visit) => visit.join?.visit === join.visit,
+        withoutJoin(target),
+      );
+    },
+    /**
+     * A finished join: this opening's visits retire, and so does every visit
+     * that would offer this viewer the community actually joined.
+     */
+    complete(target: OpenTarget, joined: string | undefined) {
+      const join = target.join;
+      if (!join) return;
+      // What each opening offers now: its edited address, else its original.
+      const offers = (visit: string, community?: string) =>
+        !!joined &&
+        offeredCommunity(inviteIntent.get(visit), community) === joined;
+      navigation.dismiss(
+        (visit) =>
+          !!visit.join &&
+          visit.join.viewer === join.viewer &&
+          (visit.join.visit === join.visit ||
+            offers(visit.join.visit, visit.join.community)),
+        withoutJoin(target),
+      );
+      // After the dismissal, which reads each opening's state.
+      inviteIntent.delete(
+        (visit, state) =>
+          visit === join.visit ||
+          (state.viewer === join.viewer && offers(visit)),
+      );
+    },
   };
+  // An opening's state lives as long as one of its visits does: closing the
+  // view beneath it, a new branch or history's capacity releases its code.
+  const joinVisits = new Map<string, string>();
+  ctx.effect(() =>
+    navigation.subscribe(() => {
+      const { entry, retainedVisits } = navigation.snapshot();
+      const before = new Set(joinVisits.values());
+      if (entry.target.join) joinVisits.set(entry.id, entry.target.join.visit);
+      else joinVisits.delete(entry.id);
+      if (retainedVisits) {
+        const retained = new Set(retainedVisits);
+        for (const id of joinVisits.keys())
+          if (!retained.has(id)) joinVisits.delete(id);
+      }
+      for (const visit of joinVisits.values()) before.delete(visit);
+      if (before.size) inviteIntent.delete((visit) => before.has(visit));
+    }),
+  );
+  // Codes are the viewer's: another identity never inherits them.
+  let inviteViewer = communities.snapshot().viewer;
+  communities.subscribe(() => {
+    const { viewer } = communities.snapshot();
+    if (viewer === inviteViewer) return;
+    inviteViewer = viewer;
+    inviteIntent.delete((_visit, state) => state?.viewer !== viewer);
+  });
   // A community the account just created is joined as an address the person
   // already chose: the join dialog opens on it and connects at once.
   ctx.provide("communityJoin", {
@@ -284,13 +423,20 @@ export function createServices() {
         : undefined;
     }),
   );
+  const unreadGates: UnreadGates = {
+    allows: (target) => notifications.gated(target),
+    subscribe: notifications.subscribeGates,
+  };
   if (notifications.indicator.available)
     ctx.effect(() =>
-      bindUnreadIndicator(communities, notifications.indicator.setUnread, {
-        allows: (target) => notifications.gated(target),
-        subscribe: notifications.subscribeGates,
-      }),
+      bindUnreadIndicator(
+        communities,
+        notifications.indicator.setUnread,
+        unreadGates,
+      ),
     );
+  const communityUnreads = createCommunityUnreads(communities, unreadGates);
+  ctx.effect(() => communityUnreads.dispose);
   let disposal: Promise<void> | undefined;
   return {
     identity,
@@ -320,6 +466,7 @@ export function createServices() {
     firstRunFederatedIdentity,
     relay,
     communities,
+    communityUnreads,
     invites,
     rejectedLinks,
     deepLinks,

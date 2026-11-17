@@ -304,3 +304,25 @@ it("defers workspace normalization until Settings closes", () => {
   expect(t.host.navigation.snapshot().entry.target).toEqual(destination);
   expect(t.host.navigation.snapshot().entry.id).toBe(t.attempt.entry.id);
 });
+
+it("keeps Settings alive under a join dialog over it, not under another Settings visit", () => {
+  const t = setup();
+  void t.host.navigation.open(settings);
+  const shown = t.host.request(
+    t.host.navigation.snapshot().attempt,
+    t.owner,
+    true,
+  );
+  const request = shown.request;
+  expect(request.complete({ status: "opened" })).toBe(true);
+  void t.host.navigation.open({
+    ...settings,
+    join: { viewer: "a".repeat(64), visit: "v1" },
+  });
+  expect(request.signal.aborted).toBe(false);
+  // Settings beneath cannot acknowledge the dialog's visit.
+  expect(request.complete({ status: "opened" })).toBe(false);
+  t.host.navigation.back();
+  void t.host.navigation.open({ ...settings, section: "profile" });
+  expect(request.signal.aborted).toBe(true);
+});

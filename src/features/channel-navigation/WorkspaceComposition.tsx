@@ -20,6 +20,7 @@ import styles from "./WorkspaceComposition.module.css";
 export type WorkspaceComposition = Readonly<{
   ordinary: ReactNode;
   chats: ReactNode;
+  chatList: ReactNode;
   workspaces: readonly Readonly<{
     id: string;
     name: string;
@@ -43,6 +44,12 @@ export const WorkspaceCompositionContext = createContext<
 export function RegionChats({ all = false }: { all?: boolean }) {
   const parts = useContext(WorkspaceCompositionContext);
   return (all ? parts?.ordinary : parts?.chats) ?? null;
+}
+
+/** All ordinary chats without workspace headings or collapse controls. */
+export function RegionChatList() {
+  const list = useContext(WorkspaceCompositionContext)?.chatList;
+  return list ? <div data-solo-chat-list="">{list}</div> : null;
 }
 
 /** One shared workspace surface. A source supplies its tasks and selection. */

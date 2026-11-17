@@ -66,7 +66,7 @@ Private to View only and its link will be posted in that channel, then discloses
 community reading of the full history and Canvas. **Share** saves that
 access and posts the link in one step. A chat already set to View only gets a
 similar confirmation explaining link delivery; Share posts the link without an
-access write. Public (existing) chats keep their access and post directly.
+access write. Public chats keep their access and post directly.
 Cancel returns focus to the same Share result and preserves the search.
 The toast says **Chat changed to View only. Shared in #channel** when Share
 changed access, or **Shared in #channel** when access was already open. Both
@@ -119,19 +119,20 @@ members keep their individual roles when the general policy changes.
 
 View only makes the chat's full history and Canvas readable by the community.
 The confirmation names this disclosure, including workspace folder paths and
-agent instructions stored in Canvas. Moving from Public (existing) also
+agent instructions stored in Canvas. Moving from Public also
 explains that people already in the chat keep their access. Moving from View only
 to Private warns that joined viewers remain members unless a verified role
 snapshot establishes that no Guests exist; loading or failed verification keeps
-the warning. Public (existing) → Private also warns that joined members retain
+the warning. Public → Private also warns that joined members retain
 their access until removed in People. One signed kind-9002 edit sets
 `visibility=open` and `join_role=guest` together, through the existing
 `channelDetails` save, conflict checks and exact readback.
 
 Omitting Public here is a UI restriction, not a relay or harness safeguard.
 CLI/MCP or another client can still set a Solo chat to Public with Member
-admission. The dialog shows **Public (existing)** for that policy and lets the
-owner change it to View only or Private. Public members can still post and
+admission. The dialog shows **Public** for that policy and lets the
+owner change it to View only or Private. The confirmation warns that the picker
+cannot switch it back to Public. Public members can still post and
 address the owner's agents, and can replace the shared Canvas. Agent wake and
 owner-Canvas hardening are separate follow-up work; this picker does not fix
 those risks. Changing to View only restricts new people, not existing members.

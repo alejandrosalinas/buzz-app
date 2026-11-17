@@ -1,9 +1,11 @@
 import { schnorr } from "@noble/curves/secp256k1.js";
 import { hexToBytes } from "nostr-tools/utils";
-import { communityDestination } from "../communities/destination";
 import type { ProfileQueries } from "../relay/profile-directory";
 import { hasEventProof, type EventData } from "../relay/events";
-import { workflowMentionOwner } from "../relay/workflow-attribution";
+import {
+  workflowMentionOwner,
+  workflowOwner,
+} from "../relay/workflow-attribution";
 import type { AgentReads } from "./reads";
 
 const KEY = /^[0-9a-f]{64}$/;
@@ -90,28 +92,9 @@ function satisfied(
   });
 }
 
-/** Whether this build keeps workflow messages from authorizing local agent
- * requests in `community`. The build flag lists exact canonical origins; with
- * any listed, an unknown or unreadable community is restricted too. */
-export function workflowRequestsRestricted(community: string | undefined) {
-  const restricted = (
-    import.meta.env.VITE_BUZZ_WORKFLOW_RESTRICTED_COMMUNITIES ?? ""
-  )
-    .split(" ")
-    .filter(Boolean);
-  if (!restricted.length) return false;
-  if (!community) return true;
-  try {
-    return restricted.includes(communityDestination(community).url);
-  } catch {
-    return true;
-  }
-}
-
-/** How a mention from a relay workflow is checked: the agent's community, the
- * community's workflow key, and its creators' profiles. */
+/** How a mention from a relay workflow is checked: the community's workflow
+ * key, and its creators' profiles. */
 export type WorkflowCheck = {
-  community?: string | undefined;
   authority: string | undefined;
   agent: string;
   profiles?: Pick<ProfileQueries, "ensure" | "event"> | undefined;
@@ -124,7 +107,6 @@ export function workflowOf(
 ): WorkflowCheck {
   return {
     agent,
-    community: reads?.origin,
     authority: reads?.workflowAuthority(),
     profiles: reads && {
       ensure: async (ids) => {
@@ -135,33 +117,59 @@ export function workflowOf(
   };
 }
 
+/** Why a mention can't direct an agent, for a note only its owner sees:
+ * the owner's own workflow posted it without naming this agent as a step's
+ * author-written mention. */
+export type MentionRefusal = "workflow";
+
 /** Owner prompts, attested siblings, and verified relay workflow mentions
- * delegated by the owner or a profile-verified sibling to this particular agent.
- * Where the build restricts workflow requests, no workflow-marked message
- * authorizes one: its rendered text is not bound to the owner's template. */
+ * delegated by the owner or a profile-verified sibling to this particular agent. */
 export async function fromOwner(
   event: EventData,
   owner: string,
   workflow?: WorkflowCheck,
 ) {
-  const restricted = workflowRequestsRestricted(workflow?.community);
-  if (restricted && event.tags.some(([name]) => name === "buzz:workflow"))
-    return false;
+  return (await mentionAuthority(event, owner, workflow)) === "owner";
+}
+
+/** `fromOwner`'s verdict with its reason. `undefined` refuses without one:
+ * anyone else's message or workflow, or a creator that can't be read yet. */
+export async function mentionAuthority(
+  event: EventData,
+  owner: string,
+  workflow?: WorkflowCheck,
+): Promise<"owner" | MentionRefusal | undefined> {
   if (event.pubkey === owner || (await attestedOwner(event)) === owner)
-    return true;
-  const creator =
-    !restricted &&
-    workflow &&
-    workflowMentionOwner(event, workflow.authority, workflow.agent);
-  if (!creator) return false;
+    return "owner";
+  const creator = workflow && workflowOwner(event, workflow.authority);
+  if (!creator) return undefined;
+  // Only a mention that names this agent reads profiles; the reason for
+  // one that doesn't comes from those already read.
+  const named = !!workflowMentionOwner(
+    event,
+    workflow.authority,
+    workflow.agent,
+  );
+  const owned = await ownedCreator(creator, owner, workflow.profiles, named);
+  if (!owned) return undefined;
+  return named ? "owner" : "workflow";
+}
+
+/** The workflow's creator is the owner or a profile-verified sibling.
+ * Without `read`, only an already-read profile counts. */
+async function ownedCreator(
+  creator: string,
+  owner: string,
+  profiles: WorkflowCheck["profiles"],
+  read: boolean,
+): Promise<boolean> {
   if (creator === owner) return true;
-  const profiles = workflow?.profiles;
   if (!profiles?.event) return false;
   try {
-    await profiles.ensure([creator]);
+    if (read) await profiles.ensure([creator]);
     const profile = profiles.event(creator);
+    if (!profile) return false;
     return (
-      !!profile &&
       hasEventProof(profile) &&
       profile.kind === 0 &&
       profile.pubkey === creator &&

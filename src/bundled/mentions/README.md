@@ -64,8 +64,11 @@ permission, and Solo chat invitation rules stay the authority. Labels are
 presentation only. Clients MUST send and store exact keys, not labels.
 
 This contract does not define profile validation, archive state, presence, or
-agent ownership proof. Ownership here is a display hint from profile metadata,
-not authorization.
+agent ownership proof. Ownership here is a ranking hint, not authorization: an
+agent is the viewer's when it is one of the viewer's own agents, or when the
+client has verified the owner claim in its signed profile and that owner is the
+viewer. An owner claim the client has not verified can still qualify the
+agent's label (`Wes’s Sol`), but it never makes the agent the viewer's.
 
 ## 1. Choice set
 
@@ -73,15 +76,27 @@ For any known channel (stream, untyped channel, forum or DM) that is not
 archived and not read-only, the choice set is:
 
 1. the channel's members;
-2. the agents that the client offers for mention in this channel;
+2. the agents that the client offers for mention in this channel. The desktop
+   offers the viewer's own agents of this community in a stream or forum where
+   the viewer can add members, and in a DM, which adds no one: there they are
+   outside choices that are named but not notified;
 3. the viewer's own agents from their other communities, which the client can
    bring into this one (section 7); and
 4. people and agents found by a community directory search for the current query.
 
-Solo chats MUST NOT add directory people or agents from other communities. This
-follows the channel type, so it also holds in Solo chat composers that do not
-invite agents, such as media comments and edits. A Solo chat that invites agents uses its own agent list
-instead of items 3 and 4. Archived or read-only channels have
+Solo chats MUST NOT add agents from other communities. A Solo chat composer
+that invites agents (the chat and its threads, the owner's or a shared chat's)
+offers the Solo chat's own agent list instead of item 3, and also offers item 4
+so people can name anyone. It never adds directory people: an outside key that
+is not one of the viewer's own agents is a reference (section 7). When the
+owner's composer limits members to its own roster, the directory MUST NOT
+bring back a member that the roster leaves out, nor one of the viewer's own
+agents that it leaves out, such as an agent a region's plugin refuses. A New chat's composer follows the
+same rule before its chat is listed: its reserved id stands for a Solo chat
+holding only the viewer. The Solo toolbar's agent menu picks agents only and
+MUST NOT search the directory. Other Solo chat composers, such as media
+comments and edits, do not invite agents and offer the members only.
+Archived or read-only channels have
 no choices. Clients MUST exclude invalid keys and identities known to be
 archived, except the viewer's own key: a user always sees themself. Unknown
 archive state does not exclude a key.
@@ -174,26 +189,37 @@ Remove choices that do not match. Sort the rest by the first rule that differs:
 1. Members before outside choices.
 2. Everyone in this community before the viewer's agents from their other
    communities.
-3. Lower match.
-4. Lower best alias tier (the **base match**). This lets `Fizz` rank above
+3. **Leading** choices before the others. Only a choice whose label matches
+   the query (section 3, any tier) can lead, and only its aliases decide it,
+   never generated label parts such as an owner prefix or key qualifier. A
+   person leads when an alias equals the query. An agent that the viewer owns
+   leads when an alias equals the query or is longer and continues it with a
+   new word: the next code point after the query is not a letter, mark or
+   digit, so `Sol 6` and `Sol-6` continue `sol` but `Solana` does not. Compare
+   with the section 3 normalization. Other agents never lead, and an empty
+   query leads no one. So `sol` puts the viewer's `Sol 6` above another
+   person's agent named `Sol`, but not above a person named `Sol`.
+4. Lower match.
+5. Lower best alias tier (the **base match**). This lets `Fizz` rank above
    `Fast Fizz` when both labels match at the same tier.
-5. Agents that the viewer owns before all other choices, people included.
-6. Block label, by UTF-16 code unit order of normalized labels. Agents with the
-   same values for rules 1 to 5 and the same normalized name form one **block**.
+6. Agents that the viewer owns before all other choices, people included.
+7. Block label, by UTF-16 code unit order of normalized labels. Agents with the
+   same values for rules 1 to 6 and the same normalized name form one **block**.
    A block's label is the lowest normalized label among its agents. A person, or
    an agent with a name of its own, is a block by itself.
-7. On an equal block label: a person before an agent block. Two agent blocks
+8. On an equal block label: a person before an agent block. Two agent blocks
    are ordered by normalized name, and two people by key.
-8. Inside a block:
+9. Inside a block:
    1. more recent explicit choice in this channel first;
    2. managed agents first;
    3. presence: online, then away, then unknown.
-9. Normalized label, by UTF-16 code unit order.
-10. Key.
+10. Normalized label, by UTF-16 code unit order.
+11. Key.
 
 Every rule is a key of one choice, so the order is the same for any input order.
 A person or another name never sorts between two agents of one block. Ownership
-and recency never override membership or match. Recency is the
+and recency never override membership. Ownership overrides match only through
+rule 3, and recency never does. Recency is the
 client's memory of explicit selections in this channel. The desktop keeps it in
 memory for 100 channels and 100 keys each.
 
@@ -304,8 +330,9 @@ for the pending name already settles the directory for every query extending
 it (section 6), so no search is waiting and the Space that completes the
 longer name selects it: `@mira Exam` returned to prose, then `ple ` selects
 `Mira Example`. In a
-DM a pending name that resolves to someone outside the DM returns to prose,
-since the chooser's "Will not be notified" row was never shown. Sending while
+DM, or in a Solo chat when the person is not one of the viewer's agents, a
+pending name that resolves to someone outside the destination returns to
+prose, since the chooser's "Will not be notified" row was never shown. Sending while
 a mention is pending waits for it, through such an extension; if a mention the
 send waited for returns to prose, the client MUST NOT send in that same action,
 since the user saw the name held and would notify no one: it keeps the draft,
@@ -363,8 +390,15 @@ A DM has fixed participants, so there is no choice to make. The client MUST NOT
 ask. It sends outside keys in a DM as references, which do not notify them. The
 chooser row says so before the user picks the person.
 
-A Solo chat MUST NOT ask either, in any Solo chat composer. Its recipients follow
-the Solo chat choice policy.
+A Solo chat MUST NOT ask either, in any Solo chat composer. A composer that
+invites agents adds the viewer's available agents that the draft names. Every
+other outside key is a reference, as in a DM, and the chooser row says so
+before the user picks the person. Classifying an unknown key as a reference
+needs complete agent inventory evidence: until the agent read is complete, the
+composer offers and accepts no outside key, so a row never calls the viewer's
+own agent a reference, and the send refuses a reference if its read is
+incomplete. A partial read still adds the agents it lists. A reference
+addresses nobody, so it does not replace the toolbar's agents.
 
 An agent from the viewer's other communities (section 1, item 3) is not a
 member here and cannot be added until it joins this community. Before the

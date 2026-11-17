@@ -1,0 +1,7 @@
+{
+  "id": "buzz.file-viewer",
+  "name": "File viewer",
+  "apiVersion": 1,
+  "description": "Read the PDFs, Markdown, code, text and CSV files shared in a conversation, beside the thread.",
+  "discovery": { "category": "productivity" }
+}

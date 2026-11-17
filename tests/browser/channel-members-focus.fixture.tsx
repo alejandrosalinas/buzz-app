@@ -2,7 +2,11 @@ import { schnorr } from "@noble/curves/secp256k1.js";
 import { bytesToHex } from "nostr-tools/utils";
 import { ToastProvider } from "../../src/shared/design-system/ui/Toast";
 import { createRoot } from "react-dom/client";
-import { ChannelMembersButton } from "../../src/bundled/channels/ChannelMembersDialog";
+import { useRef, useState } from "react";
+import {
+  ChannelMembersButton,
+  ChannelMembersDialog,
+} from "../../src/bundled/channels/ChannelMembersDialog";
 import { createRelaySession } from "../../src/features/relay/session";
 import { localAgentsFixture } from "../../src/features/agents/local-testing";
 import { PublishRejected } from "../../src/features/relay/outbox";
@@ -19,8 +23,9 @@ import {
 import "../../src/shared/styles/globals.css";
 
 const solo = new URLSearchParams(location.search).has("solo");
+const plugin = new URLSearchParams(location.search).has("plugin");
 const administration =
-  new URLSearchParams(location.search).has("administration") || solo;
+  new URLSearchParams(location.search).has("administration") || solo || plugin;
 const rejectRemoval = new URLSearchParams(location.search).has(
   "reject-removal",
 );
@@ -111,7 +116,7 @@ const managedProfiles = await Promise.all(
 const visitor = new URLSearchParams(location.search).has("visitor");
 const members = [
   ...(visitor ? [] : [viewer.pubkey]),
-  ...(administration && !solo ? [person.pubkey] : []),
+  ...(administration && !solo && !plugin ? [person.pubkey] : []),
   ...scrollMembers.map(({ key }) => key.pubkey),
   ...(idleOverlap ? [] : managed.map(({ key }) => key.pubkey)),
 ];
@@ -199,7 +204,7 @@ const { session: sharedSession } = createRelaySession(
           ],
         }),
         profile(viewer, { name: "Carl" }),
-        ...candidateProfiles,
+        ...(plugin ? [] : candidateProfiles),
         ...scrollProfiles,
         ...managedProfiles,
       ].filter((event) =>
@@ -213,7 +218,19 @@ const { session: sharedSession } = createRelaySession(
               signed(viewer, template),
             publish: async (event) => {
               publishStarted();
-              await held;
+              if (plugin) {
+                const key = event.tags.find(([tag]) => tag === "p")?.[1];
+                if (!key) throw new Error("Missing added identity");
+                additions.push(key);
+                await new Promise<void>((resolve, reject) => {
+                  pendingAdditions.set(key, {
+                    confirm: resolve,
+                    reject: () =>
+                      reject(new PublishRejected("Addition rejected")),
+                  });
+                });
+                members.push(key);
+              } else await held;
               if (rejectRemoval)
                 throw new PublishRejected("Permission changed");
               // A removal takes the member it names off the roster.
@@ -296,14 +313,50 @@ session.channels.ensureList();
 const root = document.getElementById("root");
 if (!root) throw new Error("Missing fixture root");
 function Fixture() {
+  const [open, setOpen] = useState(false);
+  const trigger = useRef<HTMLButtonElement>(null);
   return (
     <ToastProvider>
-      <ChannelMembersButton
-        session={session}
-        channelId={channelId}
-        canOpenLink={() => true}
-        onOpenLink={() => true}
-      />
+      {plugin ? (
+        <>
+          <button type="button" ref={trigger} onClick={() => setOpen(true)}>
+            Access
+          </button>
+          {open && (
+            <ChannelMembersDialog
+              session={session}
+              channelId={channelId}
+              trigger={trigger}
+              close={() => setOpen(false)}
+              shareLink="buzz://plugin?id=example.records&record=design"
+              memberActions={{
+                canAdd: true,
+                pending: false,
+                async change(change, signal) {
+                  await session.memberAdministration.run(
+                    channelId,
+                    change,
+                    signal,
+                  );
+                  const state =
+                    session.memberAdministration.snapshot(channelId);
+                  if (state.operation?.status !== "confirmed") {
+                    await session.memberAdministration.refresh(channelId);
+                    throw new Error(state.error ?? "Addition unconfirmed");
+                  }
+                },
+              }}
+            />
+          )}
+        </>
+      ) : (
+        <ChannelMembersButton
+          session={session}
+          channelId={channelId}
+          canOpenLink={() => true}
+          onOpenLink={() => true}
+        />
+      )}
     </ToastProvider>
   );
 }

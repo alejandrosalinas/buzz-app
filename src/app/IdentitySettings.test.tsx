@@ -3,6 +3,7 @@ import "@testing-library/jest-dom/vitest";
 import {
   act,
   cleanup,
+  fireEvent,
   render,
   screen,
   waitFor,
@@ -19,8 +20,12 @@ import {
 import { BACKUP_FAILURES } from "../features/identity/backup-failure";
 import { backupOfferedFor } from "../features/identity/builderlab-account";
 import type { Identity } from "../features/identity/service";
-import type { FederatedIdentity } from "../features/federated-identity/service";
+import type {
+  FederatedIdentity,
+  SessionSnapshot,
+} from "../features/federated-identity/service";
 import { IdentitySettings } from "./IdentitySettings";
+import { FOLLOW_MS, SETTLED_MS } from "./landing";
 import { federatedFixture } from "../features/federated-identity/testing";
 
 vi.mock("@tauri-apps/api/core", async (importOriginal) => ({
@@ -242,6 +247,10 @@ function bound(service: FederatedIdentity): FederatedIdentity {
     cancelSignIn() {
       expect(this).toBe(self);
       return service.cancelSignIn();
+    },
+    signInLink() {
+      expect(this).toBe(self);
+      return service.signInLink();
     },
     signOut() {
       expect(this).toBe(self);
@@ -1117,6 +1126,397 @@ it("names the first server's failed restore beside a signed-in server, without c
   );
   expect(screen.queryByRole("button", { name: "Sign in" })).toBeNull();
   expect(screen.queryByRole("button", { name: "Try again" })).toBeNull();
+});
+
+it.each([false, true])(
+  "keeps Community sign-ins focused and in view as the server list loads and a session ends, until the user scrolls (scrolled: %s)",
+  async (scrolled) => {
+    const { block, root } = twoServers();
+    block.publish({ status: "signed-in", email: "will@acme.example" });
+    let list!: (servers: readonly SessionSnapshot[]) => void;
+    const servers = () =>
+      new Promise<readonly SessionSnapshot[]>((resolve) => {
+        list = resolve;
+      });
+    // Settings' scrollport. The landing stops 48px down.
+    const port = document.body.appendChild(document.createElement("div"));
+    port.style.overflowY = "auto";
+    let top = 0;
+    Object.defineProperty(port, "scrollTop", {
+      configurable: true,
+      get: () => top,
+      set: (value: number) => {
+        top = value;
+      },
+    });
+    const scrollIntoView = vi.fn(() => {
+      top = 48;
+    });
+    HTMLElement.prototype.scrollIntoView = scrollIntoView;
+    const focus = vi.spyOn(HTMLElement.prototype, "focus");
+    const heading = () =>
+      screen.getByRole("heading", { name: "Community sign-ins" });
+    try {
+      render(
+        <IdentitySettings
+          viewer={viewer}
+          federatedIdentity={root}
+          memberships={memberships}
+          servers={servers}
+          landing="visit"
+        />,
+        {
+          container: port.appendChild(document.createElement("div")),
+          wrapper: ToastProvider,
+        },
+      );
+      const first = heading();
+      expect(first).toHaveFocus();
+      expect(focus).toHaveBeenLastCalledWith({ preventScroll: true });
+      // Instant, so the place it reads back afterwards is where it stopped.
+      expect(scrollIntoView).toHaveBeenCalledExactlyOnceWith({
+        block: "start",
+        behavior: "instant",
+      });
+      expect(scrollIntoView.mock.contexts[0]).toBe(first);
+      expect(top).toBe(48);
+      expect(
+        screen.getByRole("button", { name: "Sign out of organization" }),
+      ).toBeVisible();
+      // The user pages up from the heading, which scrolls the port.
+      if (scrolled) {
+        fireEvent.keyDown(first, { key: "PageUp" });
+        port.scrollTop = 20;
+      }
+      // The listed servers load below the heading, which stays and keeps
+      // the landing's focus.
+      await act(async () => list([block.service.snapshot()]));
+      expect(heading()).toBe(first);
+      expect(first).toHaveFocus();
+      // The server's session ending in the background changes the list
+      // below it, not the heading.
+      act(() => {
+        block.publish({ status: "signed-out", email: null });
+      });
+      expect(screen.getByText("Not signed in")).toBeVisible();
+      expect(heading()).toBe(first);
+      expect(first).toHaveFocus();
+      // Nothing moved the heading, so the landing never scrolls again; a user
+      // who scrolled keeps their place.
+      expect(scrollIntoView).toHaveBeenCalledTimes(1);
+      expect(top).toBe(scrolled ? 20 : 48);
+      // Once the user moves on, focus stays where it went.
+      await userEvent.click(screen.getByRole("button", { name: "Sign in" }));
+      expect(
+        await screen.findByRole("button", {
+          name: "Sign out of acme.builderlab.xyz",
+        }),
+      ).toBeVisible();
+      expect(first).not.toHaveFocus();
+      expect(scrollIntoView).toHaveBeenCalledTimes(1);
+    } finally {
+      focus.mockRestore();
+      Reflect.deleteProperty(HTMLElement.prototype, "scrollIntoView");
+      cleanup();
+      port.remove();
+    }
+  },
+);
+
+/** Settings' scrollport as a real-browser probe measured it: 649px tall, with
+ * the Community sign-ins heading 646px into 743px of content and its
+ * section the rest. Landing scrolls as near the heading's top as the content
+ * allows. Change `layout` as loading would; the landing notices it only on
+ * `resize` or `scroll`. */
+const SECTION = '[aria-labelledby="community-sign-ins-title"]';
+const signInHeading = () =>
+  screen.getByRole("heading", { name: "Community sign-ins" });
+function probedScrollport() {
+  const port = document.body.appendChild(document.createElement("div"));
+  port.style.overflowY = "auto";
+  const layout = { top: 0, height: 743 };
+  Object.defineProperties(port, {
+    scrollTop: {
+      configurable: true,
+      get: () => layout.top,
+      set: (top: number) => {
+        layout.top = top;
+      },
+    },
+    scrollHeight: { configurable: true, get: () => layout.height },
+    clientHeight: { configurable: true, get: () => 649 },
+  });
+  const box = (top: number, height: number) =>
+    ({
+      x: 0,
+      y: top,
+      top,
+      bottom: top + height,
+      left: 0,
+      right: 0,
+      width: 0,
+      height,
+      toJSON() {},
+    }) as DOMRect;
+  vi.spyOn(Element.prototype, "getBoundingClientRect").mockImplementation(
+    function (this: Element) {
+      if (this.id === "community-sign-ins-title")
+        return box(646 - layout.top, 24);
+      if (this.getAttribute("aria-labelledby") === "community-sign-ins-title")
+        return box(646 - layout.top, layout.height - 646);
+      return box(0, 0);
+    },
+  );
+  const scrollIntoView = vi.fn(() => {
+    layout.top = Math.min(646, layout.height - 649);
+  });
+  HTMLElement.prototype.scrollIntoView = scrollIntoView;
+  /** Each live observer, with what it observes. */
+  const observers = new Map<
+    object,
+    { callback: ResizeObserverCallback; nodes: Set<Element> }
+  >();
+  vi.stubGlobal(
+    "ResizeObserver",
+    class {
+      constructor(callback: ResizeObserverCallback) {
+        observers.set(this, { callback, nodes: new Set() });
+      }
+      observe(node: Element) {
+        observers.get(this)?.nodes.add(node);
+      }
+      unobserve(node: Element) {
+        observers.get(this)?.nodes.delete(node);
+      }
+      disconnect() {
+        observers.delete(this);
+      }
+    },
+  );
+  return {
+    port,
+    layout,
+    scrollIntoView,
+    /** Whether the whole section shows, its bottom at or above the port's. */
+    shown: () => layout.height - layout.top <= 649,
+    /** Everything a live observer watches. */
+    observed: () => [...observers.values()].flatMap(({ nodes }) => [...nodes]),
+    /** Live observers of the section: the landing's; the badge has its own. */
+    observing: () => {
+      const section = port.querySelector(SECTION);
+      return [...observers.values()].filter(
+        ({ nodes }) => !!section && nodes.has(section),
+      ).length;
+    },
+    /** The section changed height, and with it every content-sized ancestor
+     * below the port: what observes any of them hears of it. */
+    resize: () =>
+      act(() => {
+        const section = port.querySelector(SECTION);
+        for (const [observer, { callback, nodes }] of [...observers])
+          if (
+            section &&
+            [...nodes].some(
+              (node) =>
+                node !== port && port.contains(node) && node.contains(section),
+            )
+          )
+            callback([], observer as ResizeObserver);
+      }),
+    scroll: () =>
+      act(() => {
+        port.dispatchEvent(new Event("scroll"));
+      }),
+    restore() {
+      Reflect.deleteProperty(HTMLElement.prototype, "scrollIntoView");
+      vi.unstubAllGlobals();
+      cleanup();
+      port.remove();
+    },
+  };
+}
+
+function landedSignIn(servers: () => Promise<readonly SessionSnapshot[]>) {
+  const { block, root } = twoServers();
+  block.publish({ status: "signed-in", email: "will@acme.example" });
+  const scroll = probedScrollport();
+  const container = scroll.port.appendChild(document.createElement("div"));
+  const { unmount } = render(
+    <IdentitySettings
+      viewer={viewer}
+      federatedIdentity={root}
+      memberships={memberships}
+      servers={servers}
+      landing="visit"
+    />,
+    { container, wrapper: ToastProvider },
+  );
+  return { block, scroll, container, unmount };
+}
+
+it.each([
+  ["a clamp it notices resizing", 48, "resize"],
+  ["a clamp it notices scrolling", 48, "scroll"],
+  ["the section growing below the heading", 94, "resize"],
+] as const)(
+  "follows the layout after landing Community sign-ins, with no replacement, and lands again after %s",
+  async (_, top, notice) => {
+    const { scroll } = landedSignIn(() => new Promise(() => {}));
+    try {
+      expect(scroll.layout.top).toBe(94);
+      expect(scroll.shown()).toBe(true);
+      scroll.layout.height = 776;
+      scroll.layout.top = top;
+      expect(scroll.shown()).toBe(false);
+      await scroll[notice]();
+      expect(scroll.scrollIntoView).toHaveBeenCalledTimes(2);
+      expect(scroll.layout.top).toBe(127);
+      expect(scroll.shown()).toBe(true);
+      expect(signInHeading()).toHaveFocus();
+      // Where the landing put it, another notice leaves it.
+      await scroll.resize();
+      await scroll.scroll();
+      expect(scroll.scrollIntoView).toHaveBeenCalledTimes(2);
+    } finally {
+      scroll.restore();
+    }
+  },
+);
+
+it("lands Community sign-ins no more once the user scrolls, though a replacement takes the focus back", async () => {
+  let list!: (servers: readonly SessionSnapshot[]) => void;
+  const { block, scroll } = landedSignIn(
+    () =>
+      new Promise((resolve) => {
+        list = resolve;
+      }),
+  );
+  try {
+    expect(scroll.layout.top).toBe(94);
+    fireEvent.wheel(scroll.port, { deltaY: -46 });
+    scroll.layout.top = 48;
+    scroll.layout.height = 776;
+    await scroll.resize();
+    await scroll.scroll();
+    await act(async () => list([block.service.snapshot()]));
+    expect(signInHeading()).toHaveFocus();
+    await scroll.resize();
+    expect(scroll.scrollIntoView).toHaveBeenCalledTimes(1);
+    expect(scroll.layout.top).toBe(48);
+  } finally {
+    scroll.restore();
+  }
+});
+
+it("lands Community sign-ins in full through the probed journey: a clamp to the end, then growth", async () => {
+  const { scroll } = landedSignIn(() => new Promise(() => {}));
+  try {
+    expect(scroll.layout.top).toBe(94);
+    // The content shrinks to 697px, clamping scrollTop to its end.
+    scroll.layout.height = 697;
+    scroll.layout.top = 48;
+    await scroll.scroll();
+    expect(scroll.layout.top).toBe(48);
+    expect(scroll.shown()).toBe(true);
+    // Then it grows to 776px, the heading where the clamp left it.
+    scroll.layout.height = 776;
+    await scroll.resize();
+    expect(scroll.layout.top).toBe(127);
+    expect(scroll.shown()).toBe(true);
+    expect(signInHeading()).toHaveFocus();
+  } finally {
+    scroll.restore();
+  }
+});
+
+it("follows the layout no more once focus moves on from Community sign-ins", async () => {
+  const { scroll } = landedSignIn(() => new Promise(() => {}));
+  try {
+    expect(scroll.observing()).toBe(1);
+    const signOut = screen.getByRole("button", {
+      name: "Sign out of organization",
+    });
+    await act(async () => signOut.focus());
+    expect(scroll.observing()).toBe(0);
+    scroll.layout.height = 776;
+    scroll.layout.top = 48;
+    await scroll.resize();
+    await scroll.scroll();
+    expect(scroll.scrollIntoView).toHaveBeenCalledTimes(1);
+    expect(signOut).toHaveFocus();
+  } finally {
+    scroll.restore();
+  }
+});
+
+it("watches only what resizes inside the scrollport, and lets go when Identity unmounts", () => {
+  const { scroll, container, unmount } = landedSignIn(
+    () => new Promise(() => {}),
+  );
+  try {
+    const observed = scroll.observed();
+    expect(observed).toContain(
+      screen.getByRole("region", { name: "Community sign-ins" }),
+    );
+    expect(observed).toContain(container);
+    expect(observed).not.toContain(scroll.port);
+    unmount();
+    expect(scroll.observing()).toBe(0);
+  } finally {
+    scroll.restore();
+  }
+});
+
+it("follows the layout until it holds still for SETTLED_MS, then lands Community sign-ins no more", async () => {
+  vi.useFakeTimers();
+  const { scroll } = landedSignIn(() => new Promise(() => {}));
+  try {
+    act(() => vi.advanceTimersByTime(SETTLED_MS - 1));
+    expect(scroll.observing()).toBe(1);
+    act(() => vi.advanceTimersByTime(1));
+    expect(scroll.observing()).toBe(0);
+    scroll.layout.height = 776;
+    await scroll.resize();
+    await scroll.scroll();
+    expect(scroll.scrollIntoView).toHaveBeenCalledTimes(1);
+    expect(scroll.layout.top).toBe(94);
+    expect(signInHeading()).toHaveFocus();
+  } finally {
+    scroll.restore();
+    vi.useRealTimers();
+  }
+});
+
+it("follows a layout that never holds still for FOLLOW_MS at most", async () => {
+  vi.useFakeTimers();
+  const { scroll } = landedSignIn(() => new Promise(() => {}));
+  // Grows or shrinks the content, clamping scrollTop to it, and notices.
+  const change = async () => {
+    scroll.layout.height = scroll.layout.height === 743 ? 776 : 743;
+    scroll.layout.top = Math.min(scroll.layout.top, scroll.layout.height - 649);
+    await scroll.resize();
+  };
+  try {
+    // Each change lands again and restarts the wait for the layout to settle.
+    let elapsed = 0;
+    let lands = 1;
+    while (elapsed + SETTLED_MS - 1 < FOLLOW_MS) {
+      act(() => vi.advanceTimersByTime(SETTLED_MS - 1));
+      elapsed += SETTLED_MS - 1;
+      await change();
+      expect(scroll.scrollIntoView).toHaveBeenCalledTimes(++lands);
+      expect(scroll.shown()).toBe(true);
+    }
+    expect(lands).toBeGreaterThan(2);
+    act(() => vi.advanceTimersByTime(FOLLOW_MS - elapsed));
+    expect(scroll.observing()).toBe(0);
+    await change();
+    expect(scroll.scrollIntoView).toHaveBeenCalledTimes(lands);
+    expect(signInHeading()).toHaveFocus();
+  } finally {
+    scroll.restore();
+    vi.useRealTimers();
+  }
 });
 
 it("keeps a per-server sign-out that native couldn't finish visible, named, with Try again", async () => {

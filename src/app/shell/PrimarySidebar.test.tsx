@@ -18,11 +18,12 @@ import {
   soloDraftTarget,
 } from "../../features/channel-navigation/routes";
 
-import { fixture, owners, id, viewer, scope } from "./sidebar-testing";
+import { fixture, owners, id, viewer, scope, root } from "./sidebar-testing";
 import { federatedFixture } from "../../features/federated-identity/testing";
 import type { ChannelDetails } from "../../features/relay/channel-details-protocol";
 import { createSoloRegionFixture } from "../../features/channel-navigation/solo-navigation-testing";
 import { PrimarySidebar } from "./PrimarySidebar";
+import type { OpenTarget } from "../../features/navigation/targets";
 import { NewMenu } from "./NewMenu";
 import type { SidebarPreferences } from "../../features/relay/sidebar-preferences";
 import type {
@@ -457,6 +458,61 @@ it.each(["Solo", "All"])(
     expect(teamRow).toHaveAttribute("aria-current", "page");
   },
 );
+
+it("preserves a source opening only for itself, through a later render", async () => {
+  const f = fixture(true);
+  f.roster((channels) => [
+    ...channels,
+    {
+      id: "source",
+      name: "Source channel",
+      channelType: "stream",
+      cached: true,
+    },
+  ]);
+  await waitFor(() =>
+    expect(document.querySelector('[data-channel-id="source"]')).not.toBeNull(),
+  );
+  const user = userEvent.setup();
+  await user.click(screen.getByRole("tab", { name: "Solo" }));
+  const target = conversationTarget(scope, "source");
+  const thread: OpenTarget = {
+    version: 1,
+    kind: "conversation",
+    scope: { viewer, communityOrigin: "https://relay.test" },
+    channelId: "source",
+    messageId: root,
+    threadRootId: root,
+  };
+  const teamRow = () => document.querySelector('[data-channel-id="source"]');
+  await act(() => f.open(target, { sidebar: "preserve" }));
+  // Something unrelated rendering the sidebar keeps the preserved opening.
+  f.connection({ status: "ready" });
+  expect(teamRow()).not.toHaveAttribute("aria-current");
+  expect(screen.getByRole("tab", { name: "Solo" })).toHaveAttribute(
+    "aria-selected",
+    "true",
+  );
+  // A later open in it, here a thread, uses the normal destination rules.
+  await act(() => f.open(thread));
+  expect(teamRow()).toHaveAttribute("aria-current", "page");
+  expect(screen.getByRole("tab", { name: "Team" })).toHaveAttribute(
+    "aria-selected",
+    "true",
+  );
+  // Moving within the conversation, as Back and Forward over the thread do,
+  // keeps a filter chosen since: it is not a new destination.
+  await user.click(screen.getByRole("tab", { name: "Solo" }));
+  f.navigateWithin(target);
+  f.navigateWithin(thread);
+  expect(screen.getByRole("tab", { name: "Solo" })).toHaveAttribute(
+    "aria-selected",
+    "true",
+  );
+  // And a preserved opening from inside that thread applies again.
+  await act(() => f.open(target, { sidebar: "preserve" }));
+  expect(teamRow()).not.toHaveAttribute("aria-current");
+});
 
 it.each([
   ["New workspace", "New workspace", "Cancel"],
@@ -1374,7 +1430,73 @@ it.each(["New"])(
   },
 );
 
-it("keeps an ordinary chat editor and pending save through task-source recovery", async () => {
+it.each(["neighbor", "heading", "moved"])(
+  "recovers plain-list focus after the last chat in a workspace disappears (%s)",
+  async (destination) => {
+    const h = createSoloRegionFixture(viewer);
+    const preferences = createSidebarPreferencesStore({
+      available: true,
+      groupsOnly: true,
+      read: async () => ({
+        sections: [{ id: "work", name: "Work", order: 0 }],
+        assignments: { chat: "work" },
+        starred: [],
+        muted: [],
+      }),
+    });
+    await preferences.queries.ensure();
+    Object.assign(h.session, { soloPreferences: preferences.queries });
+    h.roster([
+      { id: "chat", name: "Chat", channelType: "solo", creator: viewer },
+      { id: "other", name: "Other", channelType: "solo", creator: viewer },
+    ]);
+    await h.register({
+      composeWorkspaces: true,
+      component: ({ ui }) => (ui.ChatList ? <ui.ChatList /> : null),
+    });
+    const view = render(
+      <ToastProvider>
+        <PrimarySidebar
+          relay={h.relay}
+          navigator={h.navigator}
+          target={conversationTarget(h.scope, "chat")}
+        >
+          <button type="button">Elsewhere</button>
+        </PrimarySidebar>
+      </ToastProvider>,
+    );
+    try {
+      const heading = screen.getByLabelText("Work", { selector: "summary" });
+      const elsewhere = screen.getByRole("button", { name: "Elsewhere" });
+      const chat = screen.getByRole("button", { name: "Chat" });
+      chat.focus();
+      await act(async () => {
+        h.roster(
+          destination === "heading"
+            ? []
+            : h.session.channels
+                .list()
+                .channels.filter(({ id }) => id !== "chat"),
+        );
+        if (destination === "moved") elsewhere.focus();
+      });
+      await waitFor(() => expect(chat).not.toBeInTheDocument());
+      expect(
+        destination === "neighbor"
+          ? screen.getByRole("button", { name: "Other" })
+          : destination === "heading"
+            ? heading
+            : elsewhere,
+      ).toHaveFocus();
+    } finally {
+      view.unmount();
+      preferences.dispose();
+      await h.dispose();
+    }
+  },
+);
+
+it("keeps an ordinary chat editor and pending save through layout changes and task-source recovery", async () => {
   const h = createSoloRegionFixture(viewer);
   const preferences = createSidebarPreferencesStore({
     available: true,
@@ -1426,11 +1548,13 @@ it("keeps an ordinary chat editor and pending save through task-source recovery"
   h.roster([...h.session.channels.list().channels]);
   const source = await h.register({
     composeWorkspaces: true,
-    component: ({ ui }) => {
+    component: ({ ui, snapshot }) => {
       const Workspace = ui.Workspace;
       const Chats = ui.Chats;
-      if (!Workspace || !Chats)
+      const ChatList = ui.ChatList;
+      if (!Workspace || !Chats || !ChatList)
         throw new Error("Missing workspace composition");
+      if (snapshot.model === "list") return <ChatList />;
       return (
         <>
           <Workspace id="work">{null}</Workspace>
@@ -1451,24 +1575,38 @@ it("keeps an ordinary chat editor and pending save through task-source recovery"
     </ToastProvider>,
   );
   const user = userEvent.setup();
-  const change = (status: "loading" | "ready", revision: number) =>
-    act(() => source.update({ status, binding: source.binding(), revision }));
+  const change = (
+    status: "loading" | "ready",
+    revision: number,
+    model?: string,
+  ) =>
+    act(() =>
+      source.update({
+        status,
+        binding: source.binding(),
+        revision,
+        ...(model ? { model } : {}),
+      }),
+    );
   try {
     await user.dblClick(await screen.findByRole("button", { name: /^Chat$/ }));
     const input = await screen.findByRole("textbox", { name: "Chat name" });
     await waitFor(() => expect(input).toHaveFocus());
     await user.keyboard("Keep this name");
-    change("loading", 2);
+    change("ready", 2, "list");
+    expect(screen.queryByRole("button", { name: "Work" })).toBeNull();
+    expect(screen.getByRole("textbox", { name: "Chat name" })).toBe(input);
+    change("loading", 3);
     expect(screen.getByRole("textbox", { name: "Chat name" })).toBe(input);
     expect(input).toHaveValue("Keep this name");
-    change("ready", 3);
+    change("ready", 4, "list");
     expect(screen.getByRole("textbox", { name: "Chat name" })).toBe(input);
     await user.keyboard("{Enter}");
     await waitFor(() => expect(save).toHaveBeenCalledOnce());
-    change("loading", 4);
+    change("loading", 5);
     expect(savingSignal?.aborted).toBe(false);
     expect(screen.getByRole("textbox", { name: "Chat name" })).toBe(input);
-    change("ready", 5);
+    change("ready", 6, "list");
     expect(savingSignal?.aborted).toBe(false);
     await act(async () => {
       release();

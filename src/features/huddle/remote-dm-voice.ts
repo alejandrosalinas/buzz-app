@@ -137,7 +137,7 @@ export function remoteDmVoiceCalls(relay: RelayData, agents: Agents) {
           channelId: parent.id,
           channelName: parent.name,
         };
-        const agent = dmVoiceAgent(current, destination, agents);
+        const agent = dmVoiceAgent(current, destination, agents, parent);
         if (agent?.type !== "buzz.codex/codex") return [];
         return recentHuddles(
           events,
@@ -217,6 +217,7 @@ export function remoteDmVoiceCalls(relay: RelayData, agents: Agents) {
               channelName: channel.name,
             },
             agents,
+            channel,
           )?.type === "buzz.codex/codex",
       )
       .map((channel) => channel.id)

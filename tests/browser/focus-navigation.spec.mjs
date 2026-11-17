@@ -376,7 +376,8 @@ test("covered panes and notifications preserve focus and F6 recovery", async ({
   // docked composers; pin the stack to its base offset so a covered composer's
   // focus recovery stays exercised.
   await page.addStyleTag({
-    content: ":root { --buzz-toast-clearance: 0px !important; }",
+    content:
+      '[aria-label="App notifications"] { --buzz-toast-clearance: 0px !important; }',
   });
   await page.setViewportSize({ width: 1440, height: 900 });
   await composer.fill("Toast draft");
@@ -644,10 +645,12 @@ test.extend({
       'div[tabindex="-1"]:has(> [data-main-workspace])',
     );
     // Beside the tab the page stays live. Narrowing from it hands focus to
-    // the tab. Opening lands on the reply first; let it, or it takes focus
+    // the tab. Opening focuses the composer first; let it, or it takes focus
     // back from the row.
     await expect(covered).not.toHaveAttribute("inert");
-    await expect(side.locator("[data-message-id]:focus")).toHaveCount(1);
+    await expect(
+      side.getByRole("textbox", { name: "Reply to thread" }),
+    ).toBeFocused();
     await row.focus();
     await expect(row).toBeFocused();
     await page.setViewportSize({ width: 600, height: 900 });

@@ -43,6 +43,8 @@ export type ConversationTab =
       revealRequest?: number | undefined;
       /** Transient visual cue when an opening reuses this tab. */
       attentionRequest?: number | undefined;
+      /** Each opening that names a read time asks for its divider anew. */
+      unreadRequest?: { readThrough: number } | undefined;
       /** Threads live in the side pane unless moved or opened into main. */
       pane?: TabPane | undefined;
       /** The reader's verified root, which may differ from a link's hint. */
@@ -82,7 +84,9 @@ type State = {
   left?: boolean;
   paneOpen: boolean;
   thread: { channelId: string; messageId: string } | undefined;
-  settings: { id: string; channelId: string | undefined } | undefined;
+  settings:
+    | { id: string; channelId: string | undefined; focusRequest?: string }
+    | undefined;
   /** A launcher's side panel shows in the pane; the page owns that panel. */
   sidePanel?: boolean;
   /** The launcher side panel left open here, shown again on return until closed. */
@@ -189,6 +193,7 @@ function withThread(
   pane: TabPane,
   attention = false,
   relocate = false,
+  unreadSince?: number,
 ): State {
   const existing = threadTab(state.tabs, channelId, rootId);
   const baseId = `thread:${channelId}:${rootId}`;
@@ -219,14 +224,19 @@ function withThread(
       intent === "focus" || (attention && intent === undefined)
         ? (prior?.focusRequest ?? 0) + 1
         : prior?.focusRequest,
+    // An opening at a read time asks for its line, not an earlier reveal.
     revealRequest:
       intent === "reveal"
         ? (prior?.revealRequest ?? 0) + 1
-        : prior?.revealRequest,
+        : unreadSince === undefined
+          ? prior?.revealRequest
+          : undefined,
     // Detail visits need the source thread in the other pane.
     pane: prior && !relocate ? tabPane(prior) : pane,
     rootId: prior?.rootId,
     name: prior?.name,
+    unreadRequest:
+      unreadSince === undefined ? undefined : { readThrough: unreadSince },
   };
   const tabs = existing
     ? state.tabs.map((tab) => (tab.id === id ? next : tab))
@@ -483,6 +493,18 @@ export function channelTabs(session: RelaySession, navigation?: Navigation) {
   return {
     list: (channelId: string) =>
       threads(channelId).map(({ tab: _, ...thread }) => thread),
+    /** The channel's existing details tab, opened after navigation permits entry. */
+    openSettings(channelId: string, focusRequest: string) {
+      store.update(keyOf("messages", channelId), (state) => ({
+        ...state,
+        settings: {
+          ...(state.settings ?? { id: crypto.randomUUID(), channelId }),
+          focusRequest,
+        },
+        selected: "settings",
+        paneOpen: true,
+      }));
+    },
     /** Opens thread `rootId` of `channelId` in its workspace; false when it
      * already has a tab there. */
     open(channelId: string, rootId: string) {
@@ -619,9 +641,20 @@ export function useChannelTabState(
       rootId: string,
       intent?: ThreadIntent,
       pane: TabPane = threadPlacementPreference(),
+      unreadSince?: number,
     ) =>
       update((state) =>
-        withThread(state, channelId, messageId, rootId, intent, pane, true),
+        withThread(
+          state,
+          channelId,
+          messageId,
+          rootId,
+          intent,
+          pane,
+          true,
+          false,
+          unreadSince,
+        ),
       ),
     [update],
   );

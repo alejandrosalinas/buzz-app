@@ -84,14 +84,11 @@ test("the verified owner confirms a NIP-09 delete for an agent message", async (
   await confirmation
     .getByRole("button", { name: "Delete", exact: true })
     .click();
-  await expect(confirmation.getByRole("alert")).toContainText(
-    "Fixture deletion refusal",
-  );
-  await confirmation
-    .getByRole("button", { name: "Close", exact: true })
-    .filter({ hasText: /^Close$/ })
-    .click();
+  // The dialog closes on submit; the refusal is reported outside it.
   await expect(confirmation).toHaveCount(0);
+  await expect(
+    page.getByText("Message deletion: Fixture deletion refusal"),
+  ).toBeVisible();
   const retry = page.getByRole("button", {
     name: "Retry message update",
     exact: true,

@@ -1,4 +1,4 @@
-import { prepareAttachment } from "./prepare-attachment";
+import { animatedImage, prepareAttachment } from "./prepare-attachment";
 import { expect, it } from "vitest";
 import {
   cleanGif,
@@ -109,6 +109,35 @@ it("cleans WebP flags, nested frame metadata and padding without changing frames
   const icc = webp([riff("ICCP", enc("profile")), riff("VP8 ", pixels)]);
   expect(webpNeedsPixelTransform(webpChunks(icc))).toBe(true);
   expect(() => cleanWebp(icc, true)).toThrow(/ICC/);
+});
+it("tells animated images from still ones", async () => {
+  const header = png("IHDR", new Uint8Array(13));
+  const frame = riff("VP8 ", new Uint8Array(3));
+  const images = [
+    [join([signature, header, png("IDAT"), png("IEND")]), false],
+    [
+      join([
+        signature,
+        header,
+        png("acTL", new Uint8Array(8)),
+        png("IDAT"),
+        png("IEND"),
+      ]),
+      true,
+    ],
+    [webp([frame]), false],
+    [
+      webp([
+        riff("VP8X", new Uint8Array(10)),
+        riff("ANIM", new Uint8Array(6)),
+        riff("ANMF", join([new Uint8Array(16), frame])),
+      ]),
+      true,
+    ],
+    [enc("GIF89a"), true],
+  ] as const;
+  for (const [bytes, animated] of images)
+    expect(await animatedImage(new Blob([bytes]))).toBe(animated);
 });
 it("preserves GIF loop, delay and image blocks but drops comment/trailer junk", async () => {
   const header = join([enc("GIF89a"), new Uint8Array([1, 0, 1, 0, 0, 0, 0])]);

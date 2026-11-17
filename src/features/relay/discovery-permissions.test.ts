@@ -227,3 +227,26 @@ it("lists roster owners from the signed role hints", () => {
   );
   expect(state.get(id)?.owners).toEqual([owner.pubkey, viewer.pubkey].sort());
 });
+
+it("reuses the readable channels until a change", () => {
+  const state = new DiscoveryState(viewer.pubkey, relay.pubkey);
+  const rosterEvent = roster("member", 10);
+  const detailsEvent = details("member", 10);
+  state.accept(detailsEvent);
+  state.accept(rosterEvent);
+  const readable = state.readable();
+  expect(readable.map((channel) => channel.id)).toEqual([id]);
+  // Catch-up hands the same events back.
+  state.accept(detailsEvent);
+  state.accept(rosterEvent);
+  expect(state.readable()).toBe(readable);
+  state.accept(roster("guest", 11));
+  expect(state.readable()).not.toBe(readable);
+  expect(state.readable()[0]).toMatchObject({ viewerRole: "guest" });
+  state.deny(id);
+  expect(state.readable()).toEqual([]);
+  state.start({ id: "started", name: "Started", members: [] });
+  expect(state.readable().map((channel) => channel.id)).toEqual(["started"]);
+  state.abandon("started");
+  expect(state.readable()).toEqual([]);
+});

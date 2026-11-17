@@ -231,7 +231,7 @@ test("interface zoom preserves an open emoji search and scales its controls", as
   await expect(search).toBeFocused();
   await search.fill("grinning");
   const emoji = button(page, "😀");
-  await expect(emoji).toHaveCSS("width", "48px");
+  await expect(emoji).toHaveCSS("width", "32px");
   await search.press("ArrowRight");
   const selected = page.locator(
     'em-emoji-picker .category:not([data-id]) button[aria-selected="true"]',
@@ -242,7 +242,7 @@ test("interface zoom preserves an open emoji search and scales its controls", as
   await scale(page, 2);
   await expect(search).toHaveValue("grinning");
   await expect(search).toBeFocused();
-  await expect(emoji).toHaveCSS("width", "96px");
+  await expect(emoji).toHaveCSS("width", "64px");
   await expect(selected).toHaveAttribute("aria-label", chosen);
   await expect(page.locator("em-emoji-picker .search .loupe svg")).toHaveCSS(
     "width",
@@ -266,7 +266,7 @@ test("interface zoom preserves an open emoji search and scales its controls", as
   await scale(page, 1);
   await expect(search).toHaveValue("grinning");
   await expect(search).toBeFocused();
-  await expect(emoji).toHaveCSS("width", "48px");
+  await expect(emoji).toHaveCSS("width", "32px");
   await expect(selected).toHaveAttribute("aria-label", chosen);
   await search.press("Enter");
   await expect(composer).toHaveJSProperty(
@@ -290,7 +290,7 @@ test("interface zoom preserves an open emoji search and scales its controls", as
   await expect
     // The old vendor node is briefly absent during the geometry rebuild.
     .poll(async () => (await emoji.boundingBox())?.width)
-    .toBeCloseTo(52.8, 1);
+    .toBeCloseTo(35.2, 1);
   await expect(search).toBeFocused();
   await expect.poll(range).toEqual([0, 2]);
   await page.keyboard.type("gr");

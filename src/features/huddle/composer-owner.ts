@@ -1,4 +1,5 @@
 import { communityFromScope, relayGifRequests } from "../relay/gifs";
+import { onAutomatic } from "../agents/recommended";
 import { MAX_VOICE_SECONDS } from "../relay/voice-media";
 import { mentionDraft } from "../messages/mention-draft";
 import { readView, writeView } from "../../shared/view-state";
@@ -45,7 +46,9 @@ export function createHuddleComposerOwner(
           .agents.find((item) => item.pubkey === pubkey);
         const type =
           agent && agents?.types().find((item) => item.key === agent.type);
-        if (!agent || !type?.models) return [];
+        // An agent on Automatic gets no picker, as in the main composer.
+        if (!agent || !type?.models || onAutomatic(agent.config, type.id))
+          return [];
         const models = await type.models(agent);
         if (
           agents?.snapshot().agents.find((item) => item.pubkey === pubkey) !==

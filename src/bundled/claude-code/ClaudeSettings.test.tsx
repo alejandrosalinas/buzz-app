@@ -13,6 +13,7 @@ import userEvent from "@testing-library/user-event";
 import { StrictMode, useState } from "react";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import type { Spawn } from "./claude";
+import { CONNECT } from "./auth";
 import { ClaudeSettings } from "./ClaudeSettings";
 import { ClaudeSetup } from "./setup";
 
@@ -50,14 +51,30 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
+/** What `claude auth status` reports when set: the person's own setup; an
+ * answer waits for what `hold` returns, when set. */
+const own = vi.hoisted(() => ({
+  status: undefined as object | undefined,
+  hold: undefined as (() => Promise<void> | undefined) | undefined,
+}));
+beforeEach(() => {
+  own.status = undefined;
+  own.hold = undefined;
+});
+
 function fixture(active = () => true) {
   // No installed runtime: management must still work, without starting Claude.
-  const spawn: Spawn = vi.fn(async () => ({
-    write: async () => {},
-    end: async () => {},
-    kill: async () => {},
-    exited: Promise.resolve(127),
-  }));
+  const spawn: Spawn = vi.fn(async (_id, options) => {
+    if (own.status) options?.onStdout?.(JSON.stringify(own.status));
+    return {
+      write: async () => {},
+      end: async () => {},
+      kill: async () => {},
+      exited: (own.hold?.() ?? Promise.resolve()).then(() =>
+        own.status ? 0 : 127,
+      ),
+    };
+  });
   const setup = new ClaudeSetup(spawn);
   const Settings = setup.auth.Settings;
   if (!Settings)
@@ -131,14 +148,12 @@ it("adds, confirms removal, and adds again without an installed runtime", async 
   const { spawn } = fixture();
   await screen.findByRole("button", { name: "Set" });
   expect(screen.getAllByText("Anthropic API key")).toHaveLength(1);
-  expect(
-    screen.getByText("Claude requires an API key to connect to your account."),
-  ).toBeVisible();
+  expect(screen.getByText(CONNECT)).toBeVisible();
   expect(screen.queryByLabelText("Anthropic API key")).toBeNull();
   const add = await connectKey(user);
   const dialog = screen.getByRole("dialog", { name: "Connect Claude" });
   expect(dialog).toHaveAccessibleDescription(
-    "Create an API key at console.anthropic.com and paste it below.",
+    `${CONNECT} Create an API key at console.anthropic.com and paste it below.`,
   );
   expect(
     within(dialog).getByRole("link", { name: "console.anthropic.com" }),
@@ -152,7 +167,15 @@ it("adds, confirms removal, and adds again without an installed runtime", async 
     "aria-disabled",
     "true",
   );
-  expect(spawn).not.toHaveBeenCalled();
+  // Only Claude's own setup check, which finds no copy to ask.
+  expect(
+    vi
+      .mocked(spawn)
+      .mock.calls.every(
+        ([id, options]) =>
+          id === "claude" && options?.args?.join(" ") === "auth status --json",
+      ),
+  ).toBe(true);
   await user.type(add, "sk-ant-first");
   await user.click(screen.getByRole("button", { name: "Save" }));
   await savedKey();
@@ -281,11 +304,16 @@ it.each(["saved elsewhere", "read failure"] as const)(
   async (outcome) => {
     native.saved = false;
     const user = userEvent.setup();
-    const { setup, present, onOpenChange } = fixture();
+    const { present, onOpenChange } = fixture();
     await user.type(await connectKey(user), "sk-ant-draft");
     act(() => present(false));
     await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
-    const read = vi.spyOn(setup.auth, "check");
+    // Settings reads the key store once each time setup opens.
+    const asked = native.invoke.mock.calls.length;
+    const read = () =>
+      native.invoke.mock.calls
+        .slice(asked)
+        .filter(([command]) => command === "claude_api_key_status").length;
     let release!: () => void;
     const pending = new Promise<void>((resolve) => {
       release = resolve;
@@ -308,7 +336,7 @@ it.each(["saved elsewhere", "read failure"] as const)(
     } finally {
       await act(async () => release());
     }
-    expect(read).toHaveBeenCalledOnce();
+    expect(read()).toBe(1);
     if (outcome === "saved elsewhere") {
       await waitFor(() => expect(onOpenChange).toHaveBeenCalledWith(false));
       expect(screen.queryByRole("dialog")).toBeNull();
@@ -419,12 +447,12 @@ it("treats a credential read failure as unknown and offers retry", async () => {
   native.invoke.mockImplementationOnce(() => pending);
   native.invoke.mockImplementationOnce(() => pending);
   fixture();
-  expect(screen.queryByText(/Claude requires an API key/)).toBeNull();
+  expect(screen.queryByText(CONNECT)).toBeNull();
   await act(async () => reject("Secure storage is unavailable"));
   expect(await screen.findByRole("alert")).toHaveTextContent(
     "Secure storage is unavailable",
   );
-  expect(screen.queryByText(/Claude requires an API key/)).toBeNull();
+  expect(screen.queryByText(CONNECT)).toBeNull();
   expect(
     screen.queryByRole("button", { name: "API key actions" }),
   ).not.toBeInTheDocument();
@@ -587,6 +615,11 @@ it("discards replacement drafts when the page closes", async () => {
     <ClaudeSettings
       setup={setup}
       active={() => true}
+      read={async () => ({
+        own: false,
+        key: (await setup.auth.check()) !== undefined,
+      })}
+      connect={CONNECT}
       clearKey={() => setup.auth.clear()}
     />,
   );
@@ -665,4 +698,64 @@ it("saves a replacement with Enter after composition ends", async () => {
   expect(native.value).toBe("sk-ant-new");
   expect(input).toHaveAttribute("type", "password");
   expect(input).toHaveAttribute("readonly");
+});
+
+it("asks for no key over the person's own setup, and never names it", async () => {
+  native.saved = false;
+  own.status = { loggedIn: true, apiProvider: "vertex" };
+  fixture();
+  expect(await screen.findByText("No key saved.")).toBeVisible();
+  expect(
+    screen.getByText("Manage Claude’s credentials on this computer."),
+  ).toBeVisible();
+  expect(screen.queryByText(CONNECT)).toBeNull();
+  expect(screen.queryByText(/Vertex/)).toBeNull();
+  await connectKey();
+  const dialog = screen.getByRole("dialog", { name: "Connect Claude" });
+  expect(dialog).toHaveAccessibleDescription(
+    "Create an API key at console.anthropic.com and paste it below.",
+  );
+  expect(within(dialog).queryByRole("button", { name: "Refresh" })).toBeNull();
+});
+
+it("keeps keyboard focus on Refresh while a held check finds no setup", async () => {
+  native.saved = false;
+  const user = userEvent.setup();
+  fixture();
+  await connectKey(user);
+  const dialog = screen.getByRole("dialog", { name: "Connect Claude" });
+  let release!: () => void;
+  const held = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  // Setup's own check answers; Settings' check of the credentials waits.
+  let asked = 0;
+  own.hold = () => (++asked === 2 ? held : undefined);
+  own.status = { loggedIn: false };
+  const refresh = within(dialog).getByRole("button", { name: "Refresh" });
+  await user.click(refresh);
+  // Natively disabled, a browser would blur it out of the dialog.
+  await waitFor(() => expect(refresh).toHaveAttribute("aria-disabled", "true"));
+  expect(refresh).not.toHaveAttribute("disabled");
+  expect(refresh).toHaveFocus();
+  release();
+  await waitFor(() =>
+    expect(refresh).toHaveAttribute("aria-disabled", "false"),
+  );
+  expect(refresh).toHaveFocus();
+  expect(dialog).toBeInTheDocument();
+});
+
+it("refreshes to find a setup made with the Claude CLI, closing key entry", async () => {
+  native.saved = false;
+  const user = userEvent.setup();
+  const { setup } = fixture();
+  await connectKey(user);
+  const dialog = screen.getByRole("dialog", { name: "Connect Claude" });
+  own.status = { loggedIn: true, apiProvider: "bedrock" };
+  await user.click(within(dialog).getByRole("button", { name: "Refresh" }));
+  await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+  expect(screen.queryByText(CONNECT)).toBeNull();
+  expect(screen.queryByText(/Bedrock/)).toBeNull();
+  expect(setup.auth.usesOwnSetup).toBe(true);
 });
