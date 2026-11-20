@@ -1,4 +1,4 @@
-import { LOG_LEVELS, type LogLevel } from "./logging.ts";
+import { LOG_LEVELS, type LogLevel } from "./log-level.ts";
 import type { RelayMetrics } from "./network-metrics.ts";
 import type { NetworkCancellation } from "./network-context.ts";
 

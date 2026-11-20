@@ -279,4 +279,4 @@ export type {
   RelayMetrics as NetworkRelayMetrics,
   MetricWindow as NetworkMetricWindow,
 } from "../features/developer/network-metrics";
-export type { LogLevel as NetworkLogLevel } from "../features/developer/logging";
+export type { LogLevel as NetworkLogLevel } from "../features/developer/log-level";

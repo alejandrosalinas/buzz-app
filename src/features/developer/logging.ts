@@ -1,21 +1,21 @@
 import { createConsola } from "consola";
 import type { ViteHotContext } from "vite/types/hot.d.ts";
 
-export const LOG_LEVELS = {
-  silent: -999,
-  error: 0,
-  warn: 1,
-  info: 3,
-  debug: 4,
-  trace: 5,
-} as const;
-export type LogLevel = keyof typeof LOG_LEVELS;
-export const DEFAULT_LOG_LEVEL: LogLevel = "info";
+import {
+  DEFAULT_LOG_LEVEL,
+  isLogLevel,
+  LOG_LEVELS,
+  type LogLevel,
+} from "./log-level.ts";
+export {
+  DEFAULT_LOG_LEVEL,
+  isLogLevel,
+  LOG_LEVELS,
+  type LogLevel,
+} from "./log-level.ts";
+
 export const DEVELOPER_SETTINGS_PATH = "/api/dev/settings";
 export const LOG_LEVEL_EVENT = "buzz:log-level";
-export function isLogLevel(value: unknown): value is LogLevel {
-  return typeof value === "string" && Object.hasOwn(LOG_LEVELS, value);
-}
 
 let level: LogLevel = DEFAULT_LOG_LEVEL;
 const loggers = new Map<string, ReturnType<typeof createConsola>>();

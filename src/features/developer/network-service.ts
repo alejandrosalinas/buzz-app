@@ -1,6 +1,6 @@
 import type { Context } from "@deepseek-ai/cordis";
 import { invoke, isTauri } from "@tauri-apps/api/core";
-import { isLogLevel, type LogLevel } from "./logging";
+import { isLogLevel, type LogLevel } from "./log-level";
 import { networkMetrics, type NativeTraffic } from "./network-metrics";
 import {
   networkRecorder,
