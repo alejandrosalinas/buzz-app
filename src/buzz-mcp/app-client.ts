@@ -18,6 +18,14 @@ type Spawn = (id: string, options?: HostProcessOptions) => Promise<HostProcess>;
 export const READ_LIMIT = 50 * 1024 * 1024;
 const READ_TIMEOUT_MS = 60_000;
 
+/** A connected host's relay key: `null` when the relay advertises none,
+ * undefined when there is no connection to ask. */
+export function relayKeyOf(
+  source: { workflowAuthority(): string | undefined } | undefined,
+) {
+  return source && (source.workflowAuthority() ?? null);
+}
+
 export function appClient(
   agent: AgentHandle,
   options: Readonly<{
@@ -25,7 +33,8 @@ export function appClient(
      * directory. */
     read(path: string): Promise<Uint8Array>;
     relayAuthor?: string | undefined;
-    signingAuthority?: string | undefined;
+    /** As `BuzzClient.signingAuthority`; undefined when unknown. */
+    signingAuthority?: string | null | undefined;
     memories(slug?: string): Promise<Memories>;
     /** Forget a read that may have started before a successful memory write. */
     remembered?(): void;
@@ -159,7 +168,10 @@ export function appClient(
     key: agent.key,
     owner: agent.owner,
     relayAuthor: options.relayAuthor,
-    signingAuthority: options.signingAuthority,
+    // Absent when the host can't learn the relay's key.
+    ...(options.signingAuthority !== undefined
+      ? { signingAuthority: options.signingAuthority }
+      : {}),
     attention: agent.attention && {
       enabled: () => {
         check();

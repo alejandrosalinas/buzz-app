@@ -48,6 +48,9 @@ async function nativeUpdater(
         transformCallback: () => ++nextCallback,
         unregisterCallback() {},
         invoke: async (command, args) => {
+          if (command === "plugin:app|version") return "1.0.0";
+          if (command === "get_build_identity")
+            return { revision: "b".repeat(64), state: "clean" };
           if (command === "deep_link_take") return [];
           if (command === "deep_link_watch") return;
           if (command === "plugin_catalog")
@@ -137,9 +140,14 @@ test("update checks recover from failure, download, and restart from the top bar
 
   await expect(status).toHaveText("Check if a new version is available.");
   const action = button(page, "Check for updates");
-  const card = page
-    .getByRole("region", { name: "Software updates", exact: true })
-    .locator(".buzz-empty-state");
+  const settings = page.getByRole("region", {
+    name: "Software updates",
+    exact: true,
+  });
+  const card = settings.locator(".buzz-empty-state");
+  const disclosure = settings.getByRole("button", { name: "Build details" });
+  await expect(disclosure).toHaveAttribute("aria-expanded", "false");
+  await expect(settings.getByText(/^Native image source:/)).toHaveCount(0);
   // Browser geometry verifies the card and action fit the centered settings column.
   for (const width of [1280, 390]) {
     await page.setViewportSize({ width, height: 900 });
@@ -162,6 +170,38 @@ test("update checks recover from failure, download, and restart from the top bar
     await page.screenshot({
       path: info.outputPath(`update-card-${width}.png`),
     });
+    await action.focus();
+    await page.keyboard.press("Tab");
+    await expect(disclosure).toBeFocused();
+    await page.keyboard.press("Enter");
+    await expect(disclosure).toHaveAttribute("aria-expanded", "true");
+    const identity = settings.getByText(
+      `Native image source: ${"b".repeat(64)} · clean`,
+    );
+    await expect(identity).toBeVisible();
+    await expect
+      .poll(async () => {
+        const bounds = await settings.boundingBox();
+        return identity.evaluate((node, bounds) => {
+          const range = document.createRange();
+          range.selectNodeContents(node);
+          return (
+            bounds &&
+            [...range.getClientRects()].every(
+              (box) =>
+                box.left >= bounds.x && box.right <= bounds.x + bounds.width,
+            )
+          );
+        }, bounds);
+      })
+      .toBe(true);
+    await expect(action).toBeInViewport({ ratio: 1 });
+    await page.screenshot({
+      path: info.outputPath(`update-build-details-${width}.png`),
+    });
+    await disclosure.click();
+    await expect(disclosure).toHaveAttribute("aria-expanded", "false");
+    await expect(disclosure).toBeFocused();
   }
   await page.setViewportSize({ width: 1280, height: 900 });
   await action.focus();
@@ -182,11 +222,7 @@ test("update checks recover from failure, download, and restart from the top bar
       delete window.finishCheck;
     });
     await expect(status).toHaveText(result);
-    await expect(
-      page
-        .getByRole("region", { name: "Software updates", exact: true })
-        .getByRole("button"),
-    ).toBeFocused();
+    await expect(card.getByRole("button")).toBeFocused();
   }
   await expect(status).toHaveText("Downloading update…");
   await expect(button(page, READY)).toHaveCount(0);

@@ -16,14 +16,29 @@ import { createUpdates, type UpdatePlatform, type Updates } from "./updates";
 const native = vi.hoisted(() => ({
   getVersion: vi.fn(async () => "1.2.3"),
   isTauri: vi.fn(() => false),
+  invoke: vi.fn(
+    async (): Promise<{ revision: string | null; state: string }> => ({
+      revision: null,
+      state: "unknown",
+    }),
+  ),
 }));
 vi.mock("@tauri-apps/api/app", () => ({ getVersion: native.getVersion }));
-vi.mock("@tauri-apps/api/core", () => ({ isTauri: native.isTauri }));
+vi.mock("@tauri-apps/api/core", () => ({
+  invoke: native.invoke,
+  isTauri: native.isTauri,
+}));
 
 let updates: Updates | undefined;
 afterEach(() => {
   cleanup();
   updates?.dispose();
+  vi.unstubAllEnvs();
+  native.isTauri.mockReturnValue(false);
+  native.invoke.mockReset().mockResolvedValue({
+    revision: null,
+    state: "unknown",
+  });
 });
 
 /** Reactions run in registration order, so the owner finishes its check first. */
@@ -53,6 +68,9 @@ it("checks on request and checks again from the latest version", async () => {
   expect(
     screen.getByRole("heading", { name: "Update status", level: 3 }),
   ).toBeVisible();
+  expect(screen.queryByText(/Native image source:/)).toBeNull();
+  expect(screen.queryByText(/Loaded frontend source:/)).toBeNull();
+  expect(screen.queryByRole("button", { name: "Build details" })).toBeNull();
   expect(
     screen.getByText("Check if a new version is available."),
   ).toBeVisible();
@@ -133,6 +151,86 @@ it("uses the installed version as the card title without a separate description"
     native.isTauri.mockReturnValue(false);
   }
 });
+
+it("discloses separate build identities without separating update status and action", async () => {
+  const user = userEvent.setup();
+  native.isTauri.mockReturnValue(true);
+  native.invoke.mockResolvedValue({
+    revision: "b".repeat(40),
+    state: "clean",
+  });
+  vi.stubEnv("VITE_BUZZ_FRONTEND_SOURCE_REVISION", "a".repeat(40));
+  vi.stubEnv("VITE_BUZZ_FRONTEND_SOURCE_STATE", "dirty");
+  try {
+    renderSettings({});
+    const disclosure = screen.getByRole("button", { name: "Build details" });
+    const action = screen.getByRole("button", { name: "Check for updates" });
+    expect(disclosure).toHaveAttribute("aria-expanded", "false");
+    expect(screen.queryByText(/Native image source:/)).toBeNull();
+    expect(screen.queryByText(/Loaded frontend source:/)).toBeNull();
+    await user.tab();
+    expect(action).toHaveFocus();
+    await user.tab();
+    expect(disclosure).toHaveFocus();
+    await user.keyboard("{Enter}");
+    expect(disclosure).toHaveAttribute("aria-expanded", "true");
+    expect(
+      await screen.findByText(`Native image source: ${"b".repeat(40)} · clean`),
+    ).toBeVisible();
+    expect(
+      screen.getByText(`Loaded frontend source: ${"a".repeat(40)} · dirty`),
+    ).toBeVisible();
+    expect(screen.getByRole("status")).toHaveTextContent(
+      "Check if a new version is available.",
+    );
+    expect(action).toBeVisible();
+    await user.click(disclosure);
+    expect(disclosure).toHaveAttribute("aria-expanded", "false");
+    expect(disclosure).toHaveFocus();
+    expect(screen.queryByText(/Native image source:/)).toBeNull();
+  } finally {
+    native.isTauri.mockReturnValue(false);
+  }
+});
+
+it.each([
+  { revision: null, state: "clean", description: "unknown", rejected: false },
+  {
+    revision: "d".repeat(40),
+    state: "invalid",
+    description: `${"d".repeat(40)} · unknown`,
+    rejected: false,
+  },
+  { revision: null, state: "unknown", description: "unknown", rejected: true },
+])(
+  "shows dirty and unknown honestly for an incomplete identity ($state)",
+  async ({ revision, state, description, rejected }) => {
+    native.isTauri.mockReturnValue(true);
+    const response = deferred<{ revision: string | null; state: string }>();
+    native.invoke.mockReturnValue(response.promise);
+    vi.stubEnv("VITE_BUZZ_FRONTEND_SOURCE_REVISION", "c".repeat(40));
+    vi.stubEnv("VITE_BUZZ_FRONTEND_SOURCE_STATE", "dirty");
+    try {
+      renderSettings({});
+      expect(native.invoke).toHaveBeenCalledWith("get_build_identity");
+      fireEvent.click(screen.getByRole("button", { name: "Build details" }));
+      expect(screen.getByText("Native image source: unknown")).toBeVisible();
+      await act(async () => {
+        if (rejected) response.reject(new Error("unknown native command"));
+        else response.resolve({ revision, state });
+      });
+      expect(
+        screen.getByText(`Native image source: ${description}`),
+      ).toBeVisible();
+      expect(
+        screen.getByText(`Loaded frontend source: ${"c".repeat(40)} · dirty`),
+      ).toBeVisible();
+      expect(screen.queryByText(/Native image source: .* · clean/)).toBeNull();
+    } finally {
+      native.isTauri.mockReturnValue(false);
+    }
+  },
+);
 
 function deferred<T>() {
   let resolve!: (value: T) => void;

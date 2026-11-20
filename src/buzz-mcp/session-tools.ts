@@ -60,11 +60,7 @@ export type AddedTool = Readonly<{
 }>;
 type Listed = Pick<AddedTool, "name" | "description" | "inputSchema">;
 
-export {
-  isFinalMessage,
-  isMessageTool,
-  MESSAGE_TOOLS,
-} from "./message-tools";
+export { isFinalMessage, isMessageTool, MESSAGE_TOOLS } from "./message-tools";
 
 export type BuzzSession = Readonly<{ tools: readonly Tool[] }>;
 

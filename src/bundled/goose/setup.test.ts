@@ -902,6 +902,37 @@ describe("GooseSetup", () => {
     expect((await goose.efforts(inherited)).levels).toEqual(["off"]);
   });
 
+  it("reads a named model's levels on goose's default provider when its config names no default model", async () => {
+    const { fake, setup: goose } = setup({
+      defaults: { providerId: "databricks" },
+      thinking: {
+        "goose-claude": { current: "high", levels: ["low", "high"] },
+      },
+    });
+    expect(
+      await goose.efforts({ provider: "", model: "goose-claude" }),
+    ).toEqual({ current: "high", levels: ["low", "high"] });
+    const [read] = fake.geese;
+    expect(read?.opened[0]?._meta).toMatchObject({ provider: "databricks" });
+    expect(read?.configured).toEqual(["session-1 model=goose-claude"]);
+    expect(read?.deleted).toEqual(["session-1"]);
+    // goose's own model is not one it has: that read alone fails.
+    await expect(goose.efforts({ provider: "", model: "" })).rejects.toThrow(
+      "goose's config names no default model",
+    );
+  });
+
+  it("leaves goose's error when its config names no default provider", async () => {
+    const { fake, setup: goose } = setup({
+      defaults: {},
+      thinking: { "goose-claude": { current: "high", levels: ["high"] } },
+    });
+    await expect(
+      goose.efforts({ provider: "", model: "goose-claude" }),
+    ).rejects.toThrow("Configuration value not found: GOOSE_PROVIDER");
+    expect(fake.geese[0]?.opened[0]?._meta).not.toHaveProperty("provider");
+  });
+
   it("reads no thinking levels from a goose that lists none", async () => {
     const { setup: goose } = setup();
     expect(await goose.efforts({ provider: "", model: "" })).toEqual({

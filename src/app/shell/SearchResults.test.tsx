@@ -54,6 +54,7 @@ import type {
 } from "../../features/decisions/service";
 import type { SearchGroup } from "./SearchChoices";
 import { setUnreadFirstPreference } from "../../features/search/unread-first-preference";
+import { messageSortPreference } from "../../features/search/message-sort-preference";
 import { SearchResults } from "./SearchResults";
 import { useSearchMessages } from "./useSearchMessages";
 import { useSearchSettings } from "./SearchSettings";
@@ -1218,6 +1219,8 @@ it("shows the real read failure, retains conversation choices, and retries to an
 
 it("scopes conversation search at the relay and discards out-of-scope hits", async () => {
   vi.useFakeTimers();
+  // A saved Most recent cannot apply on a relay that does not sort.
+  localStorage.setItem("buzz-search-message-sort.v1", "newest");
   const relay = keypair();
   const viewer = keypair();
   const wire = scriptedTransport(viewer.pubkey, relay.pubkey);
@@ -1282,6 +1285,7 @@ it("scopes conversation search at the relay and discards out-of-scope hits", asy
     );
     expect(changeScope).toHaveBeenCalledExactlyOnceWith();
   } finally {
+    localStorage.removeItem("buzz-search-message-sort.v1");
     cleanup();
     owner.dispose();
   }
@@ -1705,6 +1709,8 @@ it("sorts a conversation newest first across pages and restarts paging when the 
     fireEvent.click(screen.getByRole("menuitemradio", { name: "Most recent" }));
     const first = await request();
     expect(first.filters).toEqual([{ ...text, search_sort: "newest" }]);
+    // The menu leaves the saved default alone.
+    expect(messageSortPreference()).toBe("relevance");
     const page1 = hits(20, 1700000100);
     const tail = page1.pop();
     assert(tail);
@@ -1799,7 +1805,16 @@ it("sorts a conversation newest first across pages and restarts paging when the 
     );
     const reset = await request();
     expect(reset.filters).toEqual([text]);
+
+    // A saved Most recent seeds each new opening; restart reads it too.
+    localStorage.setItem("buzz-search-message-sort.v1", "newest");
+    mounted.unmount();
+    render(<SearchResults {...scoped} query="sortword" />);
+    expect((await request()).filters).toEqual([
+      { ...text, search_sort: "newest" },
+    ]);
   } finally {
+    localStorage.removeItem("buzz-search-message-sort.v1");
     cleanup();
     owner.dispose();
   }

@@ -211,8 +211,16 @@ Claude Code does, only adds the gateway's headers where its own checks allow,
 so none of this holds or fails its turns: it takes the route as it stands
 without waiting, and any blocked route, a pending check or a 401/403
 included, runs the turn unattributed with the note "Ran without gateway
-attribution" and the reason. Memberships in other communities and hosted
-agents are unchanged.
+attribution" and the reason. Once goose runs through the gateway, a goose
+agent's wake anchored in a conversation shows the "Ran without the agent
+gateway" note beside its prompt in Activity only while the app that ran it
+keeps running; a reload, or goose compacting the prompt out of its history,
+drops it. A standalone run (`runOnce`) shows none. Memberships in
+other communities and hosted agents are unchanged.
+Goose forwarding supports Thread and Channel session scope. A Goose turn
+eligible for forwarding fails in Community scope, where requests from
+different conversations can steer the same active turn.
+
 See `src/features/agents/gateway/` for the shared route, session and request
 context contract that harnesses consume.
 

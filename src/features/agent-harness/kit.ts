@@ -427,7 +427,7 @@ export function harnessKit(sources: Sources): HarnessKit {
           const ready = session(agent.key);
           return appClient(agent, {
             relayAuthor: ready?.relayAuthor,
-            signingAuthority: ready?.workflowAuthority,
+            signingAuthority: ready && (ready.workflowAuthority ?? null),
             read: (path) =>
               options.read
                 ? options.read(path)

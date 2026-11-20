@@ -30,7 +30,9 @@ import {
   EMOJI_SET_KIND,
   referencedEmoji,
 } from "../features/relay/emoji";
-import { newer } from "../features/relay/events";
+import { hasEventProof, newer } from "../features/relay/events";
+import { createIdentityArchives } from "../features/relay/identity-archives";
+import type { RelayReader } from "../features/relay/reader";
 import { normalizeName } from "../features/search/person-match";
 import {
   VERIFIED_PROFILE_BATCH,
@@ -216,7 +218,7 @@ export const TOOLS: readonly Tool[] = [
   ),
   tool(
     "send",
-    "Post a message. Without channel, replies in the current thread. A reply goes in its message's thread. To wake yourself in another conversation, use self_handoff; self-mentions are refused.",
+    "Post a message. Without channel, replies in the current thread. A reply goes in its message's thread. To wake yourself in another conversation, use self_handoff; self-mentions are refused, and so are mentions of anyone the relay archived.",
     {
       text: str,
       path: str,
@@ -403,10 +405,15 @@ export const TOOLS: readonly Tool[] = [
   ),
   tool(
     "users",
-    "Profiles by pubkey or name: each row's quoted profile name, then, for a name search, (verified: …) when the relay verified a different name, then the quoted about text.",
-    { ids: strs, q: str },
+    "Profiles by pubkey or name: each row's quoted profile name, then, for a name search, (verified: …) when the relay verified a different name, then the quoted about text, then archived for an identity the relay archived. A name search leaves archived identities out unless include_archived is true; ids always returns them.",
+    { ids: strs, q: str, include_archived: { type: "boolean" } },
   ),
-  tool("dm", "Open a DM; returns its channel.", { to: strs }, ["to"]),
+  tool(
+    "dm",
+    "Open a DM; returns its channel. A new DM with anyone the relay archived is refused; an existing one still opens.",
+    { to: strs },
+    ["to"],
+  ),
   tool(
     "mem_get",
     "Read memory: slug gives its version and text; q finds entries with every word; neither lists slugs.",
@@ -843,7 +850,7 @@ const HANDLERS: Readonly<Record<string, Handler>> = {
             "p",
             messageAuthor(
               { ...target, tags: target.tags.map((tag) => [...tag]) },
-              client.signingAuthority,
+              client.signingAuthority ?? undefined,
             ),
           ],
           ...custom,
@@ -1269,10 +1276,24 @@ const HANDLERS: Readonly<Record<string, Handler>> = {
     if (!ids.length && !q) throw new Error("Give ids or q.");
     if (ids.length && q) throw new Error("Give ids or q, not both.");
     if (ids.length > 100) throw new Error("Give at most 100 ids.");
-    const people = ids.length ? undefined : await tools.searchPeople(q ?? "");
-    const profiles =
-      people?.profiles ??
-      (await client.query([{ kinds: [0], authors: ids, limit: ids.length }]));
+    // One deadline bounds the key both the search and the archive check use.
+    const deadline = archiveDeadline();
+    const relay = tools.relayKey(deadline);
+    const [people, byId, archived] = await Promise.all([
+      ids.length ? undefined : tools.searchPeople(q ?? "", relay),
+      ids.length
+        ? client.query([{ kinds: [0], authors: ids, limit: ids.length }])
+        : undefined,
+      // The standalone lookup serves both the search and the archive list.
+      tools.archivedIdentities(deadline, client.relayAuthorLookup && relay),
+    ]);
+    // As the app's archiveHides: you always find yourself.
+    const hidden = (key: string) =>
+      !ids.length &&
+      args.include_archived !== true &&
+      key !== client.pubkey &&
+      !!archived?.has(key);
+    const profiles = people?.profiles ?? byId ?? [];
     const verified = people?.verified ?? new Map<string, VerifiedProfile>();
     const shown = (pubkey: string, name: string) => {
       const found = verified.get(pubkey);
@@ -1294,7 +1315,7 @@ const HANDLERS: Readonly<Record<string, Handler>> = {
               ...profileNames(profile),
               ...verifiedAliases(verified.get(event.pubkey)),
             ],
-            row: `${event.pubkey} ${JSON.stringify(name)}${shown(event.pubkey, name)}${about}`,
+            row: `${event.pubkey} ${JSON.stringify(name)}${shown(event.pubkey, name)}${about}${archived?.has(event.pubkey) ? " archived" : ""}`,
           },
         ] as const;
       }),
@@ -1306,14 +1327,14 @@ const HANDLERS: Readonly<Record<string, Handler>> = {
               key,
               {
                 aliases: verifiedAliases(found),
-                row: `${key}${shown(key, "")}`,
+                row: `${key}${shown(key, "")}${archived?.has(key) ? " archived" : ""}`,
               },
             ] as const,
         ),
     ]);
     const needle = normalizeName(q ?? "");
     const rows = (people?.order ?? [...byKey.keys()])
-      .flatMap((key) => byKey.get(key) ?? [])
+      .flatMap((key) => (hidden(key) ? [] : (byKey.get(key) ?? [])))
       .filter(
         ({ aliases }) =>
           !q ||
@@ -1321,15 +1342,26 @@ const HANDLERS: Readonly<Record<string, Handler>> = {
           people?.searched ||
           aliases.some((alias) => normalizeName(alias).includes(needle)),
       );
-    return rows.map(({ row }) => row).join("\n") || "No users.";
+    const found = rows.map(({ row }) => row).join("\n") || "No users.";
+    return archived
+      ? found
+      : `${found}\n${ARCHIVE_UNREAD}, so archived identities are not left out or marked.`;
   },
 
   async dm(tools, args) {
     const { client } = tools;
     const to = list(args.to).map(pubkey);
     if (!to.length) throw new Error("to is required.");
-    let found = await tools.findDm(to);
+    const first = await tools.findDm(to);
+    let found = first.dm;
+    let warning = "";
     if (!found) {
+      warning = await tools.unarchived(
+        to,
+        first.complete
+          ? "No DM was opened."
+          : "You have too many DMs to tell whether one with them exists, so none was opened.",
+      );
       await client.publish({
         kind: 41010,
         content: "",
@@ -1338,12 +1370,12 @@ const HANDLERS: Readonly<Record<string, Handler>> = {
       // The relay creates the channel's metadata just after answering.
       for (let tries = 0; !found && tries < 5; tries++) {
         if (tries) await new Promise((resolve) => setTimeout(resolve, 400));
-        found = await tools.findDm(to);
+        found = (await tools.findDm(to)).dm;
       }
     }
     const channel = found && tag(found, "d");
     if (!channel) throw new Error("The DM did not open.");
-    return channel;
+    return `${channel}${warning}`;
   },
 
   async mem_get(tools, args) {
@@ -1877,15 +1909,19 @@ async function post(
   thread: readonly string[][],
   extra: readonly string[][] = [],
 ) {
-  const files = await tools.attach(list(args.files));
-  const content = `${(await tools.body(args, !files.links)) ?? ""}${files.links}`;
-  const mentions = await tools.mentions(channel, content, list(args.mentions));
+  const paths = list(args.files);
+  const body = (await tools.body(args, !paths.length)) ?? "";
+  // Uploads come after every refusal; their links name no one.
+  const mentions = await tools.mentions(channel, body, list(args.mentions));
   // The runner suppresses every relay event authored by this agent. A post
   // receipt must not suggest that a self-mention scheduled another session.
   if (mentions.includes(tools.client.pubkey))
     throw new Error(
       "Self-mentions do not wake your other sessions. Nothing was posted. Use self_handoff with channel, text, and thread outside a Solo chat.",
     );
+  const warning = await tools.unarchived(mentions, "Nothing was posted.");
+  const files = await tools.attach(paths);
+  const content = `${body}${files.links}`;
   const template: Template = {
     kind: 9,
     content,
@@ -1903,7 +1939,7 @@ async function post(
         managedAttachments: files.managedAttachments,
       })
     : tools.client.publish(template));
-  return `sent ${event.id}`;
+  return `sent ${event.id}${warning}`;
 }
 
 /** One call's helpers, so lookups it repeats are made once. */
@@ -1993,21 +2029,26 @@ class Tools {
     return metadata;
   }
 
-  /** Your DM with exactly `people`, if it exists; never creates one. */
+  /** Your DM with exactly `people`, if it exists; never creates one.
+   * `complete` is false when your DMs were too many to read them all. */
   async findDm(people: readonly string[]) {
     const wanted = new Set([this.client.pubkey, ...people]);
-    const dms = await this.client.query([
-      { kinds: [39000], "#p": [this.client.pubkey], "#t": ["dm"], limit: 500 },
-    ]);
-    return dms.find((event) => {
-      const members = new Set(
-        event.tags.filter((t) => t[0] === "p").map((t) => t[1]),
-      );
-      return (
-        members.size === wanted.size &&
-        [...wanted].every((key) => members.has(key))
-      );
-    });
+    let dm: BuzzEvent | undefined;
+    const complete = await this.scan(
+      { kinds: [39000], "#p": [this.client.pubkey], "#t": ["dm"] },
+      (event) => {
+        const members = new Set(
+          event.tags.filter((t) => t[0] === "p").map((t) => t[1]),
+        );
+        if (
+          members.size === wanted.size &&
+          [...wanted].every((key) => members.has(key))
+        )
+          dm = event;
+        return !dm;
+      },
+    );
+    return { dm, complete: complete || !!dm };
   }
 
   /** The channel `value` names: a Buzz link, @person for your DM with them,
@@ -2019,7 +2060,9 @@ class Tools {
     if (v.startsWith("@")) {
       const person = await this.author(v.slice(1));
       const dm =
-        person === this.client.pubkey ? undefined : await this.findDm([person]);
+        person === this.client.pubkey
+          ? undefined
+          : (await this.findDm([person])).dm;
       if (!dm) throw new Error(`You have no DM with ${v.slice(1)}.`);
       return this.placeOf(tag(dm, "d") as string);
     }
@@ -2407,17 +2450,116 @@ class Tools {
     };
   }
 
-  async searchPeople(q: string) {
+  /** The relay's key: rejects when it can't be learned now, or by
+   * `deadline`; undefined when the relay has none. */
+  async relayKey(deadline?: number): Promise<string | undefined> {
+    const { relayAuthor, relayAuthorLookup } = this.client;
+    if (relayAuthor !== undefined || !relayAuthorLookup) return relayAuthor;
+    if (deadline === undefined) return relayAuthorLookup();
+    const found = await within(
+      deadline,
+      relayAuthorLookup().then((key) => ({ key })),
+      undefined,
+    );
+    if (!found) throw new Error("The relay's key took too long");
+    return found.key;
+  }
+
+  /** The relay's signed NIP-IA archive list, its key learned and the list
+   * read fresh by `deadline`; undefined when it can't be, so callers
+   * fail open. Only the relay's NIP-11 self key signs it: the standalone
+   * lookup, or the app's signing authority, never its contact key. A host that
+   * gives neither can't tell; a relay with no self key archives no one. */
+  async archivedIdentities(
+    deadline: number,
+    lookup = this.client.relayAuthorLookup?.(),
+  ): Promise<ReadonlySet<string> | undefined> {
+    const client = this.client;
+    if (!lookup && !("signingAuthority" in client)) return undefined;
+    let late = false;
+    let archives: ReturnType<typeof createIdentityArchives> | undefined;
+    const read = async () => {
+      const authority = lookup ? await lookup : client.signingAuthority;
+      if (!authority) return new Set<string>();
+      if (late) return undefined;
+      archives = createIdentityArchives(
+        {
+          async read(filters, options) {
+            const signal = options?.signal;
+            const events = await new Promise<readonly BuzzEvent[]>(
+              (resolve, reject) => {
+                const stop = () => reject(signal?.reason);
+                signal?.addEventListener("abort", stop, { once: true });
+                client
+                  .query(filters as readonly Filter[])
+                  .then(resolve, reject);
+              },
+            );
+            // The connection admits signed events; anything else is no evidence.
+            if (
+              !events.every((event) =>
+                hasEventProof(event as unknown as RelayEvent),
+              )
+            )
+              throw new Error("Unsigned archive snapshot");
+            return events as unknown as readonly RelayEvent[];
+          },
+        } as RelayReader,
+        authority,
+      );
+      await archives.queries.refresh();
+      const snapshot = archives.queries.snapshot();
+      return snapshot.status === "ready"
+        ? new Set(snapshot.archived)
+        : undefined;
+    };
+    try {
+      return await within(
+        deadline,
+        read().catch(() => undefined),
+        undefined,
+      );
+    } finally {
+      late = true;
+      // Aborts a read still held open.
+      archives?.dispose();
+    }
+  }
+
+  /** Fails, naming them, when the relay archived any of `people`; otherwise
+   * "", or a warning line when the archive list can't be read. */
+  async unarchived(people: readonly string[], outcome: string) {
+    if (!people.length) return "";
+    const deadline = archiveDeadline();
+    const archived = await this.archivedIdentities(deadline);
+    if (!archived)
+      return `\n${ARCHIVE_UNREAD}, so archived identities were not checked.`;
+    const gone = people.filter((key) => archived.has(key));
+    if (!gone.length) return "";
+    // The list alone decides; a name only helps say who, in the time left.
+    const names =
+      Date.now() < deadline
+        ? await within(
+            deadline,
+            this.names(gone).catch(() => undefined),
+            undefined,
+          )
+        : undefined;
+    throw new Error(
+      `${gone.map((key) => `${names?.get(key) ?? key} (${key})`).join(", ")} ${gone.length > 1 ? "are" : "is"} archived. ${outcome}`,
+    );
+  }
+
+  async searchPeople(q: string, key = this.relayKey()) {
     let unknownKey = false;
     const [named, relay] = await Promise.all([
       [...q].length <= PROFILE_SEARCH_QUERY_MAX
         ? this.client.searchProfiles?.(q, PROFILE_SEARCH_MAX)
         : undefined,
-      this.client.relayAuthor ??
-        this.client.relayAuthorLookup?.().catch(() => {
-          unknownKey = true;
-          return undefined;
-        }),
+      key.catch(() => {
+        unknownKey = true;
+        return undefined;
+      }),
     ]);
     const profiles = newest(
       named?.filter((event) => event.kind === 0) ??
@@ -3002,6 +3144,25 @@ const NAME_WEIGHT = {
 } as const;
 
 const HEX_KEY = /^[0-9a-f]{64}$/;
+/** How long a users lookup waits for the archive list before going on without it. */
+const ARCHIVE_READ_MS = 5000;
+/** When an archive check that starts now must be done. */
+const archiveDeadline = () => Date.now() + ARCHIVE_READ_MS;
+/** `work`, or `fallback` once `deadline` passes. */
+async function within<T, F>(deadline: number, work: Promise<T>, fallback: F) {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([
+      work,
+      new Promise<F>((resolve) => {
+        timer = setTimeout(() => resolve(fallback), deadline - Date.now());
+      }),
+    ]);
+  } finally {
+    clearTimeout(timer);
+  }
+}
+const ARCHIVE_UNREAD = "warning: the relay's archive list could not be read";
 
 const relayAuthorityOf = (relay: string | undefined) =>
   relay && HEX_KEY.test(relay)

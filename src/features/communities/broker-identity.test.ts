@@ -1,8 +1,9 @@
 import type { execFileSync } from "node:child_process";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { createServer } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { generateSecretKey, getPublicKey, nip19 } from "nostr-tools";
 import type { Plugin, UserConfigFnPromise, ViteDevServer } from "vite";
 import { assert, afterEach, beforeEach, expect, it, vi } from "vitest";
@@ -123,15 +124,30 @@ it.each(["", "  "])(
     const app = await startup();
     expect(app.plugin).toBeUndefined();
     expect(app.resolved.define?.["import.meta.env.VITE_BUZZ_LIVE"]).toBe('"0"');
+    expect(
+      app.resolved.define?.["import.meta.env.VITE_BUZZ_FRONTEND_SOURCE_STATE"],
+    ).toBe('"unknown"');
     expect(readCredential).not.toHaveBeenCalled();
   },
 );
 
 it("never registers the broker for production builds, even with a configured pin", async () => {
   vi.stubEnv("BUZZ_DEV_VIEWER", viewer);
+  const root = fileURLToPath(new URL("../../../", import.meta.url));
+  vi.spyOn(process, "cwd").mockReturnValue(tmpdir());
   const app = await startup("build");
   expect(app.plugin).toBeUndefined();
   expect(app.resolved.define?.["import.meta.env.VITE_BUZZ_LIVE"]).toBe('"0"');
+  const revision =
+    app.resolved.define?.["import.meta.env.VITE_BUZZ_FRONTEND_SOURCE_REVISION"];
+  if (existsSync(join(root, ".git"))) {
+    expect(revision).toMatch(/^"(?:[a-f\d]{40}|[a-f\d]{64})"$/i);
+  } else {
+    expect(revision).toBe('""');
+  }
+  expect(
+    app.resolved.define?.["import.meta.env.VITE_BUZZ_FRONTEND_SOURCE_STATE"],
+  ).toMatch(/^"(?:clean|dirty|unknown)"$/);
   expect(readCredential).not.toHaveBeenCalled();
 });
 

@@ -8,7 +8,13 @@ export type ForwardHarness = "goose";
 export type ForwardClass = "discovery" | "inference";
 
 export type ForwardEvent =
-  | Readonly<{ type: "admitted"; request: number; class: ForwardClass }>
+  | Readonly<{
+      type: "admitted";
+      request: number;
+      class: ForwardClass;
+      /** It named a registered goose child, not the generation's session. */
+      child: boolean;
+    }>
   | Readonly<{
       type: "finished";
       request: number;
@@ -24,6 +30,20 @@ export type ForwardOpened =
   | Readonly<{ type: "opened"; id: number; url: string }>
   /** Not at the route's current revision, or it doesn't admit. */
   | Readonly<{ type: "refused"; current: number; admits: boolean }>;
+
+/** A goose child registration. `generation_ended`: sealed, closed or
+ * unknown; `generation_revoked`: its revision or page was revoked. */
+export type ForwardChildRegistered =
+  | Readonly<{ type: "registered" }>
+  | Readonly<{
+      type: "refused";
+      reason:
+        | "child_call_conflict"
+        | "child_cap"
+        | "call_cap"
+        | "generation_ended"
+        | "generation_revoked";
+    }>;
 
 export type ForwardPushed =
   | Readonly<{ type: "applied"; revoked: number }>
@@ -77,6 +97,23 @@ export function associateForward(
     id: owner.id,
     generation,
     session,
+  });
+}
+
+/** Registers the goose child a live delegate `call` named, admitting its
+ * requests. A sealed, closed or unknown generation resolves `refused`
+ * (`generation_ended`); it rejects only on contract or transport errors. */
+export function registerForwardChild(
+  owner: ForwardOwner,
+  generation: number,
+  call: string,
+  child: string,
+): Promise<ForwardChildRegistered> {
+  return invoke<ForwardChildRegistered>("plugin_host_forward_register_child", {
+    id: owner.id,
+    generation,
+    call,
+    child,
   });
 }
 

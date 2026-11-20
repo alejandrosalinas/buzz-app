@@ -226,6 +226,9 @@ export function turnPrompt(input: TurnInput) {
 
 const EVENT = "buzz-event";
 const STEER = "new-message-arrived-while-you-were-working";
+/** What a steer ends with, after its turn. */
+export const STEER_NOTE =
+  "\n\nNote: A new message arrived while you were working. Continue your in-progress work and incorporate the new message if it's relevant; if it's unrelated, you may briefly acknowledge it and carry on.";
 /** A turn for a session that is still working on an earlier one. Its event's
  * section becomes the steer's, so the event stays a record of its own; a
  * turn without exactly one, such as a wake's, is wrapped whole. */
@@ -238,5 +241,5 @@ export function steerPrompt(turn: string) {
     once(open) && once(close)
       ? turn.replace(open, `\n<${STEER}>\n`).replace(close, `\n</${STEER}>`)
       : section(STEER, turn);
-  return `${steered}\n\nNote: A new message arrived while you were working. Continue your in-progress work and incorporate the new message if it's relevant; if it's unrelated, you may briefly acknowledge it and carry on.`;
+  return `${steered}${STEER_NOTE}`;
 }

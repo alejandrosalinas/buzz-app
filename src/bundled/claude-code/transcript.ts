@@ -107,36 +107,7 @@ function prompt(
   };
 }
 
-/** `turns` with each notice right after the prompt Claude saved under the
- * id of the message it came with. A notice whose message Claude never took
- * matches no prompt, so it shows nowhere rather than on another turn. */
-export function withNotices(
-  turns: readonly TranscriptTurn[],
-  notices: ReadonlyMap<string, string>,
-): TranscriptTurn[] {
-  return turns.map((turn) =>
-    turn.items.some((item) => item.type === "prompt" && notices.has(item.id))
-      ? {
-          ...turn,
-          items: turn.items.flatMap((item): TranscriptItem[] => {
-            const text =
-              item.type === "prompt" ? notices.get(item.id) : undefined;
-            return text
-              ? [
-                  item,
-                  {
-                    id: `${item.id}:notice`,
-                    at: item.at,
-                    type: "status",
-                    text,
-                  },
-                ]
-              : [item];
-          }),
-        }
-      : turn,
-  );
-}
+export { withNotices } from "../../features/agents/activity-transcript";
 
 /** Transcript lines as turns, each opened by a prompt. Claude Code records
  * some Buzz steers as queued-command attachments within the active turn. */

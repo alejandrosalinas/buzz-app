@@ -1,10 +1,16 @@
 import { useEffect, useState, useSyncExternalStore } from "react";
 import { getVersion } from "@tauri-apps/api/app";
-import { isTauri } from "@tauri-apps/api/core";
+import { invoke, isTauri } from "@tauri-apps/api/core";
+import { Accordion } from "../../shared/design-system/ui/Accordion";
 import { Button } from "../../shared/design-system/ui/Button";
 import { EmptyState } from "../../shared/design-system/ui/EmptyState";
 import { ArrowsClockwiseIcon } from "../../shared/design-system/icons";
 import { Header } from "../../shared/design-system/ui/Header";
+import {
+  buildIdentity,
+  describeBuildIdentity,
+  type BuildIdentity,
+} from "../../shared/build-identity";
 import type { Updates } from "./updates";
 
 export function UpdateSettings({
@@ -14,6 +20,10 @@ export function UpdateSettings({
   updates: Updates;
   active: boolean;
 }) {
+  const frontendIdentity = buildIdentity(
+    import.meta.env.VITE_BUZZ_FRONTEND_SOURCE_REVISION,
+    import.meta.env.VITE_BUZZ_FRONTEND_SOURCE_STATE,
+  );
   const status = useSyncExternalStore(
     updates.subscribe,
     updates.snapshot,
@@ -25,12 +35,28 @@ export function UpdateSettings({
   );
   // Browser builds have no native version; leave it unset there.
   const [version, setVersion] = useState<string | null>(null);
+  const [nativeIdentity, setNativeIdentity] = useState<BuildIdentity>(() =>
+    buildIdentity(null, null),
+  );
   useEffect(() => {
     if (!isTauri()) return;
     let cancelled = false;
     getVersion()
       .then((found) => {
         if (!cancelled) setVersion(found);
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+  useEffect(() => {
+    if (!isTauri()) return;
+    let cancelled = false;
+    invoke<BuildIdentity>("get_build_identity")
+      .then((identity) => {
+        if (!cancelled)
+          setNativeIdentity(buildIdentity(identity?.revision, identity?.state));
       })
       .catch(() => {});
     return () => {
@@ -92,6 +118,28 @@ export function UpdateSettings({
           </Button>
         }
       />
+      {isTauri() && (
+        <Accordion
+          variant="settings"
+          items={[
+            {
+              value: "Build details",
+              title: "Build details",
+              content: (
+                <div className="grid gap-2 text-body-sm wrap-anywhere">
+                  <p>
+                    Native image source: {describeBuildIdentity(nativeIdentity)}
+                  </p>
+                  <p>
+                    Loaded frontend source:{" "}
+                    {describeBuildIdentity(frontendIdentity)}
+                  </p>
+                </div>
+              ),
+            },
+          ]}
+        />
+      )}
     </section>
   );
 }

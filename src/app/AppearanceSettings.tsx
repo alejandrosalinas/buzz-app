@@ -37,6 +37,10 @@ import {
   setUnreadFirstPreference,
   useUnreadFirstPreference,
 } from "../features/search/unread-first-preference";
+import {
+  setMessageSortPreference,
+  useMessageSortPreference,
+} from "../features/search/message-sort-preference";
 import { macWebKit } from "../features/messages/mac-webkit";
 import { SwitchPreferenceRow } from "../shared/design-system/ui/SwitchPreferenceRow";
 import {
@@ -79,6 +83,7 @@ export function AppearanceSettings({
   const followUp = useFollowUpBehaviorPreference();
   const autocorrect = useMessageAutocorrectPreference();
   const unreadFirst = useUnreadFirstPreference();
+  const messageSort = useMessageSortPreference();
   const clock = useClockPreference();
   const names = useNamePreference();
   const verifiedCommunity = useVerifiedCommunity(communities?.relay);
@@ -488,6 +493,30 @@ export function AppearanceSettings({
               checked={unreadFirst.enabled}
               onCheckedChange={setUnreadFirstPreference}
             />
+            <PreferenceRow
+              title="Sort messages by"
+              subtitle="Where the relay supports sorting, new searches of one conversation start in this order. Sort messages in the search field changes only that search."
+              trailing={
+                <Select
+                  variant="compact"
+                  label="Sort messages by"
+                  value={messageSort.sort}
+                  groups={[
+                    {
+                      label: "Order",
+                      options: [
+                        { value: "relevance", label: "Most relevant" },
+                        { value: "newest", label: "Most recent" },
+                      ],
+                    },
+                  ]}
+                  onValueChange={(value) => {
+                    if (value === "relevance" || value === "newest")
+                      setMessageSortPreference(value);
+                  }}
+                />
+              }
+            />
           </SettingsGroup>
         </div>
         {active && messageWidthError && (
@@ -557,6 +586,20 @@ export function AppearanceSettings({
               onClick={() => setUnreadFirstPreference(unreadFirst.enabled)}
             >
               Retry saving search preference
+            </Button>
+          </ToastNotice>
+        )}
+        {active && messageSort.unsaved && (
+          <ToastNotice
+            title="Message sort preference wasn’t saved"
+            description="This choice is active, but could not be saved on this device. Try again."
+          >
+            <Button
+              type="button"
+              size="sm"
+              onClick={() => setMessageSortPreference(messageSort.sort)}
+            >
+              Retry saving message sort
             </Button>
           </ToastNotice>
         )}

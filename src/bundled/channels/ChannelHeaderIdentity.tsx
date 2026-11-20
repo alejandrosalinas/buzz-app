@@ -71,7 +71,11 @@ export function ChannelHeaderIdentity({
       className={styles.identity}
     >
       <span className={styles.avatars} aria-hidden="true">
-        <ChannelMemberAvatars session={session} channelId={channelId} />
+        <ChannelMemberAvatars
+          key={channelId}
+          session={session}
+          channelId={channelId}
+        />
       </span>
       <span className={styles.label}>
         <span className={`${styles.name} text-body-sm`}>

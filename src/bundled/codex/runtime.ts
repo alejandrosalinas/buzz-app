@@ -71,7 +71,7 @@ import { CREDENTIAL_ENV } from "../../features/host/service";
 import { isRetryableRead } from "../../features/relay/read-retry";
 import { threadReference } from "../../features/relay/thread-reference";
 import type { ChannelLabel } from "../../features/channels/channel-icon";
-import { appClient, readFile } from "../../buzz-mcp/app-client";
+import { appClient, readFile, relayKeyOf } from "../../buzz-mcp/app-client";
 import { readAuthorNames } from "../../features/agent-harness/author-names";
 import { project, readCanvas } from "../../features/agent-harness/project";
 import {
@@ -3216,7 +3216,7 @@ export class CodexRuntime {
           });
         },
         relayAuthor: this.reads(agent.key)?.relayAuthor?.(),
-        signingAuthority: this.reads(agent.key)?.workflowAuthority(),
+        signingAuthority: relayKeyOf(this.reads(agent.key)),
         read: (path) =>
           this.target
             ? this.target.readFile(path, { cwd: turn.workspace })

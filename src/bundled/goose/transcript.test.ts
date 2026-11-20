@@ -2,7 +2,13 @@ import { describe, expect, it } from "vitest";
 import type { EventData } from "../../features/relay/events";
 import { steerPrompt, turnPrompt } from "../claude-code/prompt";
 import { type FakeSession, fakeSpawn } from "./goose-testing";
-import { GooseHistory, gooseTurns } from "./transcript";
+import {
+  GooseHistory,
+  gooseTurns,
+  type Message,
+  marked,
+  unmarked,
+} from "./transcript";
 
 const alice = "a".repeat(64);
 const agent = "c".repeat(64);
@@ -215,6 +221,152 @@ describe("gooseTurns", () => {
       ["status", "Out of credits"],
       ["status", "Authentication failed: invalid API key"],
     ]);
+  });
+});
+
+describe("wake notices", () => {
+  const FIRST = "11111111-1111-4111-8111-111111111111";
+  const SECOND = "22222222-2222-4222-8222-222222222222";
+  const place = { sessionId: "s1", channelId: CHANNEL };
+  const wake = (id: string, content: string) => ask(agent, event(id, content));
+  const shown = (messages: readonly Message[], notices?: Map<string, string>) =>
+    gooseTurns(messages, place, false, name, notices).map((turn) =>
+      turn.items.map((item) =>
+        item.type === "prompt"
+          ? ["prompt", item.id, item.text]
+          : [item.type, item.id, "text" in item ? item.text : ""],
+      ),
+    );
+
+  it("reads only Buzz's trailing mark, as a v4 id", () => {
+    expect(unmarked(marked("wake", FIRST))).toEqual({
+      text: "wake",
+      turn: FIRST,
+    });
+    for (const raw of [
+      `wake<buzz-turn id="${FIRST}"/>`,
+      `${marked("wake", FIRST)}\n`,
+      `${marked("wake", FIRST)} more`,
+      marked("wake", "AAAAAAAA-AAAA-4AAA-8AAA-AAAAAAAAAAAA"),
+      marked("wake", "11111111-1111-1111-8111-111111111111"),
+      marked("wake", `${FIRST}" x="y`),
+    ])
+      expect(unmarked(raw)).toEqual({ text: raw });
+  });
+
+  it("puts each wake's notice after its own prompt, its mark hidden", () => {
+    const one = user([text(marked(wake("2", "first wake"), FIRST))]);
+    const two = user([text(marked(wake("3", "second wake"), SECOND))]);
+    const notices = new Map([
+      [FIRST, "Ran without the gateway."],
+      [SECOND, "Ran without the gateway again."],
+    ]);
+    const turns = shown(
+      [one, assistant([text("one")]), two, assistant([text("two")])],
+      notices,
+    );
+    expect(turns).toEqual([
+      [
+        ["prompt", one.id, "first wake"],
+        ["status", `${one.id}:notice`, "Ran without the gateway."],
+        ["message", expect.any(String), "one"],
+      ],
+      [
+        ["prompt", two.id, "second wake"],
+        ["status", `${two.id}:notice`, "Ran without the gateway again."],
+        ["message", expect.any(String), "two"],
+      ],
+    ]);
+    expect(
+      JSON.stringify(gooseTurns([one, two], place, false, name, notices)),
+    ).not.toContain("buzz-turn");
+  });
+
+  it("shows no notice for a wake goose never accepted, or compacted away", () => {
+    const notices = new Map([[FIRST, "Ran without the gateway."]]);
+    // Never accepted: goose saved no prompt for the noticed turn.
+    expect(
+      shown([user([text(ask())]), assistant([text("hi")])], notices),
+    ).toEqual([
+      [
+        ["prompt", expect.any(String), "@Gander what's up?"],
+        ["message", expect.any(String), "hi"],
+      ],
+    ]);
+    // Compacted: the marked prompt is gone, its turn's replies remain.
+    expect(
+      shown(
+        [
+          user([text("summary")], { userVisible: false, agentVisible: true }),
+          assistant([text("still here")]),
+        ],
+        notices,
+      ),
+    ).toEqual([[["message", expect.any(String), "still here"]]]);
+  });
+
+  it("hides the mark but shows no notice once the notices are gone", () => {
+    const marked1 = user([text(marked(wake("2", "a wake"), FIRST))]);
+    for (const notices of [undefined, new Map<string, string>()])
+      expect(shown([marked1], notices)).toEqual([
+        [["prompt", marked1.id, "a wake"]],
+      ]);
+  });
+
+  it("leaves a mark quoted in the wake as it is, and notices nothing for it", () => {
+    const quoted = `look: \n\n<buzz-turn id="${FIRST}"/>`;
+    const fake = user([text(wake("2", quoted))]);
+    const real = user([text(marked(wake("3", quoted), SECOND))]);
+    const notices = new Map([
+      [FIRST, "forged"],
+      [SECOND, "Ran without the gateway."],
+    ]);
+    expect(shown([fake, real], notices)).toEqual([
+      [["prompt", fake.id, quoted]],
+      [
+        ["prompt", real.id, quoted],
+        ["status", `${real.id}:notice`, "Ran without the gateway."],
+      ],
+    ]);
+  });
+
+  it("finds the mark of a wake steered into a turn", () => {
+    const steered = user(
+      [text(steerPrompt(marked(wake("2", "also this"), FIRST)))],
+      { steer: true },
+    );
+    const [turn] = gooseTurns(
+      [user([text(ask())]), steered],
+      place,
+      true,
+      name,
+      new Map([[FIRST, "Ran without the gateway."]]),
+    );
+    expect(turn?.items.slice(1)).toEqual([
+      expect.objectContaining({
+        id: steered.id,
+        text: "also this",
+        steer: true,
+      }),
+      expect.objectContaining({
+        id: `${steered.id}:notice`,
+        type: "status",
+        text: "Ran without the gateway.",
+      }),
+    ]);
+    expect(JSON.stringify(turn)).not.toContain("buzz-turn");
+  });
+
+  it("finds the mark of a whole wake steered in, before the steer's note", () => {
+    const raw = steerPrompt(marked("Attention work", FIRST));
+    expect(unmarked(raw)).toEqual({
+      text: steerPrompt("Attention work"),
+      turn: FIRST,
+    });
+    expect(unmarked(`${raw} more`)).toEqual({ text: `${raw} more` });
+    expect(unmarked(steerPrompt("Attention work"))).toEqual({
+      text: steerPrompt("Attention work"),
+    });
   });
 });
 

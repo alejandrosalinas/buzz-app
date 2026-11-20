@@ -39,6 +39,12 @@ export type FakeGoose = {
   /** Turns, in the order they began. */
   turns: FakeTurn[];
   closed: string[];
+  /** Sessions `session/load` resumed. */
+  loaded: string[];
+  /** Every `session/load` is answered with this error. */
+  loadError?: string;
+  /** Kill asks it to stop, and it never exits on its own. */
+  holdExit: boolean;
   cancelled: string[];
   deleted: string[];
   /** Each `session/set_config_option`, as `sessionId configId=value`. */
@@ -101,6 +107,8 @@ export function fakeSpawn(
   options: Readonly<{
     /** Whether goose says it can reach HTTP MCP servers. */
     http?: boolean;
+    /** Whether goose says it can resume a saved session. */
+    load?: boolean;
     home?: string;
     hold?: boolean;
     /** What a turn writes before it ends. */
@@ -214,6 +222,8 @@ export function fakeSpawn(
       prompts: new Map(),
       turns: [],
       closed: [],
+      loaded: [],
+      holdExit: false,
       cancelled: [],
       deleted: [],
       configured: [],
@@ -277,13 +287,31 @@ export function fakeSpawn(
             protocolVersion: 1,
             agentCapabilities: {
               mcpCapabilities: { http: options.http ?? true, sse: false },
+              ...(options.load && { loadSession: true }),
             },
           });
         case "session/new": {
           fake.opened.push(params);
+          const meta = params._meta as Record<string, unknown> | undefined;
+          // As goose does, a session that names no provider opens on its
+          // config's default provider and model, and fails without them.
+          if (
+            defaults &&
+            !meta?.provider &&
+            !(defaults.providerId && defaults.modelId)
+          )
+            return send({
+              jsonrpc: "2.0",
+              ...(id !== undefined && { id }),
+              error: {
+                code: -32603,
+                message: `Internal error: Failed to resolve provider and model: Configuration value not found: ${defaults.providerId ? "GOOSE_MODEL" : "GOOSE_PROVIDER"}`,
+              },
+            });
           const sessionId = `session-${++sessions}`;
-          const extensions = ((params._meta as Record<string, unknown>)
-            ?.enabledExtensions ?? []) as { server?: { url?: string } }[];
+          const extensions = (meta?.enabledExtensions ?? []) as {
+            server?: { url?: string };
+          }[];
           const url = extensions.find((item) => item.server?.url)?.server?.url;
           if (url) declared.set(sessionId, url);
           return reply(id, {
@@ -484,6 +512,15 @@ export function fakeSpawn(
         case "session/close":
           fake.closed.push(sessionId);
           return reply(id, {});
+        case "session/load":
+          if (fake.loadError)
+            return send({
+              jsonrpc: "2.0",
+              ...(id !== undefined && { id }),
+              error: { code: -32603, message: fake.loadError },
+            });
+          fake.loaded.push(sessionId);
+          return reply(id, { configOptions: configOptions(sessionId) });
         default:
           return send({
             jsonrpc: "2.0",
@@ -508,7 +545,7 @@ export function fakeSpawn(
       end: async () => undefined,
       kill: async () => {
         fake.killed = true;
-        fake.exit(null);
+        if (!fake.holdExit) fake.exit(null);
       },
       ...(process.agentCredential && {
         actAs: async (agent: Readonly<{ pubkey: string; relay: string }>) => {

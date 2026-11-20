@@ -23,6 +23,7 @@ use browser::{
 };
 mod agent_state;
 mod app_agents;
+mod build_identity;
 mod decisions;
 mod deep_links;
 mod dock;
@@ -138,7 +139,8 @@ use host_files::{
 };
 use host_forward::{
     plugin_host_forward_admission, plugin_host_forward_associate, plugin_host_forward_close,
-    plugin_host_forward_open, plugin_host_forward_seal, HostForward,
+    plugin_host_forward_open, plugin_host_forward_register_child, plugin_host_forward_seal,
+    HostForward,
 };
 use host_mcp::{
     plugin_host_mcp_authorize, plugin_host_mcp_close, plugin_host_mcp_pairing,
@@ -783,6 +785,7 @@ fn commands<R: tauri::Runtime>() -> impl Fn(tauri::ipc::Invoke<R>) -> bool + Sen
         federated_identity::socket::relay_socket_close,
         draft_diagnostics::draft_diagnostics_save,
         web_inspector::web_inspector,
+        build_identity::get_build_identity,
         relay_sign,
         relay_decode_read_state,
         relay_sign_read_state,
@@ -870,6 +873,7 @@ fn commands<R: tauri::Runtime>() -> impl Fn(tauri::ipc::Invoke<R>) -> bool + Sen
         plugin_host_forward_admission,
         plugin_host_forward_open,
         plugin_host_forward_associate,
+        plugin_host_forward_register_child,
         plugin_host_forward_seal,
         plugin_host_forward_close,
         plugin_host_read_file,

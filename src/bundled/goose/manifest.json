@@ -23,6 +23,16 @@
           "case \"$1\" in \"~/\"*) set -- \"$HOME/${1:2}\";; esac; exec /usr/bin/base64 -i \"$1\"",
           "buzz-read"
         ]
+      },
+      {
+        "id": "no-proxy",
+        "program": "buzz-agent-command",
+        "bundled": true,
+        "args": [
+          "--shell",
+          "set -eu -o pipefail; for value in \"${NO_PROXY-}\" \"${no_proxy-}\"; do printf '%s' \"$value\" | /usr/bin/base64 | /usr/bin/tr -d '\\n'; echo; done; if [ -n \"${HTTPS_PROXY-}${https_proxy-}${HTTP_PROXY-}${http_proxy-}${ALL_PROXY-}${all_proxy-}\" ]; then echo proxied; else echo direct; fi",
+          "buzz-no-proxy"
+        ]
       }
     ],
     "mcp": true,

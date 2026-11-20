@@ -88,6 +88,8 @@ function fake(
     });
   };
   const client: BuzzClient = {
+    // A host that knows the relay has no self key.
+    signingAuthority: null,
     key: me,
     pubkey: me,
     effectiveEdit: vi.fn(async (id: string) => {
@@ -3958,7 +3960,9 @@ it("asks for the relay's key once per people search", async () => {
     q: "Jordan Rivera",
   });
   expect(relayAuthorLookup).toHaveBeenCalledOnce();
-  expect(found).toBe(`${alice} "Alice Smith"`);
+  expect(found).toBe(
+    `${alice} "Alice Smith"\nwarning: the relay's archive list could not be read, so archived identities are not left out or marked.`,
+  );
 });
 
 it("names no author while the relay's key can't be learned, then asks which one is meant", async () => {
@@ -4138,6 +4142,415 @@ it("reads users by id without the name search", async () => {
     `${bob} "Bob"`,
   );
   expect(client.searchProfiles).not.toHaveBeenCalled();
+});
+
+function archivedPeople(forge = false, extra: readonly BuzzEvent[] = []) {
+  const relay = keypair();
+  const list = {
+    kind: 13535,
+    content: "",
+    created_at: 100,
+    tags: [["-"], ["p", bob]],
+  };
+  const { client: base } = fake([
+    ...community,
+    // Unsigned, the connection never admitted it.
+    forge
+      ? event({ ...list, pubkey: relay.pubkey })
+      : eventDto(signed(relay, list)),
+    ...extra,
+  ]);
+  const client = {
+    ...base,
+    signingAuthority: relay.pubkey,
+    searchProfiles: vi.fn(async () => [
+      profile(alice, "Alice Smith"),
+      profile(bob, "Bob"),
+    ]),
+  };
+  return client;
+}
+
+it("reads no archive list signed by a contact key alone", async () => {
+  const { signingAuthority, ...client } = archivedPeople();
+  // The app's contact key, never an archive authority.
+  const contact = {
+    ...client,
+    signingAuthority: null,
+    relayAuthor: signingAuthority,
+  };
+  expect(await callTool(contact, {}, "users", { q: "b" })).toBe(
+    `${alice} "Alice Smith"\n${bob} "Bob"`,
+  );
+  expect(contact.query).not.toHaveBeenCalledWith([
+    expect.objectContaining({ kinds: [13535] }),
+  ]);
+});
+
+it("goes on without an archive list held open", async () => {
+  vi.useFakeTimers();
+  try {
+    const client = archivedPeople();
+    const query = client.query;
+    client.query = vi.fn((filters: readonly Filter[]) =>
+      (filters[0]?.kinds as number[] | undefined)?.includes(13535)
+        ? new Promise<never>(() => {})
+        : query(filters),
+    );
+    const warning =
+      "warning: the relay's archive list could not be read, so archived identities are not left out or marked.";
+    const byId = callTool(client, {}, "users", { ids: [bob] });
+    const search = callTool(client, {}, "users", { q: "b" });
+    await vi.advanceTimersByTimeAsync(0);
+    // The profile read starts beside the archive read, not after it.
+    expect(client.query).toHaveBeenCalledWith([
+      { kinds: [0], authors: [bob], limit: 1 },
+    ]);
+    await vi.advanceTimersByTimeAsync(5000);
+    expect(await byId).toBe(`${bob} "Bob"\n${warning}`);
+    expect(await search).toBe(
+      `${alice} "Alice Smith"\n${bob} "Bob"\n${warning}`,
+    );
+  } finally {
+    vi.useRealTimers();
+  }
+});
+
+it("leaves archived identities out of a name search unless asked", async () => {
+  const client = archivedPeople();
+  expect(await callTool(client, {}, "users", { q: "b" })).toBe(
+    `${alice} "Alice Smith"`,
+  );
+  expect(
+    await callTool(client, {}, "users", { q: "b", include_archived: true }),
+  ).toBe(`${alice} "Alice Smith"\n${bob} "Bob" archived`);
+});
+
+it("finds yourself in a name search though archived", async () => {
+  const client = { ...archivedPeople(), key: bob, pubkey: bob };
+  expect(await callTool(client, {}, "users", { q: "b" })).toBe(
+    `${alice} "Alice Smith"\n${bob} "Bob" archived`,
+  );
+});
+
+it("marks an archived identity read by id", async () => {
+  const client = archivedPeople();
+  expect(await callTool(client, {}, "users", { ids: [bob, alice] })).toBe(
+    `${alice} "Alice Smith"\n${bob} "Bob" archived`,
+  );
+});
+
+it("searches unfiltered, with a warning, when the archive list can't be read", async () => {
+  const forged = archivedPeople(true);
+  const { relayAuthor: _, ...lost } = archivedPeople();
+  const unreachable = {
+    ...lost,
+    relayAuthorLookup: vi.fn(async () => {
+      throw new Error("offline");
+    }),
+  };
+  const warning =
+    "warning: the relay's archive list could not be read, so archived identities are not left out or marked.";
+  for (const broken of [forged, unreachable])
+    expect(await callTool(broken, {}, "users", { q: "b" })).toBe(
+      `${alice} "Alice Smith"\n${bob} "Bob"\n${warning}`,
+    );
+});
+
+it("refuses to mention an archived identity, by key or by name", async () => {
+  const context = { channel: "chan", root };
+  for (const args of [
+    { text: "see this", mentions: [bob] },
+    { text: "@Bob see this" },
+  ]) {
+    const client = archivedPeople();
+    const publish = vi.spyOn(client, "publish");
+    await expect(
+      callTool(client, context, "send", { ...args, audience: "everyone" }),
+    ).rejects.toThrow(`Bob (${bob}) is archived. Nothing was posted.`);
+    expect(publish).not.toHaveBeenCalled();
+  }
+});
+
+it("refuses a new DM with an archived identity, but opens an existing one", async () => {
+  const client = archivedPeople();
+  const publish = vi.spyOn(client, "publish");
+  await expect(callTool(client, {}, "dm", { to: [bob] })).rejects.toThrow(
+    `Bob (${bob}) is archived. No DM was opened.`,
+  );
+  expect(publish).not.toHaveBeenCalled();
+  const dm = event({
+    kind: 39000,
+    tags: [
+      ["d", "dm-bob"],
+      ["t", "dm"],
+      ["p", me],
+      ["p", bob],
+    ],
+  });
+  const existing = archivedPeople(false, [dm]);
+  expect(await callTool(existing, {}, "dm", { to: [bob] })).toBe("dm-bob");
+});
+
+it("opens an existing DM with an archived identity past the first page", async () => {
+  const dm = (id: string, created_at: number, other: string) =>
+    event({
+      id: id.padStart(64, "0"),
+      kind: 39000,
+      created_at,
+      tags: [
+        ["d", `dm-${id}`],
+        ["t", "dm"],
+        ["p", me],
+        ["p", other],
+      ],
+    });
+  const newer = Array.from({ length: 600 }, (_, i) =>
+    dm(`${i + 1}`, 1000 + i, alice),
+  );
+  const client = archivedPeople(false, [...newer, dm("0", 1, bob)]);
+  const publish = vi.spyOn(client, "publish");
+  expect(await callTool(client, {}, "dm", { to: [bob] })).toBe("dm-0");
+  expect(publish).not.toHaveBeenCalled();
+});
+
+it("refuses an archived mention before uploading its files", async () => {
+  const client = archivedPeople();
+  await expect(
+    callTool(client, { channel: "chan", root }, "send", {
+      text: "see this",
+      mentions: [bob],
+      files: ["shot.png"],
+      audience: "everyone",
+    }),
+  ).rejects.toThrow(`Bob (${bob}) is archived. Nothing was posted.`);
+  expect(client.upload).not.toHaveBeenCalled();
+  expect(client.publish).not.toHaveBeenCalled();
+});
+
+it("warns, not clears, when the host gives no way to learn the relay's key", async () => {
+  // As in Mesh Agent mode: no signing authority, no lookup.
+  const { signingAuthority: _, ...client } = archivedPeople();
+  expect(
+    await callTool(client, { channel: "chan", root }, "send", {
+      text: "see this",
+      mentions: [bob],
+      audience: "everyone",
+    }),
+  ).toMatch(
+    /\nwarning: the relay's archive list could not be read, so archived identities were not checked\.$/,
+  );
+});
+
+it("bounds the relay key's discovery by the archive check's limit", async () => {
+  vi.useFakeTimers();
+  try {
+    const { signingAuthority: _, ...base } = archivedPeople();
+    const client = {
+      ...base,
+      relayAuthorLookup: vi.fn(() => new Promise<never>(() => {})),
+    };
+    const sent = callTool(client, { channel: "chan", root }, "send", {
+      text: "see this",
+      mentions: [bob],
+      audience: "everyone",
+    });
+    await vi.advanceTimersByTimeAsync(5000);
+    expect(await sent).toMatch(
+      /\nwarning: the relay's archive list could not be read/,
+    );
+  } finally {
+    vi.useRealTimers();
+  }
+});
+
+it.each(["fails", "stalls"])(
+  "refuses an archived mention by key when the profile read %s",
+  async (how) => {
+    vi.useFakeTimers();
+    try {
+      const client = archivedPeople();
+      const query = client.query;
+      client.query = vi.fn((filters: readonly Filter[]) =>
+        (filters[0]?.kinds as number[] | undefined)?.includes(0)
+          ? how === "fails"
+            ? Promise.reject(new Error("offline"))
+            : new Promise<never>(() => {})
+          : query(filters),
+      );
+      const sent = callTool(client, { channel: "chan", root }, "send", {
+        text: "see this",
+        mentions: [bob],
+        audience: "everyone",
+      });
+      const refused = expect(sent).rejects.toThrow(
+        `${bob} (${bob}) is archived. Nothing was posted.`,
+      );
+      await vi.advanceTimersByTimeAsync(5000);
+      await refused;
+      expect(client.publish).not.toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
+  },
+);
+
+const archiveReads = (client: BuzzClient) =>
+  vi
+    .mocked(client.query)
+    .mock.calls.filter(([filters]) =>
+      (filters[0]?.kinds as number[] | undefined)?.includes(13535),
+    ).length;
+
+it("answers a name search within the limit while the relay key is held", async () => {
+  vi.useFakeTimers();
+  try {
+    const { signingAuthority: _, ...base } = archivedPeople();
+    const client = {
+      ...base,
+      relayAuthorLookup: vi.fn(() => new Promise<never>(() => {})),
+    };
+    let done = false;
+    const search = callTool(client, {}, "users", { q: "b" }).finally(() => {
+      done = true;
+    });
+    await vi.advanceTimersByTimeAsync(4999);
+    expect(done).toBe(false);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(await search).toMatch(
+      /^.*"Alice Smith"\n.*"Bob"\nwarning: the relay's archive list could not be read/,
+    );
+  } finally {
+    vi.useRealTimers();
+  }
+});
+
+it("gives the name lookup only the time the archive read left", async () => {
+  vi.useFakeTimers();
+  try {
+    const client = archivedPeople();
+    const query = client.query;
+    client.query = vi.fn((filters: readonly Filter[]) => {
+      const kinds = filters[0]?.kinds as number[] | undefined;
+      if (kinds?.includes(0)) return new Promise<never>(() => {});
+      if (kinds?.includes(13535))
+        return new Promise<readonly BuzzEvent[]>((resolve) =>
+          setTimeout(() => resolve(query(filters)), 4000),
+        );
+      return query(filters);
+    });
+    const sent = callTool(client, { channel: "chan", root }, "send", {
+      text: "see this",
+      mentions: [bob],
+      audience: "everyone",
+    });
+    const refused = expect(sent).rejects.toThrow(
+      `${bob} (${bob}) is archived. Nothing was posted.`,
+    );
+    await vi.advanceTimersByTimeAsync(5000);
+    await refused;
+    expect(client.publish).not.toHaveBeenCalled();
+  } finally {
+    vi.useRealTimers();
+  }
+});
+
+it("starts no archive read once the relay key arrives too late", async () => {
+  vi.useFakeTimers();
+  try {
+    const { signingAuthority, ...base } = archivedPeople();
+    const client = {
+      ...base,
+      relayAuthorLookup: vi.fn(
+        () =>
+          new Promise<string>((resolve) =>
+            setTimeout(() => resolve(signingAuthority), 6000),
+          ),
+      ),
+    };
+    const sent = callTool(client, { channel: "chan", root }, "send", {
+      text: "see this",
+      mentions: [bob],
+      audience: "everyone",
+    });
+    await vi.advanceTimersByTimeAsync(5000);
+    expect(await sent).toMatch(/\nwarning: the relay's archive list/);
+    await vi.advanceTimersByTimeAsync(5000);
+    expect(archiveReads(client)).toBe(0);
+  } finally {
+    vi.useRealTimers();
+  }
+});
+
+it.each(["fails", "stalls"])(
+  "starts no archive read past the limit when the first %s",
+  async (how) => {
+    vi.useFakeTimers();
+    try {
+      const client = archivedPeople();
+      const query = client.query;
+      client.query = vi.fn((filters: readonly Filter[]) =>
+        (filters[0]?.kinds as number[] | undefined)?.includes(13535)
+          ? how === "fails"
+            ? Promise.reject(new Error("offline"))
+            : new Promise<never>(() => {})
+          : query(filters),
+      );
+      const sent = callTool(client, { channel: "chan", root }, "send", {
+        text: "see this",
+        mentions: [bob],
+        audience: "everyone",
+      });
+      await vi.advanceTimersByTimeAsync(5000);
+      expect(await sent).toMatch(/\nwarning: the relay's archive list/);
+      const reads = archiveReads(client);
+      await vi.advanceTimersByTimeAsync(30_000);
+      expect(archiveReads(client)).toBe(reads);
+    } finally {
+      vi.useRealTimers();
+    }
+  },
+);
+
+it("stops a scheduled archive retry at the limit", async () => {
+  vi.useFakeTimers();
+  // Full backoff: retries at 1, 3 and 7 seconds, the last past the limit.
+  vi.spyOn(Math, "random").mockReturnValue(1);
+  try {
+    const client = archivedPeople();
+    const query = client.query;
+    client.query = vi.fn((filters: readonly Filter[]) =>
+      (filters[0]?.kinds as number[] | undefined)?.includes(13535)
+        ? Promise.reject(new TypeError("network unreachable"))
+        : query(filters),
+    );
+    const sent = callTool(client, { channel: "chan", root }, "send", {
+      text: "see this",
+      mentions: [bob],
+      audience: "everyone",
+    });
+    await vi.advanceTimersByTimeAsync(5000);
+    expect(await sent).toMatch(/\nwarning: the relay's archive list/);
+    expect(archiveReads(client)).toBe(3);
+    await vi.advanceTimersByTimeAsync(30_000);
+    expect(archiveReads(client)).toBe(3);
+  } finally {
+    vi.restoreAllMocks();
+    vi.useRealTimers();
+  }
+});
+
+it("sends to an archived identity, with a warning, when the archive list can't be read", async () => {
+  const client = archivedPeople(true);
+  expect(
+    await callTool(client, { channel: "chan", root }, "send", {
+      text: "@Bob see this",
+      audience: "everyone",
+    }),
+  ).toMatch(
+    /^sent [0-9a-f]+\nwarning: the relay's archive list could not be read, so archived identities were not checked\.$/,
+  );
+  expect(client.publish).toHaveBeenCalledOnce();
 });
 
 it("refuses ids with q, and more than 100 ids", async () => {
@@ -5435,7 +5848,7 @@ it.each(["send", "reply_in_subthread"])(
         files: ["shot.png"],
       }),
     ).rejects.toThrow("self_handoff");
-    expect(client.upload).toHaveBeenCalledOnce();
+    expect(client.upload).not.toHaveBeenCalled();
     expect(client.publish).not.toHaveBeenCalled();
   },
 );

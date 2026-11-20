@@ -12,7 +12,9 @@ import {
   type Transcript,
   type TranscriptItem,
   type TranscriptTurn,
+  withNotices,
 } from "../../features/agents/activity-transcript";
+import { STEER_NOTE } from "../claude-code/prompt";
 import { type GooseHost, type GooseProcess, REQUEST_TIMEOUT_MS } from "./goose";
 import { absolute, abortable } from "./sessions";
 import { briefly } from "./setup";
@@ -75,7 +77,35 @@ const KINDS: Record<string, string> = {
 
 /** A person's display name, if known. */
 type Names = (pubkey: string) => string | undefined;
-/** A Buzz prompt, or a steer, as the turn's opening item. */
+
+/** The suffix Buzz ends a fallback wake's prompt with, naming the turn only so
+ * its notice shows beside it: never a wake's or the gateway's id. */
+const MARK =
+  /\n\n<buzz-turn id="([0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12})"\/>$/;
+export const marked = (text: string, id: string) =>
+  `${text}\n\n<buzz-turn id="${id}"/>`;
+/** `text`, which Buzz didn't mark, with every mark-like tag in it escaped, as
+ * `unframed` escapes a section's: whatever a steer later adds or trims, no
+ * mark is read from it. */
+export const unforged = (text: string) =>
+  text.replace(/<(?=buzz-turn)/g, "<\\");
+/** What a steer adds after a marked wake: its note, and, for a wake it wraps
+ * whole, the end of its section. */
+const STEERED = [`\n</${STEER}>${STEER_NOTE}`, STEER_NOTE];
+/** `raw` without Buzz's suffix, and the turn it names. Only the very end, or
+ * what a steer adds after it, counts, so the same text quoted within the
+ * prompt stays as it is. */
+export function unmarked(raw: string): { text: string; turn?: string } {
+  const tail = STEERED.find((end) => raw.endsWith(end)) ?? "";
+  const match = MARK.exec(raw.slice(0, raw.length - tail.length));
+  const turn = match?.[1];
+  return match && turn
+    ? { text: raw.slice(0, match.index) + tail, turn }
+    : { text: raw };
+}
+
+/** A Buzz prompt, or a steer, as the turn's opening item, and the turn Buzz
+ * marked it as, if any. */
 function prompt(
   id: string,
   at: number,
@@ -83,21 +113,25 @@ function prompt(
   steered: boolean,
   name?: Names,
 ) {
-  let sections = promptSections(raw);
+  const { text: shown, turn } = unmarked(raw);
+  let sections = promptSections(shown);
   const steer = sections.find((section) => section.tag === STEER);
   // An older steer wraps a whole turn.
   if (steer && !readEventBody(steer.body))
     sections = promptSections(steer.body);
   const { text, author, authorPubkey } = promptMessage(sections, name);
   return {
-    id,
-    at,
-    type: "prompt" as const,
-    text: text || raw,
-    ...(author ? { author } : {}),
-    ...(authorPubkey ? { authorPubkey } : {}),
-    sections,
-    steer: steered || !!steer,
+    turn,
+    item: {
+      id,
+      at,
+      type: "prompt" as const,
+      text: text || shown,
+      ...(author ? { author } : {}),
+      ...(authorPubkey ? { authorPubkey } : {}),
+      sections,
+      steer: steered || !!steer,
+    },
   };
 }
 
@@ -118,8 +152,12 @@ export function gooseTurns(
   conversation: Place & { sessionId: string },
   working: boolean,
   name?: Names,
+  /** Notices by the turn Buzz marked their prompts as. */
+  notices?: ReadonlyMap<string, string>,
 ): TranscriptTurn[] {
   const turns: TranscriptTurn[] = [];
+  /** Notices by the id goose gave their prompts. */
+  const noticed = new Map<string, string>();
   const tools = new Map<string, ToolItem>();
   /** Messages sent with send, until their result says whether they posted. */
   const sends = new Map<
@@ -157,7 +195,15 @@ export function gooseTurns(
     if (message.role === "user" && !responses.length) {
       const raw = texts(content);
       if (!raw.trim()) return;
-      const item = prompt(id, at, raw, message.metadata?.steer === true, name);
+      const { item, turn: marked } = prompt(
+        id,
+        at,
+        raw,
+        message.metadata?.steer === true,
+        name,
+      );
+      const notice = marked && notices?.get(marked);
+      if (notice) noticed.set(id, notice);
       const current = item.steer ? turns.at(-1) : undefined;
       (current ?? turn(id, at, false)).items.push(item);
       last = at;
@@ -267,7 +313,7 @@ export function gooseTurns(
   if (current && !working) current.endedAt = Math.max(last, current.startedAt);
   // goose returns a session's every message, from its start.
   if (turns[0] && !turns[0].partial) turns[0].newSession = true;
-  return turns;
+  return noticed.size ? withNotices(turns, noticed) : turns;
 }
 
 /** A field of the context a session's first prompt carries, such as its
@@ -441,6 +487,7 @@ export class GooseHistory {
     signal: AbortSignal,
     name?: Names,
     reuse = false,
+    notices?: ReadonlyMap<string, string>,
   ): Promise<GooseTranscript | undefined> {
     return this.with(signal, async (goose, { resolveDirectory }) => {
       const turns: TranscriptTurn[] = [];
@@ -472,6 +519,7 @@ export class GooseHistory {
               { sessionId, ...(lookup.place ?? { channelId: "" }) },
               sessionId === lookup.working,
               name,
+              notices,
             ),
           );
         }

@@ -734,6 +734,9 @@ export class AgentRunners {
   private reloads = new Set<string>();
   /** Catch-up progress of each watch stream, as saved. */
   private checkpoints: Readonly<Record<string, Checkpoint>>;
+  private batchingCheckpoints = false;
+  private heardCheckpointDirty = false;
+  private checkpointFlushQueued = false;
   /** By agent, its catch-up running or last run. */
   private passes = new Map<string, Pass>();
   /** By community, for its connect, when each channel's route was first seen
@@ -1204,6 +1207,7 @@ export class AgentRunners {
   }
   /** Retires every runner, as when the host stops. */
   clear() {
+    if (this.heardCheckpointDirty) this.saveCheckpoints();
     for (const runner of this.runners.values()) this.retire(runner);
     this.runners.clear();
   }
@@ -1286,40 +1290,52 @@ export class AgentRunners {
   /** Gives a community's live events, and replayed ones from `since` on, to
    * the agents in it. */
   dispatch(batch: LiveBatch, heard: (agent: Agent) => boolean, since: number) {
-    for (const runner of this.runners.values()) {
-      const agent = this.host.ready(runner.key);
-      if (!agent || !heard(agent) || !runner.type?.run) continue;
-      let overflow = 0;
-      for (const event of batch.events) {
-        if (batch.replay && event.created_at < since) continue;
-        if (!batch.replay) {
-          this.hear(runner, agent, event, batch.channelId);
-          continue;
+    this.batchCheckpoints(() => {
+      for (const runner of this.runners.values()) {
+        const agent = this.host.ready(runner.key);
+        if (!agent || !heard(agent) || !runner.type?.run) continue;
+        // An earlier slice may have filled the queue before a rate window
+        // opened. Give that work room before filling it with this slice.
+        if (
+          batch.replay &&
+          runner.backlog.length &&
+          runner.backlog.length + batch.events.length > BACKLOG_LIMIT
+        ) {
+          this.admit(runner);
+          if (runner.controller.signal.aborted) continue;
         }
-        const channel = event.tags.find((tag) => tag[0] === "h")?.[1];
-        if (this.hasSeen(runner, event.id, channel)) continue;
-        // Left unseen, so a later replay or catch-up can still deliver it.
-        if (runner.backlog.length >= BACKLOG_LIMIT) {
-          overflow++;
-          continue;
+        let overflow = 0;
+        for (const event of batch.events) {
+          if (batch.replay && event.created_at < since) continue;
+          if (!batch.replay) {
+            this.hear(runner, agent, event, batch.channelId);
+            continue;
+          }
+          const channel = event.tags.find((tag) => tag[0] === "h")?.[1];
+          if (this.hasSeen(runner, event.id, channel)) continue;
+          // Left unseen, so a later replay or catch-up can still deliver it.
+          if (runner.backlog.length >= BACKLOG_LIMIT) {
+            overflow++;
+            continue;
+          }
+          this.markSeen(runner, event.id, channel);
+          if (this.isOwn(agent, event)) continue;
+          // A replay waits for room rather than take the drops a burst of
+          // live traffic would.
+          runner.backlog.push({
+            event,
+            ...(batch.channelId ? { channelId: batch.channelId } : {}),
+            addressable: this.host.unattended(agent, event, true),
+            replay: true,
+          });
         }
-        this.markSeen(runner, event.id, channel);
-        if (this.isOwn(agent, event)) continue;
-        // A replay waits for room rather than take the drops a burst of
-        // live traffic would.
-        runner.backlog.push({
-          event,
-          ...(batch.channelId ? { channelId: batch.channelId } : {}),
-          addressable: this.host.unattended(agent, event, true),
-          replay: true,
-        });
+        if (overflow)
+          console.warn(
+            `Agent ${agent.name} left ${overflow} replayed events for later`,
+          );
+        if (batch.replay) this.admit(runner);
       }
-      if (overflow)
-        console.warn(
-          `Agent ${agent.name} left ${overflow} replayed events for later`,
-        );
-      if (batch.replay) this.admit(runner);
-    }
+    });
   }
   /** The agent's watches whose streams started after a replayed `event`.
    * Asked as it is admitted: an attention change starts its streams in the
@@ -1449,32 +1465,38 @@ export class AgentRunners {
       runner.later.shift();
       this.submit(runner, agent, job);
     }
-    while (runner.backlog.length) {
-      const { event, channelId, addressable, replay, ...entry } = runner
-        .backlog[0] as Runner["backlog"][0];
-      // Matched against the watches as they are now: one turned on while a
-      // replay waited does not wake for it.
-      const done = replay
-        ? new Set([...(entry.done ?? []), ...this.before(runner, agent, event)])
-        : entry.done;
-      const heard = this.heard(runner, agent, event, addressable, done);
-      if (
-        (heard.held && runner.held.size >= HELD_LIMIT) ||
-        !this.takes(runner, heard.triggers)
-      )
-        return;
-      runner.backlog.shift();
-      this.deliver(
-        runner,
-        agent,
-        event,
-        channelId,
-        addressable,
-        heard,
-        done,
-        replay,
-      );
-    }
+    if (!runner.backlog.length) return;
+    this.batchCheckpoints(() => {
+      while (runner.backlog.length) {
+        const { event, channelId, addressable, replay, ...entry } = runner
+          .backlog[0] as Runner["backlog"][0];
+        // Matched against the watches as they are now: one turned on while a
+        // replay waited does not wake for it.
+        const done = replay
+          ? new Set([
+              ...(entry.done ?? []),
+              ...this.before(runner, agent, event),
+            ])
+          : entry.done;
+        const heard = this.heard(runner, agent, event, addressable, done);
+        if (
+          (heard.held && runner.held.size >= HELD_LIMIT) ||
+          !this.takes(runner, heard.triggers)
+        )
+          return;
+        runner.backlog.shift();
+        this.deliver(
+          runner,
+          agent,
+          event,
+          channelId,
+          addressable,
+          heard,
+          done,
+          replay,
+        );
+      }
+    });
   }
   /** Gives the agent `event` once, however many times it arrives. */
   private hear(
@@ -1506,7 +1528,9 @@ export class AgentRunners {
     for (const stream of streamsOf(agent))
       if ((!done || done.has(stream.slug)) && inStream(stream, event))
         changed = this.heardIn(stream.key, event) || changed;
-    if (changed) this.saveCheckpoints();
+    if (!changed) return;
+    if (this.batchingCheckpoints) this.heardCheckpointDirty = true;
+    else this.saveCheckpoints();
   }
   /** Adds `event` to what the stream heard past its checkpoint, unless it is
    * not past it; returns whether it did. */
@@ -2261,10 +2285,29 @@ export class AgentRunners {
     const checkpoint = this.checkpoints[streamOf(runner.key, trigger)];
     return !!checkpoint && undelivered(checkpoint, trigger.event);
   }
+  /** Keep progress current during admission. A relay slice may arrive as
+   * several synchronous deliveries with different channel provenance. */
+  private batchCheckpoints(run: () => void) {
+    if (this.batchingCheckpoints) return run();
+    this.batchingCheckpoints = true;
+    try {
+      run();
+    } finally {
+      this.batchingCheckpoints = false;
+      if (this.heardCheckpointDirty && !this.checkpointFlushQueued) {
+        this.checkpointFlushQueued = true;
+        queueMicrotask(() => {
+          this.checkpointFlushQueued = false;
+          if (this.heardCheckpointDirty) this.saveCheckpoints();
+        });
+      }
+    }
+  }
   /** Saves the checkpoints of watches that still exist. Unsaved, catch-up
    * starts from the last saved one again, which `seen` dedupes until a
    * restart, and each stream's saved `heard` after one. */
   private saveCheckpoints() {
+    this.heardCheckpointDirty = false;
     const keys = new Set([
       ...this.host.records().flatMap((record) =>
         // A record's `pubkey` is its membership's key.

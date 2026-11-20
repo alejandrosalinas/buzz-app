@@ -605,7 +605,7 @@ async fn forwards_inference_with_only_the_bundle_as_provenance() {
     );
     assert_eq!(
         recv(&mut generation.events).await,
-        serde_json::json!({ "type": "admitted", "request": 1, "class": "inference" })
+        serde_json::json!({ "type": "admitted", "request": 1, "class": "inference", "child": false })
     );
     assert_eq!(
         recv(&mut generation.events).await,
@@ -844,7 +844,8 @@ async fn only_allowlisted_paths_reach_the_gateway() {
 #[tokio::test]
 async fn inference_must_name_the_generation_session() {
     let mut gateway = fake_gateway().await;
-    let forward = ready(gateway.origin);
+    let mut forward = ready(gateway.origin);
+    forward.rendezvous = Duration::from_millis(100);
     let mut associated_goose = associated(&forward, 1);
     let client = reqwest::Client::new();
     let post = || {
@@ -862,6 +863,12 @@ async fn inference_must_name_the_generation_session() {
     let other = post().header("agent-session-id", "other");
     assert_eq!(
         other.send().await.unwrap().status(),
+        StatusCode::GATEWAY_TIMEOUT
+    );
+    // A session no child could have is refused without waiting.
+    let invalid = post().header("agent-session-id", "other session");
+    assert_eq!(
+        invalid.send().await.unwrap().status(),
         StatusCode::BAD_REQUEST
     );
     let twice = post()
@@ -922,9 +929,11 @@ async fn inference_must_name_the_generation_session() {
     assert!(forward
         .associate(PLUGIN, associated_goose.id, "20261104_1".into())
         .is_err());
+    // Another session may be a child not yet registered: it waits, then is
+    // refused, and nothing reaches the gateway.
     assert_eq!(
         invoke("20261104_2").send().await.unwrap().status(),
-        StatusCode::BAD_REQUEST
+        StatusCode::GATEWAY_TIMEOUT
     );
     assert_eq!(
         invoke("20261104_1").send().await.unwrap().status(),
@@ -1435,8 +1444,9 @@ fn ipc_shapes_match_the_typescript_bindings() {
             ForwardEvent::Admitted {
                 request: 1,
                 class: Class::Discovery,
+                child: false,
             },
-            serde_json::json!({ "type": "admitted", "request": 1, "class": "discovery" }),
+            serde_json::json!({ "type": "admitted", "request": 1, "class": "discovery", "child": false }),
         ),
         (
             ForwardEvent::Finished {
@@ -1460,9 +1470,415 @@ fn ipc_shapes_match_the_typescript_bindings() {
     ] {
         assert_eq!(json(serde_json::to_value(event)), expected);
     }
+    assert_eq!(
+        json(serde_json::to_value(Registered::Registered)),
+        serde_json::json!({ "type": "registered" })
+    );
+    assert_eq!(
+        json(serde_json::to_value(Registered::Refused {
+            reason: "child_cap"
+        })),
+        serde_json::json!({ "type": "refused", "reason": "child_cap" })
+    );
     assert!(serde_json::from_value::<Harness>(serde_json::json!("claude")).is_err());
     assert_eq!(
         serde_json::from_value::<Harness>(serde_json::json!("goose")).unwrap(),
         Harness::Goose
     );
+}
+
+const PARENT: &str = "20261104_1";
+const CHILD: &str = "20261104_2";
+
+/// A goose generation associated with `PARENT`.
+fn goose(forward: &HostForward) -> Opening {
+    let generation = open(forward, Harness::Goose, 1);
+    forward
+        .associate(PLUGIN, generation.id, PARENT.into())
+        .unwrap();
+    generation
+}
+fn invoke(url: &str, session: &str) -> reqwest::RequestBuilder {
+    reqwest::Client::new()
+        .post(format!("{url}/serving-endpoints/model-a/invocations"))
+        .header("agent-session-id", session)
+        .body("{}")
+}
+fn register(forward: &HostForward, id: u64, call: &str, child: &str) -> Registered {
+    forward
+        .register_child(PLUGIN, id, call.into(), child.into())
+        .unwrap()
+}
+fn refused(reason: &'static str) -> Registered {
+    Registered::Refused { reason }
+}
+fn pending(forward: &HostForward) -> usize {
+    let registry = forward.registry();
+    registry.generations.values().map(|g| g.pending.len()).sum()
+}
+/// Ready, with a deadline no test reaches, so a parked request stays parked
+/// until the test releases it.
+fn patient(origin: &str) -> HostForward {
+    let mut forward = ready(origin);
+    forward.rendezvous = Duration::from_secs(3600);
+    forward
+}
+/// Waits until `count` requests are parked: an observed state, not a delay.
+async fn parked(forward: &HostForward, count: usize) {
+    tokio::time::timeout(Duration::from_secs(5), async {
+        while pending(forward) != count {
+            tokio::time::sleep(Duration::from_millis(1)).await;
+        }
+    })
+    .await
+    .expect("parked in time");
+}
+fn send(request: reqwest::RequestBuilder) -> tokio::task::JoinHandle<reqwest::Response> {
+    tokio::spawn(async move { request.send().await.unwrap() })
+}
+/// A parked request's response, bounded well inside `patient`'s deadline so
+/// a lost wake fails the test in seconds instead of holding it for an hour.
+async fn answered(response: tokio::task::JoinHandle<reqwest::Response>) -> reqwest::Response {
+    tokio::time::timeout(Duration::from_secs(5), response)
+        .await
+        .expect("answered in time")
+        .unwrap()
+}
+
+#[tokio::test]
+async fn a_registered_child_is_admitted_under_its_own_session() {
+    let mut gateway = fake_gateway().await;
+    let forward = ready(gateway.origin);
+    let mut generation = goose(&forward);
+    assert_eq!(
+        register(&forward, generation.id, "call-1", CHILD),
+        Registered::Registered
+    );
+    let response = invoke(&generation.url, CHILD).send().await.unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let seen = recv(&mut gateway.seen).await;
+    assert_eq!(seen.headers["agent-session-id"], CHILD);
+    assert_eq!(seen.headers["x-gw-ctx-message-id"], MESSAGE);
+    assert_eq!(
+        recv(&mut generation.events).await,
+        serde_json::json!({ "type": "admitted", "request": 1, "class": "inference", "child": true })
+    );
+    // The parent's own traffic is not a child's.
+    invoke(&generation.url, PARENT).send().await.unwrap();
+    recv(&mut generation.events).await;
+    assert_eq!(recv(&mut generation.events).await["child"], false);
+}
+
+#[tokio::test]
+async fn a_request_first_child_waits_dispatching_nothing_until_registered() {
+    let mut gateway = fake_gateway().await;
+    let forward = patient(gateway.origin);
+    let generation = goose(&forward);
+    let early = send(invoke(&generation.url, CHILD));
+    parked(&forward, 1).await;
+    assert!(gateway.seen.try_recv().is_err());
+    assert_eq!(
+        register(&forward, generation.id, "call-1", CHILD),
+        Registered::Registered
+    );
+    assert_eq!(answered(early).await.status(), StatusCode::OK);
+    assert_eq!(
+        recv(&mut gateway.seen).await.headers["agent-session-id"],
+        CHILD
+    );
+    assert!(gateway.seen.try_recv().is_err());
+    assert_eq!(pending(&forward), 0);
+}
+
+#[tokio::test]
+async fn an_unregistered_child_is_refused_at_the_deadline() {
+    let mut gateway = fake_gateway().await;
+    let mut forward = ready(gateway.origin);
+    forward.rendezvous = Duration::from_millis(300);
+    let mut generation = goose(&forward);
+    // Only the outcome is asserted, never the brief parked state; the
+    // request-first test proves parking.
+    let started = std::time::Instant::now();
+    let response = answered(send(invoke(&generation.url, CHILD))).await;
+    assert!(started.elapsed() >= forward.rendezvous);
+    assert_eq!(response.status(), StatusCode::GATEWAY_TIMEOUT);
+    assert!(response
+        .text()
+        .await
+        .unwrap()
+        .contains("gateway_child_unregistered"));
+    assert_eq!(
+        recv(&mut generation.events).await,
+        serde_json::json!({ "type": "refused", "status": 504, "reason": "child_unregistered" })
+    );
+    assert!(gateway.seen.try_recv().is_err());
+    assert_eq!(pending(&forward), 0);
+    // A registration after expiry still admits a retry; expiry never did.
+    register(&forward, generation.id, "call-1", CHILD);
+    assert_eq!(
+        answered(send(invoke(&generation.url, CHILD)))
+            .await
+            .status(),
+        StatusCode::OK
+    );
+}
+
+#[tokio::test]
+async fn parked_requests_are_capped_and_free_only_their_own_slot() {
+    let gateway = fake_gateway().await;
+    let forward = patient(gateway.origin);
+    let mut generation = goose(&forward);
+    let waiting: Vec<_> = (0..PENDING_CAP)
+        .map(|n| send(invoke(&generation.url, &format!("child-{n}"))))
+        .collect();
+    parked(&forward, PENDING_CAP).await;
+    let full = answered(send(invoke(&generation.url, "child-x"))).await;
+    assert_eq!(full.status(), StatusCode::TOO_MANY_REQUESTS);
+    assert_eq!(
+        recv(&mut generation.events).await,
+        serde_json::json!({ "type": "refused", "status": 429, "reason": "child_pending_full" })
+    );
+    // A second request for child-0 cannot park; drop one harness request and
+    // only its slot is freed.
+    let mut waiting = waiting.into_iter();
+    waiting.next().unwrap().abort();
+    parked(&forward, PENDING_CAP - 1).await;
+    let again = send(invoke(&generation.url, "child-1"));
+    parked(&forward, PENDING_CAP).await;
+    // Both requests for child-1 are woken by one registration.
+    register(&forward, generation.id, "call-1", "child-1");
+    assert_eq!(answered(again).await.status(), StatusCode::OK);
+    assert_eq!(
+        answered(waiting.next().unwrap()).await.status(),
+        StatusCode::OK
+    );
+    assert_eq!(pending(&forward), PENDING_CAP - 2);
+}
+
+#[tokio::test]
+async fn a_cancelled_request_leaves_its_same_child_sibling_parked() {
+    let mut gateway = fake_gateway().await;
+    let forward = patient(gateway.origin);
+    let generation = goose(&forward);
+    let cancelled = send(invoke(&generation.url, CHILD));
+    parked(&forward, 1).await;
+    let survivor = send(invoke(&generation.url, CHILD));
+    parked(&forward, 2).await;
+    cancelled.abort();
+    parked(&forward, 1).await;
+    assert_eq!(
+        register(&forward, generation.id, "call-1", CHILD),
+        Registered::Registered
+    );
+    assert_eq!(answered(survivor).await.status(), StatusCode::OK);
+    assert_eq!(
+        recv(&mut gateway.seen).await.headers["agent-session-id"],
+        CHILD
+    );
+    assert_eq!(pending(&forward), 0);
+    assert!(gateway.seen.try_recv().is_err());
+}
+
+#[tokio::test]
+async fn seal_revocation_and_close_release_every_parked_request() {
+    let gateway = fake_gateway().await;
+    let forward = patient(gateway.origin);
+    let generation = goose(&forward);
+    let early = send(invoke(&generation.url, CHILD));
+    parked(&forward, 1).await;
+    forward.seal(PLUGIN, generation.id).unwrap();
+    assert_eq!(answered(early).await.status(), StatusCode::GONE);
+    assert_eq!(
+        register(&forward, generation.id, "call-1", CHILD),
+        refused("generation_ended")
+    );
+    assert_eq!(
+        answered(send(invoke(&generation.url, CHILD)))
+            .await
+            .status(),
+        StatusCode::GONE
+    );
+
+    let revoked = goose(&forward);
+    let early = send(invoke(&revoked.url, CHILD));
+    parked(&forward, 1).await;
+    forward
+        .push(forward.page(), PLUGIN, "route-a", 2, true)
+        .unwrap();
+    let response = answered(early).await;
+    assert_eq!(response.status(), StatusCode::GONE);
+    assert!(response
+        .text()
+        .await
+        .unwrap()
+        .contains("gateway_generation_revoked"));
+    assert_eq!(
+        register(&forward, revoked.id, "call-1", CHILD),
+        refused("generation_revoked")
+    );
+
+    let closed = open(&forward, Harness::Goose, 2);
+    forward.associate(PLUGIN, closed.id, PARENT.into()).unwrap();
+    let early = send(invoke(&closed.url, CHILD));
+    parked(&forward, 1).await;
+    forward.close(PLUGIN, closed.id).unwrap();
+    assert_eq!(answered(early).await.status(), StatusCode::GONE);
+    assert_eq!(
+        register(&forward, closed.id, "call-1", CHILD),
+        refused("generation_ended")
+    );
+    assert_eq!(pending(&forward), 0);
+}
+
+#[tokio::test]
+async fn registration_is_frozen_to_its_generation_and_parent() {
+    let gateway = fake_gateway().await;
+    let forward = ready(gateway.origin);
+    let unassociated = open(&forward, Harness::Goose, 1);
+    let a = goose(&forward);
+    let b = goose(&forward);
+    let contract = |id, call: &str, child: &str| {
+        forward
+            .register_child(PLUGIN, id, call.into(), child.into())
+            .is_err()
+    };
+    assert!(contract(unassociated.id, "call-1", CHILD));
+    assert!(contract(a.id, "call-1", PARENT));
+    assert!(contract(a.id, "call/1", CHILD));
+    assert!(contract(a.id, "call-1", ""));
+    assert_eq!(
+        forward
+            .register_child("other.plugin", a.id, "call-1".into(), CHILD.into())
+            .unwrap(),
+        refused("generation_ended")
+    );
+    assert_eq!(
+        register(&forward, a.id, "call-1", CHILD),
+        Registered::Registered
+    );
+    assert_eq!(
+        register(&forward, a.id, "call-1", CHILD),
+        Registered::Registered
+    );
+    assert_eq!(
+        register(&forward, a.id, "call-1", "20261104_3"),
+        refused("child_call_conflict")
+    );
+    // Generation B never learns A's child; unknown sessions are never
+    // admitted once B ends.
+    forward.seal(PLUGIN, b.id).unwrap();
+    assert_eq!(
+        invoke(&b.url, CHILD).send().await.unwrap().status(),
+        StatusCode::GONE
+    );
+    assert!(!forward
+        .registry()
+        .generations
+        .values()
+        .any(|g| g.id == b.id && g.children.contains(CHILD)));
+    // Discovery is never parked or widened to children.
+    let discovery = reqwest::Client::new()
+        .get(format!("{}/api/2.0/serving-endpoints/m", a.url))
+        .header("agent-session-id", CHILD)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(discovery.status(), StatusCode::BAD_REQUEST);
+}
+
+#[tokio::test]
+async fn children_and_calls_have_their_own_bounds() {
+    let gateway = fake_gateway().await;
+    let forward = ready(gateway.origin);
+    let generation = goose(&forward);
+    for n in 0..CHILD_CAP {
+        assert_eq!(
+            register(
+                &forward,
+                generation.id,
+                &format!("call-{n}"),
+                &format!("child-{n}")
+            ),
+            Registered::Registered
+        );
+    }
+    assert_eq!(
+        register(&forward, generation.id, "call-new", "child-new"),
+        refused("child_cap")
+    );
+    // A resume under a new call adds a call, not a child.
+    for n in CHILD_CAP..CALL_CAP {
+        assert_eq!(
+            register(&forward, generation.id, &format!("call-{n}"), "child-0"),
+            Registered::Registered
+        );
+    }
+    let sizes = |forward: &HostForward| {
+        let registry = forward.registry();
+        let g = registry.generations.values().next().unwrap();
+        (g.calls.len(), g.children.len())
+    };
+    assert_eq!(sizes(&forward), (CALL_CAP, CHILD_CAP));
+    assert_eq!(
+        register(&forward, generation.id, "call-0", "child-0"),
+        Registered::Registered
+    );
+    assert_eq!(
+        register(&forward, generation.id, "call-resume", "child-0"),
+        refused("call_cap")
+    );
+    assert_eq!(sizes(&forward), (CALL_CAP, CHILD_CAP));
+}
+
+#[test]
+fn goose_responses_route_is_inference() {
+    // Pinned goose v1.57.0 posts Responses models here (databricks.rs stream()).
+    assert_eq!(
+        Harness::Goose.classify(&Method::POST, "/serving-endpoints/responses", None),
+        Some(Class::Inference)
+    );
+}
+
+#[tokio::test]
+async fn goose_parent_and_child_requests_strip_authorization() {
+    let mut gateway = fake_gateway().await;
+    let forward = ready(gateway.origin);
+    let mut generation = goose(&forward);
+    assert_eq!(
+        register(&forward, generation.id, "call-1", CHILD),
+        Registered::Registered
+    );
+    for (index, (session, child, path)) in [
+        (PARENT, false, "/serving-endpoints/model-a/invocations"),
+        (PARENT, false, "/serving-endpoints/responses"),
+        (CHILD, true, "/serving-endpoints/model-a/invocations"),
+        (CHILD, true, "/serving-endpoints/responses"),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let response = reqwest::Client::new()
+            .post(format!("{}{path}", generation.url))
+            .header("Authorization", "Bearer owner-sentinel")
+            .header("agent-session-id", session)
+            .body("{}")
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let seen = recv(&mut gateway.seen).await;
+        assert_eq!(seen.path, format!("/upstream/goose{path}"));
+        assert!(seen.headers.get(header::AUTHORIZATION).is_none());
+        assert_eq!(seen.headers["agent-session-id"], session);
+        for (name, value) in inference() {
+            assert_eq!(seen.headers.get_all(&name).iter().count(), 1, "{name}");
+            assert_eq!(seen.headers[&name], value, "{name}");
+        }
+        assert_eq!(seen.body, Bytes::from_static(b"{}"));
+        assert_eq!(
+            recv(&mut generation.events).await,
+            serde_json::json!({"type": "admitted", "request": index + 1, "class": "inference", "child": child})
+        );
+        assert_eq!(recv(&mut generation.events).await["type"], "finished");
+    }
 }

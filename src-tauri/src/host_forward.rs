@@ -23,6 +23,11 @@
 //! - Inference must name the generation's harness session in the harness's own
 //!   header. A generation opens for discovery only and is associated once,
 //!   before its first prompt.
+//! - A goose generation also admits the children its parent session delegates
+//!   to, each registered from a live delegate call that named it.
+//!   Inference naming an unregistered child parks until it is registered, at
+//!   most `PENDING_CAP` at once and `RENDEZVOUS_DEADLINE` each; expiry,
+//!   sealing, revocation and close refuse it, never admit it.
 //! - Sealing is terminal: later requests get 410, which harnesses don't retry,
 //!   while admitted streams finish. Closing forgets the handle (404) and aborts
 //!   its streams. Neither leaves a record behind.
@@ -36,7 +41,7 @@ use hyper::header::{self, HeaderMap, HeaderName, HeaderValue};
 use hyper::{server::conn::http1, service::service_fn, Method, Request, Response, StatusCode};
 use hyper_util::rt::{TokioIo, TokioTimer};
 use serde::{Deserialize, Serialize};
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::convert::Infallible;
 use std::future::Future;
 use std::net::Ipv4Addr;
@@ -46,7 +51,7 @@ use std::task::{Context, Poll};
 use std::time::Duration;
 use tauri::ipc::Channel;
 use tokio::net::TcpListener;
-use tokio::sync::{mpsc, Semaphore};
+use tokio::sync::{mpsc, oneshot, Semaphore};
 use tokio_util::sync::{CancellationToken, WaitForCancellationFutureOwned};
 
 /// Generations open at once across all plugins.
@@ -60,6 +65,15 @@ const BODY_LIMIT: usize = 64 * 1024 * 1024;
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(30);
 /// The whole reserved header block, counted as `name: value\r\n` lines.
 const HEADER_BUDGET: usize = 2048;
+/// A goose generation's child rendezvous bounds: inference requests parked
+/// for a child not yet registered, registered children, and the delegate
+/// calls that named them (a resume adds a call, not a child).
+const PENDING_CAP: usize = 5;
+const CHILD_CAP: usize = 32;
+const CALL_CAP: usize = 64;
+/// How long a parked request waits for its child's registration, by
+/// default. It only bounds resources: expiry rejects, never admits.
+const RENDEZVOUS_DEADLINE: Duration = Duration::from_secs(5);
 /// Never forwarded: the connection's own, the address and anything a browser
 /// adds, plus whatever `Connection` names.
 const HOP: [&str; 10] = [
@@ -119,6 +133,10 @@ impl Harness {
             (Harness::Goose, &Method::POST, ["serving-endpoints", model, "invocations"], None)
                 if model_name(model) =>
             {
+                Some(Class::Inference)
+            }
+            // A Responses model's turn names its model in the body, not the path.
+            (Harness::Goose, &Method::POST, ["serving-endpoints", "responses"], None) => {
                 Some(Class::Inference)
             }
             _ => None,
@@ -209,8 +227,13 @@ fn origin(origin: &str) -> Option<url::Url> {
 #[derive(Clone, Debug, Serialize, PartialEq, Eq)]
 #[serde(tag = "type", rename_all = "camelCase")]
 pub(crate) enum ForwardEvent {
-    /// A request passed admission and was sent upstream.
-    Admitted { request: u64, class: Class },
+    /// A request passed admission and was sent upstream. `child`: it named a
+    /// registered goose child, not the generation's own session.
+    Admitted {
+        request: u64,
+        class: Class,
+        child: bool,
+    },
     /// An admitted request's upstream response ended: relayed whole, or
     /// aborted by the harness hanging up, a revocation or a close. `status` is
     /// what the harness was answered, if anything yet.
@@ -259,6 +282,18 @@ pub(crate) enum Pushed {
     Stale,
 }
 
+/// A goose child registration's outcome. Contract violations are errors.
+#[derive(Clone, Copy, Debug, Serialize, PartialEq, Eq)]
+#[serde(tag = "type", rename_all = "camelCase")]
+pub(crate) enum Registered {
+    Registered,
+    /// `child_call_conflict`, `child_cap`, `call_cap`, `generation_ended`
+    /// (sealed, closed or unknown) or `generation_revoked`.
+    Refused {
+        reason: &'static str,
+    },
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum State {
     Open,
@@ -282,6 +317,30 @@ struct Generation {
     abort: CancellationToken,
     events: Arc<Events>,
     requests: u64,
+    /// goose children registered for this generation's parent session,
+    /// frozen to it; each delegate call names one child.
+    children: HashSet<String>,
+    calls: HashMap<String, String>,
+    /// Inference requests parked for a child, by their own waiter ID.
+    pending: HashMap<u64, Waiter>,
+    next_waiter: u64,
+}
+impl Generation {
+    /// Answers every parked request; none can outlive admission.
+    fn release(&mut self, status: StatusCode, reason: &'static str) {
+        for (_, waiter) in self.pending.drain() {
+            let _ = waiter.wake.send(Wake::Released(status, reason));
+        }
+    }
+}
+
+struct Waiter {
+    session: String,
+    wake: oneshot::Sender<Wake>,
+}
+enum Wake {
+    Registered,
+    Released(StatusCode, &'static str),
 }
 
 #[derive(Clone, Copy, Default)]
@@ -311,6 +370,7 @@ impl Registry {
         if let Some(generation) = self.generations.get_mut(handle) {
             generation.state = State::Revoked;
             generation.abort.cancel();
+            generation.release(StatusCode::GONE, "generation_revoked");
         }
     }
 }
@@ -326,6 +386,7 @@ pub(crate) struct HostForward {
     inner: Arc<Mutex<Registry>>,
     /// The shared listener's address, bound on first use for the app's life.
     listener: Arc<Mutex<Option<String>>>,
+    rendezvous: Duration,
 }
 impl Default for HostForward {
     fn default() -> Self {
@@ -338,6 +399,7 @@ impl HostForward {
             gateway: gateway.map(Arc::new),
             inner: Arc::default(),
             listener: Arc::default(),
+            rendezvous: RENDEZVOUS_DEADLINE,
         }
     }
     fn registry(&self) -> MutexGuard<'_, Registry> {
@@ -468,6 +530,10 @@ impl HostForward {
                 abort: CancellationToken::new(),
                 events: Arc::new(Events(events)),
                 requests: 0,
+                children: HashSet::new(),
+                calls: HashMap::new(),
+                pending: HashMap::new(),
+                next_waiter: 0,
             },
         );
         Ok(Opened::Opened {
@@ -500,8 +566,69 @@ impl HostForward {
         let generation = registry.generations.get_mut(&handle).expect("found");
         if generation.state == State::Open {
             generation.state = State::Sealed;
+            generation.release(StatusCode::GONE, "generation_ended");
         }
         Ok(())
+    }
+
+    /// Registers the goose child `child` that delegate `call` named, waking
+    /// every request parked for it in the same critical section.
+    fn register_child(
+        &self,
+        plugin: &str,
+        id: u64,
+        call: String,
+        child: String,
+    ) -> Result<Registered, String> {
+        let refused = |reason| Ok(Registered::Refused { reason });
+        let mut registry = self.registry();
+        let Ok(handle) = registry.handle_of(plugin, id) else {
+            return refused("generation_ended");
+        };
+        let generation = &registry.generations[&handle];
+        let current = registry
+            .routes
+            .get(&(generation.plugin.clone(), generation.route.clone()))
+            .copied()
+            .unwrap_or_default();
+        let generation = registry.generations.get_mut(&handle).expect("found");
+        if generation.harness != Harness::Goose {
+            return Err("Only a goose generation has children".into());
+        }
+        let Some(parent) = generation.session.as_deref() else {
+            return Err("The generation's session is not associated".into());
+        };
+        if !opaque(&call) || !opaque(&child) || child == parent {
+            return Err("Invalid child session".into());
+        }
+        match generation.state {
+            State::Open if current.admits && current.revision == generation.revision => {}
+            State::Open | State::Revoked => return refused("generation_revoked"),
+            State::Sealed => return refused("generation_ended"),
+        }
+        match generation.calls.get(&call) {
+            Some(named) if *named == child => return Ok(Registered::Registered),
+            Some(_) => return refused("child_call_conflict"),
+            None if generation.calls.len() >= CALL_CAP => return refused("call_cap"),
+            None => {}
+        }
+        if !generation.children.contains(&child) && generation.children.len() >= CHILD_CAP {
+            return refused("child_cap");
+        }
+        generation.calls.insert(call, child.clone());
+        generation.children.insert(child.clone());
+        let woken: Vec<u64> = generation
+            .pending
+            .iter()
+            .filter(|(_, waiter)| waiter.session == child)
+            .map(|(waiter, _)| *waiter)
+            .collect();
+        for waiter in woken {
+            if let Some(waiter) = generation.pending.remove(&waiter) {
+                let _ = waiter.wake.send(Wake::Registered);
+            }
+        }
+        Ok(Registered::Registered)
     }
 
     fn close(&self, plugin: &str, id: u64) -> Result<(), String> {
@@ -542,8 +669,32 @@ impl HostForward {
         Ok(authority)
     }
 
-    /// Admits one request under the lock that revocation takes, or refuses it.
-    fn admit(&self, request: &Request<Incoming>) -> Result<Admitted, Refusal> {
+    /// Admits one request, or refuses it. goose inference naming a child not
+    /// yet registered waits, once and bounded, then is admitted afresh.
+    async fn admission(&self, request: &Request<Incoming>) -> Result<Admitted, Refusal> {
+        let mut parked = match self.admit(request, true)? {
+            Step::Admit(admitted) => return Ok(admitted),
+            Step::Park(parked) => parked,
+        };
+        let refuse = |status, reason| Refusal {
+            status,
+            reason,
+            events: Some(parked.events.clone()),
+        };
+        match tokio::time::timeout(self.rendezvous, &mut parked.wake).await {
+            Ok(Ok(Wake::Registered)) => match self.admit(request, false)? {
+                Step::Admit(admitted) => Ok(admitted),
+                Step::Park(_) => unreachable!("a re-check never parks"),
+            },
+            Ok(Ok(Wake::Released(status, reason))) => Err(refuse(status, reason)),
+            Ok(Err(_)) => Err(refuse(StatusCode::GONE, "generation_ended")),
+            Err(_) => Err(refuse(StatusCode::GATEWAY_TIMEOUT, "child_unregistered")),
+        }
+    }
+
+    /// Admits one request under the lock that revocation and registration
+    /// take, parks it for a goose child when `wait`, or refuses it.
+    fn admit(&self, request: &Request<Incoming>, wait: bool) -> Result<Step, Refusal> {
         let authority = self
             .listener
             .lock()
@@ -607,7 +758,15 @@ impl HostForward {
             (Class::Discovery, None, _) | (Class::Discovery, Some(_), None) => true,
             (_, Some(session), expected) => expected == Some(session),
         };
-        if !matches {
+        // goose inference under another session may be a delegated child's.
+        let child = session.filter(|session| {
+            !matches
+                && class == Class::Inference
+                && generation.harness == Harness::Goose
+                && expected.is_some()
+                && opaque(session)
+        });
+        if !matches && child.is_none() {
             let reason = if expected.is_none() {
                 "session_unassociated"
             } else {
@@ -618,26 +777,75 @@ impl HostForward {
         if !current.admits || current.revision != generation.revision {
             return Err(refuse(StatusCode::GONE, "generation_revoked"));
         }
+        if let Some(child) = child.filter(|child| !generation.children.contains(*child)) {
+            if !wait {
+                return Err(refuse(StatusCode::BAD_REQUEST, "session_mismatch"));
+            }
+            if generation.pending.len() >= PENDING_CAP {
+                return Err(refuse(StatusCode::TOO_MANY_REQUESTS, "child_pending_full"));
+            }
+            let (sender, wake) = oneshot::channel();
+            let waiter = generation.next_waiter;
+            generation.next_waiter += 1;
+            generation.pending.insert(
+                waiter,
+                Waiter {
+                    session: child.to_owned(),
+                    wake: sender,
+                },
+            );
+            return Ok(Step::Park(Parked {
+                forward: self.clone(),
+                handle: handle.to_owned(),
+                waiter,
+                wake,
+                events: generation.events.clone(),
+            }));
+        }
         generation.requests += 1;
         let headers = match class {
             Class::Inference => generation.inference.clone(),
             Class::Discovery => generation.discovery.clone(),
         };
-        Ok(Admitted {
+        Ok(Step::Admit(Admitted {
             request: generation.requests,
             class,
+            child: child.is_some(),
             harness: generation.harness,
             rest,
             headers,
             abort: generation.abort.clone(),
             events: generation.events.clone(),
-        })
+        }))
+    }
+}
+
+enum Step {
+    Admit(Admitted),
+    Park(Parked),
+}
+
+/// A request parked for a goose child. However it ends, including hyper
+/// dropping the request, it frees its own slot and no other.
+struct Parked {
+    forward: HostForward,
+    handle: String,
+    waiter: u64,
+    wake: oneshot::Receiver<Wake>,
+    events: Arc<Events>,
+}
+impl Drop for Parked {
+    fn drop(&mut self) {
+        if let Some(generation) = self.forward.registry().generations.get_mut(&self.handle) {
+            generation.pending.remove(&self.waiter);
+        }
     }
 }
 
 struct Admitted {
     request: u64,
     class: Class,
+    child: bool,
     harness: Harness,
     rest: String,
     headers: HeaderMap,
@@ -727,7 +935,7 @@ fn error(status: StatusCode, reason: &str) -> Reply {
 }
 
 async fn forward(state: &HostForward, request: Request<Incoming>) -> Reply {
-    let admitted = match state.admit(&request) {
+    let admitted = match state.admission(&request).await {
         Ok(admitted) => admitted,
         Err(refusal) => {
             if let Some(events) = refusal.events {
@@ -742,13 +950,18 @@ async fn forward(state: &HostForward, request: Request<Incoming>) -> Reply {
     let Admitted {
         request: id,
         class,
+        child,
         harness,
         rest,
         headers: bundle,
         abort,
         events,
     } = admitted;
-    events.send(ForwardEvent::Admitted { request: id, class });
+    events.send(ForwardEvent::Admitted {
+        request: id,
+        class,
+        child,
+    });
     let mut finished = Finished {
         events,
         request: id,
@@ -994,6 +1207,18 @@ pub(crate) fn plugin_host_forward_associate(
     session: String,
 ) -> Result<(), String> {
     forward.associate(&id, generation, session)
+}
+
+/// Registers a goose child that a live delegate call named.
+#[tauri::command]
+pub(crate) fn plugin_host_forward_register_child(
+    forward: tauri::State<'_, HostForward>,
+    id: String,
+    generation: u64,
+    call: String,
+    child: String,
+) -> Result<Registered, String> {
+    forward.register_child(&id, generation, call, child)
 }
 
 /// Ends the generation's admission for good; admitted streams finish.

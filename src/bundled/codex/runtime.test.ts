@@ -4721,8 +4721,8 @@ it("uses the launched workspace for shared file tools and the owner view for enc
     expect(f.runtime.sessions(pubkey)[0]?.status).toBe("Idle"),
   );
   expect(f.fileReads).toEqual([
-    { cwd: "/tmp/codex-test", path: "attachment.gif" },
     { cwd: "/tmp/codex-test", path: "answer.txt" },
+    { cwd: "/tmp/codex-test", path: "attachment.gif" },
   ]);
   expect(f.upload).toHaveBeenCalledWith(btoa(GIF), "image/gif");
   expect(f.publish.mock.calls[0]?.[0]).toMatchObject({

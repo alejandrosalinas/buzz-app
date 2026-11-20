@@ -891,6 +891,7 @@ export function createTabs({
         signal,
         (pubkey) => runtime.name(agent.key, pubkey),
         reuse,
+        runtime.notices(agent.key),
       );
       return (
         transcript && {

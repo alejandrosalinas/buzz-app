@@ -5,6 +5,7 @@ import { sessionTools } from "../../buzz-mcp/session-tools";
 import {
   AcpProcess,
   REQUEST_TIMEOUT_MS,
+  SAVED,
   STOP_TIMEOUT_MS,
 } from "../../features/agent-harness/acp/process";
 import type {
@@ -169,10 +170,17 @@ export const GOOSE: AcpHooks = {
       want.provider !== session.chosen.provider ||
       (session.chosen.model && !want.model)
     ) {
-      // goose keeps the model when the provider stays the same.
+      // goose keeps the model when the provider stays the same, as it does
+      // when a resumed session is put back on the provider it was saved
+      // with. goose's own default provider resets it to the default model.
+      const resumed = session.chosen.provider === SAVED.provider;
       if (want.provider && want.provider === session.chosen.provider)
         await configure("model", await defaultModel(goose, want.provider));
-      else await configure("provider", want.provider || CONFIGURED);
+      else {
+        await configure("provider", want.provider || CONFIGURED);
+        if (resumed && want.provider && !want.model)
+          await configure("model", await defaultModel(goose, want.provider));
+      }
       session.chosen = {
         ...session.chosen,
         provider: want.provider,

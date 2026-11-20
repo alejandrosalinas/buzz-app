@@ -13,10 +13,15 @@ import type {
   Models,
 } from "../../features/agents/service";
 import {
+  type Inherited,
+  parseInherited,
+} from "../../features/agents/gateway/forwarding";
+import {
   GooseProcess,
   REQUEST_TIMEOUT_MS,
   type Choice,
   type GooseHost,
+  type Spawn,
 } from "./goose";
 import {
   type ConfigValue,
@@ -494,12 +499,28 @@ export class GooseSetup {
       .sort((a, b) => Number(Boolean(a)) - Number(Boolean(b)));
     if (wanted.length) {
       const read = this.with(async (goose, cwd) => {
+        // goose opens a session naming no provider only on its config's
+        // default provider and model. Without that model, the session names
+        // the default provider and opens on the provider's own default
+        // model, which is not the one goose would run "" on.
+        const defaults = provider
+          ? {}
+          : ((await goose.request(
+              "_goose/unstable/defaults/read",
+              {},
+              REQUEST_TIMEOUT_MS,
+            )) as { providerId?: string | null; modelId?: string | null });
+        const fallback = !provider && !defaults.modelId && defaults.providerId;
+        const named = fallback || provider;
         const opened = (await goose.request(
           "session/new",
           {
             cwd,
             mcpServers: [],
-            _meta: { enabledExtensions: [], ...(provider ? { provider } : {}) },
+            _meta: {
+              enabledExtensions: [],
+              ...(named ? { provider: named } : {}),
+            },
           },
           REQUEST_TIMEOUT_MS,
         )) as ConfigOptions & { sessionId: string };
@@ -507,6 +528,8 @@ export class GooseSetup {
           const found = new Map<string, Efforts | Error>();
           for (const model of wanted) {
             try {
+              if (!model && fallback)
+                throw new Error("goose's config names no default model");
               const { configOptions = [] } = model
                 ? ((await goose.request(
                     "session/set_config_option",
@@ -639,6 +662,27 @@ export class GooseSetup {
   ): Promise<T> {
     return briefly(this.host, run, env);
   }
+}
+
+/** NO_PROXY and no_proxy as goose's processes inherit them from the app,
+ * empty where unset, and whether they inherit a proxy, from the manifest's
+ * `no-proxy` step. One that can't be read fails rather than passing. */
+export async function readNoProxy(spawn: Spawn): Promise<Inherited> {
+  let stdout = "";
+  let stderr = "";
+  const process = await spawn("no-proxy", {
+    onStdout: (data) => {
+      stdout += data;
+    },
+    onStderr: (data) => {
+      stderr += data;
+    },
+  });
+  const timer = setTimeout(() => void process.kill(), REQUEST_TIMEOUT_MS);
+  const code = await process.exited.finally(() => clearTimeout(timer));
+  if (code !== 0)
+    throw new Error(stderr.trim() || "The proxy exceptions are unreadable");
+  return parseInherited(stdout);
 }
 
 /** Runs `run` against a `goose-acp` started for it in the home folder, and

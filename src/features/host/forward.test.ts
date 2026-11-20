@@ -6,6 +6,7 @@ import {
   closeForward,
   openForward,
   pushForwardAdmission,
+  registerForwardChild,
   sealForward,
   type ForwardEvent,
 } from "./forward";
@@ -115,4 +116,36 @@ it("opens a goose generation without a session, then associates it", async () =>
     generation: 7,
     session: "20261104_1",
   });
+});
+
+it("registers a goose child and passes each outcome through", async () => {
+  const outcomes = [
+    { type: "registered" },
+    ...[
+      "child_call_conflict",
+      "child_cap",
+      "call_cap",
+      "generation_ended",
+      "generation_revoked",
+    ].map((reason) => ({ type: "refused", reason })),
+  ];
+  for (const outcome of outcomes) {
+    vi.mocked(invoke).mockResolvedValueOnce(outcome);
+    await expect(
+      registerForwardChild(owner, 7, "call-1", "20261104_2"),
+    ).resolves.toEqual(outcome);
+  }
+  expect(invoke).toHaveBeenLastCalledWith(
+    "plugin_host_forward_register_child",
+    {
+      id: "buzz.agents",
+      generation: 7,
+      call: "call-1",
+      child: "20261104_2",
+    },
+  );
+  vi.mocked(invoke).mockRejectedValueOnce("Invalid child session");
+  await expect(
+    registerForwardChild(owner, 7, "call-1", "20261104_1"),
+  ).rejects.toBe("Invalid child session");
 });

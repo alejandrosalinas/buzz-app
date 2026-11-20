@@ -767,3 +767,34 @@ function buildTranscript(
     }),
   };
 }
+
+/** `turns` with each notice right after the prompt it was kept for, by the
+ * prompt's id. A notice whose message the harness never took matches no
+ * prompt, so it shows nowhere rather than on another turn. */
+export function withNotices(
+  turns: readonly TranscriptTurn[],
+  notices: ReadonlyMap<string, string>,
+): TranscriptTurn[] {
+  return turns.map((turn) =>
+    turn.items.some((item) => item.type === "prompt" && notices.has(item.id))
+      ? {
+          ...turn,
+          items: turn.items.flatMap((item): TranscriptItem[] => {
+            const text =
+              item.type === "prompt" ? notices.get(item.id) : undefined;
+            return text
+              ? [
+                  item,
+                  {
+                    id: `${item.id}:notice`,
+                    at: item.at,
+                    type: "status",
+                    text,
+                  },
+                ]
+              : [item];
+          }),
+        }
+      : turn,
+  );
+}

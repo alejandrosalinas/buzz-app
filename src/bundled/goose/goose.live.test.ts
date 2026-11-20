@@ -6,10 +6,16 @@
 import { spawn as spawnChild } from "node:child_process";
 import { randomBytes } from "node:crypto";
 import { createServer } from "node:http";
-import { existsSync, mkdtempSync, readFileSync } from "node:fs";
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  writeFileSync,
+} from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { basename, join } from "node:path";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { respond } from "../../buzz-mcp/rpc";
 import {
   answerMcp,
@@ -23,6 +29,8 @@ import {
   type Spawn,
   type ToolServer,
 } from "./goose";
+import { forwardedEnv, forwardedTurn, GATEWAY_TOKEN } from "./forwarded";
+import type { Generation } from "../../features/agents/gateway/forwarding";
 import { GooseSetup } from "./setup";
 import { GooseHistory, sessionTags } from "./transcript";
 
@@ -830,5 +838,365 @@ describe.skipIf(!BIN)("goose-acp", () => {
           model: "no-such-model-xyz",
         }),
       ).toMatchObject({ ok: false });
+  });
+
+  it("sends only the forwarded bearer, from the turn and its delegate, over inherited and stored tokens", {
+    timeout: 180_000,
+  }, async () => {
+    // A generation's base path, as native serves it: goose's Databricks
+    // routes follow the handle.
+    const seen: { path: string; auth: string | undefined; session?: string }[] =
+      [];
+    type Message = { role: string; content?: unknown };
+    const text = (message: Message) => JSON.stringify(message);
+    const provider = createServer(async (request, response) => {
+      let body = "";
+      for await (const chunk of request) body += chunk;
+      const path = request.url ?? "";
+      const session = request.headers["agent-session-id"];
+      seen.push({
+        path,
+        auth: request.headers.authorization,
+        ...(typeof session === "string" ? { session } : {}),
+      });
+      if (request.method === "GET") {
+        response.writeHead(200, { "Content-Type": "application/json" });
+        response.end(
+          JSON.stringify(
+            path.endsWith("serving-endpoints")
+              ? { endpoints: [{ name: "fake-model" }] }
+              : { name: "fake-model" },
+          ),
+        );
+        return;
+      }
+      const messages =
+        (JSON.parse(body) as { messages?: Message[] }).messages ?? [];
+      const all = messages.map(text).join("\n");
+      const child = all.includes("Subagent ID:");
+      const call = (name: string, args: object) => ({
+        role: "assistant",
+        tool_calls: [
+          {
+            index: 0,
+            id: `call-${seen.length}`,
+            type: "function",
+            function: { name, arguments: JSON.stringify(args) },
+          },
+        ],
+      });
+      const delta = child
+        ? messages.at(-1)?.role === "tool"
+          ? { role: "assistant", content: "ok" }
+          : call("recipe__final_output", { summary: "child done" })
+        : /Subagent \S+ completed/.test(all)
+          ? { role: "assistant", content: "done" }
+          : all.includes("Delegated to subagent")
+            ? { role: "assistant", content: "Waiting for the subagent." }
+            : // Off the Buzz tools: a delegate's own connection to them
+              // would be a second claim on their one session.
+              call("delegate", {
+                instructions: "Write one line.",
+                extensions: ["developer"],
+              });
+      response.writeHead(200, { "Content-Type": "text/event-stream" });
+      for (const choice of [
+        { index: 0, delta, finish_reason: null },
+        {
+          index: 0,
+          delta: {},
+          finish_reason: "tool_calls" in delta ? "tool_calls" : "stop",
+        },
+      ])
+        response.write(
+          `data: ${JSON.stringify({ id: `r${seen.length}`, object: "chat.completion.chunk", created: 1, model: "fake-model", choices: [choice] })}\n\n`,
+        );
+      response.end("data: [DONE]\n\n");
+    });
+    await new Promise<void>((resolve) =>
+      provider.listen(0, "127.0.0.1", resolve),
+    );
+    const address = provider.address();
+    if (!address || typeof address === "string")
+      throw new Error("No provider address");
+    // A token the app's environment passes on, and one the owner's goose
+    // stores; neither may be sent.
+    const root = mkdtempSync(join(tmpdir(), "buzz-goose-root-"));
+    mkdirSync(join(root, "config"), { recursive: true });
+    writeFileSync(
+      join(root, "config", "secrets.yaml"),
+      "DATABRICKS_TOKEN: stored-owner-token\n",
+    );
+    vi.stubEnv("DATABRICKS_TOKEN", "inherited-app-token");
+    const choice = () => ({ provider: "databricks", model: "fake-model" });
+    const { goose, cwd, tools } = await live({
+      ...forwardedEnv(
+        {
+          url: `http://127.0.0.1:${address.port}/generation-handle`,
+          noProxy: "127.0.0.1,localhost",
+        },
+        { choice },
+      ),
+      GOOSE_PATH_ROOT: root,
+      GOOSE_DISABLE_KEYRING: "1",
+    });
+    try {
+      // Buzz's sessions don't enable goose's `summon`; this one does, to
+      // have a delegate.
+      const session = await goose.open({
+        cwd,
+        tools,
+        choice,
+        systemPrompt: "You are a Buzz agent.",
+        platform: [
+          { type: "platform", name: "developer" },
+          { type: "platform", name: "summon" },
+        ],
+      });
+      expect(await session.send("Delegate one task.")).toMatchObject({
+        ok: true,
+      });
+      const inference = seen.filter((request) =>
+        request.path.endsWith("/invocations"),
+      );
+      const sessions = new Set(inference.map((request) => request.session));
+      // The turn's own session and its delegate's.
+      expect(sessions.size).toBe(2);
+      expect(sessions).toContain(session.id);
+      expect(seen.length).toBeGreaterThan(inference.length);
+      for (const request of seen) {
+        expect(request.path.startsWith("/generation-handle/")).toBe(true);
+        expect(request.auth).toBe(`Bearer ${GATEWAY_TOKEN}`);
+      }
+    } finally {
+      vi.unstubAllEnvs();
+      await goose.kill();
+      await new Promise<void>((resolve, reject) =>
+        provider.close((error) => (error ? reject(error) : resolve())),
+      );
+    }
+  });
+
+  it("resumes a session the agent's ordinary goose saved through the gateway, and starts afresh after New session", {
+    timeout: 240_000,
+  }, async () => {
+    // One upstream for both: the owner's Databricks host, as their goose
+    // config names it, and a generation's base path, as native serves it.
+    const seen: {
+      path: string;
+      auth: string | undefined;
+      session?: string;
+      body: string;
+    }[] = [];
+    const provider = createServer(async (request, response) => {
+      let body = "";
+      for await (const chunk of request) body += chunk;
+      const path = request.url ?? "";
+      const session = request.headers["agent-session-id"];
+      seen.push({
+        path,
+        auth: request.headers.authorization,
+        ...(typeof session === "string" ? { session } : {}),
+        body,
+      });
+      if (request.method === "GET") {
+        response.writeHead(200, { "Content-Type": "application/json" });
+        response.end(
+          JSON.stringify(
+            path.endsWith("serving-endpoints")
+              ? { endpoints: [{ name: "fake-model" }] }
+              : { name: "fake-model" },
+          ),
+        );
+        return;
+      }
+      response.writeHead(200, { "Content-Type": "text/event-stream" });
+      for (const choice of [
+        { index: 0, delta: { role: "assistant", content: "noted" } },
+        { index: 0, delta: {}, finish_reason: "stop" },
+      ])
+        response.write(
+          `data: ${JSON.stringify({ id: `r${seen.length}`, object: "chat.completion.chunk", created: 1, model: "fake-model", choices: [choice] })}\n\n`,
+        );
+      response.end("data: [DONE]\n\n");
+    });
+    await new Promise<void>((resolve) =>
+      provider.listen(0, "127.0.0.1", resolve),
+    );
+    const address = provider.address();
+    if (!address || typeof address === "string")
+      throw new Error("No provider address");
+    const base = `http://127.0.0.1:${address.port}`;
+    // The owner's own goose: Databricks on their host and token, in config
+    // and secrets, as an ordinary session runs on them.
+    const root = mkdtempSync(join(tmpdir(), "buzz-goose-root-"));
+    mkdirSync(join(root, "config"), { recursive: true });
+    writeFileSync(
+      join(root, "config", "config.yaml"),
+      `GOOSE_PROVIDER: databricks\nGOOSE_MODEL: fake-model\nDATABRICKS_HOST: ${base}/ordinary\n`,
+    );
+    writeFileSync(
+      join(root, "config", "secrets.yaml"),
+      "DATABRICKS_TOKEN: stored-owner-token\n",
+    );
+    // Both geese inherit the app's environment, this root included.
+    const owned = {
+      GOOSE_PATH_ROOT: root,
+      GOOSE_DISABLE_KEYRING: "1",
+      DATABRICKS_HOST: null,
+      DATABRICKS_TOKEN: null,
+    } as const;
+    const choice = () => ({ provider: "databricks", model: "fake-model" });
+    const agent = "agent-pubkey";
+    const conversation = "channel/root";
+    const inference = (prefix: string) =>
+      seen.filter(
+        (request) =>
+          request.path.startsWith(prefix) &&
+          request.path.endsWith("/invocations"),
+      );
+
+    // 1. An ordinary turn, before the agent's membership routes through the
+    // gateway: its session is saved as the conversation's.
+    const ordinary = await live(owned);
+    let saved: string;
+    try {
+      const session = await ordinary.goose.open({
+        cwd: ordinary.cwd,
+        tools: ordinary.tools,
+        choice,
+        systemPrompt: "You are a Buzz agent.",
+        tags: sessionTags(agent, conversation),
+      });
+      saved = session.id;
+      expect(
+        await session.send("Remember the word PELICAN-ORDINARY."),
+      ).toMatchObject({ ok: true });
+    } finally {
+      await ordinary.goose.kill();
+      await ordinary.goose.exited;
+    }
+    const before = inference("/ordinary/");
+    expect(before.length).toBeGreaterThan(0);
+    for (const request of before)
+      expect(request.auth).toBe("Bearer stored-owner-token");
+
+    /** One forwarded turn, as the runtime runs it: its own goose on a
+     * generation's URL, resuming `load` when given. */
+    const forwarded = async (handle: string, text: string, load?: string) => {
+      const calls: string[] = [];
+      const fresh: boolean[] = [];
+      const kept: string[] = [];
+      const generation: Generation = {
+        url: `${base}/${handle}`,
+        revision: 1,
+        isSealed: () => false,
+        admitted: () => inference(`/${handle}/`).length > 0,
+        noProxy: "127.0.0.1,localhost",
+        seal: () => void calls.push("seal"),
+        close: async () => void calls.push("close"),
+        revoked: new Promise<void>(() => undefined),
+        isRevoked: () => false,
+        associate: async (session) => void calls.push(`associate ${session}`),
+        registerChild: async () => ({ type: "registered" }),
+      };
+      const cwd = mkdtempSync(join(tmpdir(), "buzz-goose-"));
+      const retired: Promise<void>[] = [];
+      const settled = await forwardedTurn(
+        {
+          open: async () => generation,
+          start: (env, onProcess) =>
+            GooseProcess.start(spawn, {
+              cwd,
+              env: { ...owned, ...env },
+              serve,
+              onProcess,
+            }),
+          launch: async () => ({ cwd, systemPrompt: "You are a Buzz agent." }),
+          tools: async (_conversation, message) =>
+            respond(undefined, {}, message),
+          choice,
+          conversation,
+          tags: sessionTags(agent, conversation),
+          ...(load ? { load } : {}),
+          prompt: async (isFresh) => {
+            fresh.push(isFresh);
+            return text;
+          },
+          keep: (session) => {
+            kept.push(session);
+            return true;
+          },
+          outlives: (retirement) => void retired.push(retirement),
+          signal: new AbortController().signal,
+        },
+        "The route changed",
+      );
+      await Promise.all(retired);
+      return { settled, calls, fresh, kept };
+    };
+
+    try {
+      // 2. The conversation's next turn is forwarded: it resumes the
+      // ordinary session, history and all, on the gateway alone.
+      const resumed = await forwarded(
+        "generation-1",
+        "Which word did I ask you to remember?",
+        saved,
+      );
+      expect(resumed.settled).toMatchObject({ ok: true });
+      expect(resumed.fresh).toEqual([false]);
+      expect(resumed.kept).toEqual([saved]);
+      expect(resumed.calls).toEqual([`associate ${saved}`, "seal", "close"]);
+      const continued = inference("/generation-1/");
+      expect(continued.length).toBeGreaterThan(0);
+      for (const request of continued) {
+        expect(request.session).toBe(saved);
+        expect(request.auth).toBe(`Bearer ${GATEWAY_TOKEN}`);
+        expect(request.body).toContain("PELICAN-ORDINARY");
+        expect(request.body).toContain("Which word did I ask you");
+      }
+      // Nothing of the forwarded turn reached the owner's own host.
+      expect(inference("/ordinary/")).toHaveLength(before.length);
+      for (const request of seen.filter((r) =>
+        r.path.startsWith("/generation-1/"),
+      ))
+        expect(request.auth).toBe(`Bearer ${GATEWAY_TOKEN}`);
+
+      // 3. After New session, the runtime loads nothing: a fresh session,
+      // with none of the ordinary history.
+      const reset = await forwarded(
+        "generation-2",
+        "Remember the word HERON-RESET.",
+      );
+      expect(reset.settled).toMatchObject({ ok: true });
+      expect(reset.fresh).toEqual([true]);
+      const [opened] = reset.kept;
+      expect(opened).toBeDefined();
+      expect(opened).not.toBe(saved);
+      expect(reset.calls).toEqual([`associate ${opened}`, "seal", "close"]);
+      const afresh = inference("/generation-2/");
+      expect(afresh.length).toBeGreaterThan(0);
+      for (const request of afresh) {
+        expect(request.session).toBe(opened);
+        expect(request.body).not.toContain("PELICAN-ORDINARY");
+      }
+
+      // 4. The reset session is the one that continues after.
+      const after = await forwarded("generation-3", "Which word now?", opened);
+      expect(after.settled).toMatchObject({ ok: true });
+      expect(after.fresh).toEqual([false]);
+      const later = inference("/generation-3/");
+      expect(later.length).toBeGreaterThan(0);
+      for (const request of later) {
+        expect(request.session).toBe(opened);
+        expect(request.body).toContain("HERON-RESET");
+        expect(request.body).not.toContain("PELICAN-ORDINARY");
+      }
+    } finally {
+      await new Promise<void>((resolve, reject) =>
+        provider.close((error) => (error ? reject(error) : resolve())),
+      );
+    }
   });
 });

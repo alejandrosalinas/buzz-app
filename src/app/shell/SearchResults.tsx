@@ -89,6 +89,7 @@ import {
 } from "./SearchFilterGuide";
 import { MatchRank, matchName, matchRank } from "../../features/search/match";
 import { useUnreadFirstPreference } from "../../features/search/unread-first-preference";
+import { messageSortPreference } from "../../features/search/message-sort-preference";
 import {
   noSearchUsage,
   readSearchUsage,
@@ -728,7 +729,9 @@ export function SearchResults({
   const [askAgent, setAskAgent] = useState<MentionRecipient>();
   // Search unmounts as it closes, so each opening reads previews afresh.
   const [previews] = useState<PreviewCache>(() => new Map());
-  const [sort, setSort] = useState<SearchSort>("relevance");
+  // Each opening starts from the saved order; the Sort menu overrides it
+  // for this search only.
+  const [sort, setSort] = useState<SearchSort>(messageSortPreference);
   // The chip or a single resolved `in:` limits results to one conversation.
   const effectiveChannelId = scopedChannelId ?? operatorChannelId;
   const canRerank = useCanRerank(decisions);

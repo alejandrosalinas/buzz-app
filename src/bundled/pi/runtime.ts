@@ -22,7 +22,7 @@ import {
 // Buzz tools, signed by the agent's native-held key. The runtime reports a
 // turn that fails; what Pi writes without `send` stays in local activity.
 import { isFinalMessage } from "../../buzz-mcp/session-tools";
-import { appClient, readFile } from "../../buzz-mcp/app-client";
+import { appClient, readFile, relayKeyOf } from "../../buzz-mcp/app-client";
 import type { BuzzClient, Context } from "../../buzz-mcp/client";
 import { content, errorText } from "../../buzz-mcp/rpc";
 import {
@@ -1147,7 +1147,7 @@ export class PiRuntime {
             conversation: call.conversation,
           }),
         relayAuthor: this.reads(call.agent)?.relayAuthor?.(),
-        signingAuthority: this.reads(call.agent)?.workflowAuthority(),
+        signingAuthority: relayKeyOf(this.reads(call.agent)),
         read: (path) =>
           entry.handle?.protection
             ? readFile(

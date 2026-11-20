@@ -1,7 +1,7 @@
 import { expect, it, vi } from "vitest";
 import type { AgentHandle } from "../features/agents/service";
 import type { AgentProtection } from "../features/agent-protection/service";
-import { appClient, readFile } from "./app-client";
+import { appClient, relayKeyOf, readFile } from "./app-client";
 import type { Host } from "../features/host/service";
 import { pngChunks } from "../features/messages/image-metadata";
 
@@ -206,6 +206,24 @@ it("does not invent authority when a host has none", () => {
   });
   expect(client.relayAuthor).toBeUndefined();
   expect(client.signingAuthority).toBeUndefined();
+});
+
+it("keeps a relay with no key apart from a key it can't tell", () => {
+  const options = {
+    read: vi.fn(),
+    memories: async () => ({ entries: [], partial: false }),
+  };
+  const agent = { pubkey: "agent" } as AgentHandle;
+  expect(
+    appClient(agent, { ...options, signingAuthority: null }),
+  ).toHaveProperty("signingAuthority", null);
+  expect(
+    "signingAuthority" in
+      appClient(agent, { ...options, signingAuthority: undefined }),
+  ).toBe(false);
+  expect(relayKeyOf(undefined)).toBeUndefined();
+  expect(relayKeyOf({ workflowAuthority: () => undefined })).toBeNull();
+  expect(relayKeyOf({ workflowAuthority: () => "relay" })).toBe("relay");
 });
 
 it("withholds a query result when the owning turn ends during the read", async () => {
