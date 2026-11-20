@@ -3,6 +3,7 @@ import { afterEach, expect, it, vi } from "vitest";
 import type { AgentType } from "../../features/agents/service";
 import { GooseRuntime } from "./runtime";
 import { GooseSetup } from "./setup";
+import { GooseHistory } from "./transcript";
 import { apply } from "./index";
 
 vi.mock("@tauri-apps/api/core", () => ({ isTauri: () => true }));
@@ -149,6 +150,51 @@ it("lists no review models for the providers Goose reviews refuse", async () => 
   await expect(registered.models()).resolves.toEqual([
     { provider: "openai", id: "model", label: "openai · Model" },
   ]);
+});
+
+it("finds a conversation's history in goose when the app no longer lists its session", async () => {
+  vi.spyOn(navigator, "platform", "get").mockReturnValue("Win32");
+  // The app's cache of conversations forgot it, past its limit.
+  vi.spyOn(GooseRuntime.prototype, "conversations").mockReturnValue([]);
+  vi.spyOn(GooseRuntime.prototype, "sessions").mockReturnValue([]);
+  const started = vi
+    .spyOn(GooseHistory.prototype, "started")
+    .mockResolvedValue(true);
+  const key = "a".repeat(64);
+  let type: AgentType | undefined;
+  apply({
+    pluginOwner: { id: "buzz.goose", revision: "r1" },
+    host: { request: vi.fn() },
+    agentProtection: { registerModels: vi.fn() },
+    agents: {
+      register: (registered: AgentType) => {
+        type = registered;
+      },
+      relay: () => undefined,
+    },
+    effect: vi.fn(),
+  } as never);
+  expect(type?.sessions?.list(key)).toEqual([]);
+  // From the agent's saved config, with no snapshot of running agents.
+  const agent = { key, config: { workspace: "~/w" } } as never;
+  await expect(type?.sessions?.history?.(agent, "room/root")).resolves.toBe(
+    true,
+  );
+  expect(started).toHaveBeenCalledWith(
+    "~/w",
+    key,
+    "room/root",
+    expect.any(AbortSignal),
+  );
+  started.mockResolvedValue(false);
+  await expect(type?.sessions?.history?.(agent, "room/root")).resolves.toBe(
+    false,
+  );
+  // Only goose itself being unreadable rejects.
+  started.mockRejectedValue(new Error("goose is unavailable"));
+  await expect(type?.sessions?.history?.(agent, "room/root")).rejects.toThrow(
+    "goose is unavailable",
+  );
 });
 
 it("links a failed turn's refused key to Goose's own Agent setup, quoting goose", () => {

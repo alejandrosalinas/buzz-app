@@ -9,7 +9,8 @@ import type { RelaySession } from "../relay/session";
 import { avatarMedia } from "../../shared/avatar-source";
 import { AvatarStack } from "../../shared/design-system/ui/AvatarStack";
 import { Badge } from "../../shared/design-system/ui/Badge";
-import { formatTime } from "../../shared/datetime";
+import { formatFullTimestamp } from "../../shared/datetime";
+import { useLocalDay } from "../../shared/use-local-day";
 import { CaretRightIcon } from "../../shared/design-system/icons";
 import type { RelayedRun } from "./activity-groups";
 import { MessageTimestamp, useMessageTimeVisible } from "./MessageTimestamp";
@@ -53,6 +54,8 @@ export function RelayedRunPreview({
   const resolveName = useChannelIdentityNames(session, first?.channelId);
   const directory = useReferenceDirectory(session);
   const showTime = useMessageTimeVisible(session?.channels, first?.channelId);
+  // The button's name carries the full date, so it follows time zone changes.
+  useLocalDay();
   useActivityFocusHandoff(container);
   if (!first || !last) return null;
   // The latest sender leads the stack, as it leads the line.
@@ -97,7 +100,7 @@ export function RelayedRunPreview({
     : sameSource
       ? ""
       : " from other chats";
-  const label = `${expanded ? "Collapse" : "Show"} ${run.relayed.length} messages${from} by ${names}. Latest, ${latest?.name}: ${preview}, ${formatTime(last.createdAt)}`;
+  const label = `${expanded ? "Collapse" : "Show"} ${run.relayed.length} messages${from} by ${names}. Latest, ${latest?.name}: ${preview}, ${formatFullTimestamp(last.createdAt)}`;
   return (
     <div ref={container} className={styles.relayedRun} data-layout={layout}>
       <div
@@ -131,7 +134,7 @@ export function RelayedRunPreview({
         {(chat || !sameSource) && (
           <span
             className={styles.relayedSubtle}
-            data-relayed-from=""
+            data-relayed-from={chat?.channelType === "dm" ? "dm" : ""}
             aria-hidden="true"
           >
             {expanded ? "From" : "from"}

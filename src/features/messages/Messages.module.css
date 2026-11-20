@@ -3431,8 +3431,12 @@ html[data-keyboard-navigation] .rawDiff:focus-visible {
 .activityExpansionRoot {
   display: contents;
 }
+/* One column as wide as the timeline: an implicit auto column would grow to a
+   row's unwrapped content, such as a relayed line's whole preview, and push
+   the row past the conversation's edge. */
 .activityExpansion {
   display: grid;
+  grid-template-columns: minmax(0, 1fr);
   grid-template-rows: minmax(var(--activity-reveal-min, 0px), 1fr);
 }
 .activityExpansionContent {
@@ -4185,15 +4189,30 @@ html[data-keyboard-navigation] .activityExpansion {
   line-height: var(--text-body-sm--line-height);
   white-space: nowrap;
 }
-/* Three senders' stack is wider than the avatar lane: the text starts past
-   its last avatar's artwork, half the 44px stack, with a 4px gap. */
+/* A stack of senders is wider than the avatar lane. Half its artwork is 15px
+   for two and 22px for three. It keeps 8px from the line's start edge, as the
+   line's end does, and the text starts 4px past its last avatar. */
+.relayedHeader[data-senders="2"] {
+  --relayed-stack-half: calc(
+    var(--space-5) -
+    var(--space-1h) /
+    2 -
+    var(--space-half)
+  );
+}
 .relayedHeader[data-senders="3"] {
+  --relayed-stack-half: calc(var(--space-5) + var(--space-half));
+}
+.relayedHeader:is([data-senders="2"], [data-senders="3"]) {
+  --relayed-stack-center: max(
+    var(--relayed-avatar-center),
+    calc(var(--space-2) + var(--relayed-stack-half))
+  );
   padding-inline-start: max(
     var(--relayed-text-start),
     calc(
-      var(--relayed-avatar-center) +
-      var(--space-5) +
-      var(--space-half) +
+      var(--relayed-stack-center) +
+      var(--relayed-stack-half) +
       var(--space-1)
     )
   );
@@ -4230,7 +4249,7 @@ html[data-keyboard-navigation]
 .relayedAvatar {
   position: absolute;
   inset-block-start: 50%;
-  inset-inline-start: var(--relayed-avatar-center);
+  inset-inline-start: var(--relayed-stack-center, var(--relayed-avatar-center));
   /* A definite row and no line box of its own keep the avatar 16px square and
      on the line's center; a stack's ringed avatars overflow it evenly. */
   display: grid;
@@ -4267,6 +4286,9 @@ html[data-keyboard-navigation]
 .relayedHeader > .relayedChat > * {
   margin-inline: 0;
 }
+.relayedHeader:not([data-open]) > .relayedChat {
+  max-inline-size: 20rem;
+}
 .relayedPreview {
   flex: 1 1 0;
   min-inline-size: 0;
@@ -4285,9 +4307,11 @@ html[data-keyboard-navigation]
   max-inline-size: max-content;
 }
 /* A narrow conversation keeps the avatar, the chat and the message: the name
-   and "from" go. An opened fold's lines keep naming each sender. */
+   and "from" go. An opened fold's lines keep naming each sender, and "from"
+   stays before a direct message's person, whose name has no "#" to mark it
+   as the chat. */
 @container messages (max-width: 30rem) {
-  .relayedHeader > [data-relayed-from],
+  .relayedHeader > [data-relayed-from]:not([data-relayed-from="dm"]),
   .relayedHeader > .relayedName:not(.relayedRunItems .relayedName) {
     display: none;
   }

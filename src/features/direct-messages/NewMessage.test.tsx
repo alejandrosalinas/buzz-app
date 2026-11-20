@@ -1036,6 +1036,7 @@ it("addresses the draft to the person it was opened from, creating the DM only o
   expect(
     await screen.findByRole("button", { name: "Remove Person 1" }),
   ).toBeVisible();
+  await waitFor(() => expect(screen.getByRole("textbox")).toHaveFocus());
   expect(t.directMessages.open).not.toHaveBeenCalled();
   await t.user.type(screen.getByRole("textbox"), "Hello");
   await t.user.click(send());

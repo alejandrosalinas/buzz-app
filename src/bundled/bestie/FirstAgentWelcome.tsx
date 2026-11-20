@@ -25,7 +25,7 @@ export function useFirstAgentWelcome(
   channel: string,
 ) {
   const revision = useSyncExternalStore(
-    (listener) => subscribeView(scope, listener),
+    (listener) => subscribeView(scope, listener, key(agent)),
     () => viewRevision(scope, key(agent)),
   );
   let savedChannel: string | null | undefined;

@@ -3,6 +3,26 @@ import { openPage } from "./navigation.mjs";
 
 test.use({ dmLabels: true, historyCounts: { alpha: 1, beta: 1 } });
 
+test.describe("touch headings", () => {
+  test.use({ hasTouch: true });
+
+  test("an ordinary heading opens its Actions menu on the first tap", async ({
+    page,
+    app,
+  }) => {
+    await page.goto(app.origin);
+    await openPage(page, "Messages");
+    const actions = page.getByRole("button", {
+      name: "More actions for Team",
+      exact: true,
+    });
+    await actions.tap();
+    await expect(
+      page.getByRole("menu", { name: "More actions for Team", exact: true }),
+    ).toBeVisible();
+  });
+});
+
 async function appearance(page, scale, mode = "light") {
   await page.evaluate(
     ({ scale, mode }) => {

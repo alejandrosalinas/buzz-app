@@ -164,7 +164,10 @@ test.describe("thread activity", () => {
     // followed thread lights it again.
     await page.locator('button[data-channel-id="beta"]').first().click();
     await expect(alpha.locator("[data-channel-activity]")).toHaveCount(0);
-    const root = app.histories.get("primary/alpha").at(-2);
+    // The viewer's own thread: a broadcast in a peer's thread is only bold.
+    const root = app.histories
+      .get("primary/alpha")
+      .find((event) => event.content === "Thread root 0");
     app.relay.publish(
       "primary",
       finalizeEvent(
@@ -209,5 +212,45 @@ test.describe("thread activity", () => {
     ).toBeVisible();
     await summary.click();
     await expect(title).toHaveCSS("font-weight", "500");
+  });
+
+  test("a broadcast reply in a peer's thread bolds the row without a dot", async ({
+    page,
+    app,
+  }) => {
+    await holdReadingFocus(page);
+    await open(page, app);
+    const alpha = page
+      .locator('[data-sidebar-section="starred"]')
+      .locator('button[data-channel-id="alpha"]');
+    await page.locator('button[data-channel-id="beta"]').first().click();
+    const root = app.histories
+      .get("primary/alpha")
+      .find((event) => event.content === "Thread root 1");
+    app.relay.publish(
+      "primary",
+      finalizeEvent(
+        {
+          kind: 9,
+          created_at: Math.floor(Date.now() / 1000),
+          content: "Broadcast in a peer's thread",
+          tags: [
+            ["h", "alpha"],
+            ["e", root.id, "", "reply"],
+            ["broadcast", "1"],
+          ],
+        },
+        generateSecretKey(),
+      ),
+    );
+    // Bold, like a new top-level post.
+    await expect(alpha.getByText("Alpha", { exact: true })).toHaveCSS(
+      "font-weight",
+      "600",
+    );
+    await expect(alpha.locator("[data-channel-activity]")).toHaveCount(0);
+    await expect(
+      alpha.locator('[data-channel-unread][data-priority="true"]'),
+    ).toHaveCount(0);
   });
 });

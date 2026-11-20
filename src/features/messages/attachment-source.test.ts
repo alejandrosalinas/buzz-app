@@ -8,6 +8,9 @@ it.each(["buzz-media://localhost", "http://buzz-media.localhost"])(
     expect(isNativeMediaSource(`${origin}/${encodeURIComponent(media)}`)).toBe(
       true,
     );
+    expect(
+      isNativeMediaSource(`${origin}/${encodeURIComponent(media)}?channel=c`),
+    ).toBe(true);
   },
 );
 it.each([
@@ -16,6 +19,7 @@ it.each([
   `http://buzz-media.localhost.evil.test/${encodeURIComponent(media)}`,
   `buzz-media://localhost:123/${encodeURIComponent(media)}`,
   `buzz-media://localhost/${encodeURIComponent(media)}?url=evil`,
+  `buzz-media://localhost/${encodeURIComponent(media)}?channel=c&url=evil`,
   `buzz-media://localhost/${encodeURIComponent(media)}#fragment`,
   `buzz-media://localhost/${encodeURIComponent("https://relay.test/other")}`,
   `buzz-media://localhost/${encodeURIComponent("https://evil.test/media/../../../secret")}`,

@@ -230,6 +230,8 @@ export const apply: PluginModule["apply"] = (ctx) => {
     gateway: { harness: HARNESS, mode: "attribution" },
     execution: true,
     conversationFolders: true,
+    conversationSections: true,
+    notes: true,
     hooks: { events: CLAUDE_HOOK_EVENTS },
     retire: (pubkey) => runtime.retire(pubkey),
     protection: true,

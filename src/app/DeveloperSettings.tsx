@@ -2,7 +2,6 @@ import styles from "./DeveloperSettings.module.css";
 import { SettingsGroup } from "../shared/design-system/ui/SettingsGroup";
 import { Header, InlineHeader } from "../shared/design-system/ui/Header";
 import { PreferenceRow } from "../shared/design-system/ui/PreferenceRow";
-import { Button } from "../shared/design-system/ui/Button";
 import { useEffect, useState, useSyncExternalStore } from "react";
 import { Select } from "../shared/design-system/ui/Select";
 import {
@@ -12,7 +11,6 @@ import {
   LOG_LEVELS,
   subscribeLogLevel,
 } from "../features/developer/logging";
-import type { RelayData } from "../features/relay/service";
 import { clientMetrics } from "../features/developer/client-metrics";
 import { ClientMetricsPanel } from "./ClientMetricsPanel";
 import { SwitchPreferenceRow } from "../shared/design-system/ui/SwitchPreferenceRow";
@@ -52,7 +50,7 @@ async function fetchStats(): Promise<BrokerStats | undefined> {
   }
 }
 
-export function DeveloperSettings({ relay }: { relay: RelayData }) {
+export function DeveloperSettings() {
   const level = useSyncExternalStore(subscribeLogLevel, logLevel);
   const scenario = useSyncExternalStore(
     subscribeImportScenario,
@@ -91,8 +89,6 @@ export function DeveloperSettings({ relay }: { relay: RelayData }) {
   }
   const brokerAvailable = import.meta.env.VITE_BUZZ_LIVE === "1";
   const [stats, setStats] = useState<BrokerStats>();
-  const [clearing, setClearing] = useState(false);
-  const [status, setStatus] = useState<string>();
 
   useEffect(() => {
     if (!brokerAvailable) return;
@@ -108,18 +104,6 @@ export function DeveloperSettings({ relay }: { relay: RelayData }) {
       clearInterval(timer);
     };
   }, []);
-
-  async function clearCache() {
-    setClearing(true);
-    try {
-      await relay.clearCache();
-      setStatus("Cache cleared. Buzz will load channels and media as needed.");
-    } catch (error) {
-      setStatus(`Buzz couldn’t clear the cache. ${String(error)}`);
-    } finally {
-      setClearing(false);
-    }
-  }
 
   return (
     <section aria-labelledby="developer-settings-title">
@@ -233,28 +217,6 @@ export function DeveloperSettings({ relay }: { relay: RelayData }) {
             />
           </SettingsGroup>
         </div>
-        <SettingsGroup layout="form">
-          <PreferenceRow
-            title="Caches"
-            subtitle="Clear cached channels, messages, media, and this account’s saved activity in the current community. Turn metrics and your account, relay, and sidebar settings are kept."
-            trailing={
-              <div className={styles.actions}>
-                <Button
-                  type="button"
-                  disabled={clearing}
-                  onClick={() => void clearCache()}
-                >
-                  {clearing ? "Clearing…" : "Clear cache"}
-                </Button>
-              </div>
-            }
-          />
-          {status && (
-            <p role="status" className="m-0 text-body-sm text-muted">
-              {status}
-            </p>
-          )}
-        </SettingsGroup>
       </div>
     </section>
   );

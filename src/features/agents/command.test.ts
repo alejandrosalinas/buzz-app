@@ -102,6 +102,8 @@ describe("agent command lifetime", () => {
     await vi.waitFor(() => expect(f.host.spawn).toHaveBeenCalled());
     f.controller.abort();
     starting.resolve(f.process);
+    await vi.waitFor(() => expect(f.process.kill).toHaveBeenCalled());
+    f.exited.resolve(null);
     await rejected;
     expect(f.process.kill).toHaveBeenCalled();
     expect(f.connection.close).toHaveBeenCalled();

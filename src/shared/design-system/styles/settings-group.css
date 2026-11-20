@@ -48,13 +48,18 @@
   .buzz-settings-group[data-layout="rows"] > * + * {
     border-block-start: 1px solid var(--border-standard);
   }
+  /* The form's padding and gap already space its children; a row's own
+     padding would double that, so it only applies between `rows` dividers. */
+  .buzz-settings-group[data-layout="form"] > .buzz-preference-row {
+    padding-block: 0;
+  }
   /* Embedded disclosures share the group's frame and row content inset. */
   .buzz-settings-group[data-layout="rows"]
   > .buzz-accordion[data-variant="settings"] {
     margin-inline: calc(0px - var(--settings-group-inset));
   }
   .buzz-settings-group[data-layout="rows"]
-    > .buzz-accordion[data-variant="settings"]
+    > .buzz-accordion:is([data-variant="settings"], [data-variant="popout"])
     + .buzz-preference-row {
     margin-inline: calc(0px - var(--settings-group-inset));
     padding-inline: var(--settings-group-inset);
@@ -78,6 +83,38 @@
     > .buzz-accordion[data-variant="settings"]
     .buzz-accordion-content {
     padding-block-start: 0;
+  }
+  .buzz-settings-group[data-layout="rows"]
+    > .buzz-accordion[data-variant="popout"] {
+    --accordion-row-inset: var(--settings-group-inset);
+    margin-inline: calc(0px - var(--settings-group-inset));
+    padding-inline: 0;
+
+    &:has(> .buzz-accordion-item:first-child[data-open])::after,
+    &:has(> .buzz-accordion-item:last-child[data-open])
+      + :is(
+        .buzz-accordion:is([data-variant="settings"], [data-variant="popout"]),
+        .buzz-preference-row
+      )::after {
+      content: none;
+    }
+  }
+  .buzz-settings-group[data-layout="rows"] {
+    > * + .buzz-accordion[data-variant="popout"],
+    > .buzz-accordion[data-variant="popout"]
+      + :is(.buzz-accordion[data-variant="settings"], .buzz-preference-row) {
+      position: relative;
+      border-block-start-color: transparent;
+
+      &::after {
+        content: "";
+        position: absolute;
+        inset-block-start: -1px;
+        inset-inline: var(--settings-group-inset);
+        border-block-start: 1px solid var(--border-standard);
+        pointer-events: none;
+      }
+    }
   }
   .buzz-settings-group[data-layout="form"] {
     display: grid;

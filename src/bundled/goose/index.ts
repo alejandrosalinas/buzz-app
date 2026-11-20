@@ -20,6 +20,7 @@ import {
   onRecommended,
   recommendedRun,
 } from "../../features/agents/recommended";
+import { REQUEST_TIMEOUT_MS } from "./goose";
 import { gooseRun } from "./run";
 import { readModelSettings } from "../../features/agents/model-settings";
 import { explainTurn, GooseSetup, readNoProxy, REVIEW_REFUSED } from "./setup";
@@ -141,6 +142,9 @@ export const apply: PluginModule["apply"] = (ctx) => {
     gateway: { harness: HARNESS },
     retire: (pubkey) => runtime.retire(pubkey),
     protection: true,
+    conversationFolders: true,
+    conversationSections: true,
+    notes: true,
     title: "Goose",
     icon: GooseLogoIcon,
     description:
@@ -194,6 +198,16 @@ export const apply: PluginModule["apply"] = (ctx) => {
       return [provider, model].filter(Boolean).join(" · ") || "Goose";
     },
     sessions: {
+      ready: (agentKey) => runtime.listed(agentKey),
+      // The sessions `list` remembers are the latest 200 conversations; goose
+      // keeps the rest, and finds them by tag.
+      history: (agent, conversation) =>
+        history.started(
+          config(agent.config).workspace,
+          agent.key,
+          conversation,
+          AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+        ),
       list: (agentKey) => {
         const live = runtime.sessions(agentKey);
         const busy = new Map(live.map((view) => [view.key, view.busy]));
@@ -232,6 +246,7 @@ export const apply: PluginModule["apply"] = (ctx) => {
           config(agent.config).workspace,
           since,
           signal,
+          [...new Set(runtime.folders(agent.key).values())],
         ),
     }),
     tabs: [

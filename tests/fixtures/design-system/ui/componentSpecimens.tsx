@@ -2529,8 +2529,9 @@ export const COMPONENT_SPECIMENS: Record<string, () => ReactNode> = {
     </div>
   ),
   "preference-row": SwitchSpecimen,
-  accordion: () => (
+  accordion: () => [
     <SpecimenFrame
+      key="standard"
       code={`<Accordion
   animate
   items={[
@@ -2677,8 +2678,190 @@ export const COMPONENT_SPECIMENS: Record<string, () => ReactNode> = {
           },
         ]}
       />
-    </SpecimenFrame>
-  ),
+    </SpecimenFrame>,
+    <SpecimenGroup
+      key="popout"
+      label="Popout accordion in a long list"
+      code={`<Accordion
+  variant="popout"
+  items={[
+    {
+      value: "Access",
+      title: "Access",
+      content: (
+        <p className="m-0 px-4.5 text-body-sm">
+          Use the step-free entrance on Grove Street. From the lobby, take
+          the lift to the second floor and follow the signs to Studio B.
+        </p>
+      ),
+    },
+  ]}
+/>`}
+    >
+      <section
+        aria-label="Popout accordion in a long list"
+        className="mx-auto w-full max-w-lg"
+      >
+        <Accordion
+          variant="popout"
+          items={(
+            [
+              ["Location", "The workshop takes place in the studio."],
+              ["Arrival", "Check in with the welcome desk from 9 a.m."],
+              ["Agenda", "Bring a draft to discuss in the first session."],
+              [
+                "Materials",
+                "Download workshop-materials-and-accessibility-preparation-guide-for-first-time-attendees.pdf before you arrive.",
+              ],
+              [
+                "Access",
+                "Use the step-free entrance on Grove Street. From the lobby, take the lift to the second floor and follow the signs to Studio B.",
+              ],
+              ["Breaks", "Breaks begin at 11 a.m. and 2 p.m."],
+              ["Lunch", "The café has vegetarian and gluten-free options."],
+              ["Wi-Fi", "Collect the guest network details at check-in."],
+              ["Recording", "The recap includes slides and shared notes."],
+              [
+                "Questions",
+                "Leave questions in the workbook during each session.",
+              ],
+              ["Feedback", "The closing session includes time for feedback."],
+              ["Follow-up", "The recap will be sent the next day."],
+            ] as const
+          ).map(([title, text]) => ({
+            value: title,
+            title,
+            content: <p className="m-0 px-4.5 text-body-sm">{text}</p>,
+          }))}
+        />
+      </section>
+    </SpecimenGroup>,
+    <SpecimenGroup
+      key="expanded-settings"
+      label="Popout accordion in Settings"
+      code={`<SettingsGroup>
+  <Accordion
+    variant="popout"
+    items={[
+      {
+        value: "Publishing",
+        title: "Publishing",
+        content: (
+          <div className="grid grid-cols-1 gap-3">
+            <div className="rounded-row border border-standard p-2">
+              <section
+                aria-label="Publishing instructions"
+                className="max-h-48 overflow-y-auto px-2"
+                tabIndex={0}
+              >
+                <p>Publishing instructions go here.</p>
+              </section>
+            </div>
+            <div className="[&>button]:max-w-full">
+              <Button size="sm" variant="outline">
+                <span className="whitespace-normal">Restore default</span>
+              </Button>
+            </div>
+          </div>
+        ),
+      },
+    ]}
+  />
+</SettingsGroup>`}
+    >
+      <section
+        aria-label="Popout accordion in Settings"
+        className="mx-auto w-full max-w-lg"
+      >
+        <SettingsGroup>
+          <Accordion
+            variant="popout"
+            items={[
+              {
+                value: "Response style",
+                title: "Response style",
+                content: (
+                  <p className="m-0 px-4.5 text-body-sm">
+                    Use plain language and lead with the result.
+                  </p>
+                ),
+              },
+              {
+                value: "Publishing",
+                title: "Publishing",
+                triggerDescription: "Default instructions",
+                content: (
+                  <div className="grid grid-cols-1 gap-3">
+                    <div className="rounded-row border border-standard p-2">
+                      <section
+                        aria-label="Publishing instructions"
+                        // biome-ignore lint/a11y/noNoninteractiveTabindex: This caller supplies a keyboard-scrollable region.
+                        tabIndex={0}
+                        className="grid max-h-48 gap-4 overflow-y-auto px-2 text-body-sm"
+                      >
+                        <p className="m-0">
+                          Before sharing a document, identify the audience and
+                          check who has access. Use the destination the
+                          requester named and confirm the people who need to act
+                          on it.
+                        </p>
+                        <p className="m-0">
+                          Open the final copy and check that it contains the
+                          agreed changes. Make sure links work for the intended
+                          audience and captions explain the attached images.
+                        </p>
+                        <p className="m-0">
+                          Give the recipient enough context to understand the
+                          decision. Put the requested action near the top and
+                          keep details about implementation in the document.
+                        </p>
+                        <p className="m-0">
+                          For a change that needs approval, use the existing
+                          review flow. Keep related feedback with the document
+                          so reviewers can see the questions and their answers.
+                        </p>
+                        <p className="m-0">
+                          Check that the final version uses the agreed title and
+                          that other versions still have a clear purpose.
+                          Preserve links that teammates already use.
+                        </p>
+                        <p className="m-0">
+                          After publishing, open the shared link and verify that
+                          it shows the expected version. Report the outcome
+                          where the request was made.
+                        </p>
+                      </section>
+                    </div>
+                    <div className="[&>button]:max-w-full">
+                      <Button size="sm" variant="outline">
+                        <span className="whitespace-normal">
+                          Restore default
+                        </span>
+                      </Button>
+                    </div>
+                  </div>
+                ),
+              },
+            ]}
+          />
+          <Accordion
+            variant="settings"
+            items={[
+              {
+                value: "Working notes",
+                title: "Working notes",
+                content: (
+                  <p className="m-0 text-body-sm">
+                    Keep decisions next to the work they affect.
+                  </p>
+                ),
+              },
+            ]}
+          />
+        </SettingsGroup>
+      </section>
+    </SpecimenGroup>,
+  ],
   "empty-state": () => (
     <div className="grid gap-8">
       <SpecimenFrame

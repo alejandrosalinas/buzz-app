@@ -168,28 +168,28 @@ export function ownerWorktreeRules(content: string) {
 
 /** A Canvas as its agent reads it. A workspace block that Buzz generated is
  * printed again from its settings, so what an agent is told can change
- * without changing what Canvases hold. `ownFolder`: the conversation works in
- * a folder of its own, so the block only lists the folders. A block edited by
- * hand stays as written, as does one that cannot be read. When the owner
- * wrote the Canvas, its worktree rules are then the owner's rule for this
- * chat, which the text says. */
+ * without changing what Canvases hold. `elsewhere`: the conversation works in
+ * a folder of its own, or where the plugin that manages it says, so the block
+ * only lists the folders. A block edited by hand stays as written, as does
+ * one that cannot be read. When the owner wrote the Canvas, its worktree
+ * rules are then the owner's rule for this chat, which the text says. */
 export function agentCanvas(
   content: string,
-  ownFolder = false,
+  elsewhere = false,
   ownerWrote = true,
 ): string {
   const block = workspaceBlock(content);
   if (!block) return content;
   const { value } = block;
   if (block.edited) {
-    if (!ownFolder || !value.worktree || !ownerWrote) return content;
+    if (!elsewhere || !value.worktree || !ownerWrote) return content;
     const at = content.length - value.canvas.length;
     return `${content.slice(0, at)}${ownerRule}\n\n${content.slice(at)}`;
   }
   const lines = instructions(
-    ownFolder ? { ...value, worktree: undefined } : value,
+    elsewhere ? { ...value, worktree: undefined } : value,
   );
-  if (!ownFolder && value.worktree)
+  if (!elsewhere && value.worktree)
     lines.push(followUpRule(value.worktree.location));
   return `${lines.join("\n")}\n\n${value.canvas}`;
 }

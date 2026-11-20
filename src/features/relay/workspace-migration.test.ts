@@ -164,7 +164,6 @@ it.each([
       "starred",
       ...after,
       "channels",
-      "forums",
       "dms",
     ];
     expect(workspaceSectionOrder(legacy)).toEqual(expected);
@@ -208,7 +207,6 @@ it("accepts a legacy order without Starred and restores it at the top", () => {
     "group:notes",
     "group:release",
     "channels",
-    "forums",
     "dms",
   ];
   expect(workspaceSectionOrder(projectWorkspaceGroups(base))).toEqual(order);
@@ -238,7 +236,6 @@ it("gives an existing unified record without a saved order the new default", () 
     "group:notes",
     "group:release",
     "channels",
-    "forums",
     "dms",
   ];
   expect(workspaceSectionOrder(projectWorkspaceGroups(loaded))).toEqual(
@@ -271,7 +268,6 @@ it("gives an existing unified record without a saved order the new default", () 
     "solo",
     "pages",
     "channels",
-    "forums",
     "dms",
   ]);
 });

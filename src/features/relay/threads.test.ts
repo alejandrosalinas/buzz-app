@@ -10,6 +10,7 @@ import {
 } from "./threads";
 import { byteSize, listByteSize } from "./budget";
 import { ReadError } from "./errors";
+import { USER_STATUS_KIND } from "./user-status-policy";
 import { foldMessages } from "./fold";
 import type { RelayReader } from "./reader";
 import type { OutgoingEvent } from "./outbox";
@@ -943,6 +944,12 @@ it("repairs retained thread pages through the real channel-established catch-up 
   const first = h.view.refresh();
   h.next().respond([root, reply("old", 10)]);
   await first;
+  // Alice's profile came over traffic, so her row reads only her status.
+  const status = h.next();
+  expect(status.filters).toMatchObject([
+    { kinds: [USER_STATUS_KIND], authors: [alice.pubkey] },
+  ]);
+  status.respond([]);
   const more = h.view.loadMore();
   h.next().respond([root, reply("later", 20)]);
   await more;
@@ -963,6 +970,10 @@ it("repairs retained thread pages through the real channel-established catch-up 
   ]);
   repair.respond([root, reply("old", 10), reply("missed", 15)]);
   await flush();
+  // The reconnect retired her status, so it is read again with the page.
+  const again = h.next();
+  expect(again.filters[0]?.kinds).toEqual([USER_STATUS_KIND]);
+  again.respond([]);
   const next = h.next();
   expect(next.filters[1]?.thread_cursor).toBe(15);
   next.respond([root, reply("later", 20)]);

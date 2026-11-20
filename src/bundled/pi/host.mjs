@@ -2041,8 +2041,15 @@ export function serve({
     if (Object.keys(change).length)
       await conversation.configure(change, context);
     if (refresh) {
-      const prompt = await refresh();
+      const prompt = await refresh(!!steers);
       if (!prompt) return;
+      // Built past any wait: a new run takes the instructions current now,
+      // which its prompt's Canvas reads too. A steer keeps its run's.
+      if (!steers && prompt.instructions !== undefined)
+        await conversation.configure(
+          { instructions: prompt.instructions },
+          context,
+        );
       turn = { ...turn, ...prompt };
     }
     if (withdrawn?.()) return;
@@ -2406,13 +2413,31 @@ export function serve({
           return submitted;
         };
         const prompt = refresh
-          ? () => call("prompt", { agent, request: turn.request })
+          ? (steers) => call("prompt", { agent, request: turn.request, steers })
           : undefined;
         let bound;
         try {
           // A `new` session a host stopped partway through is done first.
           if (opened.recorded.resets.has(key))
             await resetPending(opened, conversation, key);
+          // A request Pi has already is answered by its own submission, in
+          // the mode it ran in: asked again, it binds and configures nothing,
+          // and its prompt is not built again, so notes it would take stay
+          // for the next turn. Its run, continuing, reads the memory and
+          // messages it was given.
+          const held = await opened.storage.submissionByRequest(
+            conversation.id,
+            turn.request,
+            context,
+          );
+          if (held) {
+            opened.cores.set(conversation.id, turn.core?.text);
+            opened.contexts.set(conversation.id, tools);
+            return placed({
+              submission: held.id,
+              conversation: conversation.id,
+            });
+          }
           // An ordinary turn, in a conversation with no gateway work, runs
           // as on main.
           if (
@@ -2445,22 +2470,6 @@ export function serve({
             if (!submitted) return false;
             if (session !== undefined) Object.assign(submitted, { session });
             return placed(submitted);
-          }
-          // A request Pi has already is answered by its own submission, in
-          // the mode it ran in: asked again, it binds and configures nothing.
-          // Its run, continuing, reads the memory and messages it was given.
-          const held = await opened.storage.submissionByRequest(
-            conversation.id,
-            turn.request,
-            context,
-          );
-          if (held) {
-            opened.cores.set(conversation.id, turn.core?.text);
-            opened.contexts.set(conversation.id, tools);
-            return placed({
-              submission: held.id,
-              conversation: conversation.id,
-            });
           }
           bound = await bind(opened, turn, {
             key,

@@ -25,6 +25,7 @@ const nonIconDependencies = new Set([
   "@jsquash/webp", // Lossless media encoder, not an icon catalog.
   "@modelcontextprotocol/server", // The standalone Buzz MCP server.
   "@noble/curves",
+  "@noble/hashes",
   "@playwright/test",
   "@pierre/diffs", // Diff renderer and syntax highlighting, not an icon catalog.
   "@pydantic/genai-prices", // LLM price data for Usage estimates.

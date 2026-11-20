@@ -5,10 +5,18 @@ import {
 } from "../../shared/design-system/ui/NavigationItem";
 import { IconButton } from "../../shared/design-system/ui/IconButton";
 import { MenuItem } from "../../shared/design-system/ui/Menu";
-import { PencilSimpleIcon } from "../../shared/design-system/icons";
+import type { NavigationSectionTrailing } from "../../shared/design-system/ui/NavigationSection";
+import {
+  Cube3dSphereIcon,
+  PencilSimpleIcon,
+} from "../../shared/design-system/icons";
 import { SoloDisclosure } from "./SoloDisclosure";
 import type { SoloWorkspaceProps } from "./solo-navigation-contract";
 import styles from "./WorkspaceComposition.module.css";
+
+export type WorkspaceHeaderTrailing = NavigationSectionTrailing & {
+  hasInteractiveDecoration: boolean;
+};
 
 /** The existing Solo inventory retains every row, menu, mutation and disclosure. */
 export type WorkspaceComposition = Readonly<{
@@ -23,8 +31,9 @@ export type WorkspaceComposition = Readonly<{
     frame(children: ReactNode): ReactNode;
     header(
       primary: ReactNode,
-      trailing?: ReactNode,
+      newTask?: ReactNode,
       actions?: ReactNode,
+      trailing?: WorkspaceHeaderTrailing,
     ): ReactNode;
     panel(before?: ReactNode): ReactNode;
   }>[];
@@ -54,8 +63,14 @@ export function RegionWorkspace(props: SoloWorkspaceProps) {
   );
   if (!workspace || !props.id) return null;
   const title = props.id ? workspace.name : "Unfiled";
+  const leading = props.headerLeading;
+  const accessory =
+    props.headerAccessory != null && typeof props.headerAccessory !== "boolean"
+      ? props.headerAccessory
+      : undefined;
   const disclosure = (
     <SoloDisclosure
+      leading={leading}
       label={`${workspace.open ? "Hide" : "Show"} tasks and chats in ${title}`}
       summary={props.id ? "" : title}
       expanded={workspace.open}
@@ -65,13 +80,15 @@ export function RegionWorkspace(props: SoloWorkspaceProps) {
   );
   const primary = props.id ? (
     <div className={styles.heading}>
+      {leading && disclosure}
       <NavigationItem
         label={title}
+        icon={leading && <Cube3dSphereIcon size={14} aria-hidden="true" />}
         selected={!!props.selected}
         data-solo-workspace-id={workspace.id}
         onClick={() => props.onSelect?.()}
       />
-      {disclosure}
+      {!leading && disclosure}
     </div>
   ) : (
     disclosure
@@ -95,10 +112,19 @@ export function RegionWorkspace(props: SoloWorkspaceProps) {
               onClick={props.onNewTask}
             />
           ),
-          props.onNewTask && (
-            // Also in the menu, where it is never hidden.
-            <MenuItem onClick={props.onNewTask}>New task</MenuItem>
-          ),
+          <>
+            {leading && (
+              <MenuItem onClick={leading.onActivate}>{leading.label}</MenuItem>
+            )}
+            {props.onNewTask && (
+              <MenuItem onClick={props.onNewTask}>New task</MenuItem>
+            )}
+          </>,
+          {
+            accessory,
+            metadata: props.headerMetadata,
+            hasInteractiveDecoration: !!leading || accessory != null,
+          },
         )}
       </NavigationCard>
     </div>,

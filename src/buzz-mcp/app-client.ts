@@ -76,6 +76,7 @@ export function appClient(
   };
   const handoff = agent.handoff;
   const threadsApart = agent.threadsApart;
+  const isTaskThread = agent.isTaskThread;
   const plugins = agent.plugins;
   const { settings, soloWorkspaces } = agent;
   const signal = options.callSignal ?? options.signal;
@@ -362,6 +363,14 @@ export function appClient(
           threadsApart: (channel: string) => {
             check();
             return threadsApart(channel);
+          },
+        }
+      : {}),
+    ...(isTaskThread
+      ? {
+          isTaskThread: (channel: string, root: string) => {
+            check();
+            return isTaskThread(channel, root);
           },
         }
       : {}),

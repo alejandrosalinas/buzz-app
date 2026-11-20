@@ -265,15 +265,19 @@ export class SoloNavigationService extends Service implements SoloNavigation {
         const signal = this.runtimes.get(source)?.controller.signal;
         if (!signal || signal.aborted)
           throw new Error("This Solo region binding has ended");
-        const stopView = subscribeView(binding.scope, (changedKey) => {
-          if (active() && (changedKey === undefined || changedKey === key)) {
-            try {
-              listener();
-            } catch {
-              /* A source listener cannot reject an accepted storage write. */
+        const stopView = subscribeView(
+          binding.scope,
+          () => {
+            if (active()) {
+              try {
+                listener();
+              } catch {
+                /* A source listener cannot reject an accepted storage write. */
+              }
             }
-          }
-        });
+          },
+          key,
+        );
         const stop = () => {
           stopView();
           signal.removeEventListener("abort", stop);

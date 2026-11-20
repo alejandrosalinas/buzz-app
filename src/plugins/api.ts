@@ -23,6 +23,10 @@ export type PluginManifest = Readonly<{
     agentHooks?: readonly string[];
     /** Offer execution targets for these native agent type keys. */
     agentExecution?: readonly string[];
+    /** Replace these sections of an agent's base instructions, by section
+     * ID, in the conversations the plugin manages. Only sections a plugin
+     * can replace are accepted. */
+    agentPromptSections?: readonly string[];
     commands?: readonly Readonly<{
       id: string;
       program: string;
@@ -99,6 +103,7 @@ declare module "@deepseek-ai/cordis" {
       revision: string;
       agentHooks?: readonly string[];
       agentExecution?: readonly string[];
+      agentPromptSections?: readonly string[];
     }>;
   }
 }

@@ -68,6 +68,16 @@ export class ByteLru<T> {
     this.evict();
     return true;
   }
+  /** Add as the least recently used entry: when it does not fit, it is the
+   * one evicted, never a newer one. */
+  setOldest(key: string, value: T, bytes = byteSize(value)): boolean {
+    this.delete(key);
+    if (bytes > this.maxBytes || this.maxEntries < 1) return false;
+    this.items = new Map([[key, { value, bytes }], ...this.items]);
+    this.bytes += bytes;
+    this.evict();
+    return this.items.has(key);
+  }
   /** Replace a present entry without making it the most recent. */
   replace(key: string, value: T, bytes = byteSize(value)): boolean {
     const entry = this.items.get(key);

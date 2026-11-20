@@ -1,4 +1,5 @@
 import { workflowLabel } from "../../features/relay/workflow-attribution";
+import { useChannelActivitySubscription } from "../../features/agents/use-channel-agent-activity";
 import { useIsPresent } from "motion/react";
 import { LightningIcon } from "../../shared/design-system/icons";
 import { useChannelIdentityNames } from "../../features/identity-names/react";
@@ -249,9 +250,13 @@ export function ChannelActivityPopover({
     const timer = window.setInterval(() => setNow(Date.now()), 1000);
     return () => window.clearInterval(timer);
   }, [open, activeAgents.length]);
+  const subscribeWork = useChannelActivitySubscription(
+    session.agentActivity,
+    channelId,
+  );
   const getTargets = useCallback(() => {
     if (!agentIds) return "[]";
-    const activity = session.agentActivity.snapshot();
+    const activity = session.agentActivity.snapshot(channelId);
     return JSON.stringify(
       agentIds
         .split(",")
@@ -262,9 +267,7 @@ export function ChannelActivityPopover({
   }, [session, channelId, agentIds]);
   const details = JSON.parse(
     useSyncExternalStore(
-      open && activeAgents.length
-        ? session.agentActivity.subscribe
-        : noSubscribe,
+      open && activeAgents.length ? subscribeWork : noSubscribe,
       getTargets,
       getTargets,
     ),

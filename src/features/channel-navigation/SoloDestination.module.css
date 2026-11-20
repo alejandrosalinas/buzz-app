@@ -80,3 +80,54 @@
 [data-solo-disclosure][aria-expanded="false"] svg {
   transform: rotate(-90deg);
 }
+
+.leading {
+  position: relative;
+  z-index: 1;
+  display: inline-grid;
+  grid-auto-flow: column;
+  flex: none;
+  margin-inline-start: var(--space-1);
+}
+
+.leading > button {
+  justify-content: center;
+  inline-size: var(--space-6);
+  block-size: var(--space-6);
+}
+
+/* The pointer reaches the caret as it appears. Keep the caret visible when a
+   move restores focus to it with the pointer outside the heading. */
+@media (hover: hover) and (pointer: fine) {
+  .leading > button {
+    grid-area: 1 / 1;
+  }
+
+  .leading > [data-solo-leading-action] {
+    pointer-events: none;
+  }
+
+  .leading > [data-solo-disclosure] {
+    opacity: 0;
+  }
+
+  .leading:has(> [data-solo-leading-action]:focus-visible) {
+    > [data-solo-leading-action] {
+      pointer-events: auto;
+    }
+    > [data-solo-disclosure] {
+      pointer-events: none;
+    }
+  }
+
+  .leading:has(> [data-solo-disclosure]:focus),
+  [class~="navigation-section-heading"]:is(:hover, :has(:focus-visible))
+    .leading:not(:has(> [data-solo-leading-action]:focus-visible)) {
+    > [data-solo-leading-action] {
+      opacity: 0;
+    }
+    > [data-solo-disclosure] {
+      opacity: 1;
+    }
+  }
+}

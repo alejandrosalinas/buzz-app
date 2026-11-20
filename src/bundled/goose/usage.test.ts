@@ -9,6 +9,7 @@ import { readUsage, sessionUsage } from "./usage";
 
 const agent = "c".repeat(64);
 const other = "d".repeat(64);
+const third = "e".repeat(64);
 const start = 1_800_000_000;
 const mention = {
   id: "1".repeat(64),
@@ -125,6 +126,90 @@ it("titles a session by its first prompt without Buzz's turn mark", () => {
     root: mention.id,
     title: "@Grok fix the build",
   });
+});
+
+it("reads the agent's sessions in the folders its conversations were given too, each once", async () => {
+  const saved = (sessionId: string, cwd: string): FakeSession => ({
+    sessionId,
+    title: `Grok · #general · ${sessionId}`,
+    cwd,
+    updatedAt: "2027-01-15T08:00:00Z",
+    conversation: [user(ask()), reply(start + 1, tokens(1, 2, 3, 0.5))],
+  });
+  const fake = fakeSpawn({
+    home: "/home/test",
+    history: [
+      saved("home", "/home/test/.buzz"),
+      saved("there", "/repos/worktree"),
+      saved("elsewhere", "/repos/other"),
+    ],
+  });
+  const sessions = await readUsage(
+    new GooseHistory(fake),
+    agent,
+    "~/.buzz",
+    Date.parse("2026-06-01T00:00:00Z"),
+    new AbortController().signal,
+    // One of them is the workspace itself.
+    ["/repos/worktree", "/home/test/.buzz"],
+  );
+  expect(sessions.map((session) => session.id).sort()).toEqual([
+    "home",
+    "there",
+  ]);
+  // The workspace's shared listing, and the agent's own of its folders.
+  expect(fake.processes).toHaveLength(2);
+});
+
+it("exports a workspace's sessions once while several agents with folders read it", async () => {
+  const saved = (sessionId: string, cwd: string, pubkey: string) => ({
+    sessionId,
+    title: `Grok · #general · ${sessionId}`,
+    cwd,
+    updatedAt: "2026-06-15T08:00:00Z",
+    conversation: [user(ask(pubkey)), reply(start + 1, tokens(1, 2, 3, 0.5))],
+  });
+  const goose = fakeSpawn({
+    home: "/home/test",
+    history: [
+      saved("mine", "/home/test/.buzz", agent),
+      saved("theirs", "/home/test/.buzz", other),
+      saved("my-folder", "/repos/mine", agent),
+      saved("their-folder", "/repos/theirs", other),
+    ],
+  });
+  const history = new GooseHistory(goose);
+  const read = (pubkey: string, folders: readonly string[]) =>
+    readUsage(
+      history,
+      pubkey,
+      "~/.buzz",
+      Date.parse("2026-06-01T00:00:00Z"),
+      new AbortController().signal,
+      folders,
+    ).then((sessions) => sessions.map((session) => session.id).sort());
+  // Some of them are given the workspace itself as a folder.
+  expect(
+    await Promise.all([
+      read(agent, ["/repos/mine", "/home/test/.buzz"]),
+      read(other, ["/repos/theirs"]),
+      read(third, ["~/.buzz", "/home/test/.buzz"]),
+    ]),
+  ).toEqual([["mine", "my-folder"], ["their-folder", "theirs"], []]);
+  // The workspace's shared listing, and one of each other folder: none of
+  // the workspace again.
+  expect(goose.geese).toHaveLength(3);
+  const exported = goose.geese.flatMap((one) =>
+    one.received
+      .filter((message) => message.method === "_goose/unstable/session/export")
+      .map((message) => (message.params as { sessionId: string }).sessionId),
+  );
+  expect(exported.sort()).toEqual([
+    "mine",
+    "my-folder",
+    "their-folder",
+    "theirs",
+  ]);
 });
 
 it("reads the agent's sessions in its workspace through goose, every page", async () => {

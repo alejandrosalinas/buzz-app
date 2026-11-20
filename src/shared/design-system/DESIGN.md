@@ -146,6 +146,13 @@ with square trigger corners so the hover fill follows the flat row dividers.
 The disclosure spans the group's inner width; its trigger and content retain the
 group's horizontal inset, so text has padding inside the hover fill. No divider
 separates the trigger from its expanded content.
+Use `Accordion variant="popout"` to widen the open card and its panel body
+for reading or editing. The trigger stays aligned with the collapsed rows.
+The open card supplies the border between adjoining disclosure
+rows. Use it on its own or directly inside a row-layout SettingsGroup. In a
+SettingsGroup, leave space around the group for the card to extend into.
+Callers supply the panel body and decide whether it scrolls. For a bounded
+reading area, provide a keyboard focus target and place actions below it.
 Standalone triggers use the settings container shape and spacing; the chevron
 is decorative, and the entire row expands the content. `Select variant="preference"` uses the same
 label and compact choice control without adding a group container.
@@ -530,15 +537,23 @@ Tab strips keep their own wider horizontal fade.
 
 Every sidebar heading row, including collapsible channel groups and Solo
 workspaces, is a `NavigationSectionHeading`. It is auto layout: the label fills
-and truncates, actions hug the trailing edge, and the row fills its list. Never
-position heading actions absolutely or reserve trailing padding for them; a
-row that must work at every sidebar width cannot depend on a fixed gap. Use
+and truncates, actions hug the trailing edge, and the row fills its list.
+Keep ordinary actions in flow. The passive metadata slot described below
+provides a reference for its overlay. Use
 `disclosure` when the label is the feature's own collapse trigger, and
 `revealActions` or `data-navigation-reveal` for quiet parts such as the chevron.
 Revealed parts show on hover, keyboard focus, an open heading menu or while
 one of them has focus, and always show on touch; a focused control is never
-invisible. Hidden actions take no width, like a hidden auto layout
-child, so a long label keeps its words at large text sizes and narrow widths. When a host already names a list, as
+invisible. Hidden actions take no width, so a long label keeps its words at
+large text sizes and narrow widths. A heading with an accessory keeps space
+for its quiet actions beside the accessory so all controls stay in place.
+When a heading has passive metadata, it defines a compact trailing hover
+target. Quiet controls appear on slot hover or whenever a control has focus.
+They can overlay an adjacent accessory. Without an accessory, the slot fits
+the full action strip and keeps it clear of the title. Touch keeps the actions
+and accessory side by side so each can be tapped. Metadata changes preserve
+the accessory and the native controls that appear in both layouts.
+When a host already names a list, as
 the sidebar's Team and Solo tabs do, omit its heading rather than hiding or
 overlaying it; any actions it still needs take a headingless heading row.
 Top-bar pills and picker options are not sidebar rows and keep their own recipes.

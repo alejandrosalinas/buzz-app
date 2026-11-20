@@ -88,7 +88,7 @@ export function ResizableSidebar({
           : { scope, width },
       );
     };
-    const stop = subscribeView(scope, update);
+    const stop = subscribeView(scope, update, VIEW);
     update();
     return stop;
   }, [scope]);

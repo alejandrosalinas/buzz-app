@@ -1539,6 +1539,41 @@ it("opens a relayed run around a linked message that joins it after the reveal",
   }
 });
 
+it("keeps the day divider above a relayed run that starts a day, open or closed", () => {
+  const { owner, updates, content } = activityFixture();
+  const later = 100 + 2 * 86_400;
+  try {
+    const [first, ...rest] = updates(3).map(
+      ({ audience: _audience, ...row }) => row,
+    );
+    if (!first) throw new Error("expected a first row");
+    const relayed = rest.map((row) => ({
+      ...row,
+      authorId: "owner",
+      createdAt: later,
+      content: `Notice\n\nRelayed ${row.id}`,
+      relayedFrom: { agent: "zerk", verified: true },
+    }));
+    const view = render(content([first, ...relayed]));
+    const dividers = () =>
+      [...view.container.querySelectorAll("[data-day]")].map((item) =>
+        item.getAttribute("data-day"),
+      );
+    // The page's first message draws no divider, so this one is the run's.
+    const closed = dividers();
+    expect(closed).toHaveLength(1);
+    fireEvent.click(
+      screen.getByRole("button", { name: /^Show 2 messages by zerk\./ }),
+    );
+    expect(
+      screen.getByRole("button", { name: "Retain activity-1" }),
+    ).toBeVisible();
+    expect(dividers()).toEqual(closed);
+  } finally {
+    owner.dispose();
+  }
+});
+
 it("folds a run of relayed messages into one line that opens to each message", () => {
   const { owner, updates, content } = activityFixture();
   try {

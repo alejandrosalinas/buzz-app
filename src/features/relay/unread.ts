@@ -929,9 +929,10 @@ export function createUnread({
       joined.has(conversationKey(channelId, parentId))
     );
   };
-  /** A reply that lights its thread in channel activity. */
+  /** A reply that lights its thread in channel activity. Also sending a reply
+   * to the channel shows it in the timeline, not in the viewer's threads. */
   const activityEvidence = (entry: Evidence) =>
-    entry.mentioned || entry.broadcast || conversation(entry);
+    entry.mentioned || conversation(entry);
   /** Top-level posts always count. A reply counts only in the viewer's own
    * conversations, or when it is a DM, mentions the viewer, or is broadcast.
    * Quiet agent messages never count. */
@@ -942,13 +943,21 @@ export function createUnread({
       entry.mentioned ||
       entry.broadcast ||
       conversation(entry));
-  /** Retained evidence cannot decide this reply's conversation yet. */
-  const undecided = (entry: Evidence, dm: boolean) =>
+  /** Retained evidence cannot tell whether this reply is in one of the
+   * viewer's conversations, and a lookup could. */
+  const unknownConversation = (entry: Evidence, dm: boolean) =>
     !entry.quiet &&
     !!entry.parentId &&
-    !relevant(entry, dm) &&
+    !dm &&
+    !entry.mentioned &&
+    !conversation(entry) &&
     chosen(entry) === undefined &&
     !lookups.get(conversationKey(entry.channelId, entry.parentId))?.done;
+  /** Retained evidence cannot decide whether this reply counts yet. A
+   * broadcast counts either way: its lookup decides only its attention, so
+   * its unread state never waits on it. */
+  const undecided = (entry: Evidence, dm: boolean) =>
+    !entry.broadcast && unknownConversation(entry, dm);
   /** `seen` is the row's `seen:` cut: only a channel row passes one. */
   function isUnread(
     entry: Evidence,
@@ -1170,6 +1179,8 @@ export function createUnread({
           ? "thread"
           : undefined;
   }
+  /** Read by its own receipt, never by a timestamp cut: attention, and
+   * broadcasts, which the timeline shows apart from their thread. */
   function priority(entry: Evidence, dm: boolean) {
     return !!category(entry, dm) || entry.broadcast;
   }
@@ -1205,6 +1216,8 @@ export function createUnread({
     const kind = category(entry, dm);
     // A queued or running lookup may still make this reply thread attention.
     // A read reply is never looked up, so it is undecided but not pending.
+    // A broadcast is never undecided: its lookup can still raise it from
+    // ineligible to thread attention, but its unread state never waits.
     const open = undecided(entry, dm);
     if (open) want(entry, dm);
     const pending =
@@ -1289,7 +1302,7 @@ export function createUnread({
       want(entry, dm);
       if (!isUnread(entry, state, dm)) continue;
       count++;
-      if (priority(entry, dm)) attention++;
+      if (category(entry, dm)) attention++;
       if (
         target.kind === "channel" &&
         (!entry.parentId || entry.broadcast) &&
@@ -1302,7 +1315,7 @@ export function createUnread({
       )
         continue;
       rowCount++;
-      if (priority(entry, dm)) rowAttention++;
+      if (category(entry, dm)) rowAttention++;
       if (entry.rootId && activityEvidence(entry)) rowThreads.add(entry.rootId);
     }
     const manual = reads.localUnread(key)
@@ -2170,12 +2183,14 @@ export function createUnread({
   function want(entry: Evidence, dm: boolean) {
     const { event, channelId, parentId, threadRootId } = entry;
     if (!parentId || event.pubkey === viewer) return;
-    // Activity groups unread thread replies by root, so fetch a root the
-    // sampled window dropped for a followed thread or an unread reply in it.
+    // Activity groups unread thread replies by root, and a thread read mark
+    // reads a broadcast only by its root, so fetch a root the sampled window
+    // dropped for a followed thread or for an unread reply in it that lights
+    // activity or shows in the timeline.
     const structuralRootId =
       !entry.rootId &&
       (chosen(entry) === true ||
-        ((entry.mentioned || entry.broadcast || conversation(entry)) &&
+        ((activityEvidence(entry) || entry.broadcast) &&
           isUnread(entry, reads.state(), dm)))
         ? threadRootId
         : undefined;
@@ -2186,7 +2201,8 @@ export function createUnread({
     if (
       lookups.has(key) ||
       (!structuralRecovery &&
-        (!undecided(entry, dm) || !afterFrontier(entry, reads.state(), dm)))
+        (!unknownConversation(entry, dm) ||
+          !afterFrontier(entry, reads.state(), dm)))
     )
       return;
     lookups.set(key, {

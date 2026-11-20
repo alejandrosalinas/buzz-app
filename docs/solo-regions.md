@@ -163,7 +163,7 @@ focus, hidden sections, and relay signing. DOM checks do not establish those fac
 Check `ui.ChannelGroup` before using it. Older hosts omit this optional component.
 It frames a joined stream or forum channel with its current name, icon, native
 channel menu, and details entry. Sources supply selection, disclosure state and
-label, and their task content. The title calls `onSelect`; only the caret calls
+label, and their task content. The title calls `onSelect` and the caret calls
 `onToggle`. `controls` identifies the body, which stays mounted while collapsed.
 Missing channels and channels without the viewer's membership render nothing.
 
@@ -208,3 +208,35 @@ enforces authorization and record capacity.
 Regions own their task filing; they do not add an ordinary Solo assignment for
 each task. Workspace selection in a task draft is personal metadata and is
 never part of the signed message.
+
+## Header accessories
+
+`ui.Workspace` and `ui.ChannelGroup` accept an optional
+`headerAccessory: ReactNode` beside their native controls. The accessory
+stays in place when native actions appear or the body collapses.
+It can supply a compact, accessible
+control with its own activation, independent of selection, disclosure and
+native actions. The region supplies its accessible name and behavior.
+Hosts that predate this prop ignore it.
+
+Both headers also accept optional `headerMetadata: ReactNode` for compact,
+non-interactive content such as a relative activity time. The host displays
+it at the trailing edge. Hovering that slot or focusing its controls reveals
+the native Actions button and, when available, the New task pencil. They
+overlay the metadata and can cover an adjacent accessory without shifting the
+header. Without an accessory, the slot fits both actions clear of the title.
+Touch shows the controls directly. New task also remains available in the menu.
+
+Both headers accept optional `headerLeading` with a non-interactive `icon`, an
+action `label`, and an `onActivate` callback. This moves the caret before the
+title and adds a workspace glyph to workspace titles. With a fine pointer, the icon and
+native caret share a slot. Hover reveals the caret, and keyboard focus reveals
+the focused button. Touch shows both buttons. The Actions menu also offers the
+leading action with the same label and callback. The title continues to select
+the workspace or channel.
+
+`headerLeading.wrapControls(controls)` can attach a hover anchor around the
+shared slot. Render the supplied controls once inside a non-interactive
+inline-flex wrapper that keeps their width. The host controls keep their own
+focus and activation. Providing the wrapper suppresses the host's disclosure
+tooltip. Render any popup outside the controls.

@@ -8,6 +8,7 @@ import {
 import { Avatar } from "../../shared/design-system/ui/Avatar";
 import { ThinkingBadge } from "../../shared/design-system/ui/agent-thinking/ThinkingBadge";
 import type { RelaySession } from "../relay/session";
+import { useChannelActivitySubscription } from "./use-channel-agent-activity";
 import "./agent-avatar.css";
 
 type AgentAvatarProps = ComponentProps<typeof Avatar> & {
@@ -30,9 +31,13 @@ function ActiveAgentAvatar({
   thinkingDescriptionId,
   ...props
 }: AgentAvatarProps) {
-  const activity = session?.agentActivity;
+  const activity = working === undefined ? session?.agentActivity : undefined;
+  const subscribe = useChannelActivitySubscription(
+    activity,
+    channelId || undefined,
+  );
   const getThinking = () => {
-    const snapshot = activity?.snapshot();
+    const snapshot = activity?.snapshot(channelId || undefined);
     return (
       working ??
       !!(
@@ -52,7 +57,7 @@ function ActiveAgentAvatar({
     );
   };
   const thinking = useSyncExternalStore(
-    activity?.subscribe ?? noSubscribe,
+    channelId ? subscribe : (activity?.subscribe ?? noSubscribe),
     getThinking,
     getThinking,
   );

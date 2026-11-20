@@ -1,10 +1,11 @@
 import { useSyncExternalStore } from "react";
 import type { RelaySession } from "../relay/session";
 import type { ChannelMessage } from "../relay/contracts";
+import { useChannelActivitySnapshot } from "../agents/use-channel-agent-activity";
 import { currentActivity, workingRequests } from "../agents/current-activity";
 import { useActivityTypingReplacement } from "../conversation/typing-presentation";
 const noSubscribe = () => () => {};
-const noActivity = () => undefined;
+
 const empty: ReturnType<RelaySession["typing"]["snapshot"]> = [];
 const noTyping = () => empty;
 
@@ -22,9 +23,9 @@ export function useActivityIndicator(
     (eligible && session?.typing?.subscribe) || noSubscribe,
     (eligible && session?.typing?.snapshot) || noTyping,
   );
-  const activity = useSyncExternalStore(
-    (eligible && session?.agentActivity?.subscribe) || noSubscribe,
-    (eligible && session?.agentActivity?.snapshot) || noActivity,
+  const activity = useChannelActivitySnapshot(
+    eligible ? session?.agentActivity : undefined,
+    row.channelId,
   );
   const represented = new Set(participants ?? [row.authorId]);
   const detail = eligible

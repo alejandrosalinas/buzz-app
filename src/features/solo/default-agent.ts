@@ -410,7 +410,7 @@ export function savedAgentStore(session: RelaySession, scope: string) {
       const view =
         typeof window === "undefined"
           ? () => {}
-          : subscribeView(scope, listener);
+          : subscribeView(scope, listener, KEY);
       const choices = subscribeSaved(listener);
       return () => {
         view();
@@ -433,7 +433,7 @@ export function useChosenAgent(scope: string) {
   return useSyncExternalStore(
     useCallback(
       (notify) => {
-        const view = subscribeView(scope, notify);
+        const view = subscribeView(scope, notify, KEY);
         const choices = subscribeSaved(notify);
         return () => {
           view();

@@ -12,7 +12,10 @@ const connected: LiveSnapshot = {
   status: "connected",
   routes: [{ id: "observer", status: "live", replay: "unknown" }],
 };
-function fixture(findMessage?: Parameters<typeof createAgentActivity>[4]) {
+function fixture(
+  findMessage?: Parameters<typeof createAgentActivity>[4],
+  local?: Parameters<typeof createAgentActivity>[5],
+) {
   vi.useFakeTimers();
   vi.setSystemTime(1800000000000);
   const observe = vi.fn();
@@ -23,6 +26,7 @@ function fixture(findMessage?: Parameters<typeof createAgentActivity>[4]) {
     (channel) => !(denied && channel === "a"),
     undefined,
     findMessage,
+    local,
   );
   const release = activity.queries.activate();
   activity.state(connected);
@@ -284,7 +288,49 @@ it("indexes every recognized channel in a raw batch without rewriting or assigni
   expect(f.snapshot().records[0]?.plaintext).toBe(JSON.stringify(raw));
   expect(Object.isFrozen(f.snapshot().records[0]?.channelIds)).toBe(true);
   expect(f.snapshot().records[1]?.channelIds).toEqual([]);
+  const batch = f.snapshot().records[0];
+  f.send(f.item("acp_read", "second"));
+  expect(f.activity.queries.snapshot("a").records).toEqual([
+    batch,
+    f.snapshot().records[2],
+  ]);
+  expect(f.activity.queries.snapshot("b").records).toEqual([batch]);
   f.activity.dispose();
+});
+
+it("skips idle ticks and publishes turn expiry only to its channel", async () => {
+  const work = vi.fn(() => []);
+  const f = fixture(undefined, {
+    scope: "test",
+    source: { work, subscribeWork: () => () => {} },
+  });
+  try {
+    f.send(f.item("turn_started"));
+    const expired = vi.fn();
+    const other = vi.fn();
+    const all = vi.fn();
+    f.activity.queries.subscribe(expired, "a");
+    f.activity.queries.subscribe(other, "b");
+    f.activity.queries.subscribe(all);
+    work.mockClear();
+
+    await vi.advanceTimersByTimeAsync(30000);
+    expect(f.snapshot().turns[0]?.state).toBe("working");
+    expect(work).not.toHaveBeenCalled();
+    expect(all).not.toHaveBeenCalled();
+
+    await vi.advanceTimersByTimeAsync(1000);
+    expect(f.activity.queries.snapshot("a").turns[0]?.state).toBe("unknown");
+    expect(all).toHaveBeenCalledTimes(1);
+    expect(expired).toHaveBeenCalledTimes(1);
+    expect(other).not.toHaveBeenCalled();
+
+    await vi.advanceTimersByTimeAsync(1000);
+    expect(work).toHaveBeenCalledTimes(1);
+    expect(all).toHaveBeenCalledTimes(1);
+  } finally {
+    f.activity.dispose();
+  }
 });
 
 const typingEvent = (root?: string, extra = {}) => ({
@@ -511,6 +557,10 @@ it("does not notify snapshot subscribers when typing pulses only refresh an unch
   ]);
   const listener = vi.fn();
   const unsubscribe = f.activity.queries.subscribe(listener);
+  const a = vi.fn();
+  const b = vi.fn();
+  f.activity.queries.subscribe(a, "a");
+  f.activity.queries.subscribe(b, "b");
   const before = f.snapshot();
   for (const id of ["a", "b", "a"]) {
     await vi.advanceTimersByTimeAsync(3000);
@@ -518,9 +568,14 @@ it("does not notify snapshot subscribers when typing pulses only refresh an unch
   }
   expect(listener).not.toHaveBeenCalled();
   expect(f.snapshot().typing).toBe(before.typing);
-  await vi.advanceTimersByTimeAsync(8000);
+  await vi.advanceTimersByTimeAsync(5000);
+  expect(a).not.toHaveBeenCalled();
+  expect(b).toHaveBeenCalledTimes(1);
+  await vi.advanceTimersByTimeAsync(3000);
   expect(f.snapshot().typing).toEqual([]);
   expect(listener).toHaveBeenCalledTimes(2); // Each scope expires on its own.
+  expect(a).toHaveBeenCalledTimes(1);
+  expect(b).toHaveBeenCalledTimes(1);
   unsubscribe();
   f.release();
 });

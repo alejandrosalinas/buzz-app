@@ -15,6 +15,7 @@ import {
   TableIcon,
   PresentationIcon,
   GlobeIcon,
+  SquaresFourIcon,
   ChatCircleIcon,
   ThreadIcon,
   HashIcon,
@@ -149,6 +150,7 @@ const icons = {
   document: FileTextIcon,
   spreadsheet: TableIcon,
   presentation: PresentationIcon,
+  plugin: SquaresFourIcon,
   buzz: ChatCircleIcon,
   chat: ChatCircleIcon,
   channel: HashIcon,
@@ -196,6 +198,7 @@ export function LinkLabel({
     else if (kind === "chat") label = "Chat";
     else if (kind === "message") label = "Message";
     else if (kind === "thread") label = "Thread";
+    else if (kind === "plugin") label = "Plugin";
     else if (kind === "buzz") label = "Buzz";
   }
   // The channel icon already supplies the visual hash.

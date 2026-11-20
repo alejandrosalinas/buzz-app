@@ -161,7 +161,7 @@ export function useSidebarView(
           contributionOrder: saved.contributionOrder,
         };
         setView(intent.current);
-      }),
+      }, ["channel-sidebar", "solo:collapsed-projects"]),
     [scope],
   );
   // The destination waiting for its entry to render.

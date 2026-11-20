@@ -398,7 +398,10 @@ export function PageTabs({
     ...(primaryTarget.threadId
       ? {
           kind: "thread" as const,
-          messageId: primaryTarget.messageId ?? primaryTarget.threadId,
+          messageId:
+            primaryTarget.messageId ??
+            primaryTarget.subthreadId ??
+            primaryTarget.threadId,
           rootId: primaryTarget.threadId,
         }
       : {
@@ -534,6 +537,7 @@ export function PageTabs({
                             key={JSON.stringify(primaryTarget)}
                             tab={primaryTab}
                             intro={workspace.intro}
+                            subthreadId={primaryTarget?.subthreadId}
                             latestRequest={latestRequest}
                             active={
                               secondary.selectedMain === "conversation" &&

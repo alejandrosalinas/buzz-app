@@ -154,6 +154,31 @@ it.each(["off", "removed", "edited", "unloaded", "interest paused"])(
     h.manager.stop();
   },
 );
+it("preserves accepted output across a harness change until the watch is invalidated", async () => {
+  const h = harness();
+  const watch = object();
+  const agents = [agent(watch)];
+  h.manager.reconcile("example/command", h.provider, agents);
+  await Promise.resolve();
+  h.inputs[0]?.emit("accepted");
+  const current = h.emit.mock.calls[0]?.[3] as () => boolean;
+  h.manager.reconcile("example/command", h.provider, agents, () => true);
+  expect(h.inputs[0]?.signal.aborted).toBe(false);
+  const changed = [{ ...agent(watch), type: "test/replacement" }];
+  h.manager.reconcile("example/command", h.provider, changed, () => true);
+  expect(h.inputs[0]?.signal.aborted).toBe(true);
+  expect(current()).toBe(true);
+  await Promise.resolve();
+  expect(h.provider.run).toHaveBeenCalledTimes(1);
+  h.manager.reconcile("example/command", h.provider, changed);
+  await vi.waitFor(() => expect(h.provider.run).toHaveBeenCalledTimes(2));
+  expect(current()).toBe(true);
+  h.manager.reconcile("example/command", h.provider, [agent(watch, false)]);
+  h.manager.reconcile("example/command", h.provider, agents);
+  expect(current()).toBe(false);
+  h.manager.stop();
+});
+
 it("records natural completion once and does not restart a completed registration", async () => {
   const h = harness(),
     watch = object(),

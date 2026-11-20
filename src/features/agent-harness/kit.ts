@@ -1,3 +1,4 @@
+import { readSubthread } from "../relay/subthread";
 // The Buzz side of an agent turn, for a harness a plugin brings: whether a
 // delivery is the harness's to act on and which conversation it goes to, the
 // prompts the bundled harnesses give, the agent's Buzz tools as an MCP
@@ -34,7 +35,8 @@ import { threadReference } from "../relay/thread-reference";
 import { MemoryReads, READ_TIMEOUT_MS } from "./core-memory";
 import { wakeAnchor, wakeLands } from "./plugin-wake";
 import { readAuthorNames } from "./author-names";
-import { ownerCanvas, readProject } from "./project";
+import { ownerCanvas, readProject, worksElsewhere } from "./project";
+import { placeOf } from "./sections/compose";
 
 /** Whether each thread is its own conversation, or the whole channel is one. */
 export type HarnessScope = "thread" | "channel";
@@ -47,6 +49,7 @@ export type HarnessConversation = Readonly<{
   channel: string;
   /** The thread's root, when the conversation is one thread. */
   root?: string;
+  sourceRoot?: string;
   /** Replies go at the channel's top level, as in a Solo chat. */
   topLevel: boolean;
   /** `#name`, `DM` or a short channel id, for titles. */
@@ -78,7 +81,9 @@ export type HarnessKit = Readonly<{
    * The owner can change the base prompt's sections in Settings, so build it
    * again before each turn and give the session the new text when it differs.
    * `tools: false` is for a session without the Buzz tools, whose final
-   * message the harness posts as its reply. */
+   * message the harness posts as its reply. `conversation` is the one the
+   * session is for: its prompt then has the sections a plugin replaced
+   * there, for an agent type with `conversationSections`. */
   systemPrompt(
     delivery: Delivery,
     options: Readonly<{
@@ -86,6 +91,7 @@ export type HarnessKit = Readonly<{
       cwd: string;
       instructions: string;
       tools?: boolean;
+      conversation?: HarnessConversation;
     }>,
   ): Promise<string>;
   /** The turn's prompt, for a session at `cursor`, the one its last prompt
@@ -210,7 +216,7 @@ export function harnessKit(sources: Sources): HarnessKit {
 
   return Object.freeze({
     async conversation(
-      { trigger, agent, channelId, signal }: Delivery,
+      { trigger, agent, channelId, signal, routeConversation }: Delivery,
       scope: HarnessScope,
     ) {
       if (
@@ -244,12 +250,31 @@ export function harnessKit(sources: Sources): HarnessKit {
       if (wake && !wakeLands(wake, topLevel)) return undefined;
       const found = summary(agent.key, channel);
       const dm = found?.channelType === "dm";
-      const root = threadReference(event)?.rootId ?? event.id;
-      const whole = topLevel || dm || scope === "channel";
+      const nativeRoot = threadReference(event)?.rootId ?? event.id;
+      const route =
+        !topLevel && !dm
+          ? await routeConversation?.({
+              source: {
+                channelId: channel,
+                ...(wake
+                  ? wake.root
+                    ? { root: wake.root }
+                    : {}
+                  : { root: nativeRoot }),
+              },
+              conversation: {
+                channelId: channel,
+                ...(scope === "thread" ? { root: nativeRoot } : {}),
+              },
+            })
+          : undefined;
+      const root = route?.parent ?? nativeRoot;
+      const whole = topLevel || dm || (!route && scope === "channel");
       const conversation: HarnessConversation = Object.freeze({
         key: whole ? channel : `${channel}/${root}`,
         channel,
         ...(whole ? {} : { root }),
+        ...(route ? { sourceRoot: route.root } : {}),
         topLevel,
         where: found?.name ? `#${found.name}` : dm ? "DM" : channel.slice(0, 8),
       });
@@ -266,7 +291,7 @@ export function harnessKit(sources: Sources): HarnessKit {
 
     async systemPrompt(
       { agent, team }: Delivery,
-      { scope, cwd, instructions, tools = true },
+      { scope, cwd, instructions, tools = true, conversation },
     ) {
       const memory = await sources.core(agent.key);
       const text = systemPrompt({
@@ -279,7 +304,12 @@ export function harnessKit(sources: Sources): HarnessKit {
         instructions,
         team: team ?? "",
         ...(memory === undefined ? {} : { memory }),
-        sections: agent.promptSections?.(),
+        sections: agent.promptSections?.(
+          conversation?.channel,
+          conversation?.root,
+        ),
+        // Without the conversation, the Session Model states the scope alone.
+        ...(conversation ? { place: placeOf(conversation.key) } : {}),
       });
       return tools ? text : `${text}\n\n${NO_TOOLS}`;
     },
@@ -293,7 +323,7 @@ export function harnessKit(sources: Sources): HarnessKit {
       const { key, channel: channelId, topLevel } = conversation;
       const ready = session(agent.key);
       const thread = threadReference(event);
-      const rootId = thread?.rootId ?? event.id;
+      const rootId = conversation.sourceRoot ?? thread?.rootId ?? event.id;
       const shown = parseCursor(options.cursor);
       // Sharing a session does not mean it has seen every thread in the
       // channel, so a channel conversation keeps a mark for each thread.
@@ -319,16 +349,30 @@ export function harnessKit(sources: Sources): HarnessKit {
                     ready.channelWrites.startingCanvas(channelId),
                   )
               : undefined,
+            // The plugin that manages the chat may say where its work happens.
+            worksElsewhere(undefined, agent.promptSections?.(channelId)),
           )
         : Promise.resolve(undefined);
       const threadRead = (thread || (resumed && !dm)) && !topLevel;
       let earlier: readonly EventData[] = [];
       if (ready && (thread || dm || topLevel || resumed))
         try {
+          const signal = AbortSignal.timeout(CONVERSATION_READ_TIMEOUT_MS);
           const events = await ready.read(
             threadRead
               ? [
-                  { ids: [rootId], "#h": [channelId], limit: 1 },
+                  {
+                    ids: [
+                      ...new Set([
+                        rootId,
+                        ...(conversation.sourceRoot
+                          ? [conversation.root ?? event.id]
+                          : []),
+                      ]),
+                    ],
+                    "#h": [channelId],
+                    limit: conversation.sourceRoot ? 2 : 1,
+                  },
                   {
                     kinds: CHAT,
                     "#h": [channelId],
@@ -337,7 +381,7 @@ export function harnessKit(sources: Sources): HarnessKit {
                   },
                 ]
               : [{ kinds: CHAT, "#h": [channelId], limit: CONTEXT_LIMIT + 1 }],
-            { signal: AbortSignal.timeout(CONVERSATION_READ_TIMEOUT_MS) },
+            { signal },
           );
           earlier = events
             .filter(
@@ -350,10 +394,21 @@ export function harnessKit(sources: Sources): HarnessKit {
                 (resumed || item.created_at <= event.created_at),
             )
             .sort((a, b) => a.created_at - b.created_at);
+          const { root, sourceRoot } = conversation;
+          if (root && sourceRoot && event.id !== root) {
+            earlier = (
+              await readSubthread(
+                earlier,
+                { channel: channelId, root: sourceRoot, anchor: root },
+                CHAT,
+                (filters) => ready.read(filters, { signal }),
+              )
+            ).events;
+          }
         } catch (error) {
+          earlier = [];
           console.warn("A harness could not read the conversation", error);
         }
-      // A session already has its own replies; a new one is shown them too.
       const unseen = earlier.filter(
         (item) =>
           item.created_at > since && (!since || item.pubkey !== agent.pubkey),
@@ -375,7 +430,17 @@ export function harnessKit(sources: Sources): HarnessKit {
         topLevel,
         channelLevel: topLevel && !solo,
         channel: { id: channelId, ...(name ? { name } : {}), dm },
-        ...(thread ? { thread } : {}),
+        ...(conversation.sourceRoot
+          ? {
+              thread: {
+                rootId: conversation.root ?? event.id,
+                parentId: conversation.root ?? event.id,
+              },
+              sourceRoot: conversation.sourceRoot,
+            }
+          : thread
+            ? { thread }
+            : {}),
         context: unseen,
         total: earlier.length + 1,
         names,
@@ -417,7 +482,13 @@ export function harnessKit(sources: Sources): HarnessKit {
               ...(solo ? { topLevel: true } : {}),
             }
           : conversation.root
-            ? { channel: conversation.channel, root: conversation.root }
+            ? {
+                channel: conversation.channel,
+                root: conversation.root,
+                ...(conversation.sourceRoot
+                  ? { sourceRoot: conversation.sourceRoot }
+                  : {}),
+              }
             : { channel: conversation.channel };
       const pubkey = agent.pubkey;
       const reads = () => ownerReads(sources.relay(agent.key), pubkey);
@@ -465,7 +536,19 @@ export function harnessKit(sources: Sources): HarnessKit {
           ["h", conversation.channel],
           ...(conversation.topLevel
             ? []
-            : [["e", threadReference(event)?.rootId ?? event.id, "", "reply"]]),
+            : [
+                ...(conversation.sourceRoot
+                  ? [["e", conversation.sourceRoot, "", "root"]]
+                  : []),
+                [
+                  "e",
+                  conversation.sourceRoot
+                    ? (conversation.root ?? event.id)
+                    : (threadReference(event)?.rootId ?? event.id),
+                  "",
+                  "reply",
+                ],
+              ]),
           ...(options.notifyOwner ? [["p", agent.owner]] : []),
         ],
       });

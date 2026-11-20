@@ -4,6 +4,8 @@ import type { MentionRefusal } from "../agents/owner-attestation";
 import type { RelaySession } from "../relay/session";
 import styles from "./Messages.module.css";
 
+import { useChannelActivitySubscription } from "../agents/use-channel-agent-activity";
+
 const noSubscribe = () => () => {};
 
 export function agentDeclineText(name: string, ownerOnly: boolean) {
@@ -25,21 +27,22 @@ export function AgentDeclineNotes({
   channelId: string;
   messageId: string;
 }) {
+  const subscribe = useChannelActivitySubscription(
+    session.agentActivity,
+    channelId,
+  );
   const read = () =>
     JSON.stringify(
-      (session.agentActivity?.snapshot().declined ?? [])
+      (session.agentActivity?.snapshot(channelId).declined ?? [])
         .filter(
           (row) => row.channelId === channelId && row.messageId === messageId,
         )
         .map((row) => [row.agent, row.refusal]),
     );
-  const declined = JSON.parse(
-    useSyncExternalStore(
-      session.agentActivity?.subscribe ?? noSubscribe,
-      read,
-      read,
-    ),
-  ) as [string, MentionRefusal][];
+  const declined = JSON.parse(useSyncExternalStore(subscribe, read, read)) as [
+    string,
+    MentionRefusal,
+  ][];
   return declined.length ? (
     <Notes session={session} scope={scope} agents={declined.map(([a]) => a)} />
   ) : null;

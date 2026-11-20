@@ -45,6 +45,7 @@ export const apply: PluginModule["apply"] = (ctx) => {
           navigation?.target.kind === "settings" &&
           navigation.target.route?.version === 1 &&
           (navigation.target.route.params === "invite" ||
+            navigation.target.route.params === "links" ||
             navigation.target.route.params === "direct")
             ? navigation.target.route.params
             : "members"

@@ -8,6 +8,7 @@ import {
   type AgentSessionRouter,
 } from "./session-admission";
 import { memoryStorage } from "./test-fakes";
+import { keypair, message } from "../relay/testing";
 
 const roots: Context[] = [];
 afterEach(async () => {
@@ -180,6 +181,66 @@ it("blocks admission after a failed reset until New completes", async () => {
   matches.mockReturnValue(true);
   const next = await f.admissions.prepare(request("after-recovery"));
   expect(next?.session.sessionKey).toBeTruthy();
+});
+
+it("pins an invocation route across retry and supplies it to rooted wakes", async () => {
+  const route = { root: source.root, parent: "d".repeat(64) };
+  const resolve = vi.fn<NonNullable<AgentSessionRouter["route"]>>(
+    async (input) => input.savedRoute ?? route,
+  );
+  const f = await setup({ route: resolve });
+  expect(await f.admissions.route(request("invoked"))).toEqual(route);
+  const restored = await setup({ route: resolve }, f.storage);
+  expect(
+    await restored.admissions.route(
+      { ...request("invoked"), resumed: true },
+      true,
+    ),
+  ).toEqual(route);
+  expect(resolve.mock.calls.at(-1)?.[0].savedRoute).toEqual(route);
+  expect(
+    await restored.admissions.route({
+      ...request("wake"),
+      source: { ...source, root: route.parent },
+    }),
+  ).toEqual(route);
+  expect(resolve.mock.calls.at(-1)?.[0].savedRoute).toEqual(route);
+  resolve.mockResolvedValueOnce({ ...route, parent: "e".repeat(64) });
+  await expect(restored.admissions.route(request("invoked"))).rejects.toThrow(
+    "cannot change",
+  );
+});
+
+it("does not save failed routing or move an invocation admitted before routing", async () => {
+  const route = vi
+    .fn<NonNullable<AgentSessionRouter["route"]>>()
+    .mockRejectedValueOnce(new Error("Task binding is not published"))
+    .mockResolvedValue({ root: source.root, parent: "d".repeat(64) });
+  const f = await setup({ route });
+  await expect(f.admissions.route(request("retry"))).rejects.toThrow(
+    "not published",
+  );
+  expect(
+    await f.admissions.route({ ...request("retry"), resumed: true }),
+  ).toEqual({
+    root: source.root,
+    parent: "d".repeat(64),
+  });
+  await f.admissions.prepare(request("legacy"));
+  expect(await f.admissions.route(request("legacy"))).toBeUndefined();
+  expect(route).toHaveBeenCalledTimes(2);
+});
+
+it("does not keep route receipts for ordinary mentions", async () => {
+  const event = message(keypair(), source.channelId, "Work", 100);
+  const input = { ...request(event.id), event };
+  const native = await setup();
+  expect(await native.admissions.route(input)).toBeUndefined();
+  expect([...native.storage.keys()]).toEqual([]);
+
+  const registered = await setup({ route: async () => undefined });
+  expect(await registered.admissions.route(input)).toBeUndefined();
+  expect([...registered.storage.keys()]).toEqual([]);
 });
 
 it("shares a logical community lifetime across sources and restores it without crossing memberships", async () => {

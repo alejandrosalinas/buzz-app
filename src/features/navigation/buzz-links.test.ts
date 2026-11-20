@@ -197,7 +197,7 @@ it("opens Git plugin links in Settings without a community or account", () => {
     section: "plugins",
     pluginImport: { repository: pluginRepository, reference: "release/stable" },
   };
-  expect(buzzLinkKind(pluginLink)).toBe("buzz");
+  expect(buzzLinkKind(pluginLink)).toBe("plugin");
   expect(buzzLinkTarget(pluginLink, scope)).toEqual(target);
   expect(deepLinkStep(pluginLink, { selected: null })).toEqual({
     open: target,

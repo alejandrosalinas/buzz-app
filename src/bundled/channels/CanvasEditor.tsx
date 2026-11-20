@@ -61,7 +61,7 @@ export function CanvasEditor({
   const [tab, setTab] = useState<"view" | "edit" | "history">("view");
   const key = `canvas-draft-v1:${channelId}`;
   const draftRevision = useSyncExternalStore(
-    useCallback((notify) => subscribeView(scope, notify), [scope]),
+    useCallback((notify) => subscribeView(scope, notify, key), [scope, key]),
     () => viewRevision(scope, key),
   );
   // Only edits are stored. When a stored draft disappears, another editor

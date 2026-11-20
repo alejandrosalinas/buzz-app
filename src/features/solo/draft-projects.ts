@@ -28,14 +28,13 @@ export function useSoloDraftProjects(
   const keys = JSON.stringify(["", ...projects]);
   const subscribe = useCallback(
     (notify: () => void) => {
-      const views = subscribeView(scope, (key) => {
-        if (
-          !key ||
+      const views = subscribeView(
+        scope,
+        notify,
+        (key) =>
           key === "solo:new-draft" ||
-          (key.startsWith("solo:project:") && key.endsWith(":new-draft"))
-        )
-          notify();
-      });
+          (key.startsWith("solo:project:") && key.endsWith(":new-draft")),
+      );
       const files = subscribeAttachmentDraftCounts(session, notify);
       return () => {
         views();

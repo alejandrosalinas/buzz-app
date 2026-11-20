@@ -110,7 +110,7 @@ test("section filters save activity windows and recover hidden channels", async 
   await page.keyboard.press("Escape");
   await page.keyboard.press("Escape");
   await active();
-  for (const days of [1, 7, 30, 90]) {
+  for (const days of [1, 3, 7, 30, 90]) {
     const name = `${days} ${days === 1 ? "day" : "days"}`;
     await page.getByRole("radio", { name, exact: true }).click();
     await expect(

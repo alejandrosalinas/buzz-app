@@ -141,7 +141,7 @@ export const STEER = "new-message-arrived-while-you-were-working";
 const EVENT_TAGS = new Set(["buzz-event", STEER]);
 
 /** Wrappers inside a base section's text: part of that text, not framing. */
-const INLINE = new Set(["owner-section"]);
+const INLINE = new Set(["owner-section", "plugin-section"]);
 
 /** Split top-level `<tag attrs>` … `</tag>` prompt framing; other text is kept. */
 export function promptSections(text: string): PromptSection[] {

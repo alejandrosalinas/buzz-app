@@ -3,6 +3,10 @@
 // workspace. Paths only mean something on this device, so each is kept here,
 // never on the relay. A folder is set once: harnesses find a session's
 // history by the folder it ran in, so moving it would lose the conversation.
+// The first session start and the assignment contend for the same record: the
+// start records the conversation as begun in the workspace, and whichever
+// saves first wins, so a folder is never given to a conversation that began
+// without it.
 import type { AgentKey } from "./membership";
 import type { AgentStore } from "./store";
 
@@ -10,6 +14,13 @@ import type { AgentStore } from "./store";
  * threads. */
 export const conversationKey = (channelId: string, root?: string) =>
   root ? `${channelId}/${root}` : channelId;
+
+/** What the record holds once the conversation started in the agent's
+ * workspace. A folder is an absolute path, so it never equals this. */
+const WORKSPACE = "workspace";
+
+export const ALREADY_STARTED =
+  "This conversation already started in the agent's workspace";
 
 const storageKey = (scope: string, agent: AgentKey, conversation: string) =>
   `buzz.agents.conversation-folder.v1:${JSON.stringify([scope, agent, conversation])}`;
@@ -22,7 +33,25 @@ export function conversationFolder(
   agent: AgentKey,
   conversation: string,
 ): string | undefined {
-  return store.get(storageKey(scope, agent, conversation)) ?? undefined;
+  const kept = store.get(storageKey(scope, agent, conversation));
+  return kept && kept !== WORKSPACE ? kept : undefined;
+}
+
+/** The folder the conversation's session starts in, if it was given one.
+ * Without one, this records that the conversation starts in the agent's
+ * workspace, so a folder given later is refused. Call it before the session
+ * starts. */
+export async function startingFolder(
+  store: AgentStore,
+  scope: string,
+  agent: AgentKey,
+  conversation: string,
+): Promise<string | undefined> {
+  const kept = await store.add(
+    storageKey(scope, agent, conversation),
+    WORKSPACE,
+  );
+  return kept === WORKSPACE ? undefined : kept;
 }
 
 /** Every folder the agent's conversations were given, by conversation. */
@@ -39,13 +68,15 @@ export function agentFolders(
       key.slice(key.indexOf(":") + 1),
     ) as string[];
     const folder = store.get(key);
-    if (conversation && folder) folders.set(conversation, folder);
+    if (conversation && folder && folder !== WORKSPACE)
+      folders.set(conversation, folder);
   }
   return folders;
 }
 
 /** Gives the conversation `folder`, an existing directory's resolved path.
- * Giving it the folder it has again is a no-op; any other folder rejects. */
+ * Giving it the folder it has again is a no-op; any other folder rejects, as
+ * does any folder for a conversation that started in the workspace. */
 export async function assignConversationFolder(
   store: AgentStore,
   scope: string,
@@ -54,6 +85,7 @@ export async function assignConversationFolder(
   folder: string,
 ): Promise<string> {
   const kept = await store.add(storageKey(scope, agent, conversation), folder);
+  if (kept === WORKSPACE) throw new Error(ALREADY_STARTED);
   if (kept !== folder)
     throw new Error(`This conversation already works in ${kept}`);
   return kept;

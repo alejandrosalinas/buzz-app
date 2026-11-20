@@ -1,14 +1,19 @@
 // @vitest-environment jsdom
 import "@testing-library/jest-dom/vitest";
-import { cleanup, render, screen } from "@testing-library/react";
-import { afterEach, expect, it } from "vitest";
+import { act, cleanup, render, screen } from "@testing-library/react";
+import { memo } from "react";
+import { afterEach, expect, it, vi } from "vitest";
 import { stubAvatarBrowserApis } from "../agents/avatar-testing";
 import type { ChannelMessage, Profile } from "../relay/contracts";
 import type { RelaySession } from "../relay/session";
+import { formatFullTimestamp } from "../../shared/datetime";
 import { RelayedRunPreview } from "./RelayedRunPreview";
 
 stubAvatarBrowserApis();
-afterEach(cleanup);
+afterEach(() => {
+  cleanup();
+  vi.restoreAllMocks();
+});
 
 const subscribe = () => () => {};
 const profiles = new Map<string, Profile>([
@@ -20,7 +25,10 @@ const session = {
   channels: {
     list: () => ({
       status: "ready",
-      channels: [{ id: "source", name: "rebase", channelType: "stream" }],
+      channels: [
+        { id: "source", name: "rebase", channelType: "stream" },
+        { id: "direct", name: "Alice", channelType: "dm" },
+      ],
     }),
     subscribeList: subscribe,
   },
@@ -75,11 +83,16 @@ it("leads with the latest message and how many more came from its one chat", () 
     relayed("a", "mira", "Starting on the row", "source"),
     relayed("b", "zerk", "Rebase on main first", "source"),
   ]);
+  const trigger = screen.getByRole("button", {
+    name: /^Show 2 messages from #rebase by Zerk and Mira\. Latest, Zerk: Rebase on main first, /,
+  });
+  expect(trigger).toBeVisible();
+  // Its time is hidden from assistive technology, so the label reads the date.
   expect(
-    screen.getByRole("button", {
-      name: /^Show 2 messages from #rebase by Zerk and Mira\. Latest, Zerk: Rebase on main first, /,
-    }),
-  ).toBeVisible();
+    trigger
+      .getAttribute("aria-label")
+      ?.endsWith(`, ${formatFullTimestamp(1_000)}`),
+  ).toBe(true);
   expect(screen.getByRole("link", { name: /rebase/ })).toBeVisible();
   expect(view.container).toHaveTextContent("Rebase on main first");
   expect(view.container).toHaveTextContent("+1");
@@ -142,4 +155,64 @@ it("names the one chat once, not on each line inside", () => {
     />,
   );
   expect(sameSource(view)).toBeNull();
+});
+
+it("marks a direct message's from, which a narrow conversation keeps", () => {
+  const view = preview([
+    relayed("a", "mira", "Starting on the row", "direct"),
+    relayed("b", "zerk", "Rebase on main first", "direct"),
+  ]);
+  expect(
+    screen.getByRole("button", {
+      name: /^Show 2 messages from Alice by Zerk and Mira\./,
+    }),
+  ).toBeVisible();
+  expect(
+    view.container.querySelector('[data-relayed-from="dm"]'),
+  ).toHaveTextContent("from");
+});
+
+it("renames a mounted group's latest date when the time zone changes", async () => {
+  const NativeFormat = Intl.DateTimeFormat;
+  let timeZone = "Europe/London";
+  function dateTimeFormat(
+    locale?: Intl.LocalesArgument,
+    options?: Intl.DateTimeFormatOptions,
+  ) {
+    return new NativeFormat(locale ?? "en-US", { timeZone, ...options });
+  }
+  vi.spyOn(Intl, "DateTimeFormat").mockImplementation(dateTimeFormat);
+  // Memoized, like a timeline row whose parent does not re-render.
+  const Row = memo(function Row() {
+    return (
+      <RelayedRunPreview
+        run={{
+          ids: ["a", "b"],
+          relayed: [
+            relayed("a", "zerk", "One", "source"),
+            relayed("b", "mira", "Two", "source"),
+          ],
+        }}
+        session={session}
+        profiles={profiles}
+        media={() => undefined}
+        expanded={false}
+        onToggle={() => {}}
+        renderHistory={(row) => row.id}
+        onOpenLink={() => false}
+      />
+    );
+  });
+  render(<Row />);
+  const name = () =>
+    screen
+      .getByRole("button", { name: /^Show 2 messages/ })
+      .getAttribute("aria-label");
+  expect(name()).toMatch(/GMT|BST/);
+  await Promise.resolve();
+  timeZone = "America/Los_Angeles";
+  act(() => {
+    document.dispatchEvent(new Event("visibilitychange"));
+  });
+  expect(name()).toMatch(/PDT|PST/);
 });

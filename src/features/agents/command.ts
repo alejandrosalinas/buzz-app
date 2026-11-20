@@ -39,6 +39,7 @@ export async function spawnAgentCommand(
   });
   let connection: HostMcpServer | undefined;
   let process: HostProcess | undefined;
+  let started: HostProcess | undefined;
   const stop = () => {
     lifetime.removeEventListener("abort", stop);
     unsubscribe();
@@ -58,7 +59,7 @@ export async function spawnAgentCommand(
       ...options,
       mcp: { url: connection.url, headers: connection.headers },
     });
-    process = running;
+    started = process = running;
     host.check();
     lifetime.throwIfAborted();
     void running.exited.then(stop);
@@ -67,7 +68,12 @@ export async function spawnAgentCommand(
       kill: stop,
     });
   } catch (error) {
-    await stop();
+    try {
+      await stop();
+    } finally {
+      // A late handle can still be exiting after the stop request returns.
+      await started?.exited;
+    }
     throw error;
   }
 }

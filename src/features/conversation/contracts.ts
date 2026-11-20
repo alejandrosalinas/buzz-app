@@ -464,6 +464,8 @@ export type ComposerCompletion = Readonly<{
 export type PageTabTarget = {
   channelId: string;
   threadId?: string;
+  /** Invocation branch within threadId, for a page-owned task conversation. */
+  subthreadId?: string;
   messageId?: string;
   unreadSince?: number;
 };

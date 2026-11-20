@@ -43,25 +43,26 @@ test("reload restores the selected conversation/groups before handshake and upda
 }) => {
   const beta = app.histories.get("primary/beta");
   const last = beta.at(-1);
+  const image = "https://primary.example/media/startup.svg";
   beta[beta.length - 1] = app.sign({
     kind: 9,
     content: last.content,
     created_at: last.created_at,
     tags: [
       ...last.tags,
-      [
-        "imeta",
-        "url https://image.test/startup.svg",
-        "m image/svg+xml",
-        "dim 640x400",
-      ],
+      ["imeta", `url ${image}`, "m image/svg+xml", "dim 640x400"],
     ],
   });
-  await page.route("https://image.test/startup.svg", (route) =>
-    route.fulfill({
-      contentType: "image/svg+xml",
-      body: '<svg xmlns="http://www.w3.org/2000/svg" width="640" height="400"><rect width="640" height="400" fill="teal"/></svg>',
-    }),
+  // Relay media needs the connection's proxy on web, so the cached session
+  // shows a sized placeholder until the handshake completes.
+  await page.route(
+    (url) =>
+      url.pathname.endsWith("/media") && url.searchParams.get("url") === image,
+    (route) =>
+      route.fulfill({
+        contentType: "image/svg+xml",
+        body: '<svg xmlns="http://www.w3.org/2000/svg" width="640" height="400"><rect width="640" height="400" fill="teal"/></svg>',
+      }),
   );
   await open(page, app);
   await page.getByRole("button", { name: "Beta", exact: true }).click();

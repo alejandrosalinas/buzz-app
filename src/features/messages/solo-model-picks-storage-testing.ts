@@ -68,12 +68,16 @@ export function subscribeModelPicks(scope: string, listener: () => void) {
     }
   };
   let before = snapshot();
-  return subscribeView(scope, () => {
-    const after = snapshot();
-    if (after === before) return;
-    before = after;
-    listener();
-  });
+  return subscribeView(
+    scope,
+    () => {
+      const after = snapshot();
+      if (after === before) return;
+      before = after;
+      listener();
+    },
+    (key) => key.startsWith("solo:model-picks:"),
+  );
 }
 export const publishModelPicks = (_scope: string) => {};
 export async function purgeSoloModelPicks(_scope: string) {}

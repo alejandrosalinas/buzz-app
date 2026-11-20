@@ -1,10 +1,12 @@
 import { describe, expect, it, vi } from "vitest";
+import { matchFilters } from "nostr-tools/filter";
 import { RESUMED_PROMPT } from "../../buzz-mcp/prompt";
 import { fromOwner } from "../agents/owner-attestation";
 import type { AgentHandle, Delivery } from "../agents/service";
 import { eventDto, type EventData, type RelayEvent } from "../relay/events";
 import type { RelayData } from "../relay/service";
 import { keypair, signed } from "../relay/testing";
+import { workspaceCanvas } from "../solo/workspace";
 import { harnessKit } from "./kit";
 
 const self = "c".repeat(64);
@@ -47,6 +49,8 @@ function setup(
     thread?: readonly EventData[];
     core?: string | null;
     notes?: readonly string[];
+    /** The Canvas of the chat, as one its owner is still creating has it. */
+    canvas?: string;
   }> = {},
 ) {
   const read = vi.fn(
@@ -77,7 +81,7 @@ function setup(
     },
     names: { resolve: (pubkey: string) => (pubkey === alice ? "Alice" : "") },
     profiles: { ensure: vi.fn(async () => {}), snapshot: () => new Map() },
-    channelWrites: { startingCanvas: () => undefined },
+    channelWrites: { startingCanvas: () => options.canvas },
     canvas: { available: false, read: vi.fn(async () => null) },
     agentMemories: { open: vi.fn() },
     workflowAuthority: workflowKey.pubkey,
@@ -380,6 +384,48 @@ describe("harnessKit.turnPrompt", () => {
   });
 });
 
+it("restores direct and nested task corrections for a rooted harness wake", async () => {
+  const root = message("1", "Source requirements");
+  const child = (id: string, parent: string, content: string) =>
+    message(id, content, {
+      tags: [
+        ["h", channel],
+        ["e", root.id, "", "root"],
+        ["e", parent, "", "reply"],
+      ],
+    });
+  const anchor = child("2", root.id, "Start task");
+  const direct = child("3", anchor.id, "DIRECT_CORRECTION");
+  const nested = child("4", direct.id, "NESTED_CORRECTION");
+  const unrelated = child("5", root.id, "UNRELATED_DISCUSSION");
+  const { kit, delivery, read } = setup();
+  read.mockImplementation(async (filters) =>
+    [root, anchor, direct, nested, unrelated].filter((event) =>
+      matchFilters(filters as Parameters<typeof matchFilters>[0], event),
+    ),
+  );
+  const d = delivery(
+    {
+      type: "plugin",
+      plugin: "test",
+      id: "9".repeat(64),
+      channel,
+      root: anchor.id,
+      text: "Resume task",
+      at: 200_000,
+    },
+    {
+      routeConversation: async () => ({ root: root.id, parent: anchor.id }),
+    },
+  );
+  const conversation = await kit.conversation(d, "thread");
+  if (!conversation) throw new Error("Not admitted");
+  const prompt = await kit.turnPrompt(d, conversation);
+  expect(prompt.text).toContain("DIRECT_CORRECTION");
+  expect(prompt.text).toContain("NESTED_CORRECTION");
+  expect(prompt.text).not.toContain("UNRELATED_DISCUSSION");
+});
+
 describe("harnessKit.systemPrompt", () => {
   it("gives the agent its instructions, team and core memory", async () => {
     const { kit, delivery } = setup({ core: "Remember the milk." });
@@ -426,6 +472,41 @@ describe("harnessKit.systemPrompt", () => {
     );
   });
 
+  it("asks for the sections of the conversation the session is for", async () => {
+    const { kit, agent, delivery } = setup();
+    const asked: unknown[] = [];
+    const d = delivery(
+      { type: "mention", event: reply("2", "1", "x") },
+      {
+        agent: {
+          ...agent,
+          promptSections: (channel?: string, root?: string) => {
+            asked.push([channel, root]);
+            return channel
+              ? { plugin: { id: "example", sections: { progress: "Quiet." } } }
+              : {};
+          },
+        } as unknown as Delivery["agent"],
+      },
+    );
+    const conversation = await kit.conversation(d, "thread");
+    if (!conversation) throw new Error("not admitted");
+    const options = { scope: "thread", cwd: "~", instructions: "" } as const;
+    const text = await kit.systemPrompt(d, { ...options, conversation });
+    expect(asked).toEqual([[conversation.channel, conversation.root]]);
+    expect(text).toContain(
+      '## Progress\n<plugin-section id="progress" plugin="example">\nQuiet.\n</plugin-section>',
+    );
+    expect(text).toContain("This session is one thread");
+    // Without the conversation, the prompt has no plugin's sections, and its
+    // Session Model states the scope alone.
+    const unnamed = await kit.systemPrompt(d, options);
+    expect(unnamed).not.toContain("</plugin-section>\n");
+    expect(unnamed).not.toContain("This session is one thread");
+    expect(unnamed).toContain("each thread gets its own independent");
+    expect(asked[1]).toEqual([undefined, undefined]);
+  });
+
   it("tells a session without tools that its final message is its reply", async () => {
     const { kit, delivery } = setup();
     const text = await kit.systemPrompt(
@@ -457,6 +538,38 @@ describe("harnessKit.reply", () => {
         ],
       },
     ]);
+  });
+
+  it("reads a Solo chat's Canvas folders as context where a plugin says where the work happens", async () => {
+    const { kit, delivery, agent } = setup({
+      type: "solo",
+      canvas: workspaceCanvas({
+        folders: ["~/app"],
+        worktree: { location: "~/trees", baseBranch: "main" },
+        canvas: "Use tokens.",
+      }),
+    });
+    const d = delivery({ type: "mention", event: message("1", "go") });
+    const conversation = await kit.conversation(d, "thread");
+    if (!conversation) throw new Error("not admitted");
+    const sections = vi.fn((_channel?: string) => ({ owner: {} }));
+    Object.assign(agent, { promptSections: sections });
+    expect((await kit.turnPrompt(d, conversation)).text).toContain(
+      "This chat's work happens in these folders, not your own workspace: `~/app`, `~/trees`.",
+    );
+    sections.mockReturnValue({
+      owner: {},
+      plugin: {
+        id: "example",
+        sections: { "working-location": "Work in the task's folder." },
+      },
+    } as never);
+    const { text } = await kit.turnPrompt(d, conversation);
+    expect(text).toContain(
+      "relevant to this chat: `~/app`, `~/trees`. They are for reading.",
+    );
+    expect(text).not.toContain("create a new worktree");
+    expect(sections).toHaveBeenLastCalledWith(channel);
   });
 
   it("posts at a Solo chat's top level", async () => {
@@ -561,3 +674,42 @@ describe("harnessKit.tools", () => {
     );
   });
 });
+
+it.each(["thread", "channel"] as const)(
+  "isolates a routed %s harness and keeps its replies under the invocation",
+  async (scope) => {
+    const f = setup();
+    const event = reply("2", "1", "go");
+    const d = f.delivery(
+      { type: "mention", event },
+      {
+        routeConversation: async () => ({
+          root: "1".repeat(64),
+          parent: event.id,
+        }),
+      },
+    );
+    const first = await f.kit.conversation(d, scope);
+    if (!first) throw new Error("not admitted");
+    const next = await f.kit.conversation(
+      f.delivery(
+        { type: "mention", event: reply("3", "1", "continue") },
+        {
+          routeConversation: async () => ({
+            root: "1".repeat(64),
+            parent: event.id,
+          }),
+        },
+      ),
+      scope,
+    );
+    expect(first.key).toBe(`${channel}/${event.id}`);
+    expect(next?.key).toBe(first.key);
+    await f.kit.reply(f.agent, first, "Work");
+    expect(f.published[0]?.tags).toEqual([
+      ["h", channel],
+      ["e", "1".repeat(64), "", "root"],
+      ["e", event.id, "", "reply"],
+    ]);
+  },
+);

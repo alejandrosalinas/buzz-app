@@ -364,7 +364,7 @@ function InboxList({
     setFilter(route);
   }, [navigation]);
   const subscribeFilters = useCallback(
-    (listener: () => void) => subscribeView(viewScope, listener),
+    (listener: () => void) => subscribeView(viewScope, listener, filtersKey),
     [viewScope],
   );
   const filtersRevision = useSyncExternalStore(subscribeFilters, () =>

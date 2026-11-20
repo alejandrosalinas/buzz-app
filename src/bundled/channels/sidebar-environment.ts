@@ -14,7 +14,11 @@ export type WorkspaceSidebarComposition = Readonly<{
   collapsed: readonly string[];
   toggle(section: string, open: boolean): void;
   registerFrame(section: string): () => void;
-  newAction(workspace: string, name: string): ReactNode;
+  newAction(
+    workspace: string,
+    name: string,
+    menuAnchor?: RefObject<HTMLButtonElement | null>,
+  ): ReactNode;
 }>;
 
 export type MessagesSidebarState = Readonly<{

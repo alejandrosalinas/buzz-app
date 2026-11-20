@@ -137,6 +137,20 @@ export async function threadSample(
         !filter.depth_limit &&
         (filter.authors || (filter.ids && !filter["#h"])),
     );
+  // Rows and bylines' profile reads share status coverage, so no open asks
+  // for an author's status twice.
+  const statusAuthors = new Set<string>();
+  const statusRead = (filter: ReadFilter | undefined) => {
+    if (!filter) return;
+    assert.deepEqual(filter.kinds, [30315]);
+    assert.deepEqual(filter["#d"], ["general"]);
+    assert.equal(filter.limit, filter.authors?.length);
+    assert.ok(filter.limit && filter.limit <= 100);
+    for (const id of filter.authors ?? []) {
+      assert.ok(!statusAuthors.has(id), "status read twice");
+      statusAuthors.add(id);
+    }
+  };
   let fixtureError: unknown;
   const server = createServer(async (request, response) => {
     try {
@@ -168,12 +182,11 @@ export async function threadSample(
         events = [...data.headRows, data.head];
       } else if (first?.kinds?.includes(30315)) {
         assert.equal(filters.length, 1);
-        assert.deepEqual(first["#d"], ["general"]);
-        assert.equal(first.limit, first.authors?.length);
-        assert.ok(first.limit && first.limit <= 100);
+        statusRead(first);
         events = [];
       } else if (first?.kinds?.includes(0)) {
-        assert.equal(filters.length, 1);
+        assert.ok(filters.length <= 2);
+        statusRead(filters[1]);
         assert.ok(
           first.authors?.every((id) =>
             [...data.profiles, data.headProfile].some((p) => p.pubkey === id),
@@ -321,6 +334,7 @@ export async function threadSample(
 
     async function open(mode: "cold" | "warm") {
       owner.session.profiling.clear();
+      statusAuthors.clear();
       const start = performance.now();
       const cpu = process.cpuUsage();
       const mounted = mount(owner.session, "a", data.root.id);
@@ -392,8 +406,12 @@ export async function threadSample(
           mode === "cold" ? 1 : 0,
         );
         assert.equal(
-          trace.filter((r) => r.filters.length === 2 && !lookup(r.filters))
-            .length,
+          trace.filter(
+            (r) =>
+              r.filters.length === 2 &&
+              !lookup(r.filters) &&
+              !r.filters[0]?.kinds?.includes(0),
+          ).length,
           4,
           "three data pages plus empty continuation",
         );

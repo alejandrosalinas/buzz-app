@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { spawnSync } from "node:child_process";
+import { execFile, spawnSync } from "node:child_process";
 import {
   mkdirSync,
   mkdtempSync,
@@ -10,6 +10,7 @@ import {
 import { tmpdir } from "node:os";
 import { join, posix } from "node:path";
 import { fileURLToPath } from "node:url";
+import { promisify } from "node:util";
 import test from "node:test";
 import { parse } from "yaml";
 import { imageEngines } from "../../scripts/check-browser-image.mjs";
@@ -84,15 +85,25 @@ test("native protection produces upload evidence and preserves a failed test sta
   }
 });
 
-test("Linux shards and macOS recording discover every CI functional test/project exactly once", (t) => {
+test("Linux shards and macOS recording discover every CI functional test/project exactly once", {
+  concurrency: 3,
+}, async (t) => {
   const command = browser.match(
     /^ {8}run: .+ -- (\.\/bin\/pnpm test:browser:ci .+)$/m,
   )?.[1];
   assert.ok(command, "functional invocation must exist");
-  const discover = (args) => {
-    const report = JSON.parse(
-      run("pnpm", ["--silent", ...args, "--list", "--reporter=json"]),
+  const discover = async (args) => {
+    const { stdout } = await promisify(execFile)(
+      "pnpm",
+      ["--silent", ...args, "--list", "--reporter=json"],
+      {
+        cwd: fileURLToPath(new URL("../../", import.meta.url)),
+        encoding: "utf8",
+        timeout: 180_000,
+        maxBuffer: 16 * 1024 * 1024,
+      },
     );
+    const report = JSON.parse(stdout);
     assert.deepEqual(report.errors, []);
     const collect = (suites) =>
       suites.flatMap((suite) => [
@@ -109,7 +120,7 @@ test("Linux shards and macOS recording discover every CI functional test/project
       ]);
     return collect(report.suites);
   };
-  const expected = discover([
+  const expected = await discover([
     "test:browser",
     "--project",
     "chromium",
@@ -121,20 +132,25 @@ test("Linux shards and macOS recording discover every CI functional test/project
   ]);
   assert.ok(expected.length > 0);
   const actual = [];
-  for (const { engine, shard, shards } of browserJobs()) {
-    // Exercise the actual workflow command, including its shard denominator.
-    const expanded = command
-      .replaceAll(/\$\{\{ matrix\.engine \}\}/g, engine)
-      .replaceAll(/\$\{\{ matrix\.shard \}\}/g, shard)
-      .replaceAll(/\$\{\{ matrix\.shards \}\}/g, shards);
-    const selected = discover(
-      expanded.replace(/^\.\/bin\/pnpm /, "").split(/\s+/),
-    );
-    assert.ok(selected.length > 0, `${engine}/${shard} must select tests`);
-    assert.ok(selected.every((id) => id.startsWith(`${engine}:`)));
-    actual.push(...selected);
-    t.diagnostic(`${engine}/${shard}: ${selected.length} functional tests`);
-  }
+  // Node owns the bounded scheduling and subtest failure reporting.
+  await Promise.all(
+    browserJobs().map(({ engine, shard, shards }) =>
+      t.test(`${engine}/${shard}`, async () => {
+        // Exercise the actual workflow command, including its shard denominator.
+        const expanded = command
+          .replaceAll(/\$\{\{ matrix\.engine \}\}/g, engine)
+          .replaceAll(/\$\{\{ matrix\.shard \}\}/g, shard)
+          .replaceAll(/\$\{\{ matrix\.shards \}\}/g, shards);
+        const selected = await discover(
+          expanded.replace(/^\.\/bin\/pnpm /, "").split(/\s+/),
+        );
+        assert.ok(selected.length > 0, `${engine}/${shard} must select tests`);
+        assert.ok(selected.every((id) => id.startsWith(`${engine}:`)));
+        actual.push(...selected);
+        t.diagnostic(`${engine}/${shard}: ${selected.length} functional tests`);
+      }),
+    ),
+  );
   const recording = parse(workflow).jobs.media_recorder.steps.find(
     (step) => step.name === "Recording journeys",
   );
@@ -144,7 +160,7 @@ test("Linux shards and macOS recording discover every CI functional test/project
     / -- (\.\/bin\/pnpm test:browser .+)$/,
   )?.[1];
   assert.ok(recordingCommand, "macOS must execute the recording cases");
-  const mac = discover(
+  const mac = await discover(
     recordingCommand.replace(/^\.\/bin\/pnpm /, "").split(/\s+/),
   );
   assert.ok(mac.length > 0, "macOS recording must select tests");

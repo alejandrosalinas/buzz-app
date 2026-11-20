@@ -327,6 +327,660 @@ appTest.describe("workspace composition", () => {
   );
 });
 
+appTest.describe("Solo header accessories", () => {
+  appTest.use({
+    productionBroker: true,
+    savedSidebar: [{ id: "other", name: "Other", order: 1 }],
+    channelIds: ["alpha", "beta", "gamma"],
+    channelNames: { alpha: "Alpha", beta: "Beta", gamma: "Gamma" },
+    soloChannels: ["beta"],
+    ownSoloChannels: ["beta"],
+    historyCounts: { alpha: 0, beta: 0, gamma: 0 },
+  });
+
+  const admitNewTask = async (page) => {
+    await page.route("**/api/relay/*/session", async (route) => {
+      const response = await route.fetch();
+      const session = await response.json();
+      await route.fulfill({
+        response,
+        json: { ...session, writeKinds: [...session.writeKinds, 9007] },
+      });
+    });
+  };
+
+  // Real hit testing catches an accessory covered by the workspace selection
+  // target. Text truncation, the trailing swap and focus use browser layout.
+  appTest(
+    "keeps optional controls usable in collapsed headings",
+    async ({ page, app }) => {
+      // The layout must fit the New task button when the relay admits chat starts.
+      await admitNewTask(page);
+      await page.goto(
+        `${app.origin}/?solo-region-fixture&compose-workspaces&workspace-hit-targets&header-accessories`,
+      );
+      await openPage(page, "Messages");
+      const sidebar = page.getByRole("complementary", { name: "Sidebar" });
+      const resize = page.getByRole("separator", { name: "Resize sidebar" });
+      await resize.dblclick();
+      await expect(resize).toHaveAttribute("aria-valuenow", "260");
+      for (const [selector, title] of [
+        ['[data-solo-workspace="other"]', "Other"],
+        ['[data-solo-channel-group="gamma"]', "Gamma"],
+      ]) {
+        const group = sidebar.locator(selector);
+        const heading = group.getByRole("button", { name: title, exact: true });
+        const disclosure = group.getByRole("button", { name: /tasks/i });
+        await heading.hover();
+        expect((await heading.boundingBox())?.x).toBeLessThan(
+          (await disclosure.boundingBox())?.x,
+        );
+        await heading.focus();
+        await page.keyboard.press("Tab");
+        await expect(disclosure).toBeFocused();
+        if (title === "Other") {
+          await expect(heading.locator("svg")).toHaveCount(0);
+          const actions = group.getByRole("button", {
+            name: "Actions for Other",
+          });
+          const pencil = group.getByRole("button", {
+            name: "New task in Other",
+          });
+          expect((await actions.boundingBox())?.x).toBeLessThan(
+            (await pencil.boundingBox())?.x,
+          );
+        }
+      }
+      const headers = [
+        {
+          group: sidebar.locator('[data-solo-workspace="work"]'),
+          title: "Work",
+          accessory: "Mark Work workspace",
+          activity: "3m",
+          task: "Workspace task",
+        },
+        {
+          group: sidebar.locator('[data-solo-channel-group="alpha"]'),
+          title: "Alpha",
+          accessory: "Mark Alpha channel",
+          activity: "1d",
+          task: "Channel task",
+        },
+      ];
+
+      const workspaceDisclosure = headers[0].group.getByRole("button", {
+        name: "Hide tasks and chats in Work",
+      });
+      await workspaceDisclosure.click();
+      for (const theme of ["light", "dark"]) {
+        await page.emulateMedia({ colorScheme: theme });
+        await expect(page.locator("html")).toHaveAttribute(
+          "data-color-mode",
+          theme,
+        );
+        for (const { group, title, accessory, activity, task } of headers) {
+          const disclosure = group.getByRole("button", { name: /tasks/i });
+          const action = group.getByRole("button", { name: accessory });
+          const heading = group.getByRole("button", {
+            name: title,
+            exact: true,
+          });
+          const nativeMenu = group.getByRole("button", {
+            name: `Actions for ${title}`,
+            exact: true,
+          });
+          const pencil = group.getByRole("button", {
+            name: `New task in ${title}`,
+            exact: true,
+          });
+          const metadata = group.getByText(activity, { exact: true });
+          const name = heading.getByText(title, { exact: true });
+          const actionPositions = async () =>
+            Promise.all(
+              [name, action, nativeMenu].map(
+                async (button) => (await button.boundingBox())?.x,
+              ),
+            );
+          await expect(disclosure).toHaveAttribute("aria-expanded", "false");
+          await expect(group.getByRole("button", { name: task })).toBeHidden();
+          await action.scrollIntoViewIfNeeded();
+          await page.mouse.move(0, 0);
+          await resize.focus();
+          await expect(metadata).toBeVisible();
+          await expect(nativeMenu.locator("..")).toHaveCSS("opacity", "0");
+          const activityBox = await metadata.boundingBox();
+          const menuBox = await nativeMenu.boundingBox();
+          expect(activityBox).not.toBeNull();
+          expect(menuBox).not.toBeNull();
+          expect(menuBox.x + menuBox.width).toBeGreaterThanOrEqual(
+            activityBox.x + activityBox.width,
+          );
+          const restingPositions = await actionPositions();
+          expect(restingPositions).toEqual([
+            expect.any(Number),
+            expect.any(Number),
+            expect.any(Number),
+          ]);
+          await expect
+            .poll(() =>
+              name.evaluate((label) => label.clientWidth >= label.scrollWidth),
+            )
+            .toBe(true);
+          expect((await heading.boundingBox())?.x).toBeLessThan(
+            (await disclosure.boundingBox())?.x,
+          );
+          await heading.hover();
+          await expect(metadata).toBeVisible();
+          await expect(nativeMenu.locator("..")).toHaveCSS("opacity", "0");
+          await page.mouse.move(
+            activityBox.x + activityBox.width / 2,
+            activityBox.y + activityBox.height / 2,
+          );
+          await expect(nativeMenu.locator("..")).toHaveCSS("opacity", "1");
+          await expect(metadata).toBeHidden();
+          await expect(pencil).toBeVisible();
+          await expect.poll(actionPositions).toEqual(restingPositions);
+
+          await heading.click();
+          await expect(heading).toHaveAttribute("data-selected");
+          await page.mouse.move(
+            activityBox.x + activityBox.width / 2,
+            activityBox.y + activityBox.height / 2,
+          );
+          await pencil.click();
+          await expect(heading).not.toHaveAttribute("data-selected");
+          await resize.focus();
+          await heading.hover();
+          await expect(metadata).toBeVisible();
+          await expect(nativeMenu.locator("..")).toHaveCSS("opacity", "0");
+
+          await page.mouse.move(0, 0);
+          await action.focus();
+          await page.keyboard.press("Shift+Tab");
+          await expect(action).not.toBeFocused();
+          await page.keyboard.press("Tab");
+          await expect(action).toBeFocused();
+          await expect(action).toHaveCSS("outline-style", "solid");
+          await expect(metadata).toBeVisible();
+          await expect.poll(actionPositions).toEqual(restingPositions);
+          await page.keyboard.press("Shift+F10");
+          await expect(page.getByRole("menu")).toHaveCount(0);
+          await page.keyboard.press("Enter");
+          await expect(action).toHaveAttribute("aria-pressed", "true");
+          await action.click();
+          await expect(action).toHaveAttribute("aria-pressed", "false");
+          await expect(disclosure).toHaveAttribute("aria-expanded", "false");
+          await expect(heading).not.toHaveAttribute("aria-current");
+          await expect(page.getByRole("menu")).toHaveCount(0);
+          await disclosure.press("Enter");
+          await expect(disclosure).toHaveAttribute("aria-expanded", "true");
+          await expect.poll(actionPositions).toEqual(restingPositions);
+          await disclosure.press("Enter");
+          await expect(disclosure).toHaveAttribute("aria-expanded", "false");
+          await action.focus();
+          await page.keyboard.press("Tab");
+          await expect(pencil).toBeFocused();
+          await expect(metadata).toBeHidden();
+          await page.keyboard.press("Tab");
+          await expect(nativeMenu).toBeFocused();
+        }
+      }
+      await expect(sidebar.getByRole("button", { name: /^Mark / })).toHaveCount(
+        2,
+      );
+      for (const { group, title, accessory, activity } of headers) {
+        const mark = group.getByRole("button", { name: accessory });
+        const actions = group.getByRole("button", {
+          name: `Actions for ${title}`,
+        });
+        const time = group.getByText(activity, { exact: true });
+        await mark.press("Enter");
+        await expect(mark).toHaveAttribute("aria-pressed", "true");
+        await actions.focus();
+        await page.evaluate(() =>
+          window.fixtureSoloRegion.showHeaderMetadata(false),
+        );
+        await expect(time).toHaveCount(0);
+        await expect.soft(actions).toBeFocused();
+        await expect.soft(mark).toHaveAttribute("aria-pressed", "true");
+        await actions.focus();
+        await page.evaluate(() =>
+          window.fixtureSoloRegion.showHeaderMetadata(true),
+        );
+        await expect(time).toHaveCount(1);
+        await expect(actions).toBeFocused();
+        await expect(mark).toHaveAttribute("aria-pressed", "true");
+        await actions.press("Enter");
+        const menu = page.getByRole("menu");
+        await expect(menu).toBeVisible();
+        await page.evaluate(() =>
+          window.fixtureSoloRegion.showHeaderMetadata(false),
+        );
+        await expect(time).toHaveCount(0);
+        await expect(menu).toBeVisible();
+        await page.evaluate(() =>
+          window.fixtureSoloRegion.showHeaderMetadata(true),
+        );
+        await expect(time).toHaveCount(1);
+        await page.keyboard.press("Escape");
+        await expect(menu).toBeHidden();
+      }
+      await headers[0].group
+        .getByRole("button", { name: "Actions for Work" })
+        .press("Enter");
+      await expect(
+        page.getByRole("menuitem", { name: "New task" }),
+      ).toBeVisible();
+      await expect(
+        page.getByRole("menuitem", { name: "New chat" }),
+      ).toBeVisible();
+      await page.keyboard.press("Escape");
+      const channelGroup = headers[1].group;
+      await page.evaluate(() => {
+        document.documentElement.style.fontSize = "24px";
+      });
+      await channelGroup
+        .getByRole("button", { name: "Alpha", exact: true })
+        .hover();
+      await channelGroup
+        .getByRole("button", { name: "Actions for Alpha" })
+        .press("Enter");
+      await expect(
+        page.getByRole("menuitem", { name: "New task" }),
+      ).toBeVisible();
+      await page.keyboard.press("Escape");
+      const channelTitle = channelGroup.getByText("Alpha", { exact: true });
+      await expect
+        .poll(() =>
+          channelTitle.evaluate(
+            (label) => label.clientWidth >= label.scrollWidth,
+          ),
+        )
+        .toBe(true);
+      await resize.press("ArrowRight");
+      await page.evaluate(() => {
+        document.documentElement.style.fontSize = "32px";
+      });
+      for (const { group, title, accessory, activity } of headers) {
+        const label = group.getByText(title, { exact: true });
+        await label.hover();
+        await expect
+          .poll(() =>
+            label.evaluate((item) => item.clientWidth >= item.scrollWidth),
+          )
+          .toBe(true);
+        const signal = await group
+          .getByRole("button", { name: accessory })
+          .boundingBox();
+        const time = await group
+          .getByText(activity, { exact: true })
+          .boundingBox();
+        expect(
+          Math.abs(signal.y + signal.height / 2 - time.y - time.height / 2),
+        ).toBeLessThan(1);
+        const pencil = group.getByRole("button", {
+          name: `New task in ${title}`,
+        });
+        await pencil.focus();
+        await page.evaluate(() =>
+          window.fixtureSoloRegion.showHeaderMetadata(false),
+        );
+        await expect(group.getByText(activity, { exact: true })).toHaveCount(0);
+        await expect(pencil).toBeFocused();
+        await resize.focus();
+        await expect(pencil).toBeHidden();
+        await page.evaluate(() =>
+          window.fixtureSoloRegion.showHeaderMetadata(true),
+        );
+        await expect(group.getByText(activity, { exact: true })).toHaveCount(1);
+      }
+    },
+  );
+
+  appTest(
+    "keeps the Actions trigger visible after closing channel creation",
+    async ({ page, app }) => {
+      await admitNewTask(page);
+      await page.goto(
+        `${app.origin}/?solo-region-fixture&compose-workspaces&workspace-hit-targets&header-accessories&leading-header`,
+      );
+      await openPage(page, "Messages");
+      const workspace = page.locator('[data-solo-workspace="work"]');
+      const time = workspace.getByText("3m", { exact: true });
+      const actions = workspace.getByRole("button", {
+        name: "Actions for Work",
+      });
+      const timing = await time.boundingBox();
+      await page.mouse.move(
+        timing.x + timing.width / 2,
+        timing.y + timing.height / 2,
+      );
+      await actions.click();
+      await page
+        .getByRole("menuitem", { name: "New channel", exact: true })
+        .click();
+      const dialog = page.getByRole("dialog", {
+        name: "Create a channel in Work",
+      });
+      await dialog
+        .getByRole("button", { name: "Close channel creation" })
+        .click();
+      await page.mouse.move(0, 0);
+      await expect(dialog).toBeHidden();
+      await expect(actions).toBeFocused();
+      await expect(time).toBeHidden();
+      await expect(actions.locator("..")).toHaveCSS("opacity", "1");
+    },
+  );
+
+  for (const hasTouch of [false, true]) {
+    appTest.describe(hasTouch ? "touch metadata" : "pointer metadata", () => {
+      const workspaceTitle = "Workspace planning and weekly status";
+      const channelTitle = "channel-planning-and-weekly-status";
+      appTest.use({
+        hasTouch,
+        savedSidebar: [{ id: "other", name: workspaceTitle, order: 1 }],
+        channelNames: { alpha: "Alpha", beta: "Beta", gamma: channelTitle },
+      });
+
+      if (hasTouch) {
+        // A real tap detects an always-visible action stealing the accessory's hit target.
+        appTest(
+          "keeps accessories and Actions tappable beside header activity",
+          async ({ page, app }) => {
+            await admitNewTask(page);
+            await page.goto(
+              `${app.origin}/?solo-region-fixture&compose-workspaces&workspace-hit-targets&header-accessories`,
+            );
+            await openPage(page, "Messages");
+            for (const [selector, title, accessory] of [
+              ['[data-solo-workspace="work"]', "Work", "Mark Work workspace"],
+              [
+                '[data-solo-channel-group="alpha"]',
+                "Alpha",
+                "Mark Alpha channel",
+              ],
+            ]) {
+              const group = page.locator(selector);
+              const mark = group.getByRole("button", { name: accessory });
+              await expect(
+                group.getByRole("button", { name: `New task in ${title}` }),
+              ).toBeVisible();
+              await mark.scrollIntoViewIfNeeded();
+              const box = await mark.boundingBox();
+              await page.touchscreen.tap(
+                box.x + box.width / 2,
+                box.y + box.height / 2,
+              );
+              await expect.soft(mark).toHaveAttribute("aria-pressed", "true");
+              const actions = group.getByRole("button", {
+                name: `Actions for ${title}`,
+              });
+              const actionsBox = await actions.boundingBox();
+              await page.touchscreen.tap(
+                actionsBox.x + actionsBox.width / 2,
+                actionsBox.y + actionsBox.height / 2,
+              );
+              await expect(actions).toHaveAttribute("aria-expanded", "true");
+              await page.keyboard.press("Escape");
+            }
+          },
+        );
+      }
+
+      appTest(
+        "keeps both actions clear of long metadata-only titles",
+        async ({ page, app }) => {
+          await admitNewTask(page);
+          await page.goto(
+            `${app.origin}/?solo-region-fixture&compose-workspaces&workspace-hit-targets&header-accessories&leading-header`,
+          );
+          await openPage(page, "Messages");
+          const resize = page.getByRole("separator", {
+            name: "Resize sidebar",
+          });
+          await resize.dblclick();
+          await expect(resize).toHaveAttribute("aria-valuenow", "260");
+          for (const [selector, title, activity, fontSize] of [
+            ['[data-solo-workspace="other"]', workspaceTitle, "3m", "16px"],
+            ['[data-solo-channel-group="gamma"]', channelTitle, "1d", "19px"],
+          ]) {
+            await page.evaluate((fontSize) => {
+              document.documentElement.style.fontSize = fontSize;
+            }, fontSize);
+            const group = page.locator(selector);
+            const heading = group.getByRole("button", {
+              name: title,
+              exact: true,
+            });
+            const label = heading.getByText(title, { exact: true });
+            const time = group.getByText(activity, { exact: true });
+            const pencil = group.getByRole("button", {
+              name: `New task in ${title}`,
+            });
+            const actions = group.getByRole("button", {
+              name: `Actions for ${title}`,
+            });
+            await heading.scrollIntoViewIfNeeded();
+            const rest = await label.boundingBox();
+            if (!hasTouch) {
+              await expect(time).toBeVisible();
+              const timing = await time.boundingBox();
+              await page.mouse.move(
+                timing.x + timing.width / 2,
+                timing.y + timing.height / 2,
+              );
+            }
+            await expect(time).toBeHidden();
+            await expect(actions.locator("..")).toHaveCSS("opacity", "1");
+            expect(await label.boundingBox()).toEqual(rest);
+            const button = await pencil.boundingBox();
+            expect
+              .soft(rest.x + rest.width, title)
+              .toBeLessThanOrEqual(button.x);
+          }
+        },
+      );
+    });
+  }
+  appTest(
+    "shares the leading slot between a header action and disclosure",
+    async ({ page, app }) => {
+      await page.clock.install();
+      await page.goto(
+        `${app.origin}/?solo-region-fixture&compose-workspaces&workspace-hit-targets&header-accessories&leading-header`,
+      );
+      await openPage(page, "Messages");
+      const sidebar = page.getByRole("complementary", { name: "Sidebar" });
+      const resize = page.getByRole("separator", { name: "Resize sidebar" });
+      await resize.dblclick();
+      for (const [selector, title, icon] of [
+        ['[data-solo-workspace="work"]', "Work", "cube-3d-sphere"],
+        ['[data-solo-channel-group="alpha"]', "Alpha", "hash"],
+      ]) {
+        const group = sidebar.locator(selector);
+        const heading = group.getByRole("button", { name: title, exact: true });
+        const action = group.getByRole("button", { name: /open .* summary/i });
+        const disclosure = group.getByRole("button", { name: /tasks/i });
+        const marker = heading.locator(`:scope > svg.tabler-icon-${icon}`);
+        await expect(marker).toHaveCount(1);
+        await expect(marker).toBeVisible();
+        await expect(heading).toHaveText(title);
+        if ((await disclosure.getAttribute("aria-expanded")) === "true") {
+          await disclosure.click();
+        }
+        await expect(disclosure).toHaveAttribute("aria-expanded", "false");
+        await heading.scrollIntoViewIfNeeded();
+        await page.mouse.move(0, 0);
+        await resize.focus();
+        await expect(action).toHaveCSS("opacity", "1");
+        await expect(disclosure).toHaveCSS("opacity", "0");
+        const titleBox = await heading.boundingBox();
+        const leadingBox = await action.boundingBox();
+        await heading.hover();
+        await expect(action).toHaveCSS("opacity", "0");
+        await expect(disclosure).toHaveCSS("opacity", "1");
+        await expect(marker).toBeVisible();
+        expect(await disclosure.boundingBox()).toEqual(leadingBox);
+        expect(await heading.boundingBox()).toEqual(titleBox);
+        const anchor = group.locator("[data-fixture-summary-anchor]");
+        await expect(anchor).toHaveCount(1);
+        await expect(anchor.getByRole("button")).toHaveCount(2);
+        await disclosure.hover();
+        await expect(anchor).toHaveAttribute("data-hovered", "true");
+        await page.clock.runFor(1_000);
+        await expect(
+          page.getByRole("tooltip").filter({
+            hasText: await disclosure.getAttribute("aria-label"),
+          }),
+        ).toHaveCount(0);
+        await heading.hover();
+        await expect(anchor).not.toHaveAttribute("data-hovered");
+        await disclosure.click();
+        await expect(disclosure).toHaveAttribute("aria-expanded", "true");
+        await disclosure.click();
+        await expect(disclosure).toHaveAttribute("aria-expanded", "false");
+
+        await page.mouse.move(0, 0);
+        await heading.focus();
+        await page.keyboard.press("Shift+Tab");
+        await expect(disclosure).toBeFocused();
+        await expect(disclosure).toHaveCSS("opacity", "1");
+        await page.keyboard.press("Shift+Tab");
+        await expect(action).toBeFocused();
+        await expect(action).toHaveCSS("opacity", "1");
+        await expect(disclosure).toHaveCSS("opacity", "0");
+        await page.keyboard.press("Enter");
+        await expect(action).toHaveAccessibleName(`Reopen ${title} summary`);
+        await expect(disclosure).toHaveAttribute("aria-expanded", "false");
+
+        await group
+          .getByRole("button", { name: `Actions for ${title}` })
+          .press("Enter");
+        await page
+          .getByRole("menuitem", { name: `Reopen ${title} summary` })
+          .click();
+        await expect(action).toHaveAccessibleName(`Open ${title} summary`);
+        await expect(disclosure).toHaveAttribute("aria-expanded", "false");
+        await expect(heading).not.toHaveAttribute("data-selected");
+      }
+      for (const [selector, title, icon] of [
+        ['[data-solo-workspace="other"]', "Other", undefined],
+        ['[data-solo-channel-group="gamma"]', "Gamma", "hash"],
+      ]) {
+        const heading = sidebar
+          .locator(selector)
+          .getByRole("button", { name: title, exact: true });
+        const marker = heading.locator(":scope > svg");
+        await heading.hover();
+        if (icon) {
+          await expect(marker).toHaveClass(new RegExp(`tabler-icon-${icon}`));
+          await expect(marker).toBeVisible();
+        } else {
+          await expect(marker).toHaveCount(0);
+        }
+        await expect(heading).toHaveText(title);
+      }
+      await expect(resize).toHaveAttribute("aria-valuenow", "260");
+      await page.evaluate(() => {
+        document.documentElement.style.fontSize = "32px";
+      });
+      const workspaceTitle = sidebar
+        .getByRole("button", { name: "Work", exact: true })
+        .getByText("Work", { exact: true });
+      await expect
+        .poll(() =>
+          workspaceTitle.evaluate(
+            (label) => label.clientWidth >= label.scrollWidth,
+          ),
+        )
+        .toBe(true);
+    },
+  );
+
+  appTest.describe("touch workspace header", () => {
+    appTest.use({ hasTouch: true });
+
+    appTest(
+      "opens the leading action after a workspace drag",
+      async ({ page, app }) => {
+        await page.goto(
+          `${app.origin}/?solo-region-fixture&compose-workspaces&workspace-hit-targets&header-accessories&leading-header`,
+        );
+        await openPage(page, "Messages");
+        const workspace = page.locator('[data-solo-workspace="work"]');
+        const title = workspace.getByRole("button", {
+          name: "Work",
+          exact: true,
+        });
+        const leading = workspace.getByRole("button", {
+          name: /open work summary/i,
+        });
+        await title.scrollIntoViewIfNeeded();
+        const box = await title.boundingBox();
+        if (!box) throw new Error("Workspace title is missing");
+        const x = box.x + box.width / 2;
+        const y = box.y + box.height / 2;
+        await page.mouse.move(x, y);
+        await page.mouse.down();
+        await page.mouse.move(x + 40, y);
+        await expect(page.locator("[data-section-dragging]")).toHaveCount(1);
+        await page.keyboard.press("Escape");
+        await page.mouse.up();
+        await expect(page.locator("[data-section-dragging]")).toHaveCount(0);
+        await leading.tap();
+        await expect(leading).toHaveAccessibleName("Reopen Work summary");
+        await expect(title).not.toHaveAttribute("data-selected");
+      },
+    );
+  });
+
+  appTest.describe("workspace move focus", () => {
+    appTest.use({
+      soloChannels: ["beta", "gamma"],
+      ownSoloChannels: ["beta", "gamma"],
+    });
+
+    appTest(
+      "shows the focused disclosure after a pointer move into a closed workspace",
+      async ({ page, app }) => {
+        await page.goto(
+          `${app.origin}/?solo-region-fixture&compose-workspaces&workspace-hit-targets&leading-header`,
+        );
+        await openPage(page, "Messages");
+        const sidebar = page.getByRole("complementary", { name: "Sidebar" });
+        const workspace = sidebar.locator('[data-solo-workspace="work"]');
+        const disclosure = workspace.getByRole("button", {
+          name: /tasks and chats in Work/,
+        });
+        const chat = sidebar.getByRole("button", {
+          name: "Gamma",
+          exact: true,
+        });
+        await expect(
+          workspace.getByRole("button", { name: /open work summary/i }),
+        ).toHaveCount(1);
+        await expect(disclosure).toHaveAttribute("aria-expanded", "true");
+        await disclosure.click();
+        await chat.click({ button: "right" });
+        await page
+          .getByRole("menuitem", { name: "Move to", exact: true })
+          .hover();
+        await page.getByRole("menuitem", { name: "Work", exact: true }).click();
+        await page.mouse.move(0, 0);
+        await expect(disclosure).toBeFocused();
+        await expect(disclosure).toHaveAttribute("aria-expanded", "false");
+        await expect(disclosure).toHaveCSS("opacity", "1");
+        await expect(chat).toBeHidden();
+        await page.keyboard.press("Enter");
+        await expect(
+          workspace.getByRole("button", { name: "Gamma", exact: true }),
+        ).toBeVisible();
+      },
+    );
+  });
+});
+
 appTest.describe("Focus", () => {
   appTest.use({
     enabledPlugins: ["buzz.focus"],

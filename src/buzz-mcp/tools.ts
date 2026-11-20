@@ -1,3 +1,4 @@
+import { readSubthread } from "../features/relay/subthread";
 import { messageAuthor } from "../features/relay/fold";
 // The Buzz tools: what an agent does in Buzz, in the wire formats the `buzz`
 // CLI writes. Names, arguments and descriptions are kept short because every
@@ -612,13 +613,18 @@ const HANDLERS: Readonly<Record<string, Handler>> = {
     // A harness takes a wake with no thread only in a Solo chat.
     if (!event && !soloChannelMetadata(metadata as RelayEvent))
       throw new Error("thread is required outside a Solo chat.");
-    const root = event && rootOf(event);
+    const same = channel === context.channel;
+    const task =
+      event &&
+      ((same && !!context.sourceRoot && event.id === context.root) ||
+        client.isTaskThread?.(channel, event.id));
+    const root = event && (task ? event.id : rootOf(event));
     // A conversation with no thread is the whole channel, unless the host
     // says this channel's threads have sessions of their own.
-    const same = channel === context.channel;
     const rootless = same && !context.root && !context.wholeChannel;
     const apart = rootless ? client.threadsApart?.(channel) : undefined;
-    const whole = context.wholeChannel || (!context.root && apart !== true);
+    const whole =
+      !task && (context.wholeChannel || (!context.root && apart !== true));
     if (same && (whole || root === context.root))
       throw new Error(
         rootless && client.threadsApart && apart === undefined
@@ -747,7 +753,7 @@ const HANDLERS: Readonly<Record<string, Handler>> = {
         "This chat stays at the top level: send again without reply.",
       );
     const audienceTags = [...audienceOf(args), ...requestOf(args)];
-    const thread = reply ? await tools.threadTags(reply) : [];
+    const thread = reply ? await tools.threadTags(reply, channel) : [];
     return post(tools, channel, args, thread, audienceTags);
   },
 
@@ -765,7 +771,7 @@ const HANDLERS: Readonly<Record<string, Handler>> = {
     // As relay ingest reads it: the last valid marker, in either case.
     const root = target
       ? (threadReference(target)?.rootId ?? target.id)
-      : parent;
+      : (context.sourceRoot ?? parent);
     return post(
       tools,
       channel,
@@ -942,6 +948,9 @@ const HANDLERS: Readonly<Record<string, Handler>> = {
         channel = tag(event, "h") ?? channel;
       }
       if (!channel) throw new Error("channel is required here.");
+      const sourceRoot = root === context.root ? context.sourceRoot : undefined;
+      if (sourceRoot && channel !== context.channel)
+        throw new Error("The task thread is in a different channel.");
       max = bound(limit, 100, 500);
       // The root comes on the first page only, apart from the replies' limit
       // and cursor.
@@ -949,12 +958,20 @@ const HANDLERS: Readonly<Record<string, Handler>> = {
         {
           kinds: THREAD,
           "#h": [channel],
-          "#e": [root],
-          limit: max + 1,
+          "#e": [sourceRoot ?? root],
+          // The task anchor may also be returned by the physical reply query.
+          limit: max + (sourceRoot ? 2 : 1),
           ...cursor,
         },
-        ...(before === undefined
-          ? [{ ids: [root], kinds: [...THREAD, 45001], limit: 1 }]
+        ...(before === undefined || sourceRoot
+          ? [
+              {
+                ids: [root],
+                kinds: [...THREAD, 45001],
+                ...(sourceRoot ? { "#h": [channel] } : {}),
+                limit: 1,
+              },
+            ]
           : []),
       ]);
       first = events.find((event) => event.id === root);
@@ -987,15 +1004,26 @@ const HANDLERS: Readonly<Record<string, Handler>> = {
     // retention can leave older history unseen.
     const shown = found.slice(0, max);
     const last = shown.at(-1);
-    const lines = await tools.messages(
-      first ? [first, ...shown] : shown,
-      scope,
-    );
-    if (!lines.length) return "No messages.";
+    const page = first ? [first, ...shown] : shown;
+    const branch =
+      scope.root && scope.root === context.root && context.sourceRoot
+        ? await readSubthread(
+            page,
+            { channel, root: context.sourceRoot, anchor: scope.root },
+            THREAD,
+            (filters) => client.query(filters),
+          )
+        : undefined;
+    const lines = await tools.messages(branch?.events ?? page, scope);
+    if (!lines.length && !(scope.root === context.root && context.sourceRoot))
+      return "No messages.";
     const noun = scope.root ? "replies" : "messages";
     return [
       scope.root ? `thread ${scope.root} in ${channel}` : `channel ${channel}`,
       ...lines,
+      ...(branch?.incomplete
+        ? ["Some replies could not be verified as part of this task."]
+        : []),
       last && found.length > max
         ? `Older ${noun} remain; continue with ${JSON.stringify({ ...more, before: last.created_at, before_id: last.id })}`
         : `The relay returned no older ${noun}.`,
@@ -1984,10 +2012,36 @@ class Tools {
 
   /** The e-tag of a `send` reply to `parent`: a reply to any message in a
    * thread is a reply to the thread's root. */
-  async threadTags(parent: string) {
-    const root =
-      parent === this.context.root ? parent : rootOf(await this.event(parent));
-    return [["e", root, "", "reply"]];
+  async threadTags(parent: string, channel: string) {
+    const { channel: taskChannel, root: anchor, sourceRoot } = this.context;
+    const target = parent === anchor ? undefined : await this.event(parent);
+    if (anchor && sourceRoot) {
+      const taskTags = [
+        ["e", sourceRoot, "", "root"],
+        ["e", anchor, "", "reply"],
+      ];
+      if (!target) {
+        if (channel !== taskChannel)
+          throw new Error("The task thread is in a different channel.");
+        return taskTags;
+      }
+      if (
+        channel === taskChannel &&
+        tag(target, "h") === channel &&
+        threadReference(target)?.rootId === sourceRoot
+      ) {
+        const branch = await readSubthread(
+          [target],
+          { channel, root: sourceRoot, anchor },
+          THREAD,
+          (filters) => this.client.query(filters),
+        );
+        if (branch.events.length) return taskTags;
+        if (branch.incomplete)
+          throw new Error("Could not verify the task reply's parent thread.");
+      }
+    }
+    return [["e", target ? rootOf(target) : parent, "", "reply"]];
   }
 
   /** Visit matching events in relay order, retaining only what the caller needs.

@@ -1,3 +1,4 @@
+import { useChannelActivitySubscription } from "../../features/agents/use-channel-agent-activity";
 import { breathing, localActivity } from "../../features/agents/local-activity";
 import { useMemo, useSyncExternalStore } from "react";
 import type { Profile } from "../../features/relay/contracts";
@@ -16,19 +17,29 @@ export function useWorkingAgents(
   channelId: string,
   working: boolean,
 ) {
-  const local = useSyncExternalStore(session.agentActivity.subscribe, () =>
+  const subscribe = useChannelActivitySubscription(
+    session.agentActivity,
+    channelId,
+  );
+  const local = useSyncExternalStore(subscribe, () =>
     JSON.stringify(
       [
-        ...localActivity(session.agentActivity.snapshot(), channelId).values(),
+        ...localActivity(
+          session.agentActivity.snapshot(channelId),
+          channelId,
+        ).values(),
       ].map((row) => [row.agent, breathing(row) ? "waiting" : row.state]),
     ),
   );
   const localStates = new Map<string, string>(JSON.parse(local));
   const agentKeys = useSyncExternalStore(
-    working ? session.agentActivity.subscribe : noSubscribe,
+    working ? subscribe : noSubscribe,
     () =>
       working
-        ? workingAgents(session.agentActivity.snapshot(), channelId).join(",")
+        ? workingAgents(
+            session.agentActivity.snapshot(channelId),
+            channelId,
+          ).join(",")
         : "",
   );
   // App-managed agents publish no observer telemetry, so typing in this channel

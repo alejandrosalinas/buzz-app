@@ -9,7 +9,13 @@ import {
 } from "../relay/native";
 import { joinPolicy as readJoinPolicy } from "./join-policy";
 import { leaveRefusal, leaveRequestTemplate } from "./leave-protocol";
-import { adminReason, memberCommand } from "./admin-protocol";
+import {
+  adminReason,
+  inviteListPath,
+  inviteRequest,
+  memberCommand,
+  revokeRequest,
+} from "./admin-protocol";
 import { readRelayLibrary } from "../agents/relay-library";
 import { eventDto } from "../relay/events";
 import { readApiFailure } from "../relay/http-admission";
@@ -135,31 +141,37 @@ export async function nativeCommunityRequest(
     });
   }
   if (route === "invite") {
-    const input = body as
-      | { ttl_secs?: unknown; max_uses?: unknown }
-      | undefined;
-    const ttl = input?.ttl_secs;
-    const uses = input?.max_uses ?? null;
-    if (
-      !Number.isSafeInteger(ttl) ||
-      (ttl as number) < 60 ||
-      (ttl as number) > 2_592_000
-    )
-      throw new Error("Invalid invite expiry");
-    if (
-      uses !== null &&
-      (!Number.isSafeInteger(uses) ||
-        (uses as number) < 1 ||
-        (uses as number) > 10_000)
-    )
-      throw new Error("Invalid invite use limit");
     return readResponse(
       await nativeRelayRequest(
         community,
         "/api/invites",
-        { ttl_secs: ttl, max_uses: uses },
+        inviteRequest(body),
         signal,
       ),
+      adminReason,
+    );
+  }
+  if (route === "invites") {
+    // The native host signs this owner/admin read; the cursor is the relay's.
+    return readResponse(
+      await nativeRelayRequest(
+        community,
+        inviteListPath(body),
+        undefined,
+        signal,
+      ),
+      adminReason,
+    );
+  }
+  if (route === "invite-revoke") {
+    return readResponse(
+      await nativeRelayRequest(
+        community,
+        "/api/invites/revoke",
+        revokeRequest(body),
+        signal,
+      ),
+      adminReason,
     );
   }
   if (route === "profile") {

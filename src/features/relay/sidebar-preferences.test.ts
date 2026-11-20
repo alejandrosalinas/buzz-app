@@ -63,7 +63,6 @@ it.each([
       "starred",
       ...workspaces,
       "solo",
-      "forums",
       "dms",
     ]);
   },
@@ -206,7 +205,6 @@ it("reads legacy preferences through the production session, transport, and boun
       "starred",
       "group:work",
       "channels",
-      "forums",
       "dms",
     ]);
     const reads = upstream.mock.calls.flatMap(([, init]) =>

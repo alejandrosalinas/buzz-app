@@ -489,7 +489,7 @@ function ScopedPage({
         ...(entry.threadRootId ? { threadRootId: entry.threadRootId } : {}),
         ...(draft
           ? entry.threadRootId
-            ? { messageId: entry.threadRootId }
+            ? { messageId: entry.subthreadId ?? entry.threadRootId }
             : {}
           : { messageId: entry.id }),
       });

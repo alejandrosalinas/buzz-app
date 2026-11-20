@@ -460,6 +460,35 @@ describe("GooseHistory", () => {
     ).toBeUndefined();
   });
 
+  it("finds a session goose holds for a conversation by its tags, in the workspace the agent ran it in", async () => {
+    const thread = `${CHANNEL}/${root.id}`;
+    const fake = fakeSpawn({
+      home: "/home/test",
+      history: [
+        session("tagged", "Gander · #general", conversation(), undefined, {
+          "buzz.agent": agent,
+          "buzz.conversation": thread,
+        }),
+        session("theirs", "Goosey · #general", conversation(), undefined, {
+          "buzz.agent": other,
+          "buzz.conversation": `${CHANNEL}/other`,
+        }),
+        session("elsewhere", "Gander · #general", conversation(), "/repos/x", {
+          "buzz.agent": agent,
+          "buzz.conversation": `${CHANNEL}/folder`,
+        }),
+      ],
+    });
+    const goose = new GooseHistory(fake);
+    const started = (conversation: string, who = agent) =>
+      goose.started("~/.buzz", who, conversation, signal);
+    await expect(started(thread)).resolves.toBe(true);
+    // Another conversation, another agent's, and one that ran in a folder.
+    await expect(started(CHANNEL)).resolves.toBe(false);
+    await expect(started(thread, other)).resolves.toBe(false);
+    await expect(started(`${CHANNEL}/folder`)).resolves.toBe(false);
+  });
+
   it("reuses another session's export only on automatic reads, so a full read shows its final messages", async () => {
     const a = [...conversation()];
     const sessions = [

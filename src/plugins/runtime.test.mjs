@@ -246,6 +246,64 @@ test("enabled plugin stays active across catalog refreshes and cleans up on disa
   assert.equal(h.states["example.page"], undefined);
 });
 
+test("a plugin's declared host access is readable only while the plugin is active", async () => {
+  const gate = deferred();
+  const h = harness(async () => ({
+    async apply(ctx) {
+      await gate.promise;
+      ctx.pages.register({ id: "main", title: "Main", component: Page });
+    },
+  }));
+  const declared = {
+    ...plugin(),
+    manifest: {
+      ...plugin().manifest,
+      host: { agentPromptSections: ["progress"] },
+    },
+  };
+  try {
+    assert.equal(h.root.pluginStatus.promptSections("example.page"), undefined);
+    assert.equal(h.root.pluginStatus.on("example.page"), false);
+    h.runtime.reconcile(desired([declared]));
+    await h.wait((s) => s["example.page"]?.status === "starting");
+    assert.equal(h.root.pluginStatus.promptSections("example.page"), undefined);
+    // It is on before it is active.
+    assert.equal(h.root.pluginStatus.on("example.page"), true);
+    gate.resolve();
+    await h.wait((s) => s["example.page"]?.status === "active");
+    assert.deepEqual(h.root.pluginStatus.promptSections("example.page"), [
+      "progress",
+    ]);
+    assert.equal(
+      h.root.pluginStatus.promptSections("example.other"),
+      undefined,
+    );
+    assert.equal(h.root.pluginStatus.on("example.other"), false);
+    h.runtime.reconcile(desired([{ ...declared, enabled: false }]));
+    assert.equal(h.root.pluginStatus.promptSections("example.page"), undefined);
+    assert.equal(h.root.pluginStatus.on("example.page"), false);
+  } finally {
+    gate.resolve();
+    await h.dispose();
+  }
+});
+
+test("a plugin that failed to start is still on, with no declared access to read", async () => {
+  const h = harness(async () => ({
+    apply() {
+      throw new Error("no start");
+    },
+  }));
+  try {
+    h.runtime.reconcile(desired([plugin()]));
+    await h.wait((s) => s["example.page"]?.status === "failed");
+    assert.equal(h.root.pluginStatus.on("example.page"), true);
+    assert.equal(h.root.pluginStatus.promptSections("example.page"), undefined);
+  } finally {
+    await h.dispose();
+  }
+});
+
 test("replacement and rapid disable/enable wait for async cleanup", async () => {
   const cleanup = deferred();
   const stopping = deferred();

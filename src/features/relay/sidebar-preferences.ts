@@ -389,8 +389,10 @@ export function projectWorkspaceGroups(workspaces: unknown): SidebarGroups {
 export function workspaceSectionOrder(
   groups: Pick<SidebarGroups, "sections" | "sectionOrder"> | undefined,
 ): readonly string[] {
-  const [starred, ...home] = HOME_SIDEBAR_SECTIONS;
-  const [solo, ...otherHomes] = home;
+  const [starred, solo, ...rest] = HOME_SIDEBAR_SECTIONS;
+  // Forums list under Channels; "forums" stays valid in saved preferences.
+  const otherHomes = rest.filter((key) => key !== "forums");
+  const home = [solo, ...otherHomes];
   const defaults = [
     SIDEBAR_PAGES_SECTION,
     solo,

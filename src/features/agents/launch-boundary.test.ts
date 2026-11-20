@@ -38,6 +38,20 @@ import { gooseRun } from "../../bundled/goose/run";
 import { GooseRuntime } from "../../bundled/goose/runtime";
 import { fakeSpawn as fakeGoose } from "../../bundled/goose/goose-testing";
 
+/** A Goose runtime with its own agent storage, as the app gives it. */
+const gooseRuntime = (
+  ...[host, relay, core]: ConstructorParameters<typeof GooseRuntime>
+) =>
+  new GooseRuntime(
+    host,
+    relay,
+    core,
+    undefined,
+    undefined,
+    undefined,
+    memoryStorage(),
+  );
+
 const owner = keypair();
 const relayKey = keypair();
 const agentKey = keypair();
@@ -174,7 +188,7 @@ async function setup<Config>(
   const storage = memoryStorage();
   seed(storage, heads);
   const counted = countedTransport([
-    metadata(relayKey, channel, "general"),
+    metadata(relayKey, channel, "general", undefined, [["t", "stream"]]),
     roster(relayKey, channel, [owner.pubkey, agentKey.pubkey]),
     profile(owner, { name: "Owner" }),
     profile(agentKey, { name: typeId, is_agent: true }),
@@ -601,7 +615,7 @@ it("starts Goose sessions from the synced copies, with no relay request online o
   });
   const f = await setup(
     "goose",
-    (relay, _reads, core) => gooseRun(new GooseRuntime(host, relay, core)),
+    (relay, _reads, core) => gooseRun(gooseRuntime(host, relay, core)),
     { ...GOOSE_LOCAL },
     seeded,
     synced(),
@@ -637,7 +651,7 @@ it("refuses to start from deleted synced settings once: no launch, the reason on
   const { seeded } = heads("buzz/goose", { model: "synced-model" });
   const f = await setup(
     "goose",
-    (relay, _reads, core) => gooseRun(new GooseRuntime(host, relay, core)),
+    (relay, _reads, core) => gooseRun(gooseRuntime(host, relay, core)),
     { ...GOOSE_LOCAL },
     [[settingsSubject, deleted], seeded[1] as [Subject, RelayEvent]],
     synced(),
@@ -724,7 +738,7 @@ it.each([
       });
       const f = await setup(
         "goose",
-        (relay, _reads, core) => gooseRun(new GooseRuntime(host, relay, core)),
+        (relay, _reads, core) => gooseRun(gooseRuntime(host, relay, core)),
         { ...GOOSE_LOCAL },
         seeded,
         synced(),

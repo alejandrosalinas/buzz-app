@@ -112,8 +112,13 @@ import {
 } from "./catch-up";
 import { CHANNEL_KINDS } from "../relay/live";
 import { fileStore, loadAgentStorage, type AgentStore } from "./state";
-import { readInterrupted, writeInterrupted } from "./interrupted";
+import {
+  INTERRUPTED_PREFIX,
+  readInterrupted,
+  writeInterrupted,
+} from "./interrupted";
 import { saveOwnerSections } from "./prompt-sections";
+import { startingFolder } from "./conversation-folders";
 import { memoryStorage } from "./test-fakes";
 import { SyncedTeams } from "./team-config";
 import { TEAM_MOVES_KEY, TeamMoves } from "./team-migration";
@@ -276,6 +281,10 @@ async function setup({
   /** The example type's id, "echo" unless a test needs a real harness's. */
   typeId = "echo",
   conversationFolders = undefined as true | undefined,
+  conversationSections = undefined as true | undefined,
+  execution = undefined as true | undefined,
+  /** The base prompt sections the example plugin's manifest declares. */
+  promptSections = [] as readonly string[],
   sessions = undefined as AgentType<Config>["sessions"],
 } = {}) {
   const ctx = new Context();
@@ -286,8 +295,14 @@ async function setup({
     settled = true;
     for (const listener of statusListeners) listener();
   };
+  /** The plugins that are active, by id. */
+  const owners = new Map<string, NonNullable<Context["pluginOwner"]>>();
+  /** The plugins that are on and not active: starting, or failed to start. */
+  const inactive = new Set<string>();
   ctx.provide("pluginStatus", {
     isActive: pluginActive,
+    promptSections: (id) => owners.get(id)?.agentPromptSections,
+    on: (id) => owners.has(id) || inactive.has(id),
     subscribe: (listener: () => void) => {
       statusListeners.add(listener);
       const stop = subscribePlugin(listener);
@@ -333,9 +348,13 @@ async function setup({
     binding,
     deviceSettings,
   );
-  const plugin = ctx.extend({
-    pluginOwner: Object.freeze({ id: "example", revision }),
+  const example = Object.freeze({
+    id: "example",
+    revision,
+    agentPromptSections: promptSections,
   });
+  owners.set(example.id, example);
+  const plugin = ctx.extend({ pluginOwner: example });
   const run =
     vi.fn<(delivery: Delivery<Config>) => void | Promise<void>>(answer);
   const type: AgentType<Config> = {
@@ -409,6 +428,8 @@ async function setup({
     ...(resumes ? { resumes } : {}),
     ...(syncedSettings ? { syncedSettings } : {}),
     ...(conversationFolders ? { conversationFolders } : {}),
+    ...(conversationSections ? { conversationSections } : {}),
+    ...(execution ? { execution } : {}),
     ...(sessions ? { sessions } : {}),
   };
   plugin.agents.register(type);
@@ -423,6 +444,8 @@ async function setup({
   return {
     activity,
     service,
+    owners,
+    inactive,
     typesafe,
     /** Ends startup, as when the last plugin finishes starting. */
     settleStartup: settle,
@@ -1902,6 +1925,114 @@ describe("a conversation folder", () => {
     expect(list).toHaveBeenCalledWith(f.agent.key);
   });
 
+  it("waits for a harness that reads its sessions in the background, and is refused when it cannot read them", async () => {
+    let listed: readonly AgentSession[] = [];
+    const loaded = vi.fn(async () => {
+      listed = [thread];
+    });
+    const f = await ready({
+      conversationFolders: true,
+      sessions: {
+        list: () => listed,
+        ready: loaded,
+        subscribe: () => () => {},
+      },
+    });
+    const { agents } = f.plugin;
+    await expect(
+      agents.assignConversationFolder(f.agent.key, thread, "~/work"),
+    ).rejects.toThrow(
+      "This conversation already started in the agent's workspace",
+    );
+    expect(loaded).toHaveBeenCalledWith(f.agent.key, `${channel}/${root}`);
+    // Sessions it cannot read may hold the conversation.
+    loaded.mockRejectedValue(new Error("The agent is not running"));
+    const other = { channelId: channel, root: "f".repeat(64) };
+    await expect(
+      agents.assignConversationFolder(f.agent.key, other, "~/work"),
+    ).rejects.toThrow("The agent is not running");
+    expect(agents.conversationFolder(f.agent.key, other)).toBeUndefined();
+  });
+
+  it("is refused when the conversation's first session starts while the check waits on another's sessions", async () => {
+    const storage = memoryStorage();
+    let hold: Promise<void> | undefined;
+    const entered = vi.fn();
+    const f = await ready({
+      storage,
+      conversationFolders: true,
+      sessions: {
+        // Nothing lists a session that is starting, as a harness reads them.
+        list: () => [],
+        ready: async () => {
+          entered();
+          await hold;
+        },
+        subscribe: () => () => {},
+      },
+    });
+    const { agents } = f.plugin;
+    // The community's storage scope, from a folder given first.
+    const first = { channelId: channel, root: "f".repeat(64) };
+    await agents.assignConversationFolder(f.agent.key, first, "~/work");
+    const [scope] = JSON.parse(
+      (
+        storage.keys().find((key) => key.includes("conversation-folder")) ?? ""
+      ).replace(/^[^:]*:/, ""),
+    ) as string[];
+    let start!: () => void;
+    hold = new Promise<void>((resolve) => {
+      start = resolve;
+    });
+    entered.mockClear();
+    const assigning = agents.assignConversationFolder(
+      f.agent.key,
+      thread,
+      "~/work",
+    );
+    const refused = expect(assigning).rejects.toThrow(
+      "This conversation already started in the agent's workspace",
+    );
+    await vi.waitFor(() => expect(entered).toHaveBeenCalledTimes(1));
+    // The conversation's first launch picks the workspace before the check
+    // ends, and no session lists it yet.
+    await expect(
+      startingFolder(storage, scope ?? "", f.agent.key, `${channel}/${root}`),
+    ).resolves.toBeUndefined();
+    start();
+    await refused;
+    expect(agents.conversationFolder(f.agent.key, thread)).toBeUndefined();
+  });
+
+  it("is refused for a conversation the harness itself holds history for, and when that cannot be read", async () => {
+    const history = vi.fn(async (_agent: Agent, _conversation: string) => true);
+    const f = await ready({
+      conversationFolders: true,
+      sessions: { list: () => [], history, subscribe: () => () => {} },
+    });
+    const { agents } = f.plugin;
+    await expect(
+      agents.assignConversationFolder(f.agent.key, thread, "~/work"),
+    ).rejects.toThrow(
+      "This conversation already started in the agent's workspace",
+    );
+    expect(history).toHaveBeenCalledWith(
+      expect.objectContaining({ key: f.agent.key }),
+      `${channel}/${root}`,
+    );
+    expect(agents.conversationFolder(f.agent.key, thread)).toBeUndefined();
+    // History it cannot read may hold the conversation.
+    history.mockRejectedValue(new Error("goose is unavailable"));
+    await expect(
+      agents.assignConversationFolder(f.agent.key, thread, "~/work"),
+    ).rejects.toThrow("goose is unavailable");
+    // Without any, the conversation is given its folder.
+    history.mockResolvedValue(false);
+    await expect(
+      agents.assignConversationFolder(f.agent.key, thread, "~/work"),
+    ).resolves.toBe("/home/me/work");
+  });
+
   it.each(["solo", "dm"] as const)(
     "is given to a %s conversation whole, refusing a root",
     async (channelType) => {
@@ -1947,7 +2078,7 @@ describe("a conversation folder", () => {
       ).rejects.toThrow("Conversation folders are unavailable in a huddle");
   });
 
-  it("is refused by a harness without folders, such as goose or Pi", async () => {
+  it("is refused by a harness without folders", async () => {
     const f = await ready();
     await expect(
       f.plugin.agents.assignConversationFolder(f.agent.key, thread, "~/work"),
@@ -2167,6 +2298,545 @@ describe("a conversation's instructions", () => {
     expect(saved()).toHaveLength(1);
     await f.service.remove(bot);
     expect(saved()).toEqual([]);
+  });
+});
+
+describe("a conversation's sections", () => {
+  const root = "e".repeat(64);
+  const thread = { channelId: channel, root };
+  const DECLARED = ["working-location", "progress", "publishing", "routing"];
+  const ready = async (options: Parameters<typeof setup>[0] = {}) => {
+    const f = await setup({
+      conversationSections: true,
+      promptSections: DECLARED,
+      ...options,
+    });
+    const agent = await f.service.create({
+      type: "example/echo",
+      name: "Echo",
+    });
+    await vi.waitFor(() => expect(f.native.claim).toHaveBeenCalledWith(bot, 0));
+    await settle();
+    return { ...f, agent };
+  };
+  /** The handle of the agent's first run. */
+  const handle = async (f: Awaited<ReturnType<typeof ready>>) => {
+    f.emit({
+      events: [
+        event("1", {
+          tags: [
+            ["h", channel],
+            ["p", bot],
+          ],
+        }),
+      ],
+    });
+    await vi.waitFor(() => expect(f.run).toHaveBeenCalledTimes(1));
+    const [delivery] = f.run.mock.calls[0] ?? [];
+    if (!delivery) throw new Error("no run");
+    return delivery.agent;
+  };
+  /** Another plugin that is on and declares the same sections. */
+  const another = (f: Awaited<ReturnType<typeof ready>>) => {
+    const pluginOwner = Object.freeze({
+      id: "other",
+      revision: "one",
+      agentPromptSections: DECLARED,
+    });
+    f.owners.set(pluginOwner.id, pluginOwner);
+    return f.ctx.extend({ pluginOwner }).agents;
+  };
+  const saved = (f: Awaited<ReturnType<typeof ready>>) =>
+    f.storage
+      .keys()
+      .filter((key) => key.startsWith("buzz.agents.conversation-sections"));
+
+  it("are built into a turn's prompt while its community reconnects", async () => {
+    const f = await ready();
+    await f.plugin.agents.setConversationSections(f.agent.key, thread, {
+      "working-location": "Work in the task's folder.",
+    });
+    const agent = await handle(f);
+    // A reconnect keeps the community's storage scope, as the conversation's
+    // folder lookup does.
+    vi.spyOn(f.relay, "snapshot").mockReturnValue({
+      ...f.relay.snapshot(),
+      status: "connecting",
+    });
+    expect(agent.promptSections?.(channel, root)?.plugin?.sections).toEqual({
+      "working-location": "Work in the task's folder.",
+    });
+  });
+
+  it("are set, replaced and cleared by a plugin, and built into the agent's prompt there", async () => {
+    const f = await ready();
+    const { agents } = f.plugin;
+    await expect(
+      f.service.setConversationSections(f.agent.key, thread, { progress: "x" }),
+    ).rejects.toThrow("Only a plugin");
+    await agents.setConversationSections(f.agent.key, thread, {
+      "working-location": "  Work in the task's folder. ",
+      progress: "Report to the task.",
+    });
+    await expect(
+      agents.conversationSections(f.agent.key, thread),
+    ).resolves.toEqual({
+      "working-location": { text: "Work in the task's folder.", applied: true },
+      progress: { text: "Report to the task.", applied: true },
+    });
+    const agent = await handle(f);
+    expect(agent.promptSections?.(channel, root)).toEqual({
+      owner: {},
+      plugin: {
+        id: "example",
+        sections: {
+          "working-location": "Work in the task's folder.",
+          progress: "Report to the task.",
+        },
+      },
+    });
+    // Only that conversation's prompt: no other thread's, and no turn's
+    // outside any conversation, such as a watch's or a timer's.
+    expect(agent.promptSections?.(channel, "f".repeat(64))).toEqual({
+      owner: {},
+    });
+    expect(agent.promptSections?.(channel)).toEqual({ owner: {} });
+    expect(agent.promptSections?.()).toEqual({ owner: {} });
+    // The whole set is replaced.
+    await agents.setConversationSections(f.agent.key, thread, {
+      progress: "Report once.",
+    });
+    expect(agent.promptSections?.(channel, root)?.plugin?.sections).toEqual({
+      progress: "Report once.",
+    });
+    await agents.setConversationSections(f.agent.key, thread, {});
+    await expect(
+      agents.conversationSections(f.agent.key, thread),
+    ).resolves.toBeUndefined();
+    expect(agent.promptSections?.(channel, root)).toEqual({ owner: {} });
+    expect(saved(f)).toEqual([]);
+  });
+
+  it("refuse a section the plugin may not replace, and save nothing of a call with one", async () => {
+    const f = await ready();
+    const set = (sections: Record<string, string>) =>
+      f.plugin.agents.setConversationSections(f.agent.key, thread, sections);
+    // The plugin's manifest lists four others.
+    await expect(set({ autonomy: "Ask first." })).rejects.toThrow(
+      'does not declare the agent prompt section "autonomy"',
+    );
+    await expect(set({ progress: "Fine.", trust: "x" })).rejects.toThrow(
+      'A plugin cannot replace the agent prompt section "trust"',
+    );
+    expect(saved(f)).toEqual([]);
+    await set({ progress: "Fine." });
+    expect(saved(f)).toHaveLength(1);
+  });
+
+  it("are refused by a harness without them", async () => {
+    const f = await ready({ conversationSections: undefined });
+    await expect(
+      f.plugin.agents.setConversationSections(f.agent.key, thread, {
+        progress: "x",
+      }),
+    ).rejects.toThrow("Echo agents do not support conversation sections");
+  });
+
+  it("are not used once the agent has a type without them", async () => {
+    const f = await ready();
+    await f.plugin.agents.setConversationSections(f.agent.key, thread, {
+      progress: "Report to the task.",
+    });
+    const run = vi.fn();
+    f.plugin.agents.register({
+      id: "plain",
+      title: "Plain",
+      defaults: () => ({ config: {} }),
+      run,
+    });
+    await f.service.retype(f.agent.key, "example/plain");
+    await expect(
+      f.plugin.agents.conversationSections(f.agent.key, thread),
+    ).resolves.toEqual({
+      progress: { text: "Report to the task.", applied: false },
+    });
+    f.emit({
+      events: [
+        event("1", {
+          tags: [
+            ["h", channel],
+            ["p", bot],
+          ],
+        }),
+      ],
+    });
+    await vi.waitFor(() => expect(run).toHaveBeenCalledTimes(1));
+    const [delivery] = run.mock.calls[0] ?? [];
+    expect(delivery.agent.promptSections?.(channel, root)?.plugin).toBe(
+      undefined,
+    );
+  });
+
+  it("are refused for one community session, and unused once an agent has one", async () => {
+    let scope: "thread" | "community" = "thread";
+    const f = await ready({
+      sessionControls: {
+        state: () => "idle",
+        run: async () => {},
+        scope: () => scope,
+      } as never,
+    });
+    const { agents } = f.plugin;
+    await agents.setConversationSections(f.agent.key, thread, {
+      progress: "Report to the task.",
+    });
+    const agent = await handle(f);
+    // The owner gives the agent one session for its whole community, which
+    // takes in every conversation's turns.
+    scope = "community";
+    expect(agent.promptSections?.(channel, root)).toEqual({ owner: {} });
+    await expect(
+      agents.conversationSections(f.agent.key, thread),
+    ).resolves.toEqual({
+      progress: {
+        text: "Report to the task.",
+        applied: false,
+        reason: "community",
+      },
+    });
+    await expect(
+      agents.setConversationSections(f.agent.key, thread, { progress: "x" }),
+    ).rejects.toThrow("A community session has one prompt");
+    scope = "thread";
+    expect(agent.promptSections?.(channel, root)?.plugin?.sections).toEqual({
+      progress: "Report to the task.",
+    });
+  });
+
+  it("follow the place rules of a conversation's instructions", async () => {
+    const whole = await ready({
+      sessionControls: {
+        state: () => "idle",
+        run: async () => {},
+        scope: () => "channel",
+      } as never,
+    });
+    await expect(
+      whole.plugin.agents.setConversationSections(whole.agent.key, thread, {
+        progress: "x",
+      }),
+    ).rejects.toThrow("give its sections without a root");
+    const f = await ready();
+    await expect(
+      f.plugin.agents.setConversationSections(sibling, thread, {
+        progress: "x",
+      }),
+    ).rejects.toThrow("No such local agent on this device");
+    await expect(
+      f.plugin.agents.conversationSections(sibling, thread),
+    ).resolves.toBeUndefined();
+    const list = f.session.channels.list();
+    vi.spyOn(f.session.channels, "list").mockReturnValue({
+      ...list,
+      channels: list.channels.map((row) =>
+        row.id === channel
+          ? { ...row, description: huddleDescription(crypto.randomUUID()) }
+          : row,
+      ),
+    });
+    await expect(
+      f.plugin.agents.setConversationSections(f.agent.key, thread, {
+        progress: "x",
+      }),
+    ).rejects.toThrow("Conversation sections are unavailable in a huddle");
+  });
+
+  it("have one managing plugin, until that plugin is off", async () => {
+    const f = await ready();
+    const other = another(f);
+    await f.plugin.agents.setConversationSections(f.agent.key, thread, {
+      progress: "Report to the task.",
+    });
+    for (const sections of [{ progress: "Mine." }, {}])
+      await expect(
+        other.setConversationSections(f.agent.key, thread, sections),
+      ).rejects.toThrow("Another plugin manages this conversation");
+    // Nor does it read what the managing plugin gave.
+    await expect(
+      other.conversationSections(f.agent.key, thread),
+    ).resolves.toBeUndefined();
+    // It manages another conversation of the same agent.
+    await other.setConversationSections(
+      f.agent.key,
+      { channelId: channel, root: "f".repeat(64) },
+      { progress: "Mine." },
+    );
+    const agent = await handle(f);
+    expect(agent.promptSections?.(channel, root)?.plugin?.id).toBe("example");
+    // While it restarts or after it failed to start, its record is not used,
+    // and stays its own: it is still on.
+    const example = f.owners.get("example");
+    f.owners.delete("example");
+    f.inactive.add("example");
+    expect(agent.promptSections?.(channel, root)).toEqual({ owner: {} });
+    await expect(
+      f.plugin.agents.conversationSections(f.agent.key, thread),
+    ).resolves.toEqual({
+      progress: { text: "Report to the task.", applied: false },
+    });
+    for (const sections of [{ progress: "Mine." }, {}])
+      await expect(
+        other.setConversationSections(f.agent.key, thread, sections),
+      ).rejects.toThrow("Another plugin manages this conversation");
+    if (example) f.owners.set("example", example);
+    f.inactive.delete("example");
+    expect(agent.promptSections?.(channel, root)?.plugin?.id).toBe("example");
+    // Turned off, its record is not used, and the other plugin takes over.
+    f.owners.delete("example");
+    expect(agent.promptSections?.(channel, root)).toEqual({ owner: {} });
+    await other.setConversationSections(f.agent.key, thread, {
+      progress: "Mine.",
+    });
+    expect(agent.promptSections?.(channel, root)?.plugin).toEqual({
+      id: "other",
+      sections: { progress: "Mine." },
+    });
+  });
+
+  it("are claimed by the plugin whose first save is still being written", async () => {
+    const f = await ready();
+    const other = another(f);
+    // The first save shows at once and is held while it is written.
+    const set = f.storage.set.bind(f.storage);
+    let release = () => {};
+    const written = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    vi.spyOn(f.storage, "set").mockImplementationOnce(async (key, value) => {
+      const done = set(key, value);
+      await written;
+      return done;
+    });
+    const first = f.plugin.agents.setConversationSections(f.agent.key, thread, {
+      progress: "Report to the task.",
+    });
+    await vi.waitFor(() => expect(saved(f)).toHaveLength(1));
+    try {
+      for (const sections of [{ progress: "Mine." }, {}])
+        await expect(
+          other.setConversationSections(f.agent.key, thread, sections),
+        ).rejects.toThrow("Another plugin manages this conversation");
+      // A turn still takes no text that is not saved yet.
+      const agent = await handle(f);
+      expect(agent.promptSections?.(channel, root)?.plugin).toBeUndefined();
+    } finally {
+      release();
+    }
+    await first;
+    const agent = await handle(f);
+    expect(agent.promptSections?.(channel, root)?.plugin).toEqual({
+      id: "example",
+      sections: { progress: "Report to the task." },
+    });
+  });
+
+  it("stay claimed by their plugin until its removal is saved", async () => {
+    // The device's file write for the removal is held, then fails.
+    let write: Promise<void> | undefined;
+    let entered = () => {};
+    const storage = fileStore(new Map(), async () => {
+      if (!write) return;
+      entered();
+      await write;
+    });
+    const f = await ready({ storage });
+    const other = another(f);
+    await f.plugin.agents.setConversationSections(f.agent.key, thread, {
+      progress: "Report to the task.",
+    });
+    let fail = () => {};
+    write = new Promise<void>((_, reject) => {
+      fail = () => reject(new Error("Disk full"));
+    });
+    const started = new Promise<void>((resolve) => {
+      entered = resolve;
+    });
+    const clear = f.plugin.agents.setConversationSections(
+      f.agent.key,
+      thread,
+      {},
+    );
+    await started;
+    try {
+      // The removal shows at once, and the other plugin still may not take over.
+      expect(saved(f)).toHaveLength(0);
+      for (const sections of [{ progress: "Mine." }, {}])
+        await expect(
+          other.setConversationSections(f.agent.key, thread, sections),
+        ).rejects.toThrow("Another plugin manages this conversation");
+    } finally {
+      fail();
+    }
+    await expect(clear).rejects.toThrow("Disk full");
+    write = undefined;
+    expect(saved(f)).toHaveLength(1);
+    // It still manages the conversation, and its record is still used.
+    const agent = await handle(f);
+    expect(agent.promptSections?.(channel, root)?.plugin).toEqual({
+      id: "example",
+      sections: { progress: "Report to the task." },
+    });
+    await expect(
+      other.setConversationSections(f.agent.key, thread, { progress: "Mine." }),
+    ).rejects.toThrow("Another plugin manages this conversation");
+    // Once its removal is saved, the other plugin can take over.
+    await f.plugin.agents.setConversationSections(f.agent.key, thread, {});
+    await other.setConversationSections(f.agent.key, thread, {
+      progress: "Mine.",
+    });
+    expect(agent.promptSections?.(channel, root)?.plugin).toEqual({
+      id: "other",
+      sections: { progress: "Mine." },
+    });
+  });
+
+  it("use only the sections the plugin's manifest declares now", async () => {
+    const f = await ready();
+    await f.plugin.agents.setConversationSections(f.agent.key, thread, {
+      "working-location": "Work in the task's folder.",
+      progress: "Report to the task.",
+    });
+    // The plugin's update declares one section fewer.
+    const pluginOwner = Object.freeze({
+      id: "example",
+      revision: "two",
+      agentPromptSections: ["progress"],
+    });
+    f.owners.set(pluginOwner.id, pluginOwner);
+    const agent = await handle(f);
+    expect(agent.promptSections?.(channel, root)?.plugin?.sections).toEqual({
+      progress: "Report to the task.",
+    });
+    await expect(
+      f.ctx
+        .extend({ pluginOwner })
+        .agents.conversationSections(f.agent.key, thread),
+    ).resolves.toEqual({
+      "working-location": {
+        text: "Work in the task's folder.",
+        applied: false,
+      },
+      progress: { text: "Report to the task.", applied: true },
+    });
+  });
+
+  it("say when the owner's choice for a section wins", async () => {
+    const f = await ready();
+    await f.plugin.agents.setConversationSections(f.agent.key, thread, {
+      "working-location": "Work in the task's folder.",
+      progress: "Report to the task.",
+    });
+    await saveOwnerSections(f.storage, { progress: { mode: "off" } });
+    await expect(
+      f.plugin.agents.conversationSections(f.agent.key, thread),
+    ).resolves.toEqual({
+      "working-location": { text: "Work in the task's folder.", applied: true },
+      progress: {
+        text: "Report to the task.",
+        applied: false,
+        reason: "owner",
+      },
+    });
+    // The builder gets both, and prints the owner's.
+    const agent = await handle(f);
+    expect(agent.promptSections?.(channel, root)).toEqual({
+      owner: { progress: { mode: "off" } },
+      plugin: {
+        id: "example",
+        sections: {
+          "working-location": "Work in the task's folder.",
+          progress: "Report to the task.",
+        },
+      },
+    });
+  });
+
+  it("keep Working location from an agent on an execution target, which has no conversation folders", async () => {
+    const f = await ready({ execution: true, retire: vi.fn(async () => {}) });
+    await f.plugin.agents.setConversationSections(f.agent.key, thread, {
+      "working-location": "Work in the task's folder.",
+      progress: "Report to the task.",
+    });
+    const adapter = f.ctx.extend({
+      pluginOwner: {
+        id: "internal",
+        revision: "one",
+        agentExecution: ["example/echo"],
+      },
+    });
+    adapter.agents.registerExecution({
+      id: "remote",
+      harnesses: ["example/echo"],
+      connect: vi.fn(),
+    });
+    await adapter.agents.bindExecution(f.agent.key, { id: "remote" });
+    await expect(
+      f.plugin.agents.conversationSections(f.agent.key, thread),
+    ).resolves.toEqual({
+      "working-location": {
+        text: "Work in the task's folder.",
+        applied: false,
+        reason: "target",
+      },
+      progress: { text: "Report to the task.", applied: true },
+    });
+    const agent = await handle(f);
+    expect(agent.promptSections?.(channel, root)?.plugin?.sections).toEqual({
+      progress: "Report to the task.",
+    });
+  });
+
+  it("are kept for a protected agent, whose prompt uses none", async () => {
+    const identities: AgentIdentity[] = [];
+    const f = await ready({ identities, protection: true });
+    await f.plugin.agents.setConversationSections(f.agent.key, thread, {
+      progress: "Report to the task.",
+    });
+    const sections = () =>
+      f.plugin.agents.handle(bot)?.promptSections?.(channel, root);
+    expect(sections()?.plugin?.id).toBe("example");
+    const identity = identities[0];
+    if (!identity) throw new Error("Missing native identity");
+    identities[0] = {
+      ...identity,
+      protection: { provider: "example", policy: {} },
+      protectionRevision: 1,
+    };
+    await f.service.refresh();
+    await vi.waitFor(() =>
+      expect(f.service.find(bot)?.protection).toBeDefined(),
+    );
+    expect(sections()).toEqual({ owner: {} });
+    expect(saved(f)).toHaveLength(1);
+    await expect(
+      f.plugin.agents.conversationSections(f.agent.key, thread),
+    ).resolves.toEqual({
+      progress: {
+        text: "Report to the task.",
+        applied: false,
+        reason: "protected",
+      },
+    });
+  });
+
+  it("are dropped when the agent is deleted", async () => {
+    const f = await ready();
+    await f.plugin.agents.setConversationSections(f.agent.key, thread, {
+      progress: "Report to the task.",
+    });
+    expect(saved(f)).toHaveLength(1);
+    await f.service.remove(bot);
+    expect(saved(f)).toEqual([]);
   });
 });
 
@@ -9965,18 +10635,26 @@ describe("a turn closing or reloading the app stopped", () => {
     for (const key of from.keys()) next.setItem(key, from.get(key) ?? "");
     return next;
   };
+  const placementFor = (asked: RelayEvent) => {
+    const source = { channelId: channel, root: asked.id };
+    return { source, conversation: source };
+  };
   /** An app that stopped while Echo worked on `asked`, as it left storage. */
-  const stopped = async (asked: RelayEvent) => {
+  const stopped = async (asked: RelayEvent, beforeRouting = false) => {
     const first = await setup({ identities: [echo], resumes: true });
-    first.run.mockImplementationOnce(({ workingUntil }) =>
-      workingUntil(working()),
+    first.run.mockImplementationOnce(
+      async ({ routeConversation, workingUntil }) => {
+        if (!beforeRouting) await routeConversation?.(placementFor(asked));
+        workingUntil(working());
+      },
     );
     first.emit({ events: [asked], channelId: channel });
     await vi.waitFor(() => expect(first.run).toHaveBeenCalledOnce());
     await settle();
-    expect(readInterrupted(first.storage)).toEqual({
-      [bot]: { [asked.id]: channel },
-    });
+    if (!beforeRouting)
+      expect(readInterrupted(first.storage)).toEqual({
+        [bot]: { [asked.id]: channel },
+      });
     first.connect(false);
     return reopen(first.storage);
   };
@@ -10026,6 +10704,112 @@ describe("a turn closing or reloading the app stopped", () => {
     await settle();
     expect(third.run).not.toHaveBeenCalled();
   });
+
+  it.each([false, true])(
+    "requires a durable native fallback only when a routing plugin matches (%s)",
+    async (matches) => {
+      const asked = mention();
+      const store = memoryStorage();
+      const app = await setup({
+        storage: {
+          ...store,
+          async set(key, value) {
+            if (key.startsWith(INTERRUPTED_PREFIX))
+              throw new Error("Disk full");
+            await store.set(key, value);
+          },
+        },
+        identities: [echo],
+        resumes: true,
+      });
+      if (matches)
+        await app.ctx
+          .extend({ pluginOwner: { id: "tasks", revision: "one" } })
+          .plugin((plugin) => {
+            plugin.agents.registerSessionRouter({
+              id: "tasks",
+              ready: async () => {},
+              matches: () => true,
+              route: async () => undefined,
+              prepare: async () => undefined,
+            });
+          })
+          .await();
+      const answered = vi.fn();
+      app.run.mockImplementationOnce(async ({ routeConversation }) => {
+        await routeConversation?.(placementFor(asked));
+        answered();
+      });
+
+      app.emit({ events: [asked], channelId: channel });
+      await vi.waitFor(() =>
+        expect(app.activity.reader.work()[0]?.state).toBe(
+          matches ? "error" : "done",
+        ),
+      );
+      expect(answered).toHaveBeenCalledTimes(matches ? 0 : 1);
+    },
+  );
+
+  it.each(["legacy", "native", "pending"] as const)(
+    "keeps the %s placement decision through Resume and Retry",
+    async (state) => {
+      const asked = mention();
+      const storage =
+        state === "legacy"
+          ? memoryStorage()
+          : await stopped(asked, state === "pending");
+      if (state === "legacy")
+        await writeInterrupted(storage, bot, { [asked.id]: channel });
+      const app = await setup({
+        storage,
+        identities: [echo],
+        resumes: true,
+        history: [asked],
+      });
+      const task = { root: asked.id, parent: "d".repeat(64) };
+      await app.ctx
+        .extend({ pluginOwner: { id: "tasks", revision: "one" } })
+        .plugin((plugin) => {
+          plugin.agents.registerSessionRouter({
+            id: "tasks",
+            ready: async () => {},
+            matches: () => true,
+            route: async () => task,
+            prepare: async () => undefined,
+          });
+        })
+        .await();
+      const placements: Array<typeof task | undefined> = [];
+      const route = async ({ routeConversation }: Delivery) => {
+        placements.push(await routeConversation?.(placementFor(asked)));
+      };
+      app.run.mockImplementationOnce(async (delivery) => {
+        await route(delivery);
+        throw new Error("Provider unavailable");
+      });
+      app.run.mockImplementationOnce(route);
+
+      await vi.waitFor(() =>
+        expect(names(app.service.snapshot().interrupted)).toEqual(["Echo"]),
+      );
+      app.service.resumeInterrupted();
+      await vi.waitFor(() =>
+        expect(app.activity.reader.work()[0]).toMatchObject({
+          state: "error",
+          retryable: true,
+        }),
+      );
+      const expected = state === "pending" ? task : undefined;
+      expect(placements).toEqual([expected]);
+      app.activity.reader.retry?.(app.activity.reader.work()[0] as LocalWork);
+      await vi.waitFor(() =>
+        expect(app.activity.reader.work()[0]?.state).toBe("done"),
+      );
+      expect(placements).toEqual([expected, expected]);
+      expect(readInterrupted(storage)).toEqual({});
+    },
+  );
 
   it("previews its saved turns with Resume's fresh read, changing nothing", async () => {
     const asked = mention();
@@ -10268,7 +11052,7 @@ describe("a turn closing or reloading the app stopped", () => {
     finish();
     await settle();
     expect(readInterrupted(storage)).toEqual({
-      [sibling]: { [asked.id]: channel },
+      [sibling]: { [asked.id]: { channel, placement: "pending" } },
     });
   });
 
@@ -14790,13 +15574,15 @@ it("retries a failed request as the same mention, which stays seen and is saved 
   });
   let finish!: () => void;
   f.run.mockRejectedValueOnce(new Error("Provider unavailable"));
-  f.run.mockImplementationOnce(({ workingUntil }) =>
+  f.run.mockImplementationOnce(async ({ routeConversation, workingUntil }) => {
+    const source = { channelId: channel, root: asked.id };
+    await routeConversation?.({ source, conversation: source });
     workingUntil(
       new Promise<void>((resolve) => {
         finish = resolve;
       }),
-    ),
-  );
+    );
+  });
   f.emit({ events: [asked], channelId: channel });
   try {
     await vi.waitFor(() =>
@@ -16664,6 +17450,72 @@ describe("Attention plugin sources", () => {
           type: "attention",
           text: expect.stringContaining("watch-classifier"),
         });
+    },
+  );
+  it.each(["switches", "refuses the switch"])(
+    "delivers a completed source's accepted wake when retype %s",
+    async (outcome) => {
+      const jev = fakeJev();
+      const decision = runnerGate<DecisionResult>();
+      jev.decide.mockReturnValueOnce(decision.promise);
+      const { service, run, plugin, native, watching } = await sourceFixture({
+        jev,
+      });
+      const replacement = vi.fn(async () => {});
+      plugin.agents.register({
+        id: "replacement",
+        title: "Replacement",
+        defaults: () => ({ config: {} }),
+        run: replacement,
+      });
+      const produce = vi.fn(
+        async ({ emit }: Parameters<AttentionSource["run"]>[0]) => {
+          emit("final command output");
+        },
+      );
+      plugin.agents.addAttentionSource({ id: "command", run: produce });
+      try {
+        await service.create({ type: "example/echo", name: "Echo" });
+        await service.save(bot, {
+          attentionEnabled: true,
+          attention: {
+            ...watches,
+            "watch/pr": {
+              ...watches["watch/pr"],
+              classifier: {
+                questions: { relevant: { question: "Relevant?" } },
+              },
+            },
+          },
+        });
+        await vi.waitFor(() =>
+          expect(service.find(bot)?.sourceRuns?.["watch/pr"]).toBeDefined(),
+        );
+        if (outcome === "switches") {
+          await service.retype(bot, "example/replacement");
+        } else {
+          native.setType.mockRejectedValueOnce(new Error("Switch refused"));
+          await expect(
+            service.retype(bot, "example/replacement"),
+          ).rejects.toThrow("Switch refused");
+        }
+        decision.resolve(answered(0.9));
+        const receiving = outcome === "switches" ? replacement : run;
+        await vi.waitFor(() =>
+          expect(receiving).toHaveBeenCalledExactlyOnceWith(
+            expect.objectContaining({
+              trigger: expect.objectContaining({
+                type: "attention",
+                text: expect.stringContaining("final command output"),
+              }),
+            }),
+          ),
+        );
+        expect(produce).toHaveBeenCalledOnce();
+      } finally {
+        decision.resolve(answered(0.9));
+        await watching?.dispose();
+      }
     },
   );
   it("reserves a classified source's queue slot until delivery", async () => {
@@ -20673,6 +21525,103 @@ it.each(["command"])(
       }),
     );
     await watching?.dispose();
+  },
+);
+
+it.each(["starting", "running", "refused", "refused after notification"])(
+  "reconciles a command watch after a %s harness switch",
+  async (state) => {
+    const { service, plugin, ctx, native, watching } = await setup();
+    const kill = vi.fn(async () => {});
+    let exit!: (code: number | null) => void;
+    const exited = new Promise<number | null>((resolve) => {
+      exit = resolve;
+    });
+    const starting = runnerGate();
+    if (state !== "starting") starting.resolve();
+    const spawn = vi.fn(heldCommand).mockImplementationOnce(async () => {
+      await starting.promise;
+      return { ...(await heldCommand()), exited, kill };
+    });
+    ctx.provide("host", {
+      spawn,
+      serveMcp: async () => ({
+        url: "http://127.0.0.1/mcp",
+        headers: [],
+        closed: new Promise<void>(() => {}),
+        close: async () => {},
+      }),
+    });
+    plugin.agents.register({
+      id: "replacement",
+      title: "Replacement",
+      defaults: () => ({ config: {} }),
+      run: async () => {},
+    });
+    const core = plugin.extend({
+      pluginOwner: { id: "buzz.agents", revision: "bundled" },
+    });
+    registerAttention({ agents: core.agents });
+    try {
+      await service.create({ type: "example/echo", name: "Echo" });
+      await service.save(bot, {
+        attentionEnabled: true,
+        attention: {
+          "watch/saved": {
+            type: "source",
+            provider: "attention/command",
+            interest_id: "default",
+            enabled: true,
+            config: { command: ["check"] },
+          },
+        },
+      });
+      await vi.waitFor(() => expect(spawn).toHaveBeenCalledTimes(1));
+      const watch = service.find(bot)?.attention["watch/saved"];
+
+      if (state === "refused" || state === "refused after notification") {
+        const entered = runnerGate();
+        const change = runnerGate();
+        native.setType.mockImplementationOnce(async () => {
+          entered.resolve();
+          await change.promise;
+        });
+        const result = expect(
+          service.retype(bot, "example/replacement"),
+        ).rejects.toThrow("Switch refused");
+        await entered.promise;
+        try {
+          if (state === "refused after notification")
+            await service.saveTeam({
+              name: "Crew",
+              instructions: "",
+              members: [bot],
+            });
+        } finally {
+          change.reject(new Error("Switch refused"));
+          await result;
+        }
+        await settle();
+        expect(service.find(bot)?.type).toBe("example/echo");
+        expect(kill).not.toHaveBeenCalled();
+        expect(spawn).toHaveBeenCalledTimes(1);
+        return;
+      }
+
+      await service.retype(bot, "example/replacement");
+
+      starting.resolve();
+      expect(service.find(bot)?.attention["watch/saved"]).toBe(watch);
+      await vi.waitFor(() => expect(kill).toHaveBeenCalledTimes(1));
+      await settle();
+      expect(spawn).toHaveBeenCalledTimes(1);
+      exit(null);
+      await vi.waitFor(() => expect(spawn).toHaveBeenCalledTimes(2));
+    } finally {
+      starting.resolve();
+      exit(null);
+      await watching?.dispose();
+    }
   },
 );
 

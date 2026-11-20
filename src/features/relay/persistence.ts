@@ -39,7 +39,8 @@ const DB = "buzz-channel-heads-v1";
 const STORE = "heads";
 const STARTUP = "startup";
 const MIRROR = ":profiles";
-const MAX_BYTES = 8 * 1024 * 1024;
+/** The largest row saved; a larger one is not written at all. */
+export const MAX_BYTES = 8 * 1024 * 1024;
 const MAX_HEADS = 64;
 const MAX_AGE = 24 * 60 * 60 * 1000;
 type HeadMeta = { key: string; bytes: number; savedAt: number };

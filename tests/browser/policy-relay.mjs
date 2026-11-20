@@ -205,6 +205,22 @@ export function policyRelay({
       refusal = status ? { status, body, only } : undefined;
     },
     async fetch(url, init) {
+      const holdProfile = (result) =>
+        new Promise((resolve, reject) => {
+          const held = { pending: true, aborted: false };
+          profileHolds.push(held);
+          const abort = () => {
+            held.pending = false;
+            held.aborted = true;
+            reject(init.signal.reason);
+          };
+          init.signal.addEventListener("abort", abort, { once: true });
+          pendingProfiles.push(() => {
+            held.pending = false;
+            init.signal.removeEventListener("abort", abort);
+            resolve(Response.json(result));
+          });
+        });
       try {
         if (latencyMs)
           await new Promise((resolve) => setTimeout(resolve, latencyMs));
@@ -280,6 +296,32 @@ export function policyRelay({
           return Response.json(
             filters.flatMap((filter) => answer(communityOf(url), filter)),
           );
+        }
+        if (filters.length === 2 && filters[1].kinds?.includes(30315)) {
+          // Byline profiles with the statuses their rows show.
+          const [names, statuses] = filters;
+          expect(names).toEqual({
+            kinds: [0],
+            authors: expect.any(Array),
+            limit: expect.any(Number),
+          });
+          expect(statuses).toEqual({
+            kinds: [30315],
+            "#d": ["general"],
+            authors: expect.any(Array),
+            limit: statuses.authors.length,
+          });
+          expect(statuses.authors.length).toBeLessThanOrEqual(100);
+          expect(
+            statuses.authors.every((id) => names.authors.includes(id)),
+          ).toBe(true);
+          const community = communityOf(url);
+          for (const filter of filters)
+            report.queries.push({ community, filter, at: performance.now() });
+          const result = filters.flatMap((filter) => answer(community, filter));
+          return names.authors.some((id) => heldAuthors.has(id))
+            ? holdProfile(result)
+            : Response.json(result);
         }
         if (filters.length === 2 && filters[0].kinds?.includes(39000)) {
           // Exact channel authority lookup, distinct from sidebar preferences.
@@ -564,21 +606,7 @@ export function policyRelay({
           filter.kinds?.includes(0) &&
           filter.authors?.some((id) => heldAuthors.has(id))
         )
-          return new Promise((resolve, reject) => {
-            const held = { pending: true, aborted: false };
-            profileHolds.push(held);
-            const abort = () => {
-              held.pending = false;
-              held.aborted = true;
-              reject(init.signal.reason);
-            };
-            init.signal.addEventListener("abort", abort, { once: true });
-            pendingProfiles.push(() => {
-              held.pending = false;
-              init.signal.removeEventListener("abort", abort);
-              resolve(Response.json(result));
-            });
-          });
+          return holdProfile(result);
         if (
           filter.search === undefined &&
           filter.until !== undefined &&

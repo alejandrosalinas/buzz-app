@@ -706,7 +706,6 @@ it("real broker reorders sections through the signed, confirmed narrow command",
       "solo",
       "starred",
       "channels",
-      "forums",
       "dms",
     ],
   });

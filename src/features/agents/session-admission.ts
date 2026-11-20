@@ -41,6 +41,8 @@ type AdmissionRequest = Omit<
   AgentSessionAdmission,
   "sessionKey" | "intent" | "association" | "adopted"
 >;
+/** Physical thread and the invocation that owns a routed conversation. */
+export type InvocationSubthread = Readonly<{ root: string; parent: string }>;
 export type AgentSessionRouter = Readonly<{
   id: string;
   /** Opens local keyed storage. This must not wait for a sidebar or relay. */
@@ -51,6 +53,11 @@ export type AgentSessionRouter = Readonly<{
       "agent" | "owner" | "harness" | "source"
     >,
   ): boolean;
+  /** Runs after authority checks, before the harness chooses its session.
+   * Resolve task ancestry here; undefined preserves the native placement. */
+  route?(
+    input: AdmissionRequest & Readonly<{ savedRoute?: InvocationSubthread }>,
+  ): Promise<InvocationSubthread | undefined>;
   /** Saves the local association before returning. Undefined leaves the run unchanged. */
   prepare(input: AgentSessionAdmission): Promise<
     | Readonly<{
@@ -81,6 +88,20 @@ function parse<T>(text: string): T {
   }
 }
 
+function checkedRoute(value: unknown): InvocationSubthread {
+  const route = value as InvocationSubthread | undefined;
+  if (
+    !route ||
+    typeof route.root !== "string" ||
+    typeof route.parent !== "string" ||
+    !/^[a-f0-9]{64}$/.test(route.root) ||
+    !/^[a-f0-9]{64}$/.test(route.parent) ||
+    route.root === route.parent
+  )
+    throw new Error("The invocation subthread is invalid");
+  return { root: route.root, parent: route.parent };
+}
+
 const keyFor = (agent: AgentKey, harness: string, source: AgentSessionSource) =>
   SESSION_ADMISSION_PREFIX +
   JSON.stringify([
@@ -92,6 +113,20 @@ const keyFor = (agent: AgentKey, harness: string, source: AgentSessionSource) =>
   ]);
 const savedKey = (sessionKey: string) =>
   SESSION_ADMISSION_PREFIX + JSON.stringify(["session", sessionKey]);
+
+const routeConversationKey = (
+  agent: AgentKey,
+  harness: string,
+  source: AgentSessionSource,
+) =>
+  SESSION_ADMISSION_PREFIX +
+  JSON.stringify([
+    "route-conversation",
+    agent,
+    harness,
+    source.channelId,
+    source.root,
+  ]);
 
 /** Logical lifetimes survive harness reconnects. Each invocation keeps its own key. */
 export function createSessionAdmissions(root: Context, storage: AgentStore) {
@@ -106,6 +141,12 @@ export function createSessionAdmissions(root: Context, storage: AgentStore) {
     if (stopped) throw new Error("Agent session admission is stopped");
   };
   return {
+    routed(agent: AgentKey, harness: string, source: AgentSessionSource) {
+      return (
+        !!source.root &&
+        storage.get(routeConversationKey(agent, harness, source)) !== null
+      );
+    },
     register(ctx: Context, router: AgentSessionRouter) {
       if (
         !ctx.pluginOwner ||
@@ -118,6 +159,91 @@ export function createSessionAdmissions(root: Context, storage: AgentStore) {
           "A session router needs an id, ready, matches and prepare",
         );
       routers.register(ctx, router);
+    },
+    async route(
+      input: AdmissionRequest,
+      nativePlacement?: true,
+      pinNativePlacement?: () => Promise<void> | undefined,
+    ) {
+      check(input.signal);
+      const key =
+        SESSION_ADMISSION_PREFIX +
+        JSON.stringify([
+          "route",
+          input.agent,
+          input.harness,
+          input.invocationId,
+        ]);
+      const saved = await storage.read(key);
+      if (saved !== null && parse<InvocationSubthread | null>(saved) === null)
+        return;
+      const conversationKey = (parent: string) =>
+        routeConversationKey(input.agent, input.harness, {
+          channelId: input.source.channelId,
+          root: parent,
+        });
+      const prior =
+        saved ??
+        (input.source.root
+          ? await storage.read(conversationKey(input.source.root))
+          : null);
+      const savedRoute =
+        prior === null ? undefined : checkedRoute(parse<unknown>(prior));
+      if (nativePlacement && !savedRoute) return;
+      const candidates = routers.snapshot().filter((router) => router.route);
+      if (!candidates.length) return savedRoute;
+      await Promise.all(candidates.map((router) => router.ready()));
+      check(input.signal);
+      const matches = candidates.filter((router) => router.matches(input));
+      if (matches.length > 1)
+        throw new Error("More than one plugin routes this conversation");
+      const router = matches[0];
+      if (!router) return savedRoute;
+      // A request already admitted under the old placement stays there.
+      const legacy = await storage.read(
+        SESSION_ADMISSION_PREFIX +
+          JSON.stringify([
+            "invocation",
+            input.agent,
+            input.harness,
+            input.invocationId,
+          ]),
+      );
+      const route =
+        legacy === null || savedRoute
+          ? await router.route?.({
+              ...input,
+              ...(savedRoute ? { savedRoute } : {}),
+            })
+          : undefined;
+      check(input.signal);
+      if (!routers.snapshot().includes(router))
+        throw new Error("The conversation router changed");
+      if (route !== undefined) checkedRoute(route);
+      if (route && input.event && route.root !== input.source.root)
+        throw new Error(
+          "The invocation subthread has a different source thread",
+        );
+      if (
+        savedRoute &&
+        (savedRoute.root !== route?.root || savedRoute.parent !== route.parent)
+      )
+        throw new Error("The invocation subthread cannot change");
+      if (!route) {
+        await pinNativePlacement?.();
+        check(input.signal);
+        return;
+      }
+      const accepted =
+        parse<InvocationSubthread | null>(
+          await storage.add(key, JSON.stringify(route)),
+        ) ?? undefined;
+      if (accepted)
+        await storage.add(
+          conversationKey(accepted.parent),
+          JSON.stringify(accepted),
+        );
+      return accepted;
     },
     async prepare(input: AdmissionRequest) {
       check(input.signal);

@@ -60,6 +60,20 @@ pub struct Discovery {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub tags: Vec<String>,
 }
+/// The sections of an agent's base instructions that a plugin can replace:
+/// those marked `plugin` in `src/features/agent-harness/sections/index.ts`,
+/// which a test checks against this list. An ID never leaves this list: a
+/// section's earlier IDs stay when it is renamed, and its ID stays when the
+/// section goes or a plugin can no longer replace it. Every installed manifest is checked each time the installed
+/// plugins are read, so a removed ID would stop them all from loading.
+pub const AGENT_PROMPT_SECTIONS: &[&str] = &[
+    "callbacks",
+    "routing",
+    "publishing",
+    "progress",
+    "working-location",
+    "autonomy",
+];
 #[derive(Clone, Debug, Default, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct HostGrants {
@@ -71,6 +85,10 @@ pub struct HostGrants {
     /// Execution targets may run these native agent types.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub agent_execution: Vec<String>,
+    /// The plugin may give these sections of an agent's base instructions its
+    /// own text, in the conversations it manages.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub agent_prompt_sections: Vec<String>,
     #[serde(default)]
     pub commands: Vec<HostCommand>,
     #[serde(default)]
@@ -249,6 +267,7 @@ impl Manifest {
         if let Some(host) = &self.host {
             if host.agent_hooks.len() > 16
                 || host.agent_execution.len() > 16
+                || host.agent_prompt_sections.len() > 16
                 || host.commands.len() > 16
                 || host.network_origins.len() > 16
                 || host.processes.len() > 16
@@ -271,6 +290,17 @@ impl Manifest {
                 valid_id(kind)?;
                 if !execution_types.insert(key) {
                     return Err("Duplicate agent execution type".into());
+                }
+            }
+            let mut prompt_sections = std::collections::HashSet::new();
+            for id in &host.agent_prompt_sections {
+                if !AGENT_PROMPT_SECTIONS.contains(&id.as_str()) {
+                    return Err(format!(
+                        "A plugin cannot replace the agent prompt section \"{id}\""
+                    ));
+                }
+                if !prompt_sections.insert(id) {
+                    return Err("Duplicate agent prompt section".into());
                 }
             }
             if let Some(grant) = &host.federated_identity {
@@ -3400,6 +3430,36 @@ mod tests {
         assert!(plugin.enabled);
         assert_eq!(plugin.revision, first);
         assert_eq!(plugin.previous, None);
+    }
+    #[test]
+    fn validates_agent_prompt_sections() {
+        for (ids, valid) in [
+            (vec!["working-location"], true),
+            (vec!["working-location", "progress"], true),
+            (super::AGENT_PROMPT_SECTIONS.to_vec(), true),
+            // Locked, owner-only, host-variant and unknown sections.
+            (vec!["trust"], false),
+            (vec!["etiquette"], false),
+            (vec!["session-model"], false),
+            (vec!["no-such-section"], false),
+            (vec!["progress", "progress"], false),
+            (vec!["Progress"], false),
+        ] {
+            let manifest: super::Manifest = serde_json::from_value(serde_json::json!({
+                "id": "policy", "name": "Policy", "apiVersion": 1,
+                "host": { "agentPromptSections": ids },
+            }))
+            .unwrap();
+            assert_eq!(manifest.validate().is_ok(), valid, "{ids:?}");
+        }
+        // A manifest that declares none is saved as it was.
+        let manifest: super::Manifest = serde_json::from_value(serde_json::json!({
+            "id": "policy", "name": "Policy", "apiVersion": 1, "host": { "files": true },
+        }))
+        .unwrap();
+        assert!(!serde_json::to_string(&manifest)
+            .unwrap()
+            .contains("agentPromptSections"));
     }
     #[test]
     fn validates_agent_type_grants() {

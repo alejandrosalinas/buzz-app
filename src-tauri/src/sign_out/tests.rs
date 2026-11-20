@@ -12,6 +12,7 @@ fn paths_for(root: &Path, service: &str) -> Paths {
         app_data: root.join("app"),
         backups: root.join("nsec-backups").join(service),
         others: vec![root.join("webkit")],
+        media: root.join("cache").join("media"),
         moves: Vec::new(),
         seeds: Vec::new(),
     }
@@ -1071,6 +1072,20 @@ fn a_pending_erase_waits_for_every_agent_supervisor_to_let_go() {
 }
 
 #[test]
+fn a_plain_sign_out_forgets_saved_images_and_keeps_the_rest() {
+    let (dir, paths) = fixture();
+    let before = listing(dir.path());
+    fs::create_dir_all(paths.media.join("community")).unwrap();
+    fs::write(paths.media.join("community").join("entry"), "image").unwrap();
+    mark(&paths, false, false);
+    assert_eq!(finish_pending(&paths, |_| Ok(()), || Ok(())), Ok(()));
+    assert!(!paths.media.exists());
+    let mut after = listing(dir.path());
+    after.retain(|path| path != "cache/");
+    assert_eq!(after, before);
+}
+
+#[test]
 fn a_plain_sign_out_does_not_wait_for_agent_supervisors() {
     let (_dir, paths) = fixture();
     mark(&paths, false, false);
@@ -1898,6 +1913,27 @@ fn a_development_seed_keeps_folder_access_and_retries_past_read_only_ones() {
     fs::set_permissions(&sealed, fs::Permissions::from_mode(0o755)).unwrap();
 }
 
+/// Copies with other identifiers share the key but keep their own caches, so a
+/// sign-out another one finished deletes this one's saved images before any
+/// identity reads them.
+#[test]
+fn a_sign_out_another_copy_finished_forgets_saved_images() {
+    let (_dir, paths) = fixture();
+    let launch = || {
+        let instance = boot(&paths, no_agents, || Ok(())).unwrap();
+        forget_signed_out_key(&instance, &paths, || Ok(()))
+    };
+    launch().unwrap();
+    fs::create_dir_all(&paths.media).unwrap();
+    fs::write(paths.media.join("entry"), "private").unwrap();
+    launch().unwrap();
+    assert!(paths.media.exists());
+    // Another identifier's copy finishes signing out of the shared key.
+    fs::write(&paths.finished, ".").unwrap();
+    launch().unwrap();
+    assert!(!paths.media.exists());
+}
+
 #[test]
 fn a_sign_out_an_older_build_finished_removes_the_current_key_once() {
     let (_dir, paths) = fixture();
@@ -1908,7 +1944,7 @@ fn a_sign_out_an_older_build_finished_removes_the_current_key_once() {
     ));
     let launch = || {
         let instance = boot(&paths, no_agents, || Ok(())).unwrap();
-        forget_signed_out_key(&instance, || {
+        forget_signed_out_key(&instance, &paths, || {
             // Decided and removed holding the record alone: another launch
             // reads it only once this one has recorded the count.
             #[allow(clippy::incompatible_msrv)]
@@ -1938,7 +1974,7 @@ fn a_sign_out_an_older_build_finished_removes_the_current_key_once() {
     fs::write(&paths.finished, "..").unwrap();
     let instance = boot(&paths, no_agents, || Ok(())).unwrap();
     assert_eq!(
-        forget_signed_out_key(&instance, || Err("denied".into())),
+        forget_signed_out_key(&instance, &paths, || Err("denied".into())),
         Err(FAILED.into())
     );
     drop(instance);

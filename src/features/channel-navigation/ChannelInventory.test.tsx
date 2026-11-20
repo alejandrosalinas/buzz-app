@@ -1151,6 +1151,63 @@ it("offers DMs a Move conversation menu and relocates them into a saved group", 
   }
 });
 
+it("lists forums under Channels and moves them into a saved group", async () => {
+  const saved: SidebarPreferences = {
+    sections: [{ id: "work", name: "Work", order: 0 }],
+    assignments: {},
+    starred: [],
+    muted: [],
+  };
+  let assignments: Record<string, string> = {};
+  const read = vi.fn(async () => ({ ...saved, assignments }));
+  const write = vi.fn(
+    async (intent: { channelId?: string; sectionId?: string }) => {
+      if (intent.channelId === undefined || intent.sectionId === undefined)
+        throw new Error("Expected a move into a section");
+      assignments = { ...assignments, [intent.channelId]: intent.sectionId };
+      return { sections: saved.sections, assignments };
+    },
+  );
+  const preferences = createSidebarPreferencesStore({
+    read,
+    available: true,
+    write,
+    writeStar: vi.fn(async () => []),
+  });
+  await preferences.queries.ensure();
+  const h = fixture(preferences.queries, "ready", [
+    { id: "alpha", name: "alpha", channelType: "stream" },
+    { id: "ideas", name: "ideas", channelType: "forum" },
+  ]);
+  const user = userEvent.setup();
+  try {
+    render(h.view("alpha"));
+    const row = await screen.findByRole("button", { name: "ideas" });
+    expect(
+      document.querySelector('[data-sidebar-section="channels"]'),
+    ).toContainElement(row);
+    expect(
+      document.querySelector('[data-sidebar-section="forums"]'),
+    ).toBeNull();
+    fireEvent.keyDown(row, { key: "ContextMenu" });
+    await user.hover(await screen.findByRole("menuitem", { name: "Move to…" }));
+    fireEvent.click(await screen.findByRole("menuitemradio", { name: "Work" }));
+    await waitFor(() =>
+      expect(write).toHaveBeenCalledWith(
+        { channelId: "ideas", sectionId: "work" },
+        expect.any(AbortSignal),
+      ),
+    );
+    await waitFor(() =>
+      expect(
+        document.querySelector('[data-sidebar-section="group:work"]'),
+      ).toContainElement(screen.getByRole("button", { name: "ideas" })),
+    );
+  } finally {
+    preferences.dispose();
+  }
+});
+
 async function failedMoveFixture() {
   const data: SidebarPreferences = {
     sections: [{ id: "work", name: "Work", order: 0 }],
@@ -2586,7 +2643,6 @@ it("moves a saved group from its menu, rolls back a failed save, and retries it"
         "group:later",
         "group:work",
         "channels",
-        "forums",
         "dms",
       ],
       expect.any(AbortSignal),

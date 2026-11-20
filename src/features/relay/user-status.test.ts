@@ -2,7 +2,15 @@ import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { createUserStatuses } from "./user-status";
 import { createEmojiDirectory } from "./emoji-directory";
 import { createRelaySession } from "./session";
-import { keypair, signed } from "./testing";
+import {
+  bounds,
+  keypair,
+  message,
+  metadata,
+  profile,
+  roster,
+  signed,
+} from "./testing";
 import type { RelayEvent } from "./events";
 import type { RelayReader } from "./reader";
 
@@ -299,15 +307,16 @@ it("keeps recently unwatched authors loaded, current from live traffic, and boun
   await vi.advanceTimersByTimeAsync(0);
   expect(read).toHaveBeenCalledOnce();
   expect(owner.queries.snapshot().get(carol.pubkey)?.text).toBe("Live");
-  // 499 more authors out of view keep bob, the oldest; one more evicts him.
+  // As many authors out of view as profiles keep bob, the oldest; one more
+  // evicts that status.
   unwatch();
   const pass = (from: number, count: number) => {
     for (let n = from; n < from + count; n++)
       owner.queries.watch([n.toString(16).padStart(64, "0")])();
   };
-  pass(1, 498);
+  pass(1, 1022);
   expect(owner.queries.snapshot().has(bob.pubkey)).toBe(true);
-  pass(499, 1);
+  pass(1023, 1);
   expect(owner.queries.snapshot().has(bob.pubkey)).toBe(false);
   expect(owner.queries.snapshot().has(carol.pubkey)).toBe(true);
   await vi.advanceTimersByTimeAsync(0);
@@ -342,7 +351,7 @@ it("reads an idle author again after a reconnect, which can miss live changes", 
   expect(read).toHaveBeenCalledTimes(2);
 });
 
-it("keeps unwatched authors loaded only while the profiles stream is live", async () => {
+it("keeps unwatched authors loaded only while the profiles stream is live, and shown either way", async () => {
   const read = vi.fn<RelayReader["read"]>(async () => [
     signed(bob, {
       kind: 30315,
@@ -361,10 +370,10 @@ it("keeps unwatched authors loaded only while the profiles stream is live", asyn
   await rows();
   await rows();
   expect(read).toHaveBeenCalledOnce();
-  // The stream stops: nothing keeps bob's status current, so it is dropped
-  // and read again when his row returns, and dropped again when it leaves.
+  // The stream stops: nothing keeps bob's status current, so it stays shown
+  // but is read again whenever the row returns.
   owner.live(false);
-  expect(owner.queries.snapshot().has(bob.pubkey)).toBe(false);
+  expect(owner.queries.snapshot().get(bob.pubkey)?.text).toBe("Remote");
   await rows();
   expect(read).toHaveBeenCalledTimes(2);
   await rows();
@@ -602,4 +611,388 @@ it("prefers the catalog's current URL over the one a re-save carries forward", a
   await queries.save({ text: "Still buzzin'", emoji: ":bee:" });
   expect(publish.mock.calls[0]?.[0].tags[1]).toEqual(["emoji", ":bee:", newer]);
   catalog.dispose();
+});
+
+it("shows saved statuses at once, reads them again when their rows mount, and saves only shown ones", async () => {
+  const carol = keypair();
+  const dave = keypair();
+  const bobStatus = (content: string, time: number) =>
+    signed(bob, {
+      kind: 30315,
+      created_at: time,
+      content,
+      tags: [["d", "general"]],
+    });
+  const read = vi.fn<RelayReader["read"]>(async () => [
+    bobStatus("Fresh", now + 1),
+  ]);
+  const owner = createUserStatuses({ read });
+  owners.push(owner);
+  const saved = bobStatus("Saved", now);
+  owner.restore([
+    saved,
+    signed(carol, {
+      kind: 30315,
+      created_at: now,
+      content: "Gone",
+      tags: [
+        ["d", "general"],
+        ["expiration", String(now - 1)],
+      ],
+    }),
+    signed(dave, {
+      kind: 30315,
+      created_at: now,
+      content: "",
+      tags: [["d", "general"]],
+    }),
+  ]);
+  expect(owner.queries.snapshot().get(bob.pubkey)?.text).toBe("Saved");
+  expect([...owner.queries.snapshot().keys()]).toEqual([bob.pubkey]);
+  expect(owner.saved()).toEqual([saved]);
+  expect(read).not.toHaveBeenCalled();
+  owner.queries.watch([bob.pubkey]);
+  await vi.advanceTimersByTimeAsync(0);
+  expect(read).toHaveBeenCalledOnce();
+  expect(owner.queries.snapshot().get(bob.pubkey)?.text).toBe("Fresh");
+  // An older copy never replaces what the relay answered.
+  owner.restore([saved]);
+  expect(owner.queries.snapshot().get(bob.pubkey)?.text).toBe("Fresh");
+});
+it("restores in the order live events replace: the same second keeps the lower ID", async () => {
+  const read = vi.fn<RelayReader["read"]>(async () => []);
+  const owner = createUserStatuses({ read });
+  owners.push(owner);
+  owner.queries.watch([bob.pubkey]);
+  await vi.advanceTimersByTimeAsync(0);
+  const [low, high] = ["One", "Two"]
+    .map((content) =>
+      signed(bob, {
+        kind: 30315,
+        created_at: now,
+        content,
+        tags: [["d", "general"]],
+      }),
+    )
+    .sort((a, b) => a.id.localeCompare(b.id)) as [RelayEvent, RelayEvent];
+  owner.accept([high]);
+  owner.restore([low]);
+  expect(owner.queries.snapshot().get(bob.pubkey)?.text).toBe(low.content);
+  owner.accept([high]);
+  expect(owner.saved()).toEqual([low]);
+});
+it("drops a saved status a successful read no longer returns, but not after a failure or a live event", async () => {
+  const carol = keypair();
+  const saved = (author: typeof bob, content: string, time = now) =>
+    signed(author, {
+      kind: 30315,
+      created_at: time,
+      content,
+      tags: [["d", "general"]],
+    });
+  let fail = true;
+  const read = vi.fn<RelayReader["read"]>(async () => {
+    if (fail) throw new Error("offline");
+    // Carol's live event lands while the read is out.
+    owner.accept([saved(carol, "Live", now + 1)]);
+    return [];
+  });
+  const owner = createUserStatuses({ read });
+  owners.push(owner);
+  owner.restore([saved(bob, "Removed"), saved(carol, "Old")]);
+  owner.queries.watch([bob.pubkey, carol.pubkey]);
+  await vi.advanceTimersByTimeAsync(0);
+  expect(read).toHaveBeenCalledOnce();
+  expect(owner.queries.snapshot().get(bob.pubkey)?.text).toBe("Removed");
+  fail = false;
+  await vi.advanceTimersByTimeAsync(5000);
+  expect(read).toHaveBeenCalledTimes(2);
+  expect(owner.queries.snapshot().has(bob.pubkey)).toBe(false);
+  expect(owner.queries.snapshot().get(carol.pubkey)?.text).toBe("Live");
+  expect(owner.saved().map((event) => event.content)).toEqual(["Live"]);
+});
+it("prepares a channel's status images with its avatars", async () => {
+  const relay = keypair();
+  const created: string[] = [];
+  vi.stubGlobal(
+    "Image",
+    class {
+      decoding = "";
+      set src(url: string) {
+        created.push(url);
+      }
+    },
+  );
+  const owner = createRelaySession(
+    {
+      viewer: bob.pubkey,
+      relayAuthor: relay.pubkey,
+      media: (url) => `https://media.test/?url=${encodeURIComponent(url)}`,
+      async query(filters) {
+        const kinds = filters.flatMap((filter) => filter.kinds ?? []);
+        if (kinds.includes(39002))
+          return [roster(relay, "c", [bob.pubkey]), metadata(relay, "c", "C")];
+        if (kinds.includes(9) && filters[0]?.["#h"])
+          return [
+            message(alice, "c", "hello", now),
+            bounds(relay, "c", "head", { has_more: false, next_cursor: null }),
+          ];
+        if (kinds.includes(0)) return [profile(alice, { name: "Alice" })];
+        if (kinds.includes(30315))
+          return [emojiStatus(["emoji", ":bee:", beeUrl])];
+        return [];
+      },
+    },
+    {},
+  );
+  try {
+    const { channels, statuses } = owner.session;
+    channels.ensureList();
+    await vi.waitFor(() => expect(channels.list().channels).toHaveLength(1));
+    channels.ensure("c");
+    statuses.watch([alice.pubkey]);
+    await vi.waitFor(() =>
+      expect(statuses.snapshot().get(alice.pubkey)?.emojiUrl).toBe(beeUrl),
+    );
+    channels.prepare?.("c");
+    expect(created).toContain(
+      `https://media.test/?url=${encodeURIComponent(beeUrl)}`,
+    );
+  } finally {
+    owner.dispose();
+    vi.unstubAllGlobals();
+  }
+});
+
+it("lets a profile read's status query cover rows for its authors, with or without a status", async () => {
+  const carol = keypair();
+  const read = vi.fn<RelayReader["read"]>(async () => []);
+  const owner = createUserStatuses({ read });
+  owners.push(owner);
+  owner.live(true);
+  const prefetch = owner.prefetch([bob.pubkey, carol.pubkey]);
+  expect(prefetch?.filter).toEqual({
+    kinds: [30315],
+    "#d": ["general"],
+    authors: [bob.pubkey, carol.pubkey],
+    limit: 2,
+  });
+  // Rows mount while the profile read is out.
+  owner.queries.watch([bob.pubkey, carol.pubkey]);
+  await vi.advanceTimersByTimeAsync(0);
+  expect(read).not.toHaveBeenCalled();
+  prefetch?.settle([
+    signed(bob, {
+      kind: 30315,
+      created_at: now,
+      content: "Prefetched",
+      tags: [["d", "general"]],
+    }),
+  ]);
+  await vi.advanceTimersByTimeAsync(0);
+  expect(owner.queries.snapshot().get(bob.pubkey)?.text).toBe("Prefetched");
+  expect(owner.queries.snapshot().has(carol.pubkey)).toBe(false);
+  expect(read).not.toHaveBeenCalled();
+  expect(owner.prefetch([bob.pubkey, carol.pubkey])).toBeUndefined();
+});
+
+it("leaves a failed profile read's statuses to their rows and skips statuses rows are reading", async () => {
+  const carol = keypair();
+  let answer!: (events: RelayEvent[]) => void;
+  const read = vi.fn<RelayReader["read"]>(
+    () => new Promise((resolve) => (answer = resolve)),
+  );
+  const owner = createUserStatuses({ read });
+  owners.push(owner);
+  const prefetch = owner.prefetch([bob.pubkey]);
+  owner.queries.watch([bob.pubkey, carol.pubkey]);
+  await vi.advanceTimersByTimeAsync(0);
+  expect(read).toHaveBeenCalledOnce();
+  expect(read.mock.calls[0]?.[0][0]?.authors).toEqual([carol.pubkey]);
+  // Carol's row read is out, so a profile read asks for neither.
+  expect(owner.prefetch([bob.pubkey, carol.pubkey])).toBeUndefined();
+  prefetch?.settle();
+  answer([]);
+  await vi.advanceTimersByTimeAsync(0);
+  expect(read).toHaveBeenCalledTimes(2);
+  expect(read.mock.calls[1]?.[0][0]?.authors).toEqual([bob.pubkey]);
+});
+
+it("reads statuses with the profiles of bylines, so their rows read nothing more", async () => {
+  const relay = keypair();
+  const carol = keypair();
+  const queries: (readonly { kinds?: readonly number[] }[])[] = [];
+  let answer!: () => void;
+  const owner = createRelaySession(
+    {
+      viewer: alice.pubkey,
+      relayAuthor: relay.pubkey,
+      media: (url) => url,
+      async query(filters) {
+        queries.push(filters);
+        if (!filters.some((filter) => filter.kinds?.includes(0))) return [];
+        await new Promise<void>((resolve) => (answer = resolve));
+        return [
+          signed(bob, { kind: 0, content: '{"name":"Bob"}', tags: [] }),
+          signed(bob, {
+            kind: 30315,
+            created_at: now,
+            content: "Bundled",
+            tags: [["d", "general"]],
+          }),
+        ];
+      },
+    },
+    { outboxStorage: { load: () => [], save() {} } },
+  );
+  try {
+    const { profiles, statuses } = owner.session;
+    const read = profiles.ensure([bob.pubkey], "background", {
+      withStatuses: true,
+    });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(queries.at(-1)?.map((filter) => filter.kinds)).toEqual([
+      [0],
+      [30315],
+    ]);
+    // The byline's row mounts while its profile read is out.
+    const before = queries.length;
+    statuses.watch([bob.pubkey]);
+    await vi.advanceTimersByTimeAsync(0);
+    answer();
+    await read;
+    await vi.advanceTimersByTimeAsync(0);
+    expect(statuses.snapshot().get(bob.pubkey)?.text).toBe("Bundled");
+    expect(queries.slice(before)).toEqual([]);
+    // A view without bylines reads profiles alone.
+    const alone = profiles.ensure([carol.pubkey], "background");
+    await vi.advanceTimersByTimeAsync(0);
+    answer();
+    await alone;
+    expect(queries.at(-1)?.map((filter) => filter.kinds)).toEqual([[0]]);
+  } finally {
+    owner.dispose();
+  }
+});
+
+it("hands a failed prefetch's statuses to rows that mounted while it was out", async () => {
+  const read = vi.fn<RelayReader["read"]>(async () => []);
+  const owner = createUserStatuses({ read });
+  owners.push(owner);
+  const prefetch = owner.prefetch([bob.pubkey]);
+  owner.queries.watch([bob.pubkey]);
+  await vi.advanceTimersByTimeAsync(0);
+  expect(read).not.toHaveBeenCalled();
+  prefetch?.settle();
+  await vi.advanceTimersByTimeAsync(0);
+  expect(read).toHaveBeenCalledOnce();
+  expect(read.mock.calls[0]?.[0][0]?.authors).toEqual([bob.pubkey]);
+});
+
+it("lets rows read their statuses when a reconnect drops a prefetch's claim", async () => {
+  const read = vi.fn<RelayReader["read"]>(async () => [
+    signed(bob, {
+      kind: 30315,
+      created_at: now + 1,
+      content: "Current",
+      tags: [["d", "general"]],
+    }),
+  ]);
+  const owner = createUserStatuses({ read });
+  owners.push(owner);
+  const prefetch = owner.prefetch([bob.pubkey]);
+  owner.queries.watch([bob.pubkey]);
+  await vi.advanceTimersByTimeAsync(0);
+  expect(read).not.toHaveBeenCalled();
+  owner.reconnect();
+  await vi.advanceTimersByTimeAsync(0);
+  expect(read).toHaveBeenCalledOnce();
+  // The retired read's late answer changes nothing.
+  prefetch?.settle([
+    signed(bob, {
+      kind: 30315,
+      created_at: now,
+      content: "Stale",
+      tags: [["d", "general"]],
+    }),
+  ]);
+  expect(owner.queries.snapshot().get(bob.pubkey)?.text).toBe("Current");
+});
+
+it("keeps a live status or clear that lands while a prefetch is out, and drops saved ones it no longer finds", async () => {
+  const carol = keypair();
+  const read = vi.fn<RelayReader["read"]>(async () => []);
+  const owner = createUserStatuses({ read });
+  owners.push(owner);
+  owner.live(true);
+  const event = (key: typeof bob, content: string, time: number) =>
+    signed(key, {
+      kind: 30315,
+      created_at: time,
+      content,
+      tags: [["d", "general"]],
+    });
+  const dave = keypair();
+  owner.restore([event(carol, "Saved", now), event(dave, "Removed", now)]);
+  const prefetch = owner.prefetch([bob.pubkey, carol.pubkey, dave.pubkey]);
+  owner.accept([event(bob, "New", now + 1), event(carol, "", now + 1)]);
+  prefetch?.settle([event(bob, "Old", now), event(carol, "Saved", now)]);
+  owner.queries.watch([bob.pubkey, carol.pubkey, dave.pubkey]);
+  await vi.advanceTimersByTimeAsync(0);
+  expect(owner.queries.snapshot().get(bob.pubkey)?.text).toBe("New");
+  expect(owner.queries.snapshot().has(carol.pubkey)).toBe(false);
+  // The relay no longer has Dave's saved status.
+  expect(owner.queries.snapshot().has(dave.pubkey)).toBe(false);
+  expect(read).not.toHaveBeenCalled();
+});
+
+it("loads names when the relay refuses a combined read, and rows read their own statuses", async () => {
+  const relay = keypair();
+  const queries: (readonly { kinds?: readonly number[] }[])[] = [];
+  const owner = createRelaySession(
+    {
+      viewer: alice.pubkey,
+      relayAuthor: relay.pubkey,
+      media: (url) => url,
+      async query(filters) {
+        queries.push(filters);
+        if (filters.length > 1) throw new Error("kind 30315 refused");
+        if (filters[0]?.kinds?.includes(0))
+          return [
+            signed(bob, { kind: 0, content: '{"name":"Bob"}', tags: [] }),
+          ];
+        return [
+          signed(bob, {
+            kind: 30315,
+            created_at: now,
+            content: "Alone",
+            tags: [["d", "general"]],
+          }),
+        ];
+      },
+    },
+    { outboxStorage: { load: () => [], save() {} } },
+  );
+  try {
+    const { profiles, statuses } = owner.session;
+    const read = profiles.ensure([bob.pubkey], "background", {
+      withStatuses: true,
+    });
+    statuses.watch([bob.pubkey]);
+    // The names' one retry waits out the first recovery delay.
+    await vi.advanceTimersByTimeAsync(1000);
+    await read;
+    await vi.advanceTimersByTimeAsync(0);
+    expect(profiles.snapshot().get(bob.pubkey)?.name).toBe("Bob");
+    expect(statuses.snapshot().get(bob.pubkey)?.text).toBe("Alone");
+    expect(
+      queries
+        .filter((filters) =>
+          filters.some((f) => f.kinds?.includes(0) || f.kinds?.includes(30315)),
+        )
+        .map((filters) => filters.map((f) => f.kinds)),
+    ).toEqual([[[0], [30315]], [[30315]], [[0]]]);
+  } finally {
+    owner.dispose();
+  }
 });

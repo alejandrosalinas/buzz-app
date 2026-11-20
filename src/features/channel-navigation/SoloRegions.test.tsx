@@ -30,6 +30,7 @@ import type { ConfigurationState } from "../../plugins/types";
 import { conversationTarget, soloDraftTarget } from "./routes";
 import { MessageComposer } from "../messages/MessageComposer";
 import { composerDOMFixture } from "../messages/composer-testing";
+import { SPRING_LOAD_DELAY_MS } from "../messages/spring-loaded-drag";
 import { ToastProvider } from "../../shared/design-system/ui/Toast";
 import { MenuItem } from "../../shared/design-system/ui/Menu";
 import { SoloHeading } from "../../bundled/channels/SoloHeading";
@@ -2880,7 +2881,8 @@ it("channel groups separate selection from disclosure, preserve children, and re
   await h.register({ component: Body });
   mount(h);
   const user = userEvent.setup();
-  await user.click(screen.getByRole("button", { name: "Source channel" }));
+  const title = screen.getByRole("button", { name: "Source channel" });
+  await user.click(title);
   expect(select).toHaveBeenCalledOnce();
   const disclosure = screen.getByRole("button", {
     name: "Toggle source tasks",
@@ -2891,6 +2893,18 @@ it("channel groups separate selection from disclosure, preserve children, and re
   expect(disclosure).toHaveAttribute("aria-expanded", "false");
   expect(draft).toBeInTheDocument();
   expect(draft).not.toBeVisible();
+  const dataTransfer = { types: ["Files"] };
+  vi.useFakeTimers();
+  try {
+    fireEvent.dragEnter(title, { dataTransfer });
+    act(() => vi.advanceTimersByTime(SPRING_LOAD_DELAY_MS));
+    fireEvent.dragOver(title, { dataTransfer });
+    expect(select).toHaveBeenCalledTimes(2);
+    expect(disclosure).toHaveAttribute("aria-expanded", "false");
+  } finally {
+    fireEvent.dragEnd(title, { dataTransfer });
+    vi.useRealTimers();
+  }
   await user.click(disclosure);
   expect(screen.getByRole("textbox", { name: "Task draft" })).toBe(draft);
   const newTask = screen.getByRole("button", {

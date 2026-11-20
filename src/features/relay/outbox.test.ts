@@ -80,8 +80,11 @@ function setup(storage = memoryStorage(), timeoutMs = 10000) {
         bounds(relay, "c", "head", { has_more: false, next_cursor: null }),
       ]);
     await flush();
-    // Resolve the author directory once so tests control only history and delivery reads.
-    const names = owner.session.profiles.ensure([viewer.pubkey]);
+    // Resolve the author directory and status once so tests control only
+    // history and delivery reads.
+    const names = owner.session.profiles.ensure([viewer.pubkey], undefined, {
+      withStatuses: true,
+    });
     wire.next().respond([
       signed(viewer, {
         kind: 0,

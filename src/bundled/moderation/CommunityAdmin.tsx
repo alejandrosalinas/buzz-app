@@ -67,6 +67,7 @@ import {
 import styles from "./CommunityAdmin.module.css";
 import { DIRECT_MEMBER_ADD_ENABLED } from "./features";
 import { canShareInvite, shareInvite } from "./shareInvite";
+import { InviteLinks } from "./InviteLinks";
 
 const DAY = 24 * 60 * 60;
 const EXPIRY = [1, 3, 7, 30].map((days) => ({
@@ -84,7 +85,7 @@ const message = (reason: unknown) =>
   reason instanceof Error ? reason.message : String(reason);
 const STALE = "The member list is out of date. Retry before making changes.";
 
-export type MembershipMethod = "members" | "invite" | "direct";
+export type MembershipMethod = "members" | "invite" | "links" | "direct";
 type MembershipSelection = {
   selectedMethod?: MembershipMethod | undefined;
   onMethodChange?: ((method: MembershipMethod) => void) | undefined;
@@ -306,6 +307,7 @@ function Members({
       busy={busy || !!pending}
       community={community}
       members={members}
+      name={name}
       owner={role === "owner"}
       stale={stale}
       refreshing={refreshing}
@@ -523,6 +525,7 @@ function MembershipContent({
   busy,
   community,
   members,
+  name,
   owner,
   stale,
   refreshing,
@@ -536,6 +539,7 @@ function MembershipContent({
   busy: boolean;
   community: string;
   members: readonly Member[];
+  name(pubkey: string): string;
   owner: boolean;
   stale: boolean;
   refreshing: boolean;
@@ -550,6 +554,8 @@ function MembershipContent({
       ? "members"
       : requestedMethod;
   const open = method === "invite";
+  const [linksVisited, setLinksVisited] = useState(false);
+  if (method === "links" && !linksVisited) setLinksVisited(true);
   const [ttl, setTtl] = useState(String(3 * DAY));
   const [uses, setUses] = useState("");
   const [identity, setIdentity] = useState("");
@@ -683,6 +689,12 @@ function MembershipContent({
               value: "invite",
               label: "Invite",
               panelId: "invite-share-panel",
+              disabled: adding || busy,
+            },
+            {
+              value: "links",
+              label: "Links",
+              panelId: "invite-links-panel",
               disabled: adding || busy,
             },
             ...(DIRECT_MEMBER_ADD_ENABLED
@@ -824,6 +836,23 @@ function MembershipContent({
               </div>
             </SettingsGroup>
           </div>
+        </section>
+      )}
+      {/* Mounted from the first visit so a revoke in flight survives Back/Forward. */}
+      {(method === "links" || linksVisited) && (
+        <section
+          role="tabpanel"
+          id="invite-links-panel"
+          aria-labelledby="invite-links-panel-tab"
+          hidden={method !== "links"}
+        >
+          <InviteLinks
+            community={community}
+            name={name}
+            locked={locked}
+            active={active}
+            visible={method === "links"}
+          />
         </section>
       )}
       {DIRECT_MEMBER_ADD_ENABLED && method === "direct" && (

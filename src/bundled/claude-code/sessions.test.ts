@@ -62,6 +62,7 @@ function sessions(
   const fake = fakeSpawn(options.known, options.env);
   const store = options.store ?? memoryStore();
   let model = "opus";
+  let sections = "default";
   let ids = 0;
   const spawn = (id: string, spawnOptions?: object) => {
     if (options.full) return Promise.reject(PROCESS_LIMIT);
@@ -97,6 +98,7 @@ function sessions(
       };
     },
     fingerprint: () => model,
+    sections: () => sections,
     newId: () => `new-${++ids}`,
     ...(options.started ? { started: options.started } : {}),
     ...(options.resumed ? { resumed: options.resumed } : {}),
@@ -111,6 +113,9 @@ function sessions(
     live: () => claudes().filter((process) => !process.killed),
     setModel: (next: string) => {
       model = next;
+    },
+    setSections: (next: string) => {
+      sections = next;
     },
   };
 }
@@ -745,6 +750,45 @@ it("applies new settings over background work once no reply is running", async (
   expect(claudes().at(-1)?.options.args).toEqual(
     expect.arrayContaining(["--resume", "new-1", "--model", "sonnet"]),
   );
+});
+
+it("keeps background work through a section change until a new turn needs the new prompt", async () => {
+  const { pool, claudes, setSections } = sessions({ hold: true });
+  const first = pool.deliver("c/root", "start a build", 1);
+  await flush();
+  const [process] = claudes();
+  backgroundTasks(process, {});
+  // A plugin changes the conversation's sections while the reply runs.
+  setSections("plugin");
+  process?.finish();
+  await first;
+  pool.reconfigure();
+  await flush();
+  expect(process?.killed).toBe(false);
+  // Once the work ends, the process waits for the next turn.
+  backgroundTasks(process);
+  await flush();
+  expect(process?.killed).toBe(false);
+  const again = pool.deliver("c/root", "again", 2);
+  await flush();
+  expect(process?.killed).toBe(true);
+  expect(claudes().at(-1)?.options.args).toEqual(
+    expect.arrayContaining(["--resume", "new-1"]),
+  );
+  claudes().at(-1)?.finish();
+  await again;
+});
+
+it("gives an idle session new sections as its reply ends", async () => {
+  const { pool, claudes, setSections } = sessions({ hold: true });
+  const first = pool.deliver("c/root", "hello", 1);
+  await flush();
+  const [process] = claudes();
+  setSections("plugin");
+  process?.finish();
+  await first;
+  await flush();
+  expect(process?.killed).toBe(true);
 });
 
 it("starts over when a saved session no longer loads", async () => {

@@ -1,4 +1,4 @@
-import { useRef, useState } from "react";
+import { type RefObject, useRef, useState } from "react";
 import {
   ChatCircleIcon,
   ChatsCircleIcon,
@@ -25,6 +25,7 @@ export function WorkspaceNewMenu({
   name,
   channelAvailable,
   dmAvailable,
+  menuAnchor,
   choose,
 }: {
   scope: string;
@@ -32,6 +33,7 @@ export function WorkspaceNewMenu({
   name: string;
   channelAvailable: boolean;
   dmAvailable: boolean;
+  menuAnchor?: RefObject<HTMLButtonElement | null> | undefined;
   choose: (action: WorkspaceNewAction, trigger: HTMLButtonElement) => void;
 }) {
   const key = `workspace-new-action:${workspace}`;
@@ -43,6 +45,22 @@ export function WorkspaceNewMenu({
   const enabled = (choice: WorkspaceNewAction) =>
     choice === "chat" ||
     (choice === "channel" ? channelAvailable : dmAvailable);
+  const items = actions.map((choice) => (
+    <MenuItem
+      key={choice}
+      disabled={!enabled(choice)}
+      onClick={() => {
+        const trigger = (menuAnchor ?? primary).current;
+        if (!trigger) return;
+        setAction(choice);
+        writeView(scope, key, choice);
+        choose(choice, trigger);
+      }}
+    >
+      {labels[choice]}
+    </MenuItem>
+  ));
+  if (menuAnchor) return <>{items}</>;
   // An unavailable remembered action falls back to New chat, always enabled.
   const shown = enabled(action) ? action : "chat";
   const Icon = icons[shown];
@@ -61,21 +79,7 @@ export function WorkspaceNewMenu({
       size="sm"
       icon
       menuLabel={`New options in ${name}`}
-      menu={actions.map((choice) => (
-        <MenuItem
-          key={choice}
-          disabled={!enabled(choice)}
-          onClick={() => {
-            const trigger = primary.current;
-            if (!trigger) return;
-            setAction(choice);
-            writeView(scope, key, choice);
-            choose(choice, trigger);
-          }}
-        >
-          {labels[choice]}
-        </MenuItem>
-      ))}
+      menu={items}
     />
   );
 }

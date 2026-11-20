@@ -343,7 +343,9 @@ export class AcpSession {
               this.runWaiters.push(resolve),
             )
           : undefined);
-      if (activity.refresh) text = steerPrompt(await activity.refresh());
+      const said = activity.refresh
+        ? steerPrompt(await activity.refresh())
+        : text;
       if (!live()) return;
       if (activity.current && !activity.current()) {
         this.discard(waiter);
@@ -353,7 +355,7 @@ export class AcpSession {
       if (runId && steering) {
         try {
           activity.accepted?.();
-          await steering.steer(this.acp, this.id, runId, text);
+          await steering.steer(this.acp, this.id, runId, said);
           if (live()) {
             activity.delivered?.();
             this.acknowledge(activity, waiter);

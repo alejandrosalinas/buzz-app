@@ -4,12 +4,16 @@ import { requestWork, isSettledWork } from "../agents/request-work";
 import { ActivityDisclosure } from "./ActivityDisclosure";
 import { ActivityOutcome } from "./ActivityOutcome";
 import { AgentResponsePreview } from "./AgentResponsePreview";
+import { useChannelActivitySubscription } from "../agents/use-channel-agent-activity";
 import { useSpringLoaded } from "./spring-loaded-drag";
 import { useActivityIndicator } from "./use-activity-indicator";
 import type { ActivityRowPresentation } from "./activity-presentation";
 import { ShimmerText } from "../../shared/design-system/ui/ShimmerText";
 import { Collapsible } from "@base-ui/react/collapsible";
-import { formatItemTimestamp } from "../../shared/datetime";
+import {
+  formatFullTimestamp,
+  formatItemTimestamp,
+} from "../../shared/datetime";
 import { ProfilePeek } from "../profiles/ProfilePeek";
 import { AgentAvatar } from "../agents/AgentAvatar";
 import {
@@ -49,6 +53,7 @@ import { ReplySummary } from "./ReplySummary";
 import { usePresenceStatus } from "../presence/react";
 import { UserStatusDisplay } from "../user-status/StatusDisplay";
 import { useMessageDensity } from "../../shared/theme/message-density";
+import { useLocalDay } from "../../shared/use-local-day";
 import { IconButton } from "../../shared/design-system/ui/IconButton";
 import {
   memo,
@@ -154,7 +159,7 @@ export type MessageRowProps = {
   participantProfiles?: ReadonlyMap<string, Profile> | undefined;
   agentPubkeys?: ReadonlySet<string> | undefined;
   canOpenLink?: ((target: string) => boolean) | undefined;
-  media(url: string, size?: "small"): string | undefined;
+  media(url: string, size?: "small", channel?: string): string | undefined;
   /** Receives the thread the link was opened from: the row’s root, or the row. */
   onOpenLink(url: string, origin?: MessageLinkOrigin): boolean;
   day: boolean;
@@ -206,8 +211,9 @@ function useCompletedMessageWork(
   activity: RelaySession["agentActivity"] | undefined,
   row: ChannelMessage,
 ) {
+  const subscribe = useChannelActivitySubscription(activity, row.channelId);
   const read = () => {
-    const snapshot = activity?.snapshot();
+    const snapshot = activity?.snapshot(row.channelId);
     if (!snapshot) return false;
     const published = (snapshot.local ?? []).filter(
       (work) =>
@@ -229,7 +235,7 @@ function useCompletedMessageWork(
       )
     );
   };
-  return useSyncExternalStore(activity?.subscribe ?? noSubscribe, read, read);
+  return useSyncExternalStore(subscribe, read, read);
 }
 
 const FullMessageRow = memo(function MessageRow(props: MessageContentProps) {
@@ -759,6 +765,10 @@ function MessageRowContent({
       previous.push(attachment);
     else attachmentGroups.push([attachment]);
   }
+  // A message's images are saved with its channel, so losing the channel
+  // forgets them.
+  const attachmentMedia = (url: string, size?: "small") =>
+    media(url, size, row.channelId);
   const attachmentContent = (copied = false) =>
     attachmentGroups.some(
       (group) => copiedUrls.has(group[0]?.url ?? "") === copied,
@@ -787,7 +797,7 @@ function MessageRowContent({
             const items = previews.map((attachment, index) => {
               const url = safeMessageUrl(attachment.url);
               if (!url) return null;
-              const source = media(url);
+              const source = attachmentMedia(url);
               if (attachment.kind === "file") {
                 const fallback = (
                   <FileAttachment
@@ -850,8 +860,7 @@ function MessageRowContent({
                 );
               }
               if (attachment.kind === "image") {
-                // biome-ignore lint/plugin: Attachment thumbnails, not avatars.
-                const small = media(url, "small");
+                const small = attachmentMedia(url, "small");
                 // Third-party URLs map to themselves: no thumbnail. JPEG
                 // drops alpha, so these formats use the WebP variant.
                 const alpha =
@@ -860,7 +869,7 @@ function MessageRowContent({
                   small === source
                     ? undefined
                     : alpha
-                      ? media(`${alpha[1]}.thumb.webp`)
+                      ? attachmentMedia(`${alpha[1]}.thumb.webp`)
                       : small;
                 const image = (
                   <AttachmentImage
@@ -921,7 +930,7 @@ function MessageRowContent({
                 <MediaAttachment
                   key={url}
                   attachment={{ ...attachment, url }}
-                  media={media}
+                  media={attachmentMedia}
                   compact={images && group.length >= 4 && !!onOpenMediaReview}
                   overlayCount={collapsed && index === 3 ? group.length - 3 : 0}
                   label={
@@ -2120,6 +2129,8 @@ function RelayedMessageRow(props: MessageRowProps) {
   const resolveName = useChannelIdentityNames(references, row.channelId);
   const directory = useReferenceDirectory(references, participantProfiles);
   const showTime = useMessageTimeVisible(references?.channels, row.channelId);
+  // The button's name carries the full date, so it follows time zone changes.
+  useLocalDay();
   const shown = useMemo(() => {
     const content = withoutRelayNotice(row.content, row.relayedFrom?.notice);
     const removed = row.content.length - content.length;
@@ -2191,7 +2202,7 @@ function RelayedMessageRow(props: MessageRowProps) {
                 ref={trigger}
                 data-buzz-ui=""
                 className={styles.relayedTrigger}
-                aria-label={`${agent.name}${chatLabel ? ` from ${chatLabel}` : ""}: ${preview}${row.edited ? " (edited)" : ""}${row.replyCount > 0 ? `, ${row.replyCount === 1 ? "1 reply" : `${row.replyCount} replies`}` : ""}`}
+                aria-label={`${agent.name}${chatLabel ? ` from ${chatLabel}` : ""}: ${preview}${row.edited ? " (edited)" : ""}${row.replyCount > 0 ? `, ${row.replyCount === 1 ? "1 reply" : `${row.replyCount} replies`}` : ""}, ${formatFullTimestamp(row.createdAt)}`}
               />
               <span className={styles.relayedAvatar} aria-hidden="true">
                 <AgentAvatar
@@ -2217,7 +2228,7 @@ function RelayedMessageRow(props: MessageRowProps) {
                   <span
                     className={styles.relayedSubtle}
                     data-relayed-source=""
-                    data-relayed-from=""
+                    data-relayed-from={chat.channelType === "dm" ? "dm" : ""}
                     aria-hidden="true"
                   >
                     from
@@ -2344,8 +2355,12 @@ function useThreadAgents(
     get,
   );
   // Subscribe to this thread's working agents, not every activity step.
+  const subscribeWork = useChannelActivitySubscription(
+    session?.agentActivity,
+    channelId,
+  );
   const getWork = () => {
-    const activity = session?.agentActivity?.snapshot();
+    const activity = session?.agentActivity?.snapshot(channelId);
     const typers = threadWorkingAgents(
       activity,
       keys ? keys.split(",") : [],
@@ -2366,11 +2381,7 @@ function useThreadAgents(
       typers.length > 0 && typers.every((agent) => breathing(local.get(agent)));
     return `${waiting ? "waiting" : "working"}:${typers.join(",")}`;
   };
-  const work = useSyncExternalStore(
-    session?.agentActivity?.subscribe ?? noSubscribe,
-    getWork,
-    getWork,
-  );
+  const work = useSyncExternalStore(subscribeWork, getWork, getWork);
   const [state, joined = ""] = work.split(/:(.*)/s);
   const typers = joined ? joined.split(",") : [];
   const hasWork = typers.length > 0;

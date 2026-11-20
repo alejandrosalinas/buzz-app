@@ -27,6 +27,10 @@ vi.mock("../relay/persistence", () => ({
     };
   },
 }));
+vi.mock("../relay/native", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../relay/native")>()),
+  clearNativeMedia: (origin: string) => record("saved images", origin),
+}));
 vi.mock("../relay/read-state-storage", () => ({
   purgeReadStateStorage: (scope: string) => record("read state", scope),
 }));
@@ -146,6 +150,7 @@ it("purges the relay's heads, read state and outbox for the exact partition, in 
     ["heads", viewer, origin],
     ["heads.clear"],
     ["heads.close"],
+    ["saved images", origin],
     ["read state", `${origin}:${viewer}`],
     ["outbox", `${origin}:${viewer}`],
     ["artifacts", viewer, origin],
@@ -156,6 +161,7 @@ it("purges the relay's heads, read state and outbox for the exact partition, in 
 it("skips the head cache without IndexedDB and still purges the other relay stores", async () => {
   expect(await purgeCommunityDeviceState(origin, viewer)).toEqual([]);
   expect(relay.calls).toEqual([
+    ["saved images", origin],
     ["read state", `${origin}:${viewer}`],
     ["outbox", `${origin}:${viewer}`],
   ]);
@@ -183,6 +189,7 @@ it("reports each failed relay store by name, closes heads and still clears the o
     "heads",
     "heads.clear",
     "heads.close",
+    "saved images",
     "read state",
     "outbox",
     "artifacts",

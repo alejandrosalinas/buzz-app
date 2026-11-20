@@ -461,7 +461,7 @@ it("a deletion cannot use revoked unread evidence to delete an accessible target
   expect(h.snapshot().observedCount).toBe(1);
 });
 
-it("promotes mentions, broadcasts and participating-thread replies without promoting ordinary unread", () => {
+it("promotes mentions and participating-thread replies, broadcasts only in the viewer's threads, without promoting ordinary unread", async () => {
   const h = setup();
   h.grant("room");
   const root = message(h.viewer, "room", "root", 10);
@@ -489,12 +489,115 @@ it("promotes mentions, broadcasts and participating-thread replies without promo
       ["broadcast", "1"],
     ],
   );
-  h.emit([mentioned, broadcast, participatingReply, missingRootBroadcast]);
-  expect(h.snapshot()).toMatchObject({ observedCount: 5, attentionCount: 4 });
-  expect(h.session.unread.activity("room").items).toHaveLength(1);
+  const otherRoot = message(h.alice, "room", "someone else's root", 16);
+  const otherBroadcast = message(h.alice, "room", "broadcast elsewhere", 17, [
+    ["e", otherRoot.id, "", "reply"],
+    ["broadcast", "1"],
+  ]);
+  h.emit([
+    mentioned,
+    broadcast,
+    participatingReply,
+    missingRootBroadcast,
+    otherRoot,
+    otherBroadcast,
+  ]);
+  // Broadcasts outside the viewer's threads count as ordinary unread: bold,
+  // no dot, and no thread activity.
+  // The sidebar row reads `row`: the same dot count and one thread.
+  expect(h.snapshot()).toMatchObject({
+    observedCount: 7,
+    attentionCount: 3,
+    row: { observedCount: 7, attentionCount: 3, threadCount: 1 },
+  });
+  expect(
+    h.session.unread.activity("room").items?.map((item) => item.rootId),
+  ).toEqual([root.id]);
+  // Its parent lookup asks for the viewer's replies and finds none. A
+  // broadcast never reports `pending`, so wait for the lookup itself.
+  const lookup = () =>
+    h.query.mock.calls.findIndex(([filters]) =>
+      filters.some(
+        (filter) => filter.authors && filter["#e"]?.includes(otherRoot.id),
+      ),
+    );
+  await vi.waitFor(() => expect(lookup()).toBeGreaterThanOrEqual(0));
+  await h.query.mock.results[lookup()]?.value;
+  await flush();
+  const other = h.session.unread.attention("room", otherBroadcast.id);
+  expect(other).toMatchObject({ status: "ineligible", unread: true });
+  expect(other.category).toBeUndefined();
+  expect(h.snapshot()).toMatchObject({
+    observedCount: 7,
+    attentionCount: 3,
+    row: { observedCount: 7, attentionCount: 3, threadCount: 1 },
+  });
+  expect(
+    h.session.unread.activity("room").items?.map((item) => item.rootId),
+  ).toEqual([root.id]);
+  expect(h.session.unread.attention("room", broadcast.id)).toMatchObject({
+    status: "eligible",
+    category: "thread",
+  });
   expect(
     h.session.unread.attention("room", missingRootBroadcast.id),
   ).toMatchObject({ status: "unknown", unread: true });
+});
+
+it("a broadcast in a thread the viewer started outside the retained window earns its dot once the lookup finds the root", async () => {
+  const h = setup();
+  h.grant("room");
+  const root = message(h.viewer, "room", "older own root", 10);
+  h.query.mockImplementation(async (filters) =>
+    filters.some((filter) => filter.ids?.includes(root.id)) ? [root] : [],
+  );
+  const broadcast = message(h.alice, "room", "broadcast reply", 12, [
+    ["e", root.id, "", "reply"],
+    ["broadcast", "1"],
+  ]);
+  h.emit([broadcast]);
+  expect(h.snapshot()).toMatchObject({
+    observedCount: 1,
+    attentionCount: 0,
+    row: { observedCount: 1, attentionCount: 0, threadCount: 0 },
+  });
+  // Unknown only because its root is not retained yet, as before this rule.
+  const before = h.session.unread.attention("room", broadcast.id);
+  expect(before).toMatchObject({ status: "unknown", unread: true });
+  expect(before.pending).toBeUndefined();
+  await vi.waitFor(() =>
+    expect(h.snapshot()).toMatchObject({
+      observedCount: 1,
+      attentionCount: 1,
+      row: { observedCount: 1, attentionCount: 1, threadCount: 1 },
+    }),
+  );
+  expect(h.session.unread.attention("room", broadcast.id)).toMatchObject({
+    status: "eligible",
+    category: "thread",
+    unread: true,
+  });
+});
+
+it("a read broadcast in a peer's thread is decided, so it never holds the timeline's New messages boundary", async () => {
+  const h = setup();
+  h.grant("room");
+  const root = message(h.alice, "room", "peer root", 10);
+  const broadcast = message(h.alice, "room", "read broadcast", 11, [
+    ["e", root.id, "", "reply"],
+    ["broadcast", "1"],
+  ]);
+  const post = message(h.alice, "room", "unread post", 12);
+  h.emit([root, broadcast, post]);
+  await h.session.unread.markThrough(h.target, broadcast.id);
+  // Already read, so no lookup is queued: its state must not stay unknown.
+  const read = h.session.unread.attention("room", broadcast.id);
+  expect(read).toMatchObject({ status: "ineligible", unread: false });
+  expect(read.pending).toBeUndefined();
+  expect(h.session.unread.attention("room", post.id)).toMatchObject({
+    unread: true,
+  });
+  expect(h.snapshot()).toMatchObject({ oldestUnreadId: post.id });
 });
 
 it("the channel snapshot names the oldest unread message its timeline shows", async () => {

@@ -16,7 +16,7 @@ export function useAgentOrder(
 ) {
   useSyncExternalStore(
     useCallback(
-      (notify) => (scope ? subscribeView(scope, notify) : () => {}),
+      (notify) => (scope ? subscribeView(scope, notify, KEY) : () => {}),
       [scope],
     ),
     () => (scope ? viewRevision(scope, KEY) : null),

@@ -59,7 +59,8 @@ function restore(scope: string): HiddenDm[] {
  * the row, and this follows that saved state while mounted. */
 export function useSavedHiddenDmIds(scope: string | undefined) {
   const subscribe = useCallback(
-    (notify: () => void) => (scope ? subscribeView(scope, notify) : () => {}),
+    (notify: () => void) =>
+      scope ? subscribeView(scope, notify, key) : () => {},
     [scope],
   );
   const revision = useSyncExternalStore(subscribe, () =>

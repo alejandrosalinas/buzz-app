@@ -1,4 +1,8 @@
+import { assignConversationFolder } from "../../features/agents/conversation-folders";
+import type { AgentStore } from "../../features/agents/store";
 import { memoryStorage } from "../../features/agents/test-fakes";
+import { workspaceCanvas } from "../../features/solo/workspace";
+import type { SectionChoices } from "../../features/agent-harness/sections/choices";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { AddedTool } from "../../buzz-mcp/session-tools";
 import {
@@ -101,6 +105,7 @@ function setup(
     /** The channel's Canvas. */
     canvas?: string;
     repositories?: (scope: string | undefined) => string;
+    resolveDirectory?: Host["resolveDirectory"];
     protection?: AgentProtection;
     /** The owner session's native memory read. */
     memoryRead?: (
@@ -154,7 +159,7 @@ function setup(
   });
   const host = {
     spawn,
-    resolveDirectory: fake.resolveDirectory,
+    resolveDirectory: options.resolveDirectory ?? fake.resolveDirectory,
     readFile,
     serveMcp: fake.serve,
     request: vi.fn(),
@@ -175,15 +180,23 @@ function setup(
     },
     channels: {
       list: () => ({
-        channels: [
-          {
-            id: channel,
-            name: "general",
-            channelType: options.solo?.has(channel) ? "solo" : "stream",
-            members: [],
-          },
-        ],
+        status: state.list,
+        channels:
+          state.list === "loading"
+            ? []
+            : [
+                {
+                  id: channel,
+                  name: "general",
+                  channelType: options.solo?.has(channel) ? "solo" : "stream",
+                  members: [],
+                },
+              ],
       }),
+      subscribeList: (listener: () => void) => {
+        listListeners.add(listener);
+        return () => listListeners.delete(listener);
+      },
     },
     names: { resolve: (pubkey: string) => (pubkey === alice ? "Alice" : "") },
     profiles: {
@@ -209,7 +222,13 @@ function setup(
   // A reconnect is a new session to the same community.
   let connected = session;
   // `retained`: a reconnecting relay keeps its session, not yet ready.
-  const state: { status: string; retained?: boolean } = { status: "ready" };
+  const state: {
+    status: string;
+    retained?: boolean;
+    list: "ready" | "loading";
+  } = { status: "ready", list: "ready" };
+  const listeners = new Set<() => void>();
+  const listListeners = new Set<() => void>();
   const relay = {
     snapshot: () => ({
       status: state.status,
@@ -219,7 +238,10 @@ function setup(
       origin: "https://goose.example",
       scope: `https://goose.example:${alice}`,
     }),
-    subscribe: () => () => {},
+    subscribe: (listener: () => void) => {
+      listeners.add(listener);
+      return () => listeners.delete(listener);
+    },
   } as unknown as RelayData;
   const core = vi.fn(async () => options.core);
   const data = new Map<string, string>();
@@ -227,6 +249,8 @@ function setup(
     getItem: (key: string) => data.get(key) ?? null,
     setItem: (key: string, value: string) => void data.set(key, value),
   } as Storage;
+  /** Agent storage. */
+  const agentStore = memoryStorage();
   const runtime = new GooseRuntime(
     host,
     () => relay,
@@ -234,7 +258,7 @@ function setup(
     storage,
     () => options.added ?? [],
     options.repositories,
-    memoryStorage(),
+    agentStore,
     options.recommended,
     options.forwarding,
     options.defaultProvider,
@@ -301,9 +325,35 @@ function setup(
     runtime,
     spawn,
     session,
+    agentStore,
     memoryOpen: session.agentMemories.open,
     reconnect: () => {
       connected = { ...session };
+    },
+    /** The connection drops, until it is back. A reconnecting relay keeps
+     * its session; only its status changes. */
+    offline: () => {
+      state.status = "connecting";
+      state.retained = true;
+    },
+    /** How many wait for the connection to change. */
+    listening: () => listeners.size,
+    /** The connection is back. */
+    online: () => {
+      state.status = "ready";
+      state.retained = false;
+      for (const listener of [...listeners]) listener();
+    },
+    /** The community lists its channels again, until `listed`. */
+    listing: () => {
+      state.list = "loading";
+    },
+    /** How many wait for the channel list to change. */
+    listWaiting: () => listListeners.size,
+    /** The community has listed its channels. */
+    listed: () => {
+      state.list = "ready";
+      for (const listener of [...listListeners]) listener();
     },
   };
 }
@@ -1285,6 +1335,509 @@ describe("GooseRuntime", () => {
     expect(prompt()).not.toContain("## Progress");
   });
 
+  it("builds a conversation's prompt with the sections of the plugin that manages it, and updates it in place", async () => {
+    const { agent, deliver, goose } = setup();
+    const managedRoot = message("1", "@Gander hi");
+    const otherRoot = message("2", "@Gander hi");
+    let managed: SectionChoices = {
+      plugin: {
+        id: "example.plugin",
+        sections: { "working-location": "Work in the task's folder." },
+      },
+    };
+    const promptSections = vi.fn((channelId?: string, root?: string) =>
+      channelId === channel && root === managedRoot.id ? managed : {},
+    );
+    Object.assign(agent, { promptSections });
+    const wrapper =
+      '## Working location\n<plugin-section id="working-location" plugin="example.plugin">\nWork in the task\'s folder.\n</plugin-section>';
+    const promptOf = (turn: number) =>
+      goose()?.prompts.get(goose()?.turns[turn]?.sessionId ?? "");
+    await deliver(managedRoot);
+    await vi.waitFor(() => expect(goose()?.turns).toHaveLength(1));
+    await deliver(otherRoot);
+    await vi.waitFor(() => expect(goose()?.turns).toHaveLength(2));
+    expect(promptSections).toHaveBeenCalledWith(channel, managedRoot.id);
+    expect(promptOf(0)).toContain(wrapper);
+    expect(promptOf(0)).not.toContain("Make file changes on a new branch");
+    expect(promptOf(0)).toContain("This session is one thread");
+    // Another conversation of the same agent has the default rule.
+    expect(promptOf(1)).not.toContain("<plugin-section id=");
+    expect(promptOf(1)).toContain("Make file changes on a new branch");
+
+    // The plugin clears its sections: the session gets the default in place.
+    managed = {};
+    const opened = goose()?.opened.length;
+    await deliver(
+      message("3", "@Gander again", {
+        tags: [
+          ["h", channel],
+          ["e", managedRoot.id, "", "reply"],
+          ["p", self],
+        ],
+      }),
+    );
+    await vi.waitFor(() => expect(goose()?.turns).toHaveLength(3));
+    expect(goose()?.turns[2]?.sessionId).toBe(goose()?.turns[0]?.sessionId);
+    expect(goose()?.opened).toHaveLength(opened ?? 0);
+    expect(promptOf(2)).not.toContain("<plugin-section id=");
+    expect(promptOf(2)).toContain("Make file changes on a new branch");
+  });
+
+  it("builds a one-off turn's prompt with no conversation's sections", async () => {
+    const { agent, runOnce, goose } = setup();
+    const promptSections = vi.fn(() => ({}));
+    Object.assign(agent, { promptSections });
+    await runOnce("timer/daily", "Post the daily summary.");
+    // Asked as the session opens and as its turn starts.
+    expect(promptSections.mock.calls).toEqual([
+      [undefined, undefined],
+      [undefined, undefined],
+    ]);
+    expect(goose()?.prompts.get(goose()?.turns[0]?.sessionId ?? "")).toContain(
+      "This run joins no conversation",
+    );
+  });
+
+  it("tells a Solo chat whose plugin gives the working location to read its Canvas's folders", async () => {
+    const { agent, deliver, goose } = setup({
+      solo: new Set([channel]),
+      canvas: workspaceCanvas({
+        folders: ["~/Development/app"],
+        worktree: { location: "~/Development/trees", baseBranch: "main" },
+        canvas: "Use the design system.",
+      }),
+    });
+    Object.assign(agent, {
+      // A Solo chat is one conversation, with no thread root.
+      promptSections: (channelId?: string, root?: string): SectionChoices =>
+        channelId === channel && !root
+          ? {
+              plugin: {
+                id: "example.plugin",
+                sections: { "working-location": "Work in the task's folder." },
+              },
+            }
+          : {},
+    });
+    await deliver(message("1", "@Gander go"));
+    await vi.waitFor(() => expect(goose()?.turns).toHaveLength(1));
+    expect([...(goose()?.prompts.values() ?? [])].join()).toContain(
+      '<plugin-section id="working-location" plugin="example.plugin">',
+    );
+    const turn = goose()?.turns[0]?.text;
+    expect(turn).toContain("They are for reading.");
+    expect(turn).not.toContain("create a new worktree");
+  });
+
+  it("reads a queued turn's Canvas with the working location its own turn's prompt has", async () => {
+    const { agent, deliver, goose } = setup({
+      solo: new Set([channel]),
+      hold: true,
+      canvas: workspaceCanvas({
+        folders: ["~/Development/app"],
+        worktree: { location: "~/Development/trees", baseBranch: "main" },
+        canvas: "Use the design system.",
+      }),
+    });
+    let managed = false;
+    Object.assign(agent, {
+      promptSections: (): SectionChoices =>
+        managed
+          ? {
+              plugin: {
+                id: "example.plugin",
+                sections: { "working-location": "Work in the task's folder." },
+              },
+            }
+          : {},
+    });
+    const config = { ...DEFAULT_CONFIG, provider: "openai" };
+    await deliver(message("1", "@Gander go"), { config });
+    await vi.waitFor(() => expect(goose()?.turns).toHaveLength(1));
+    // Another model cannot join the running turn, so it waits for its own.
+    await deliver(message("2", "@Gander also this"), { config, model: "o3" });
+    // The plugin takes the working location before that turn starts.
+    managed = true;
+    goose()?.turns[0]?.finish();
+    await vi.waitFor(() => expect(goose()?.turns).toHaveLength(2));
+    const queued = goose()?.turns[1];
+    expect(goose()?.prompts.get(queued?.sessionId ?? "")).toContain(
+      '<plugin-section id="working-location" plugin="example.plugin">',
+    );
+    expect(queued?.text).toContain("They are for reading.");
+    expect(queued?.text).not.toContain("create a new worktree");
+    queued?.finish();
+  });
+
+  it("reads a queued turn's Canvas with the choices its turn took, when they change as it picks its model", async () => {
+    // Held only for the queued turn's own model pick, after its prompt update.
+    let picking: Promise<void> | undefined;
+    let pick = () => {};
+    let picked = false;
+    const { agent, deliver, goose } = setup({
+      solo: new Set([channel]),
+      hold: true,
+      canvas: workspaceCanvas({
+        folders: ["~/Development/app"],
+        worktree: { location: "~/Development/trees", baseBranch: "main" },
+        canvas: "Use the design system.",
+      }),
+      wrap: (spawn) => async (id, options) => {
+        const process = await spawn(id, options);
+        return {
+          ...process,
+          write: async (data: string) => {
+            if (
+              picking &&
+              data.includes('"method":"session/set_config_option"') &&
+              data.includes('"o3"')
+            ) {
+              picked = true;
+              await picking;
+            }
+            return process.write(data);
+          },
+        };
+      },
+    });
+    let managed = true;
+    Object.assign(agent, {
+      promptSections: (): SectionChoices =>
+        managed
+          ? {
+              plugin: {
+                id: "example.plugin",
+                sections: { "working-location": "Work in the task's folder." },
+              },
+            }
+          : {},
+    });
+    const config = { ...DEFAULT_CONFIG, provider: "openai" };
+    await deliver(message("1", "@Gander go"), { config });
+    await vi.waitFor(() => expect(goose()?.turns).toHaveLength(1));
+    picking = new Promise<void>((resolve) => {
+      pick = resolve;
+    });
+    await deliver(message("2", "@Gander also this"), { config, model: "o3" });
+    goose()?.turns[0]?.finish();
+    await vi.waitFor(() => expect(picked).toBe(true));
+    // The plugin gives the working location back once the turn's prompt
+    // took its folder rule.
+    managed = false;
+    pick();
+    await vi.waitFor(() => expect(goose()?.turns).toHaveLength(2));
+    const queued = goose()?.turns[1];
+    expect(goose()?.prompts.get(queued?.sessionId ?? "")).toContain(
+      '<plugin-section id="working-location" plugin="example.plugin">',
+    );
+    expect(queued?.text).toContain("They are for reading.");
+    expect(queued?.text).not.toContain("create a new worktree");
+    queued?.finish();
+  });
+
+  it("reads a steer's Canvas as its running turn's prompt has the working location, and a new turn's as its own", async () => {
+    const { agent, deliver, goose } = setup({
+      solo: new Set([channel]),
+      hold: true,
+      canvas: workspaceCanvas({
+        folders: ["~/Development/app"],
+        worktree: { location: "~/Development/trees", baseBranch: "main" },
+        canvas: "Use the design system.",
+      }),
+    });
+    let managed = false;
+    Object.assign(agent, {
+      promptSections: (): SectionChoices =>
+        managed
+          ? {
+              plugin: {
+                id: "example.plugin",
+                sections: { "working-location": "Work in the task's folder." },
+              },
+            }
+          : {},
+    });
+    await deliver(message("1", "@Gander go"));
+    await vi.waitFor(() => expect(goose()?.turns).toHaveLength(1));
+    expect(goose()?.turns[0]?.text).toContain("create a new worktree");
+    // The plugin takes the working location while that turn runs.
+    managed = true;
+    await deliver(message("2", "@Gander also this"));
+    await vi.waitFor(() => expect(goose()?.turns[0]?.steered).toHaveLength(1));
+    const steered = goose()?.turns[0]?.steered[0];
+    expect(steered).toContain("create a new worktree");
+    expect(steered).not.toContain("They are for reading.");
+    goose()?.turns[0]?.finish();
+    await deliver(message("3", "@Gander next"));
+    await vi.waitFor(() => expect(goose()?.turns).toHaveLength(2));
+    const next = goose()?.turns[1];
+    expect(goose()?.prompts.get(next?.sessionId ?? "")).toContain(
+      '<plugin-section id="working-location" plugin="example.plugin">',
+    );
+    expect(next?.text).toContain("They are for reading.");
+    expect(next?.text).not.toContain("create a new worktree");
+  });
+
+  describe("a conversation given its own folder", () => {
+    const scope = `https://goose.example:${alice}`;
+    const root = message("1", "@Gander hi");
+    const folders = (missing = new Set<string>()) =>
+      vi.fn(async (path: string, options?: { create?: boolean }) => {
+        if (options?.create === false && missing.has(path))
+          throw new Error(`Could not find ${path}`);
+        return path.replace(/^~/, "/home/test");
+      });
+    const assign = (
+      store: AgentStore,
+      conversation = `${channel}/${root.id}`,
+    ) =>
+      assignConversationFolder(
+        store,
+        scope,
+        self,
+        conversation,
+        "/repos/worktree",
+      );
+
+    it("starts its session there and names the agent's workspace, and leaves other conversations in the workspace", async () => {
+      const resolveDirectory = folders();
+      const { agentStore, deliver, goose, published } = setup({
+        resolveDirectory,
+      });
+      await assign(agentStore);
+      await deliver(root);
+      await vi.waitFor(() => expect(goose()?.turns).toHaveLength(1));
+      await deliver(message("2", "@Gander hi"));
+      await vi.waitFor(() => expect(goose()?.turns).toHaveLength(2));
+      const promptOf = (turn: number) =>
+        goose()?.prompts.get(goose()?.turns[turn]?.sessionId ?? "");
+      expect(goose()?.opened[0]).toMatchObject({ cwd: "/repos/worktree" });
+      expect(resolveDirectory).toHaveBeenCalledWith("/repos/worktree", {
+        create: false,
+      });
+      expect(promptOf(0)).toContain(
+        "<workspace>\nCurrent working directory: /repos/worktree\n</workspace>",
+      );
+      expect(promptOf(0)).toContain(
+        "Your persistent workspace is at `/home/test/.buzz`, not in your working directory",
+      );
+      expect(promptOf(0)).toContain("This conversation has its own folder");
+      expect(goose()?.opened[1]).toMatchObject({ cwd: "/home/test/.buzz" });
+      expect(promptOf(1)).not.toContain("This conversation has its own folder");
+      expect(published).toEqual([]);
+    });
+
+    it("refuses its turn, naming the folder, once the folder is gone", async () => {
+      const missing = new Set<string>();
+      const { agentStore, deliver, fake, published } = setup({
+        resolveDirectory: folders(missing),
+      });
+      await assign(agentStore);
+      missing.add("/repos/worktree");
+      await deliver(root);
+      await vi.waitFor(() =>
+        expect(published.at(-1)?.content).toContain(
+          "This conversation's folder /repos/worktree no longer exists",
+        ),
+      );
+      // It never falls back to the workspace.
+      expect(fake.geese.flatMap((process) => process.opened)).toEqual([]);
+    });
+
+    it("reads a file a tool names from the folder, also while Buzz reconnects", async () => {
+      const { agentStore, deliver, goose, readFile, offline } = setup({
+        hold: true,
+      });
+      readFile.mockResolvedValue(new TextEncoder().encode("From a file"));
+      await assign(agentStore);
+      await deliver(root);
+      await flush(100);
+      const process = goose();
+      const send = () =>
+        process?.mcp(process.turns[0]?.sessionId ?? "", "tools/call", {
+          name: "send",
+          arguments: { audience: "everyone", path: "notes.md" },
+        });
+      await send();
+      offline();
+      await send();
+      expect(readFile.mock.calls).toEqual([
+        ["notes.md", { cwd: "/repos/worktree" }],
+        ["notes.md", { cwd: "/repos/worktree" }],
+      ]);
+    });
+
+    it("starts a turn while Buzz reconnects in its folder, and routes one that comes then once it is back", async () => {
+      const {
+        agentStore,
+        core,
+        deliver,
+        goose,
+        listening,
+        offline,
+        online,
+        published,
+      } = setup({ resolveDirectory: folders() });
+      await assign(agentStore);
+      let release!: () => void;
+      const held = new Promise<void>((resolve) => {
+        release = resolve;
+      });
+      let reading!: () => void;
+      const read = new Promise<void>((resolve) => {
+        reading = resolve;
+      });
+      core.mockImplementationOnce(async () => {
+        reading();
+        await held;
+        return undefined;
+      });
+      // Taken in while Buzz is connected; it starts while Buzz reconnects.
+      const first = deliver(root);
+      await read;
+      offline();
+      release();
+      await first;
+      await vi.waitFor(() => expect(goose()?.turns).toHaveLength(1));
+      // Where one that comes now answers is not known until Buzz is back.
+      const later = deliver(message("3", "@Gander hi"));
+      await vi.waitFor(() => expect(listening()).toBe(1));
+      expect(goose()?.turns).toHaveLength(1);
+      online();
+      await later;
+      await vi.waitFor(() => expect(goose()?.turns).toHaveLength(2));
+      expect(goose()?.opened.map((session) => session.cwd)).toEqual([
+        "/repos/worktree",
+        "/home/test/.buzz",
+      ]);
+      expect(published).toEqual([]);
+    });
+
+    it("answers a Solo chat that writes while Buzz reconnects in its own conversation", async () => {
+      const { agentStore, deliver, goose, listening, offline, online } = setup({
+        resolveDirectory: folders(),
+        solo: new Set([channel]),
+      });
+      await assign(agentStore, channel);
+      offline();
+      const pending = deliver(message("1", "@Gander hi"));
+      await vi.waitFor(() => expect(listening()).toBe(1));
+      expect(goose()).toBeUndefined();
+      online();
+      await pending;
+      await vi.waitFor(() => expect(goose()?.turns).toHaveLength(1));
+      expect(goose()?.opened.map((session) => session.cwd)).toEqual([
+        "/repos/worktree",
+      ]);
+    });
+
+    it("answers a Solo chat once a connected community has listed its channels", async () => {
+      const { agentStore, deliver, goose, listing, listWaiting, listed } =
+        setup({ resolveDirectory: folders(), solo: new Set([channel]) });
+      await assign(agentStore, channel);
+      listing();
+      const pending = deliver(message("1", "@Gander hi"));
+      await vi.waitFor(() => expect(listWaiting()).toBe(1));
+      expect(goose()).toBeUndefined();
+      listed();
+      await pending;
+      await vi.waitFor(() => expect(goose()?.turns).toHaveLength(1));
+      expect(goose()?.opened.map((session) => session.cwd)).toEqual([
+        "/repos/worktree",
+      ]);
+    });
+
+    it("refuses a folder once the conversation's first launch chose the workspace, before any session lists it", async () => {
+      const held = gated("session/new");
+      const { agentStore, deliver, runtime } = setup({
+        hold: true,
+        wrap: held.wrap,
+        resolveDirectory: folders(),
+      });
+      try {
+        void deliver(root);
+        await vi.waitFor(() => expect(held.waiting()).toHaveLength(1));
+        expect(runtime.sessions(self)).toEqual([]);
+        await expect(assign(agentStore)).rejects.toThrow(
+          "already started in the agent's workspace",
+        );
+        // Another conversation is still given its folder.
+        await expect(
+          assign(agentStore, `${channel}/${message("9", "x").id}`),
+        ).resolves.toBe("/repos/worktree");
+      } finally {
+        held.release();
+        runtime.dispose();
+      }
+    });
+
+    it("lists a conversation whose session is opening before it says its sessions are listed", async () => {
+      const held = gated("session/new");
+      const { deliver, runtime } = setup({ hold: true, wrap: held.wrap });
+      try {
+        void deliver(root);
+        await vi.waitFor(() => expect(held.waiting()).toHaveLength(1));
+        let listed = false;
+        const ready = runtime.listed(self).then(() => {
+          listed = true;
+        });
+        await flush();
+        // Nothing lists it yet, so a folder given now would come too late.
+        expect(listed).toBe(false);
+        expect(runtime.sessions(self)).toEqual([]);
+        held.release();
+        await ready;
+        expect(runtime.sessions(self)).toMatchObject([
+          { key: `${channel}/${root.id}`, at: expect.any(Number) },
+        ]);
+      } finally {
+        held.release();
+        runtime.dispose();
+      }
+    });
+
+    it("tells a Solo chat that works there to read its Canvas's folders", async () => {
+      const { agentStore, deliver, goose } = setup({
+        solo: new Set([channel]),
+        canvas: workspaceCanvas({
+          folders: ["~/Development/app"],
+          worktree: { location: "~/Development/trees", baseBranch: "main" },
+          canvas: "Use the design system.",
+        }),
+      });
+      // A Solo chat is one conversation, with no thread root.
+      await assign(agentStore, channel);
+      await deliver(root);
+      await vi.waitFor(() => expect(goose()?.turns).toHaveLength(1));
+      expect(goose()?.opened[0]).toMatchObject({ cwd: "/repos/worktree" });
+      const turn = goose()?.turns[0]?.text;
+      expect(turn).toContain("They are for reading.");
+      expect(turn).not.toContain("create a new worktree");
+    });
+
+    it("keeps the Canvas's worktree rule for a community session when the chat kept a folder", async () => {
+      const { agentStore, deliver, goose } = setup({
+        scope: "community",
+        solo: new Set([channel]),
+        canvas: workspaceCanvas({
+          folders: ["~/Development/app"],
+          worktree: { location: "~/Development/trees", baseBranch: "main" },
+          canvas: "Use the design system.",
+        }),
+      });
+      // Assigned while the agent's sessions were per conversation: a
+      // community session works in the agent's workspace instead.
+      await assign(agentStore, channel);
+      await deliver(root);
+      await vi.waitFor(() => expect(goose()?.turns).toHaveLength(1));
+      expect(goose()?.opened[0]?.cwd).not.toBe("/repos/worktree");
+      const turn = goose()?.turns[0]?.text;
+      expect(turn).toContain("create a new worktree");
+      expect(turn).not.toContain("They are for reading.");
+    });
+  });
+
   it("starts a session from the host's core memory, reading none from the relay", async () => {
     const { core, deliver, goose, memoryOpen } = setup({
       core: "I am Gander.",
@@ -1998,13 +2551,12 @@ it("gives the workflow reason for its owner's workflow mention that doesn't name
   expect(f.goose()).toBeUndefined();
 });
 
-it("waits for a workflow mention's community, not for its owner's", async () => {
+it("waits for the community before it routes a mention, a workflow's or its owner's", async () => {
   const relay = keypair();
   const f = setup({ workflowAuthority: relay.pubkey });
   f.state.status = "connecting";
-  // The owner's own mention settles without waiting for the community.
-  await f.deliver(message("1", "Say hi"));
   const stop = new AbortController();
+  const own = f.deliver(message("1", "Say hi"), { signal: stop.signal });
   const workflow = f.deliver(
     eventDto(
       signed(relay, {
@@ -2020,8 +2572,13 @@ it("waits for a workflow mention's community, not for its owner's", async () => 
     ),
     { signal: stop.signal },
   );
+  await vi.waitFor(() => expect(f.listening()).toBe(2));
   stop.abort();
-  await expect(workflow).rejects.toThrow("Workflow request could not start");
+  await Promise.all([
+    expect(own).rejects.toThrow("This turn could not start"),
+    expect(workflow).rejects.toThrow("Workflow request could not start"),
+  ]);
+  expect(f.goose()).toBeUndefined();
 });
 
 it("ignores a workflow mention whose agent was replaced during the wait", async () => {

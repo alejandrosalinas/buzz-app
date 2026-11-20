@@ -1,5 +1,21 @@
 import type { RelaySession } from "../relay/session";
 
+export type ComposerDraftSend = {
+  text: string;
+  forward?: import("./forward-clipboard").ForwardReference;
+  draft: string;
+  retirementCursor?: number | undefined;
+  picks?: import("../relay/messages").MentionPicks;
+  mentions: readonly string[];
+  references: readonly string[];
+  attachments: readonly import("../relay/attachments").UploadedAttachment[];
+};
+
+export type ComposerDraftSendResult = {
+  id: string;
+  retirement: "saved" | "changed" | "failed";
+};
+
 type AsyncResult<F> = F extends (...args: infer A) => infer R
   ? (...args: A) => R | Promise<R>
   : never;
@@ -78,6 +94,8 @@ export type ComposerSession = Pick<
       picks: import("../relay/messages").MentionPicks,
     ): Promise<string>;
   };
+  /** The detached owner attempts draft retirement before acknowledging admission. */
+  sendDraft?(message: ComposerDraftSend): Promise<ComposerDraftSendResult>;
   messages: {
     send: AsyncResult<RelaySession["messages"]["send"]>;
     reply: AsyncResult<RelaySession["messages"]["reply"]>;

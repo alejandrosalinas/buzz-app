@@ -886,14 +886,11 @@ it("counts a reply that mentions you, even muted, tiers Thread only for threads 
       mentionRoot.id,
       mentionRoot.id,
     );
-    // With no mention, it shows and opens your thread, not a newer
-    // broadcast in one you're not in.
+    // With no mention, it previews your thread, but a broadcast in a thread
+    // you're not in is ordinary channel unread, like a top-level post, so the
+    // row opens its conversation.
     fireEvent.click(row("picked") as HTMLElement);
-    expect(open).toHaveBeenLastCalledWith(
-      "picked",
-      pickedRoot.id,
-      pickedRoot.id,
-    );
+    expect(open).toHaveBeenLastCalledWith("picked");
     // A mixed row still opens its conversation.
     fireEvent.click(row("mixed") as HTMLElement);
     expect(open).toHaveBeenLastCalledWith("mixed");

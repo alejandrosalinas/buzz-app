@@ -566,10 +566,12 @@ const promptCalls = [];
 pi = start(async ({ request }) => {
   promptCalls.push(request);
   if (request === "R1") { promptStarted.release(); await promptQueue.gate; }
-  return request === "R3" ? undefined : { text: instructions, steer: instructions };
+  return request === "R3" ? undefined : { text: instructions, steer: instructions, instructions: "Run instructions " + request };
 });
 await pi.rpc("open", { agent: promptAgent, tools });
-faux.setResponses([fauxAssistantMessage("Refreshed"), fauxAssistantMessage("Refreshed")]);
+const promptSystems = [];
+const refreshed = (context) => { promptSystems.push(context.messages[0].sections.instructions); return fauxAssistantMessage("Refreshed"); };
+faux.setResponses([refreshed, refreshed]);
 const refreshing = (request, at = 200) => ({ ...turn(request, "Old Interest instructions"), agent: promptAgent, key: "refresh", refresh: true, at });
 const r1 = pi.rpc("deliver", refreshing("R1"));
 await promptStarted.gate;
@@ -579,8 +581,12 @@ instructions = "Updated Interest instructions";
 promptQueue.release();
 const submitted = await Promise.all([r1, r2]);
 await Promise.all(submitted.map(({ submission }) => pi.rpc("wait", { agent: promptAgent, submission })));
-out.refresh = { calls: promptCalls, entries: JSON.stringify((await pi.rpc("entries", { agent: promptAgent, conversation: submitted[0].conversation })).entries) };
+out.refresh = { calls: promptCalls, systems: promptSystems, entries: JSON.stringify((await pi.rpc("entries", { agent: promptAgent, conversation: submitted[0].conversation })).entries) };
 out.refresh.dropped = await pi.rpc("deliver", refreshing("R3", 999));
+// Asked again, as after a host stopped, a request Pi has is answered by its
+// submission without building its prompt again.
+out.refresh.again = await pi.rpc("deliver", refreshing("R1"));
+out.refresh.first = submitted[0];
 out.refresh.seen = (await pi.rpc("place", { agent: promptAgent, key: "refresh" })).seen;
 await pi.stop();
 // A run that answered keeps its run while its afterRun hooks work; a request
@@ -1085,10 +1091,20 @@ describe.skipIf(!DEPS)("the Pi host on Pi durable", () => {
     expect(out.lostDeliver).toBe("The agent is not open");
     expect(out.lostLeft).toEqual(["K"]);
     expect(out.refresh.calls).toEqual(["R1", "R2", "R3"]);
+    // The run is set up with the instructions its prompt call chose, and the
+    // request that steers it keeps them.
+    expect(out.refresh.systems).toEqual([
+      "<instructions>\nRun instructions R1\n</instructions>",
+      "<instructions>\nRun instructions R1\n</instructions>",
+    ]);
     expect(out.refresh.entries).toContain("Updated Interest instructions");
     expect(out.refresh.entries).not.toContain("Old Interest instructions");
     expect(out.refresh.seen).toBe(200);
     expect(out.refresh.dropped).toBe(false);
+    expect(out.refresh.again).toEqual({
+      submission: out.refresh.first.submission,
+      conversation: out.refresh.first.conversation,
+    });
     const signIn = { type: "oauth", access: "a", refresh: "r", expires: 1 };
     expect(out.auth).toEqual({ result: signIn, stored: signIn });
     expect(out.command).toMatch(

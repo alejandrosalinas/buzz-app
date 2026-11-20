@@ -54,6 +54,7 @@ import {
   conversationFolder,
   conversationKey,
   existingFolder,
+  startingFolder,
 } from "../../features/agents/conversation-folders";
 import type {
   Agent,
@@ -73,7 +74,11 @@ import { threadReference } from "../../features/relay/thread-reference";
 import type { ChannelLabel } from "../../features/channels/channel-icon";
 import { appClient, readFile, relayKeyOf } from "../../buzz-mcp/app-client";
 import { readAuthorNames } from "../../features/agent-harness/author-names";
-import { project, readCanvas } from "../../features/agent-harness/project";
+import {
+  project,
+  readCanvas,
+  worksElsewhere,
+} from "../../features/agent-harness/project";
 import {
   referencedFolders,
   referencedSkills,
@@ -135,6 +140,27 @@ import {
   type ToolReply,
 } from "./rpc";
 import { findConversation } from "./transcript";
+import {
+  bindSession,
+  inferenceBundle,
+  type Checked,
+  type GatewayBinding,
+  type TurnContext,
+} from "../../features/agents/gateway/contract";
+import { controlTurn } from "../../features/agents/gateway/forwarding";
+import { unattributedNotice } from "../../features/agents/gateway/route";
+import {
+  controlRoute,
+  gatewayProvider,
+  ELSEWHERE,
+  REMOTE_UNATTRIBUTED,
+  threadConfig,
+  unattributed,
+  type CodexGateway,
+  type CodexRoute,
+  type CodexRoutes,
+  type ProviderConfig,
+} from "./gateway";
 
 const scopedKey = (scope: Config["scope"], channel: string, root?: string) =>
   JSON.stringify([
@@ -152,6 +178,7 @@ type Request = {
   event?: EventData;
   /** Publish/activity root; unlike toolRoot, retained in DMs. */
   replyRoot?: string;
+  sourceRoot?: string;
   agent: AgentHandle;
   settings: Config;
   conversation: Conversation;
@@ -168,7 +195,7 @@ type Request = {
   sessionContext?: string;
   /** The Solo chat's workspace Canvas section, if it has one. */
   project?: string;
-  /** `project` for a turn that works where `elsewhere` says. */
+  /** `project` for a turn that works where `worksElsewhere` says. */
   projectAt?: (elsewhere: boolean) => string | undefined;
   canvas?: Project;
   solo?: boolean;
@@ -196,6 +223,11 @@ type Request = {
   /** Notes plugins left for this turn, taken when its input is first built:
    * one that fails or is cancelled before then leaves them for the next. */
   notes?: readonly string[];
+  /** The membership's gateway route and this delivery's context, frozen at
+   * dispatch; used when Codex's own configuration routes to the gateway. */
+  gateway?: CodexGateway;
+  /** Why a wake ran without the gateway, for its Activity status. */
+  gatewayFallback?: Delivery["gatewayFallback"];
 };
 type TextRequest = Request & { event: EventData; adopted?: never };
 /** `at` is when the binding last took in a message or ended a turn; bindings
@@ -215,6 +247,10 @@ type Saved = {
    * sent the ones that differ now. `shown` is the `key` of the sections its
    * saved prompt last showed. A thread from before they were kept has none. */
   sections?: StartedSections & { shown?: string };
+  /** The Buzz session of a thread that has run through the agent gateway;
+   * a later gateway turn of the thread continues it. A thread resumes in
+   * either mode: each resume sets, or drops, the Buzz headers. */
+  gateway?: GatewayBinding;
 };
 type Active = {
   /** The server this turn runs on; steering must reach the same process. */
@@ -245,6 +281,10 @@ type Active = {
   requests: Request[];
   /** Latest acknowledged mention per Buzz thread; independent of session scope. */
   activity: Map<string, Request>;
+  /** The first delivery's gateway route revision, channel and thread: a
+   * request steers in only with the same ones, and then runs under the
+   * turn's frozen headers. */
+  gateway?: string | undefined;
 };
 /** A watch or timer turn on an ephemeral thread of its own. Its tools have
  * no default destination and it answers no request. */
@@ -573,6 +613,9 @@ export class CodexRuntime {
       signal: AbortSignal,
       channelId: string | undefined,
     ) => Promise<AgentReads | undefined>,
+    /** The gateway's routes while Codex's gateway mode is on; without
+     * them no turn or compaction consults the gateway. */
+    private readonly routes?: CodexRoutes,
   ) {}
   /** The folder a plugin gave the conversation, if any. Only the local
    * runtime keeps them; an execution target's conversations refuse one. */
@@ -584,6 +627,22 @@ export class CodexRuntime {
   ) {
     if (this.target) return undefined;
     return conversationFolder(
+      this.storage,
+      scope,
+      agent,
+      conversationKey(channelId, root),
+    );
+  }
+  /** `folder`, for a conversation's thread starting, which records that one
+   * without a folder starts in the workspace. */
+  private startFolder(
+    scope: string,
+    agent: AgentKey,
+    channelId: string,
+    root?: string,
+  ) {
+    if (this.target) return undefined;
+    return startingFolder(
       this.storage,
       scope,
       agent,
@@ -602,7 +661,12 @@ export class CodexRuntime {
     const assigned =
       settings.scope === "community"
         ? undefined
-        : this.folder(scope, agent, conversation.channelId, conversation.root);
+        : await this.startFolder(
+            scope,
+            agent,
+            conversation.channelId,
+            conversation.root,
+          );
     const workspace = await this.workspace(settings.workspace);
     if (!assigned) return { cwd: workspace };
     return {
@@ -751,7 +815,7 @@ export class CodexRuntime {
   });
   private controlKey(agent: Agent, place: SessionPlace) {
     return scopedKey(
-      this.resolveConfig(agent.config).scope,
+      place.isolated ? "thread" : this.resolveConfig(agent.config).scope,
       place.channelId,
       place.root,
     );
@@ -913,9 +977,18 @@ export class CodexRuntime {
         throw new Error("The protected agent has no live policy binding");
       const thread = resumable(saved, this.handle(agent.key)?.protection);
       if (!thread) throw new Error("There is no session here to compact yet.");
+      // Codex uses its configured provider. The route only gates attribution.
+      const control = controlRoute(this.routes, agent.key);
+      let notice =
+        control?.kind === "blocked"
+          ? unattributedNotice(control.route.reason)
+          : undefined;
       const server = this.open(this.handle(agent.key));
       const rpc = await server.opening;
-      const settings = this.resolveConfig(agent.config);
+      const configured = this.resolveConfig(agent.config);
+      const settings = place.isolated
+        ? { ...configured, scope: "thread" as const }
+        : configured;
       const conversation = {
         channelId: place.channelId,
         ...(settings.scope === "channel" || !place.root
@@ -934,7 +1007,7 @@ export class CodexRuntime {
         );
       await rpc.confirmThreadReleased(thread.threadId);
       signal.throwIfAborted();
-      const { params, bridge } = await this.prepare(
+      const prepared = await this.prepare(
         rpc,
         agent,
         settings,
@@ -942,9 +1015,40 @@ export class CodexRuntime {
         {},
         undefined,
         home,
-        sessionPlace(conversation),
+        conversation,
       );
+      const { bridge } = prepared;
+      let { params } = prepared;
+      // Through the gateway where the agent's turns go, under the control's
+      // own context and the thread's Buzz session.
+      const gateway =
+        control?.kind === "eligible" ? control.gateway : undefined;
+      const headed = this.gatewayParams(prepared, gateway);
+      if (gateway && !headed) notice = this.unheaded();
       try {
+        if (gateway && headed) {
+          const bound = continueSession(gateway.route, thread.gateway);
+          if (bound.persist) {
+            // Keep the in-memory binding for this session and let the next
+            // turn retry the write if the local store is temporarily unavailable.
+            entry.saved[key] = { ...thread, gateway: bound.binding };
+            try {
+              await this.storage.set(
+                entry.storageKey,
+                JSON.stringify(entry.saved),
+              );
+            } catch {
+              notice = "Codex's Buzz session could not be saved.";
+            }
+          }
+          const routed = headed(
+            bound.binding,
+            controlTurn(place, settings.scope),
+          );
+          // Without its context, compaction still runs.
+          if (routed.ok) params = routed.value;
+          else notice = unattributed(routed.message);
+        }
         signal.throwIfAborted();
         bridge?.bind(thread.threadId);
         await rpc.request("thread/resume", {
@@ -954,7 +1058,7 @@ export class CodexRuntime {
         });
         signal.throwIfAborted();
         await this.compact(rpc, signal, thread.threadId, agent.key, key);
-        this.status(agent.key, key, "Idle");
+        this.status(agent.key, key, "Idle", notice);
       } catch (error) {
         this.status(
           agent.key,
@@ -1927,7 +2031,7 @@ export class CodexRuntime {
                 .filter(Boolean)
                 .join("\n\n")
             : "";
-        const voiceInstructions = (updates?: string) =>
+        const voiceInstructions = (updates?: string | null) =>
           `${contextText(agent, settings, request.team, memory, this.repositories(reads.scope), updates)}\nFor every spoken request, apply the room's current source policy below, replacing policies retained from other conversations.\n${policy()}\nVoice work acts for owner ${agent.owner}. Buzz tools default to room ${channelId} at top level. This is the room's existing conversation. A turn that starts with <realtime_delegation> is a spoken request: the voice model speaks only your final answer, so put the result there in a few plain spoken sentences, not in a send. When you delegate, say only a short acknowledgement, then wait: never state a fact the delegated work has not returned yet.`;
         loaded = await this.loadThread(
           request,
@@ -1938,9 +2042,10 @@ export class CodexRuntime {
           rpc,
           voiceInstructions(),
         );
-        // Realtime start adds these instructions again, so they carry the
-        // same section updates as the injected message.
-        const instructions = voiceInstructions(loaded.updates);
+        // Realtime start has a size limit and adds its instructions as a
+        // later developer message, so they leave the section updates to the
+        // injected message, which the thread keeps.
+        const instructions = voiceInstructions(null);
         // A resumed thread keeps its first developer message, not resume's.
         if (!loaded.fresh)
           await rpc.request("thread/inject_items", {
@@ -1949,7 +2054,12 @@ export class CodexRuntime {
               {
                 type: "message",
                 role: "developer",
-                content: [{ type: "input_text", text: instructions }],
+                content: [
+                  {
+                    type: "input_text",
+                    text: voiceInstructions(loaded.updates),
+                  },
+                ],
               },
             ],
           });
@@ -2079,6 +2189,7 @@ export class CodexRuntime {
           workspace: loaded.workspace,
           at: Date.now(),
           ...(loaded.tools ? { tools: loaded.tools } : {}),
+          ...(loaded.binding ? { gateway: loaded.binding } : {}),
           ...(agent.protection
             ? { protection: agent.protection.stateKey }
             : {}),
@@ -2148,8 +2259,8 @@ export class CodexRuntime {
     if (!reads) throw new Error("Connect to the agent's community first");
     const channelId = delivery.channelId;
     if (!channelId) throw new Error("The event has no unambiguous channel");
-    const settings = this.resolveConfig(delivery.config);
-    if (settings.scope === "community" && !reserved)
+    const configuredSettings = this.resolveConfig(delivery.config);
+    if (configuredSettings.scope === "community" && !reserved)
       return this.controls.admit(
         `${agent.key}/${scopedKey("community", COMMUNITY_SESSION)}`,
         delivery,
@@ -2175,13 +2286,17 @@ export class CodexRuntime {
     // A community session works in the agent's workspace, as
     // `conversationPlace` has it, whatever folder the chat kept.
     const canvasProjectOf = (
-      elsewhere = settings.scope !== "community" &&
-        // A Solo chat is one conversation, with no thread root.
-        Boolean(this.folder(reads.scope, agent.key, channelId)),
+      elsewhere = worksElsewhere(
+        configuredSettings.scope === "community"
+          ? undefined
+          : // A Solo chat is one conversation, with no thread root.
+            this.folder(reads.scope, agent.key, channelId),
+        agent.promptSections?.(channelId),
+      ),
     ) => canvasRead && project(canvasRead.text, elsewhere);
     const projectOf = (elsewhere?: boolean) =>
       [
-        settings.scope === "community"
+        configuredSettings.scope === "community"
           ? undefined
           : canvasProjectOf(elsewhere)?.section,
         folders.section,
@@ -2194,8 +2309,38 @@ export class CodexRuntime {
     // A stop during the reads deleted this agent's entry; recreating it would
     // reopen the agent.
     delivery.signal.throwIfAborted();
-    const toolRoot = channel?.dm || topLevel ? undefined : rootOf(event);
-    const root = settings.scope === "channel" ? undefined : toolRoot;
+    const route =
+      !channel?.dm && !topLevel
+        ? await delivery.routeConversation?.(
+            {
+              source: {
+                channelId,
+                ...(wake?.root
+                  ? { root: wake.root }
+                  : !wake
+                    ? { root: rootOf(event) }
+                    : {}),
+              },
+              conversation: {
+                channelId,
+                ...(configuredSettings.scope === "community"
+                  ? { community: true }
+                  : configuredSettings.scope === "thread"
+                    ? { root: rootOf(event) }
+                    : {}),
+              },
+            },
+            delivery.signal,
+          )
+        : undefined;
+    const settings =
+      route && configuredSettings.scope !== "thread"
+        ? { ...configuredSettings, scope: "thread" as const }
+        : configuredSettings;
+    const toolRoot =
+      channel?.dm || topLevel ? undefined : (route?.parent ?? rootOf(event));
+    const root =
+      route?.parent ?? (settings.scope === "channel" ? undefined : toolRoot);
     delivery.signal.throwIfAborted();
     const conversationKey = scopedKey(settings.scope, channelId, root);
     await rememberCommunitySource(
@@ -2204,7 +2349,7 @@ export class CodexRuntime {
       settings.scope === "community" ? COMMUNITY_SESSION : channelId,
       channelId,
     );
-    const sourceRoot = wake ? wake.root : rootOf(event);
+    const sourceRoot = route?.parent ?? (wake ? wake.root : rootOf(event));
     const admission = (deferred: boolean) =>
       delivery.prepareSession?.(
         {
@@ -2255,6 +2400,7 @@ export class CodexRuntime {
             : lifetime;
           await runtime.run({
             ...delivery,
+            routeConversation: async () => route,
             ...(admitted
               ? { session: admitted.session, sessionContext: admitted.context }
               : {}),
@@ -2285,7 +2431,8 @@ export class CodexRuntime {
       scope: reads.scope,
       ...(wake ? { current: delivery.current } : {}),
       event,
-      ...(!topLevel ? { replyRoot: rootOf(event) } : {}),
+      ...(!topLevel ? { replyRoot: route?.parent ?? rootOf(event) } : {}),
+      ...(route ? { sourceRoot: route.root } : {}),
       ...(wake ? { wake } : {}),
       ...(delivery.wakeText ? { wakeText: delivery.wakeText } : {}),
       agent,
@@ -2296,13 +2443,15 @@ export class CodexRuntime {
       ...(delivery.synced ? { synced: delivery.synced } : {}),
       activityScope: topLevel
         ? channelId
-        : (threadReference(event)?.rootId ??
+        : (route?.parent ??
+          threadReference(event)?.rootId ??
           (channel?.dm ? channelId : event.id)),
       conversation: {
         channelId,
         name: channel?.name ?? channelId,
         ...(settings.scope === "community" ? { community: true } : {}),
         ...(root ? { root } : {}),
+        ...(route ? { sourceRoot: route.root } : {}),
         ...(topLevel ? { topLevel } : {}),
         ...(topLevel && !solo && !huddle ? { threadReplies: true } : {}),
       },
@@ -2328,6 +2477,10 @@ export class CodexRuntime {
         ? { resumed: true }
         : {}),
       ...(solo && delivery.named ? { named: delivery.named } : {}),
+      ...(delivery.gateway ? { gateway: delivery.gateway } : {}),
+      ...(wake && delivery.gatewayFallback
+        ? { gatewayFallback: delivery.gatewayFallback }
+        : {}),
     };
     if (!validWorkspace(settings.workspace)) {
       failActivity(
@@ -2367,7 +2520,9 @@ export class CodexRuntime {
         (request.model && request.model !== targetModel) ||
         (request.effort && request.effort !== targetEffort));
     entry.waiting.add(request);
-    delivery.interruptible?.(() => this.interrupt(entry, key, request));
+    delivery.interruptible?.(() =>
+      this.interrupt(entry, key, request, reserved),
+    );
     const handoff = this.controls.deliver(
       `${agent.key}/${key}`,
       async (deferred) => {
@@ -2375,6 +2530,11 @@ export class CodexRuntime {
         if (deferred) entry.abort.signal.throwIfAborted();
         else delivery.signal.throwIfAborted();
         const admitted = await admission(deferred);
+        if (reserved && request.current?.() === false) {
+          entry.waiting.delete(request);
+          request.answered();
+          return;
+        }
         if (admitted) {
           request.session = admitted.session;
           if (admitted.context !== undefined)
@@ -2416,7 +2576,13 @@ export class CodexRuntime {
                 active.stopped ||
                 (!communityLane && !request.solo !== !active.reply.solo) ||
                 (request.model && request.model !== active.model) ||
-                (request.effort && request.effort !== active.effort)
+                (request.effort && request.effort !== active.effort) ||
+                // A steered request runs under the turn's frozen headers,
+                // which name the turn's first message. One routed otherwise,
+                // a gateway delivery into an ordinary turn or the reverse, or
+                // another Buzz thread of a channel-scoped session, runs as its
+                // own turn.
+                gatewayMark(request.gateway) !== active.gateway
               ) {
                 queue();
                 return;
@@ -2642,6 +2808,10 @@ export class CodexRuntime {
           tags: [],
         } as EventData,
         ...(delivery.synced ? { synced: delivery.synced } : {}),
+        ...(delivery.gateway ? { gateway: delivery.gateway } : {}),
+        ...(delivery.gatewayFallback
+          ? { gatewayFallback: delivery.gatewayFallback }
+          : {}),
         answered(stopped) {
           if (request.finalDelivery === true) published();
           else if (stopped) outcome = { ok: false, error: "Codex was stopped" };
@@ -2717,6 +2887,8 @@ export class CodexRuntime {
       return { ok: false, error: "Codex was stopped" };
     const server = this.open(agent);
     const signal = AbortSignal.any([entry.abort.signal, turnSignal]);
+    /** Why this turn ran without the Buzz context, for its Activity status. */
+    let notice = delivery.gatewayFallback?.notice;
     let release!: () => void;
     const once: Once = {
       finished: false,
@@ -2737,17 +2909,32 @@ export class CodexRuntime {
       const workspace = await this.workspace(settings.workspace);
       signal.throwIfAborted();
       once.workspace = workspace;
-      const { params, model, effort, summary, bridge } = await this.prepare(
+      const prepared = await this.prepare(
         rpc,
         agent,
         settings,
         workspace,
         {},
         delivery.synced,
-        undefined,
-        "standalone",
       );
+      const { model, effort, summary, bridge } = prepared;
+      let { params } = prepared;
       hookBridge = bridge;
+      // Through the gateway when Codex's configuration goes there, in a
+      // Buzz session of its own: the thread is never resumed or saved.
+      const headed = this.gatewayParams(prepared, delivery.gateway);
+      if (!headed && delivery.gateway) notice = this.unheaded();
+      if (headed && delivery.gateway) {
+        const bound = bindSession(
+          delivery.gateway.route,
+          undefined,
+          "standalone",
+        );
+        if (!bound.ok) throw new Error(bound.message);
+        const routed = headed(bound.binding, delivery.gateway.turn);
+        if (routed.ok) params = routed.value;
+        else notice = unattributed(routed.message);
+      }
       const text = await prompt();
       if (text === undefined) return { ok: true };
       const memory = await this.core(agent.key, signal);
@@ -2783,14 +2970,16 @@ export class CodexRuntime {
         },
       );
       once.turnId ??= turnStarted.turn.id;
-      this.status(agent.key, key, "Working");
+      this.status(agent.key, key, "Working", notice);
       const status = await followed.completed;
       if (status === "interrupted") {
-        this.status(agent.key, key, "Interrupted");
+        this.status(agent.key, key, "Interrupted", notice);
         return { ok: false, error: "Codex’s turn was interrupted" };
       }
-      // A finished wake leaves nothing to show; a failed one stays listed.
-      this.forget(agent.key, key);
+      // A finished wake leaves nothing to show; a failed one stays listed,
+      // as does one that ran without the gateway it routes through.
+      if (notice) this.status(agent.key, key, "Idle", notice);
+      else this.forget(agent.key, key);
       return { ok: true };
     } catch (error) {
       if (!once.finished && once.threadId && once.turnId)
@@ -2826,15 +3015,18 @@ export class CodexRuntime {
     entry: Entry,
     key: string,
     request: Request,
+    canStopWaiting = request.settings.scope === "community",
   ): Promise<void> {
     if (entry.waiting.has(request)) {
-      if (request.settings.scope !== "community")
+      if (!canStopWaiting)
         return Promise.reject(
           new Error("Codex has not started on this message yet"),
         );
       // Codex is still deciding on its steer: stop the turn it joins, or drop it.
       if (request.steering)
-        return request.steering.then(() => this.interrupt(entry, key, request));
+        return request.steering.then(() =>
+          this.interrupt(entry, key, request, canStopWaiting),
+        );
       request.current = () => false;
       request.answered(true);
       return Promise.resolve();
@@ -3132,7 +3324,12 @@ export class CodexRuntime {
       tags: [
         ["h", request.conversation.channelId],
         ...(request.replyRoot !== undefined
-          ? [["e", request.replyRoot, "", "reply"]]
+          ? [
+              ...(request.sourceRoot
+                ? [["e", request.sourceRoot, "", "root"]]
+                : []),
+              ["e", request.replyRoot, "", "reply"],
+            ]
           : []),
         ["p", request.agent.owner],
       ],
@@ -3247,6 +3444,7 @@ export class CodexRuntime {
             ...(request.session ? { session: request.session } : {}),
             channel: request.conversation.channelId,
             ...(request.toolRoot ? { root: request.toolRoot } : {}),
+            ...(request.sourceRoot ? { sourceRoot: request.sourceRoot } : {}),
             ...(request.toolRoot && !request.conversation.root
               ? { wholeChannel: true }
               : {}),
@@ -3503,11 +3701,11 @@ export class CodexRuntime {
     synced?: Delivery["synced"],
     /** The agent's workspace, when `workspace` is the conversation's folder. */
     home?: string,
-    /** What the thread is, for its Session Model. */
-    place?: Facts["place"],
+    /** The conversation the thread is for; none for a one-off turn. */
+    conversation?: Readonly<{ channelId: string; root?: string }>,
   ) {
     const normalized = await rpc.request<{
-      config: {
+      config: ProviderConfig & {
         mcp_servers?: Record<string, Record<string, unknown>>;
         model_reasoning_summary?: string | null;
         features?: { hooks?: boolean; codex_hooks?: boolean };
@@ -3545,8 +3743,18 @@ export class CodexRuntime {
     const credential = await rpc.toolCredential(agent);
     // Read once: what the thread is told and what its saved prompt shows
     // come from the same choices.
-    const choices = agent.promptSections?.();
-    const base = composeBase(baseFacts(settings, home, place), choices);
+    const choices = agent.promptSections?.(
+      conversation?.channelId,
+      conversation?.root,
+    );
+    const base = composeBase(
+      baseFacts(
+        settings,
+        home,
+        conversation ? sessionPlace(conversation) : "standalone",
+      ),
+      choices,
+    );
     const params = {
       model,
       cwd: workspace,
@@ -3575,9 +3783,50 @@ export class CodexRuntime {
     const summary = normalized.config.model_reasoning_summary
       ? {}
       : { summary: "auto" };
-    return { params, model, effort, summary, bridge, base, choices };
+    return {
+      params,
+      model,
+      effort,
+      summary,
+      bridge,
+      base,
+      choices,
+      providers: normalized.config as ProviderConfig,
+    };
   }
-  /** Shared thread setup; a voice seat retains it between delegated turns. */
+  /** The thread params for a local gateway turn under `binding`: `params`
+   * with the active provider's header table replaced; undefined when there
+   * is no such turn or provider, and the turn runs as configured. */
+  private gatewayParams<Params extends { config: Record<string, unknown> }>(
+    prepared: Readonly<{ params: Params; providers: ProviderConfig }>,
+    gateway: CodexRoute | undefined,
+  ) {
+    // Only a local agent: Codex elsewhere has its own configuration.
+    const provider =
+      gateway &&
+      this.routes &&
+      !this.target &&
+      gatewayProvider(prepared.providers, gateway.route.gatewayOrigin);
+    if (!gateway || !provider) return undefined;
+    return (binding: GatewayBinding, turn: TurnContext): Checked<Params> => {
+      const bundle = inferenceBundle(gateway.route.profile, binding, turn);
+      if (!bundle.ok) return bundle;
+      return {
+        ok: true,
+        value: {
+          ...prepared.params,
+          config: {
+            ...prepared.params.config,
+            ...threadConfig(gateway, provider, bundle.value),
+          },
+        },
+      };
+    };
+  }
+  /** Why a gateway delivery ran without the Buzz context. */
+  private unheaded() {
+    return this.target ? REMOTE_UNATTRIBUTED : ELSEWHERE;
+  }
   /** A thread's key in its saved prompts. */
   private promptKey(threadId: string) {
     return this.targetKey
@@ -3614,17 +3863,23 @@ export class CodexRuntime {
 
   /** Whether a thread that started with `sections` can be given `base`.
    * One from before its sections were kept cannot be told which of them
-   * the owner changed, so it starts fresh once. A remote thread is kept by
-   * design, as restarting it would stop the conversation with a reset
-   * error: it keeps the sections it started with until the owner chooses
-   * New. */
+   * changed, so it starts fresh once. A remote thread is kept by design for
+   * the owner's choices, as restarting it would stop the conversation with
+   * a reset error: it keeps the sections it started with until the owner
+   * chooses New. A plugin's text is not the owner's to wait for, so the
+   * remote thread asks for New then. */
   private keepsSections(
     sections: Saved["sections"],
-    base: Pick<ReturnType<typeof composeBase>, "custom">,
+    base: Pick<ReturnType<typeof composeBase>, "custom" | "plugin">,
   ) {
-    return !base.custom || sections?.layout === LAYOUT || !!this.target;
+    return (
+      !base.custom ||
+      sections?.layout === LAYOUT ||
+      (!!this.target && !base.plugin)
+    );
   }
 
+  /** Shared thread setup; a voice seat retains it between delegated turns. */
   async loadThread(
     request: Request,
     entry: Entry,
@@ -3646,17 +3901,18 @@ export class CodexRuntime {
     signal.throwIfAborted();
     const saved = entry.saved[key];
     const existing = resumable(saved, agent.protection);
-    const { params, model, effort, summary, bridge, base, choices } =
-      await this.prepare(
-        rpc,
-        agent,
-        settings,
-        workspace,
-        request,
-        request.synced,
-        home,
-        sessionPlace(request.conversation),
-      );
+    const prepared = await this.prepare(
+      rpc,
+      agent,
+      settings,
+      workspace,
+      request,
+      request.synced,
+      home,
+      request.conversation,
+    );
+    const { model, effort, summary, bridge, base, choices } = prepared;
+    let { params } = prepared;
     if (voiceInstructions) {
       Object.assign(params.config, {
         "realtime.type": "conversational",
@@ -3664,16 +3920,42 @@ export class CodexRuntime {
       });
       params.developerInstructions += `\n${voiceInstructions}`;
     }
+    // A voice seat retains its subscription; its turns use that setup.
+    const { gateway } = request;
+    const headed = this.gatewayParams(prepared, gateway);
+    let notice = request.gatewayFallback?.notice;
+    if (gateway && !headed) notice = this.unheaded();
     let threadId: string | undefined;
     try {
       // Resume restores the thread's tools, so one started with other added
       // tools starts fresh.
       const added = this.added();
       const tools = addedKey(added);
-      const resuming =
-        existing?.workspace === workspace &&
-        (existing.tools ?? "") === tools &&
-        this.keepsSections(existing.sections, base);
+      const same =
+        existing?.workspace === workspace && (existing.tools ?? "") === tools;
+      const resuming = same && this.keepsSections(existing?.sections, base);
+      /** The Buzz session a gateway thread runs under. */
+      let binding = resuming ? existing.gateway : undefined;
+      // The whole table replaces the provider's headers on every start and
+      // resume; an ordinary resume after a released gateway turn drops them.
+      const plainParams = params;
+      const bind = (event: "resume" | "new_generation") => {
+        // A new thread is a new Buzz session.
+        if (event === "new_generation") binding = undefined;
+        if (!gateway || !headed) return;
+        // An unaddressed wake uses its own attribution even on a shared thread.
+        const turnBinding = continueSession(
+          gateway.route,
+          request.unaddressed ? undefined : binding,
+        ).binding;
+        if (!request.unaddressed) binding = turnBinding;
+        const routed = headed(turnBinding, gateway.turn);
+        params = routed.ok ? routed.value : plainParams;
+        notice = routed.ok
+          ? request.gatewayFallback?.notice
+          : unattributed(routed.message);
+      };
+      bind(resuming ? "resume" : "new_generation");
       type Started = { thread: { id: string; cwd: string } };
       const start = () =>
         rpc.request<Started>("thread/start", {
@@ -3689,7 +3971,9 @@ export class CodexRuntime {
       if (this.target && existing && !resuming)
         throw Object.assign(
           new Error(
-            "The Codex workspace or tools changed. Start a new session to continue.",
+            same
+              ? "The base instructions of this conversation changed. Start a new session to continue."
+              : "The Codex workspace or tools changed. Start a new session to continue.",
           ),
           { code: "EXECUTION_SESSION_RESET_REQUIRED" },
         );
@@ -3722,6 +4006,8 @@ export class CodexRuntime {
           .catch(async (error) => {
             missing(error);
             fresh = true;
+            // A lost thread is a new Buzz session.
+            bind("new_generation");
             return start();
           });
       } else started = await start();
@@ -3749,8 +4035,6 @@ export class CodexRuntime {
       return {
         threadId,
         workspace,
-        // Where it works, which its Canvas states the rule from.
-        elsewhere: Boolean(home),
         params,
         model,
         effort,
@@ -3764,9 +4048,13 @@ export class CodexRuntime {
         base,
         facts,
         sections,
+        // Where it works, which its Canvas states the rule from.
+        elsewhere: worksElsewhere(home && workspace, choices),
         updates: fresh
           ? ""
           : sectionUpdates(existing?.sections, facts, choices),
+        binding,
+        notice,
       };
     } catch (error) {
       if (threadId) await rpc.releaseThread(threadId).catch(() => {});
@@ -3851,6 +4139,7 @@ export class CodexRuntime {
     let turnMayBeRunning = adopted !== undefined;
     /** The voice seat whose thread this turn runs on, if any. */
     let seat: Lane["voice"];
+    let notice = request.gatewayFallback?.notice;
     try {
       const rpc = await server.opening;
       signal.throwIfAborted();
@@ -3867,20 +4156,31 @@ export class CodexRuntime {
       }
       seat = lane.voice;
       // A seat keeps its loaded thread between turns, and the owner can
-      // change a section meanwhile: its turns get the sections as they are.
-      const choices = seat && agent.promptSections?.();
+      // change a section or the session scope meanwhile: its turns get the
+      // sections as they are. Its lane fixes its place and folder.
+      const facts = seat
+        ? { ...seat.loaded.facts, scope: settings.scope }
+        : undefined;
+      const choices =
+        seat &&
+        agent.promptSections?.(
+          request.conversation.channelId,
+          request.conversation.root,
+        );
       if (
         seat &&
         adopted === undefined &&
         !this.keepsSections(
           seat.loaded.sections,
-          composeBase(seat.loaded.facts, choices),
+          composeBase(facts ?? seat.loaded.facts, choices),
         )
       ) {
         // Typed work goes on in a fresh thread, which the seat joins next.
+        // Its reply posts to this room, so the Huddle's own "Leave and
+        // rejoin" comes after it.
         seat.end(
           new Error(
-            "The base instructions changed. Join the huddle again to use them.",
+            "The base instructions changed, so voice stopped. Wait for the reply to your typed message before you leave, since a Huddle closes when its only person leaves",
           ),
         );
         seat = undefined;
@@ -3904,15 +4204,24 @@ export class CodexRuntime {
         resuming,
         fresh,
         sections,
+        binding,
       } = loaded;
-      const base = seat ? composeBase(loaded.facts, choices) : loaded.base;
-      const updates = seat
-        ? sectionUpdates(sections, loaded.facts, choices)
-        : loaded.updates;
+      const base = seat && facts ? composeBase(facts, choices) : loaded.base;
+      const updates =
+        seat && facts
+          ? sectionUpdates(sections, facts, choices)
+          : loaded.updates;
       // The seat owns the subscription. The typed follower can claim its
       // native turn only once the typed request is about to be sent.
       if (!seat || adopted !== undefined || settings.scope !== "community")
         active.threadId = threadId;
+      active.gateway = gatewayMark(request.gateway);
+      notice =
+        seat && request.gateway
+          ? unattributed(
+              "The active voice session keeps its existing Codex configuration.",
+            )
+          : loaded.notice;
       // A refusal outside this turn does not explain how it ends.
       explain = server.explainer?.(threadId);
       active.workspace = workspace;
@@ -4096,6 +4405,7 @@ export class CodexRuntime {
             ? { protection: agent.protection.stateKey }
             : {}),
           ...(saving ? { sections: saving } : {}),
+          ...(binding ? { gateway: binding } : {}),
         });
         ready();
         this.status(agent.key, key, "Working");
@@ -4109,7 +4419,7 @@ export class CodexRuntime {
       if (status === "interrupted" && active.stopped) {
         for (const taken of active.requests) taken.answered(true);
         await this.terminals(rpc, threadId, STOP_LINGER_MS);
-        this.status(agent.key, key, "Stopped");
+        this.status(agent.key, key, "Stopped", notice);
       } else if (status === "interrupted") {
         for (const taken of active.requests)
           taken.failActivity("Codex’s turn was interrupted");
@@ -4126,7 +4436,7 @@ export class CodexRuntime {
         if (failed instanceof Error) throw failed;
         // A turn may end without a reply when there is nothing new to say.
         for (const taken of active.requests) taken.answered();
-        this.status(agent.key, key, "Idle");
+        this.status(agent.key, key, "Idle", notice);
       }
     } catch (error) {
       turnFailed = true;
@@ -4318,6 +4628,29 @@ const dynamicTools = (added: readonly AddedTool[]) => [
   },
 ];
 const EMPTY: readonly SessionView[] = Object.freeze([]);
+/** A gateway delivery's route revision, channel and thread, which a steered
+ * request must share with its turn. Its message may differ: the turn's
+ * headers keep naming the first. */
+const gatewayMark = (gateway: CodexGateway | undefined) =>
+  gateway &&
+  JSON.stringify([
+    gateway.route.revision,
+    gateway.turn.channel_id,
+    gateway.turn.thread_id,
+  ]);
+/** The Buzz session that continues `saved` for `route`: a new one where there
+ * is none, or it can't continue (unreadable, or minted for another owner,
+ * agent or community), so attribution never stops a conversation. */
+function continueSession(
+  route: Readonly<{ identity: GatewayBinding["identity"] }>,
+  saved: unknown,
+): Readonly<{ binding: GatewayBinding; persist: boolean }> {
+  const bound = bindSession(route, saved, "resume");
+  if (bound.ok) return bound;
+  const fresh = bindSession(route, undefined, "new_generation");
+  if (!fresh.ok) throw new Error(fresh.message);
+  return fresh;
+}
 
 /** A started Codex item as a step, named in the shared step vocabulary.
  * Shapes follow codex app-server v2 `ThreadItem` / `CommandAction` (camelCase). */

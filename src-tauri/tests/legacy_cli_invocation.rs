@@ -45,6 +45,7 @@ fn legacy_cli_commands_fail_without_echoing_payloads() {
         vec!["sidebar", "sort", "list", "private-sidebar-payload"],
         vec!["--private-key=private-key-payload", "messages", "list"],
         vec!["--format", "compact", "channels", "list"],
+        vec!["raw", "publish", "private-raw-payload"],
     ] {
         let output = invoke(&args);
         assert_eq!(output.status.code(), Some(1));
@@ -59,6 +60,7 @@ fn legacy_cli_commands_fail_without_echoing_payloads() {
         assert!(!stderr.contains("private-huddle-payload"));
         assert!(!stderr.contains("private-sidebar-payload"));
         assert!(!stderr.contains("private-key-payload"));
+        assert!(!stderr.contains("private-raw-payload"));
     }
 }
 

@@ -1,3 +1,4 @@
+import { useChannelActivitySubscription } from "../../features/agents/use-channel-agent-activity";
 import { activityTranscript } from "../../features/agents/activity-transcript";
 import { useRecordedActivityAgents } from "../../features/conversation/typing-presentation";
 import { useToastNotification } from "../../shared/design-system/ui/Toast";
@@ -122,18 +123,21 @@ function MessageActivity(
   const recorded = useRecordedActivityAgents(session, channelId, messageId);
   // Every row mounts this; only rows with work subscribe to each activity
   // step, profile and choice change. Others read once and wait for work.
-  const hasWork = useSyncExternalStore(session.agentActivity.subscribe, () => {
+  const subscribe = useChannelActivitySubscription(
+    session.agentActivity,
+    channelId,
+  );
+  const hasWork = useSyncExternalStore(subscribe, () => {
     if (!messageId) return false;
     const work = messageWork(
-      session.agentActivity.snapshot(),
+      session.agentActivity.snapshot(channelId),
       channelId,
       messageId,
     );
     return work.live.length > 0 || work.stopped.length > 0;
   });
-  const snapshot = useSyncExternalStore(
-    hasWork ? session.agentActivity.subscribe : noSubscribe,
-    session.agentActivity.snapshot,
+  const snapshot = useSyncExternalStore(hasWork ? subscribe : noSubscribe, () =>
+    session.agentActivity.snapshot(channelId),
   );
   const work = useMemo(
     () =>
@@ -848,10 +852,11 @@ function ActivityBubble({
  * main's existing presentation rather than disappearing without a bubble. */
 export function ActivityTypingReplacement(props: ComposerAccessoryProps) {
   // Subscribe to which agents are replaced, not every observer frame.
-  const agents = useSyncExternalStore(
-    props.session.agentActivity.subscribe,
-    () => replacedAgents(props),
+  const subscribe = useChannelActivitySubscription(
+    props.session.agentActivity,
+    props.channelId,
   );
+  const agents = useSyncExternalStore(subscribe, () => replacedAgents(props));
   return (
     <>
       {agents
@@ -864,7 +869,7 @@ export function ActivityTypingReplacement(props: ComposerAccessoryProps) {
   );
 }
 function replacedAgents(props: ComposerAccessoryProps) {
-  const activity = props.session.agentActivity.snapshot();
+  const activity = props.session.agentActivity.snapshot(props.channelId);
   const ids = [
     ...(props.threadRootId ? [props.threadRootId] : []),
     ...(activity.local ?? [])

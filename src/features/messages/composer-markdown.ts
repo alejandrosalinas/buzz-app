@@ -82,6 +82,24 @@ export function composerMarkdown(
   return prepareMarkdown(sent).kind === "plain" ? wire(doc) : sent;
 }
 
+/** Unmarked chat paragraphs send their source with a newline between them. */
+export function plainChatLength(doc: EditorNode): number | undefined {
+  let length = doc.childCount - 1;
+  for (const block of doc.content.content) {
+    if (
+      block.type !== composerSchema.nodes.paragraph ||
+      !block.content.content.every(
+        (node) =>
+          !node.marks.length &&
+          (node.isText || node.type === composerSchema.nodes.hard_break),
+      )
+    )
+      return undefined;
+    length += block.content.size;
+  }
+  return length;
+}
+
 /** The empty paragraph a code block exit opens at an edge of the draft, a
  * quote or a list item sends only the blank line that separates it from the
  * code block. One is dropped per edge, so the exit fits at the length limit

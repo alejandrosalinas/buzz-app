@@ -1,6 +1,7 @@
-// What the owner chose for the base prompt's sections, as the builder takes
-// it. The builder checks each choice again when it reads it, so a bad saved
-// value cannot unlock a section or break the prompt's framing.
+// What the owner chose for the base prompt's sections, and what the plugin
+// that manages a conversation gave them there, as the builder takes it. The
+// builder checks each choice again when it reads it, so a bad saved value
+// cannot unlock a section or break the prompt's framing.
 
 /** The owner's choice for one owner-configurable section; none is the
  * default text. */
@@ -10,6 +11,12 @@ export type OwnerChoice = Readonly<
 /** Section id → choice. Resolved by the host; a harness only passes it on. */
 export type SectionChoices = Readonly<{
   owner?: Readonly<Record<string, OwnerChoice>>;
+  /** The plugin that manages the conversation, and its text for each section
+   * it replaces there. The owner's choice for a section wins over it. */
+  plugin?: Readonly<{
+    id: string;
+    sections: Readonly<Record<string, string>>;
+  }>;
 }>;
 
 /** The most UTF-8 bytes a section's replacement text has, after trimming:

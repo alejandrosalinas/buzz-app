@@ -1,4 +1,5 @@
 import { sessionTools } from "../../buzz-mcp/session-tools";
+import { steerPrompt } from "../claude-code/prompt";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   GooseProcess,
@@ -1759,6 +1760,56 @@ it("keeps Goose steers in order across an Attention refresh", async () => {
     await flush();
     await goose.close(session);
     await Promise.all([first, second, third]);
+  }
+});
+
+it("steers with a message's built text only when it joins the running turn", async () => {
+  const { open, process, goose } = await start();
+  process.hold = true;
+  const session = await open({
+    choice: () => ({ provider: "openai", model: "gpt-4.1" }),
+  });
+  const first = session.send("one");
+  await vi.waitFor(() => expect(process.turns).toHaveLength(1));
+  const prompt = (text: string) => vi.fn(async () => text);
+  const two = prompt("two");
+  const three = prompt("three");
+  const steered = session.send("old two", { refresh: two });
+  // Another model cannot join the running turn: it runs as its own.
+  const other = session.send("old three", { refresh: three }, "o3");
+  try {
+    await vi.waitFor(() => expect(process.turns[0]?.steered).toHaveLength(1));
+    expect(process.turns[0]?.steered[0]).toBe(steerPrompt("two"));
+    expect(two).toHaveBeenCalledExactlyOnceWith();
+    process.turns[0]?.finish();
+    await vi.waitFor(() => expect(process.turns).toHaveLength(2));
+    expect(process.turns[1]?.text).toBe("three");
+    expect(three).toHaveBeenCalledExactlyOnceWith();
+    process.turns[1]?.finish();
+  } finally {
+    await flush();
+    await goose.close(session);
+    await Promise.all([first, steered, other]);
+  }
+});
+
+it("rebuilds an Attention prompt as it joins the running turn", async () => {
+  const { open, process, goose } = await start();
+  process.hold = true;
+  const session = await open();
+  const first = session.send("one");
+  await vi.waitFor(() => expect(process.turns).toHaveLength(1));
+  const refresh = vi.fn(async () => "wake");
+  const woken = session.send("old wake", { current: () => true, refresh });
+  try {
+    await vi.waitFor(() => expect(process.turns[0]?.steered).toHaveLength(1));
+    expect(refresh).toHaveBeenCalledExactlyOnceWith();
+    expect(process.turns[0]?.steered[0]).toBe(steerPrompt("wake"));
+    process.turns[0]?.finish();
+  } finally {
+    await flush();
+    await goose.close(session);
+    await Promise.all([first, woken]);
   }
 });
 

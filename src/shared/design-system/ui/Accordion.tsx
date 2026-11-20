@@ -17,6 +17,8 @@ export function Accordion({
   items: readonly {
     value: string;
     title: ReactNode;
+    triggerLabel?: string | undefined;
+    triggerDescription?: string | undefined;
     content: ReactNode;
   }[];
   defaultValue?: string[];
@@ -26,6 +28,7 @@ export function Accordion({
     | "default"
     | "form"
     | "settings"
+    | "popout"
     | "navigation"
     | "activity"
     | "section";
@@ -66,7 +69,11 @@ export function Accordion({
           >
             <BaseAccordion.Trigger
               className={`buzz-accordion-trigger ${variant === "section" ? "text-label-sm" : "text-body"}`}
-              aria-label={variant === "settings" ? item.value : undefined}
+              aria-label={
+                item.triggerLabel ??
+                (variant === "settings" ? item.value : undefined)
+              }
+              aria-description={item.triggerDescription}
             >
               <span>{item.title}</span>
               <CaretDownIcon size={14} aria-hidden="true" />
@@ -82,8 +89,10 @@ export function Accordion({
                     const instant =
                       reducedMotion ||
                       (typeof document !== "undefined" &&
-                        document.documentElement.hasAttribute(
-                          "data-keyboard-navigation",
+                        document.documentElement.matches(
+                          variant === "popout"
+                            ? "[data-keyboard-input], [data-keyboard-navigation]"
+                            : "[data-keyboard-navigation]",
                         ));
                     return (
                       <div {...props}>
@@ -103,7 +112,7 @@ export function Accordion({
                 : undefined
             }
           >
-            {variant === "settings" || animate ? (
+            {variant === "settings" || variant === "popout" || animate ? (
               <div className="buzz-accordion-content">{item.content}</div>
             ) : (
               item.content

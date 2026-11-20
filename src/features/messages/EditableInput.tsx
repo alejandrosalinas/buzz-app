@@ -85,6 +85,7 @@ import {
 import {
   composerMarkdown,
   type ComposerMarkdownMode,
+  plainChatLength,
 } from "./composer-markdown";
 import {
   documentEditorDraft,
@@ -774,10 +775,14 @@ export function EditableInput({
     };
     const normalize = new Plugin({
       filterTransaction(tr) {
+        if (!tr.docChanged) return true;
+        const { markdownMode, maxLength, serializeDraft } = current.current;
+        const length =
+          markdownMode === "chat" ? plainChatLength(tr.doc) : undefined;
         return (
-          !tr.docChanged ||
-          current.current.serializeDraft(projectComposerDocument(tr.doc).draft)
-            .length <= current.current.maxLength
+          (length ??
+            serializeDraft(projectComposerDocument(tr.doc).draft).length) <=
+          maxLength
         );
       },
       appendTransaction(transactions, old, state) {
@@ -2333,7 +2338,7 @@ export function EditableInput({
             return;
           }
           editor.updateState(next);
-          if (tr.docChanged) {
+          if (tr.docChanged && !next.doc.eq(previous.doc)) {
             scrollAfterTokens.current ||=
               tr.scrolledIntoView && hosts.current.size > 0;
             emitted.current = projection().draft;
@@ -3205,11 +3210,17 @@ export function EditableInput({
         )(editor.state, (tr) => editor.dispatch(closeHistory(tr)));
       },
       sync(next, reset = false) {
-        if (
-          !reset &&
-          JSON.stringify(next) === JSON.stringify(projection().draft)
-        )
-          return;
+        if (!reset) {
+          const current = projection().draft;
+          if (
+            (next.document === current.document &&
+              next.text === current.text &&
+              next.recipients === current.recipients &&
+              next.pending === current.pending) ||
+            JSON.stringify(next) === JSON.stringify(current)
+          )
+            return;
+        }
         plain.current = [];
         pendingTokens = [];
         const doc = readComposerDocument(

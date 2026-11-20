@@ -24,6 +24,24 @@ function remember(src: string, outcome: Outcome) {
 const RETRY_DELAYS_MS = [2_000, 10_000, 30_000];
 const failed = new Map<string, Set<() => void>>();
 
+/** A source loaded outside any mount, such as by request warming. Its mounts
+ * then load eagerly, which WebKit serves from the warmed memory cache. */
+export function rememberLoadedImage(src: string) {
+  remember(src, "loaded");
+}
+
+// Counts retryFailedImages calls, so a request already in flight when one ran
+// gets the same extra attempt once it fails.
+let recoveries = 0;
+
+/** Requests every mounted failed source once more, after its timed retries
+ * may be spent: a connection that can now serve it has come up. */
+export function retryFailedImages() {
+  recoveries++;
+  for (const retries of [...failed.values()])
+    for (const retry of [...retries]) retry();
+}
+
 export type ReadyImage = ReturnType<typeof useReadyImage>;
 
 /** Paint lifecycle for a small, frequently remounted image (avatars, emoji).
@@ -33,6 +51,7 @@ export function useReadyImage(src: string, loading?: "eager" | "lazy") {
   const [status, setStatus] = useState<"loading" | Outcome>("loading");
   const [outcome] = useState(() => outcomes.get(src));
   const [attempt, setAttempt] = useState(0);
+  const requested = useRef(recoveries);
   // WebKit paints a ready async-decoded image (even with `auto`) as empty
   // until a later frame. Decode an image that is ready at mount in the paint
   // that reveals it; network loads keep decoding off the main thread.
@@ -52,12 +71,13 @@ export function useReadyImage(src: string, loading?: "eager" | "lazy") {
   useEffect(() => {
     if (status !== "failed") return;
     const retry = () => {
+      requested.current = recoveries;
       setAttempt(attempt + 1);
       setStatus("loading");
     };
     const waiting = failed.get(src) ?? new Set();
     failed.set(src, waiting.add(retry));
-    const delay = RETRY_DELAYS_MS[attempt];
+    const delay = requested.current < recoveries ? 0 : RETRY_DELAYS_MS[attempt];
     const timer = delay === undefined ? 0 : window.setTimeout(retry, delay);
     return () => {
       window.clearTimeout(timer);

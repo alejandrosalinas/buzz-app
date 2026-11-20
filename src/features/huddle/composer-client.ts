@@ -1,5 +1,5 @@
 import type { GifRequests } from "../relay/gifs";
-import { readView } from "../../shared/view-state";
+import { viewRevision } from "../../shared/view-state";
 import type { ComposerSession } from "../messages/composer-session";
 import { createNameProvider } from "../identity-names/directory";
 import { resolveIdentityNames } from "../identity-names/policy";
@@ -223,21 +223,30 @@ export function createHuddleComposerClient(token: string) {
       forwarding: {
         resolve: (reference, signal) =>
           request("forwardSource", reference, signal),
-        send: (reference, text, mentions, attachments, references, picks) =>
-          request("send", {
-            forward: reference,
-            text,
-            mentions,
-            attachments,
-            references,
-            picks,
-            draft: JSON.stringify(
-              readView(initial.scope, `draft:${initial.room}`, null),
-            ),
-          }),
+        send: async (
+          reference,
+          text,
+          mentions,
+          attachments,
+          references,
+          picks,
+        ) =>
+          (
+            await request("send", {
+              forward: reference,
+              text,
+              mentions,
+              attachments,
+              references,
+              picks,
+              draft:
+                viewRevision(initial.scope, `draft:${initial.room}`) ?? "null",
+            })
+          ).id,
       },
+      sendDraft: (message) => request("send", message),
       messages: {
-        send: (
+        send: async (
           room,
           text,
           mentions = [],
@@ -248,16 +257,17 @@ export function createHuddleComposerClient(token: string) {
         ) => {
           if (room !== initial.room)
             return Promise.reject(new Error("Huddle destination changed."));
-          return request("send", {
-            text,
-            picks,
-            mentions,
-            attachments,
-            references,
-            draft: JSON.stringify(
-              readView(initial.scope, `draft:${initial.room}`, null),
-            ),
-          });
+          return (
+            await request("send", {
+              text,
+              picks,
+              mentions,
+              attachments,
+              references,
+              draft:
+                viewRevision(initial.scope, `draft:${initial.room}`) ?? "null",
+            })
+          ).id;
         },
         reply: unavailable,
         edit: unavailable,

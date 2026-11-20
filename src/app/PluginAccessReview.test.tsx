@@ -12,7 +12,10 @@ import { afterEach, expect, it } from "vitest";
 import { AgentsContext } from "../features/agents/react";
 import type { Agents } from "../features/agents/service";
 import type { PluginManifest } from "../plugins/api";
-import { PluginAccessReview } from "./PluginAccessReview";
+import {
+  PluginAccessReview,
+  pluginAccessIncreases,
+} from "./PluginAccessReview";
 
 afterEach(cleanup);
 
@@ -101,6 +104,67 @@ it.each([
     ).toBeVisible();
   },
 );
+
+const replaces = (...agentPromptSections: string[]): PluginManifest => ({
+  id: "example.worktrees",
+  name: "Worktrees",
+  apiVersion: 1,
+  host: { agentPromptSections },
+});
+it("discloses each base instruction section a plugin can replace, by its title", async () => {
+  render(
+    <PluginAccessReview manifest={replaces("working-location", "progress")} />,
+  );
+  expect(
+    screen.getByRole("button", {
+      name: /Replace the Progress instructions for agents/,
+    }),
+  ).toHaveTextContent(
+    "Can replace this part of the base instructions in chats it manages.",
+  );
+  fireEvent.click(
+    screen.getByRole("button", {
+      name: /Replace the Working location instructions for agents/,
+    }),
+  );
+  await waitFor(() =>
+    expect(
+      screen.getByText(
+        /agents get the plugin’s text for Working location in place of the text Buzz gives them/,
+      ),
+    ).toBeVisible(),
+  );
+  // An older Codex chat cannot be told what changed, so the owner is told
+  // before the plugin starts it over.
+  expect(
+    screen.getByText(/Codex chat that an earlier Buzz version started/),
+  ).toHaveTextContent("starts over once, without its earlier context");
+  // Only a section the owner can set has an owner's choice to keep.
+  const own = /Your own choice for this part in Settings/;
+  expect(screen.queryByText(own)).not.toBeInTheDocument();
+  fireEvent.click(
+    screen.getByRole("button", {
+      name: /Replace the Progress instructions for agents/,
+    }),
+  );
+  await waitFor(() => expect(screen.getByText(own)).toBeVisible());
+});
+
+it("needs a review for an update that adds a section, not for one that drops one", () => {
+  const one = replaces("working-location");
+  const two = replaces("working-location", "progress");
+  expect(pluginAccessIncreases(two, one)).toBe(true);
+  expect(pluginAccessIncreases(one, two)).toBe(false);
+  expect(pluginAccessIncreases(two, two)).toBe(false);
+  render(<PluginAccessReview manifest={two} previousManifest={one} />);
+  expect(
+    within(
+      screen.getByRole("region", { name: "Added declarations" }),
+    ).getByRole("button", {
+      name: /Replace the Progress instructions for agents/,
+    }),
+  ).toBeVisible();
+});
 
 it("shows a registered harness title while keeping its exact key in details", async () => {
   const types = [{ key: "third/custom", title: "Custom Agent" }];

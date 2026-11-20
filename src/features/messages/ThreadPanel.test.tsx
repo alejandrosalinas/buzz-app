@@ -414,6 +414,7 @@ it("loads history automatically with error-only retry and no routine history con
   expect(h.ensure).toHaveBeenCalledExactlyOnceWith(
     [row.authorId],
     "background",
+    { withStatuses: true },
   );
   for (const name of ["Refresh thread", "Try again", "Load more replies"])
     expect(screen.queryByRole("button", { name })).toBeNull();
@@ -1096,6 +1097,31 @@ it("decides the line once a hidden reader is shown, and again for each ordinary 
     ) & Node.DOCUMENT_POSITION_PRECEDING,
   ).toBeTruthy();
   expect(h.element.scrollTop).toBe(300);
+});
+it("keeps the day divider above a relayed group that starts a day, open or closed", () => {
+  const h = messagesHarness();
+  const { reply } = unreadReplies(h);
+  const later = row.createdAt + 2 * 86_400;
+  const relayed = ["a", "b"].map((name, index) => ({
+    ...reply(`relayed ${name}`, later + index),
+    authorId: viewer,
+    relayedFrom: { agent: "zerk", verified: true },
+  }));
+  h.snapshot.replies = [reply("plain", row.createdAt + 1), ...relayed];
+  h.render();
+  const dividers = () =>
+    [...h.element.querySelectorAll("[data-day]")].map((item) =>
+      item.getAttribute("data-day"),
+    );
+  const closed = dividers();
+  expect(closed.at(-1)).not.toBe(closed.at(-2));
+  fireEvent.click(
+    screen.getByRole("button", { name: /^Show 2 messages by zerk\./ }),
+  );
+  expect(
+    screen.getByRole("button", { name: /^Collapse 2 messages by zerk\./ }),
+  ).toBeVisible();
+  expect(dividers()).toEqual(closed);
 });
 it("a kept line still splits relayed replies while a late navigation decides it again", () => {
   const h = messagesHarness();
@@ -2214,65 +2240,77 @@ it("without close, the embedded thread keeps its reader but has no close header 
   expect(close).toHaveBeenCalledOnce();
 });
 
-it("observes a visible reply before its root resolves, then enables thread catch-up", async () => {
-  vi.useFakeTimers();
-  const h = messagesHarness();
-  const reply = {
-    ...row,
-    id: "c".repeat(64),
-    content: "available reply",
-    createdAt: 2,
-  };
-  h.snapshot.root = undefined;
-  h.snapshot.replies = [reply];
-  h.resize(600);
-  const observe = vi.fn(async () => {});
-  const catchUp = vi.fn(async (_id: string, rootId?: string) => {
-    if (!rootId)
-      throw new Error("A thread reply cannot advance the channel frontier");
-  });
-  h.props.session = {
-    ...h.session,
-    unread: {
-      ...h.session.unread,
-      sync: () =>
-        ({ capability: "frontier-sync" }) as ReturnType<
-          RelaySession["unread"]["sync"]
-        >,
-      reading: () => ({ view() {}, observe, catchUp, dispose() {} }),
-      leave() {},
-    },
-  };
-  vi.spyOn(document, "hasFocus").mockReturnValue(true);
-  vi.spyOn(document, "visibilityState", "get").mockReturnValue("visible");
-  vi.spyOn(HTMLElement.prototype, "getClientRects").mockReturnValue([
-    new DOMRect(0, 0, 500, 500),
-  ] as unknown as DOMRectList);
-  vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockReturnValue(
-    new DOMRect(0, 0, 500, 500),
-  );
-  h.render();
-  screen.getByRole("button", { name: "Close thread" }).focus();
-  // Focus rerenders the rows, which measure again in the next frame.
-  await act(async () => {});
-  await act(() => vi.advanceTimersToNextFrame());
-  await act(() => vi.advanceTimersByTimeAsync(299));
-  expect(observe).not.toHaveBeenCalled();
-  await act(() => vi.advanceTimersByTimeAsync(1));
-  expect(observe).toHaveBeenCalledExactlyOnceWith([reply.id]);
-  expect(catchUp).not.toHaveBeenCalled();
+it.each([false, true])(
+  "reads a visible reply before and after the root resolves (task=%s)",
+  async (task) => {
+    vi.useFakeTimers();
+    const h = messagesHarness();
+    const physicalRoot = task ? "d".repeat(64) : row.id;
+    (h.props as ThreadPanelProps).subthreadId = task ? row.id : undefined;
+    const reply = {
+      ...row,
+      id: "c".repeat(64),
+      content: "available reply",
+      createdAt: 2,
+      threadRootId: physicalRoot,
+      replyParentId: row.id,
+    };
+    h.snapshot.root = undefined;
+    h.snapshot.replies = [reply];
+    h.resize(600);
+    const observe = vi.fn(async () => {});
+    const catchUp = vi.fn(async (_id: string, rootId?: string) => {
+      if (rootId !== physicalRoot)
+        throw new Error("The reply belongs to a different thread");
+    });
+    h.props.session = {
+      ...h.session,
+      unread: {
+        ...h.session.unread,
+        sync: () =>
+          ({ capability: "frontier-sync" }) as ReturnType<
+            RelaySession["unread"]["sync"]
+          >,
+        reading: () => ({ view() {}, observe, catchUp, dispose() {} }),
+        leave() {},
+      },
+    };
+    vi.spyOn(document, "hasFocus").mockReturnValue(true);
+    vi.spyOn(document, "visibilityState", "get").mockReturnValue("visible");
+    vi.spyOn(HTMLElement.prototype, "getClientRects").mockReturnValue([
+      new DOMRect(0, 0, 500, 500),
+    ] as unknown as DOMRectList);
+    vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockReturnValue(
+      new DOMRect(0, 0, 500, 500),
+    );
+    h.render();
+    screen.getByRole("button", { name: "Close thread" }).focus();
+    // Focus rerenders the rows, which measure again in the next frame.
+    await act(async () => {});
+    await act(() => vi.advanceTimersToNextFrame());
+    await act(() => vi.advanceTimersByTimeAsync(299));
+    expect(observe).not.toHaveBeenCalled();
+    await act(() => vi.advanceTimersByTimeAsync(1));
+    expect(observe).toHaveBeenCalledExactlyOnceWith([reply.id]);
+    expect(catchUp).not.toHaveBeenCalled();
 
-  h.snapshot.root = row;
-  h.render();
-  // The rows measure in the next frame. That list mutation restarts dwell,
-  // which measures again in the frame after it.
-  await act(() => vi.advanceTimersToNextFrame());
-  await act(() => vi.advanceTimersToNextFrame());
-  await act(() => vi.advanceTimersByTimeAsync(299));
-  expect(catchUp).not.toHaveBeenCalled();
-  await act(() => vi.advanceTimersByTimeAsync(1));
-  expect(catchUp).toHaveBeenCalledExactlyOnceWith(reply.id, row.id);
-});
+    h.snapshot.root = row;
+    h.render();
+    // The rows measure in the next frame. That list mutation restarts dwell,
+    // which measures again in the frame after it.
+    await act(() => vi.advanceTimersToNextFrame());
+    await act(() => vi.advanceTimersToNextFrame());
+    await act(() => vi.advanceTimersByTimeAsync(299));
+    expect(catchUp).not.toHaveBeenCalled();
+    await act(() => vi.advanceTimersByTimeAsync(1));
+    if (task) {
+      expect(observe).toHaveBeenLastCalledWith([row.id, reply.id]);
+      expect(catchUp).not.toHaveBeenCalled();
+    } else {
+      expect(catchUp).toHaveBeenCalledExactlyOnceWith(reply.id, row.id);
+    }
+  },
+);
 
 it("a closed relayed group at the bottom catches up through its latest reply, same-second ties included", async () => {
   vi.useFakeTimers();
@@ -3492,6 +3530,20 @@ it("an unrouted retained opening retries allocation locally", () => {
   expect(screen.getByRole("region", { name: "Composer" })).toBeVisible();
   expect(navigationRetry).not.toHaveBeenCalled();
   expect(h.thread).toHaveBeenCalledTimes(2);
+});
+
+it("reselecting an invocation thread returns its reader to the latest message", () => {
+  const h = messagesHarness();
+  const props: ThreadPanelProps = h.props;
+  props.subthreadId = row.id;
+  h.render();
+  h.scroll(2000);
+  expect(h.element.scrollTop).toBe(2000);
+
+  props.latestRequest = new AbortController().signal;
+  h.rerenderProps();
+
+  expect(h.element.scrollTop).toBe(3400);
 });
 
 it("releases bottom following after a jump that included child-only resizing", () => {

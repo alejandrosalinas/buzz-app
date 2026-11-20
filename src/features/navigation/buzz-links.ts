@@ -283,6 +283,7 @@ export const settingsTarget = ({
 export function buzzLinkKind(href: string) {
   const link = parseBuzzLink(href);
   if (!link) return null;
+  if (link.format === "plugin-install") return "plugin";
   if (link.format !== "legacy") return "buzz";
   return link.threadRootId ? "thread" : link.messageId ? "message" : "channel";
 }

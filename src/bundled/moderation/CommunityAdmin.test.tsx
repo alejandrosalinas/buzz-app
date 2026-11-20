@@ -707,3 +707,492 @@ it("ignores a late mint from a previous Invite visit", async () => {
     screen.queryByDisplayValue("https://primary.example/invite/old"),
   ).toBeNull();
 });
+
+it("lists invite links and revokes one by row or by pasted link", async () => {
+  const user = userEvent.setup();
+  const permanent = "0b9c8f7e-1d2a-4b3c-9e8f-7a6b5c4d3e2f";
+  let revoked = false;
+  const calls = broker({
+    invites: () =>
+      Response.json({
+        invites: [
+          {
+            id: permanent,
+            created_by: owner,
+            created_at: 1700000000,
+            expires_at: 4102444800,
+            max_uses: null,
+            use_count: 2,
+            revoked_at: revoked ? 1700000100 : null,
+            status: revoked ? "revoked" : "active",
+          },
+          {
+            id: "1b9c8f7e-1d2a-4b3c-9e8f-7a6b5c4d3e2f",
+            created_by: admin,
+            created_at: 1690000000,
+            expires_at: 1690003600,
+            max_uses: 5,
+            use_count: 5,
+            revoked_at: null,
+            status: "exhausted",
+          },
+        ],
+        next_before: null,
+      }),
+    "invite-revoke": (body) => {
+      revoked = true;
+      return Response.json({
+        id: (body as { id?: string }).id ?? permanent,
+        revoked_at: 1700000100,
+      });
+    },
+  });
+  const { relay: data } = relay(owner);
+  render(<CommunityAdmin relay={data} active={() => true} />);
+  await user.click(await screen.findByRole("tab", { name: "Links" }));
+  const list = await screen.findByRole("list", { name: "Invite links" });
+  expect(list).toHaveTextContent("Active · 2 uses · Expires");
+  expect(list).toHaveTextContent("Used up · 5 of 5 uses · Expired");
+  expect(calls.find((c) => c.route === "invites")?.body).toEqual({});
+
+  const [rowRevoke] = screen.getAllByRole("button", { name: /^Revoke Link/ });
+  await user.click(rowRevoke as HTMLElement);
+  const dialog = await screen.findByRole("alertdialog");
+  expect(dialog).toHaveTextContent(/Link 0b9c8f7e by .+, created /);
+  await user.click(
+    within(dialog).getByRole("button", {
+      name: "Revoke",
+    }),
+  );
+  await waitFor(() =>
+    expect(list).toHaveTextContent("Revoked · 2 uses · Expires"),
+  );
+  expect(calls.filter((c) => c.route === "invite-revoke")).toEqual([
+    { route: "invite-revoke", body: { id: permanent } },
+  ]);
+
+  const field = screen.getByRole("textbox", { name: "Revoke a link" });
+  await user.type(field, "https://other.example/invite/abc");
+  expect(field).toHaveAccessibleDescription(
+    "This invite link is for a different community.",
+  );
+  expect(field).toHaveAttribute("aria-invalid", "true");
+  await user.clear(field);
+  await user.type(field, "https://primary.example/invite/abc");
+  await user.click(screen.getByRole("button", { name: "Revoke" }));
+  await user.click(
+    within(await screen.findByRole("alertdialog")).getByRole("button", {
+      name: "Revoke",
+    }),
+  );
+  await waitFor(() =>
+    expect(
+      calls.filter((c) => c.route === "invite-revoke").at(-1)?.body,
+    ).toEqual({ code: "abc" }),
+  );
+});
+
+const linkId = (n: number) => `${n}b9c8f7e-1d2a-4b3c-9e8f-7a6b5c4d3e2f`;
+const link = (n: number, extra: Record<string, unknown> = {}) => ({
+  id: linkId(n),
+  created_by: owner,
+  created_at: 1700000000 - n,
+  expires_at: 4102444800,
+  max_uses: null,
+  use_count: 0,
+  revoked_at: null,
+  status: "active",
+  ...extra,
+});
+const unavailable = () =>
+  Response.json(
+    { error: "community writes are temporarily unavailable" },
+    { status: 503 },
+  );
+
+it("shows a revoke from its receipt and keeps older pages on refresh", async () => {
+  const user = userEvent.setup();
+  let reads = 0;
+  const calls = broker({
+    invites: (body) => {
+      reads++;
+      if ((body as { before?: string }).before)
+        return Response.json({ invites: [link(2)], next_before: null });
+      // The read after the first page fails; the receipt alone shows the revoke.
+      if (reads === 3) return unavailable();
+      return Response.json({
+        invites: [link(1)],
+        next_before: `1699999999_${linkId(1)}`,
+      });
+    },
+    "invite-revoke": (body) =>
+      Response.json({
+        id: (body as { id: string }).id,
+        revoked_at: 1700000100,
+      }),
+  });
+  const { relay: data } = relay(owner);
+  render(<CommunityAdmin relay={data} active={() => true} />);
+  await user.click(await screen.findByRole("tab", { name: "Links" }));
+  const list = await screen.findByRole("list", { name: "Invite links" });
+  await user.click(screen.getByRole("button", { name: "Show more" }));
+  await waitFor(() =>
+    expect(calls.filter((c) => c.route === "invites").at(-1)?.body).toEqual({
+      before: `1699999999_${linkId(1)}`,
+    }),
+  );
+  await waitFor(() =>
+    expect(within(list).getAllByRole("listitem")).toHaveLength(2),
+  );
+
+  await user.click(
+    screen.getAllByRole("button", {
+      name: /^Revoke Link 1b9c8f7e/,
+    })[0] as HTMLElement,
+  );
+  await user.click(
+    within(await screen.findByRole("alertdialog")).getByRole("button", {
+      name: "Revoke",
+    }),
+  );
+  await waitFor(() => expect(screen.queryByRole("alertdialog")).toBeNull());
+  await waitFor(() => expect(list).toHaveFocus());
+  const [first] = within(list).getAllByRole("listitem");
+  expect(first).toHaveTextContent("Revoked");
+  expect(within(first as HTMLElement).queryByRole("button")).toBeNull();
+
+  await user.click(screen.getByRole("button", { name: "Refresh" }));
+  expect(await screen.findByRole("alert")).toHaveTextContent(
+    "community writes are temporarily unavailable",
+  );
+  // The receipt still wins, and Retry works with the list loaded.
+  expect(within(list).getAllByRole("listitem")[0]).toHaveTextContent("Revoked");
+  await user.click(screen.getByRole("button", { name: "Retry" }));
+  await waitFor(() => expect(screen.queryByRole("alert")).toBeNull());
+  expect(within(list).getAllByRole("listitem")).toHaveLength(2);
+  expect(within(list).getAllByRole("listitem")[0]).toHaveTextContent("Revoked");
+  expect(screen.queryByRole("button", { name: "Show more" })).toBeNull();
+});
+
+it("lands a held revoke after Back and Forward", async () => {
+  const user = userEvent.setup();
+  let finish!: (response: Response) => void;
+  const held = new Promise<Response>((resolve) => {
+    finish = resolve;
+  });
+  broker({
+    invites: () => Response.json({ invites: [link(1)], next_before: null }),
+    "invite-revoke": () => held,
+  });
+  const { relay: data } = relay(owner);
+  const active = () => true;
+  const view = render(
+    <CommunityAdmin relay={data} active={active} selectedMethod="links" />,
+  );
+  await user.click(await screen.findByRole("button", { name: /^Revoke Link/ }));
+  await user.click(
+    within(await screen.findByRole("alertdialog")).getByRole("button", {
+      name: "Revoke",
+    }),
+  );
+  view.rerender(
+    <CommunityAdmin relay={data} active={active} selectedMethod="members" />,
+  );
+  expect(screen.queryByRole("alertdialog")).toBeNull();
+  view.rerender(
+    <CommunityAdmin relay={data} active={active} selectedMethod="links" />,
+  );
+  await act(async () => {
+    finish(Response.json({ id: linkId(1), revoked_at: 1700000100 }));
+    await held;
+  });
+  const list = await screen.findByRole("list", { name: "Invite links" });
+  await waitFor(() => expect(list).toHaveTextContent("Revoked"));
+  expect(screen.queryByRole("button", { name: /^Revoke Link/ })).toBeNull();
+});
+
+it("keeps the confirmation open with a retry when revoke fails", async () => {
+  const user = userEvent.setup();
+  let attempts = 0;
+  const calls = broker({
+    invites: () => Response.json({ invites: [link(1)], next_before: null }),
+    "invite-revoke": () =>
+      ++attempts === 1
+        ? Response.json({ error: "invite_not_found" }, { status: 404 })
+        : Response.json({ id: linkId(1), revoked_at: 1700000100 }),
+  });
+  const { relay: data } = relay(owner);
+  render(
+    <CommunityAdmin relay={data} active={() => true} selectedMethod="links" />,
+  );
+  await user.click(await screen.findByRole("button", { name: /^Revoke Link/ }));
+  const dialog = await screen.findByRole("alertdialog");
+  await user.click(within(dialog).getByRole("button", { name: "Revoke" }));
+  expect(await within(dialog).findByRole("alert")).toHaveTextContent(
+    "No invite link in this community matches that link.",
+  );
+  expect(dialog).not.toHaveTextContent("invite_not_found");
+  expect(dialog).toHaveTextContent(/Link 1b9c8f7e/);
+  await user.click(within(dialog).getByRole("button", { name: "Retry" }));
+  await waitFor(() => expect(screen.queryByRole("alertdialog")).toBeNull());
+  expect(
+    calls.filter((c) => c.route === "invite-revoke").map((c) => c.body),
+  ).toEqual([{ id: linkId(1) }, { id: linkId(1) }]);
+  expect(screen.getByRole("list", { name: "Invite links" })).toHaveTextContent(
+    "Revoked",
+  );
+});
+
+it("shows a listed link without an expiry as never expiring", async () => {
+  broker({
+    invites: () =>
+      Response.json({
+        invites: [link(1, { expires_at: null })],
+        next_before: null,
+      }),
+  });
+  const { relay: data } = relay(owner);
+  render(
+    <CommunityAdmin relay={data} active={() => true} selectedMethod="links" />,
+  );
+  expect(
+    await screen.findByRole("list", { name: "Invite links" }),
+  ).toHaveTextContent("Active · 0 uses · Never expires");
+});
+
+it("refresh re-reads loaded pages and resolves a lost page-two receipt", async () => {
+  const user = userEvent.setup();
+  let committed = false;
+  // Same creation second, UUIDs in the opposite order to the relay's cursor order.
+  const later = link(1, { created_at: 1700000000 });
+  const earlier = link(9, { created_at: 1700000000 });
+  const calls = broker({
+    invites: (body) =>
+      (body as { before?: string }).before
+        ? Response.json({
+            invites: [
+              {
+                ...earlier,
+                ...(committed && { status: "revoked", revoked_at: 1700000100 }),
+              },
+            ],
+            next_before: null,
+          })
+        : Response.json({
+            invites: [later],
+            next_before: `1700000000000001_${linkId(1)}`,
+          }),
+    "invite-revoke": () => {
+      committed = true;
+      return unavailable();
+    },
+  });
+  const { relay: data } = relay(owner);
+  render(
+    <CommunityAdmin relay={data} active={() => true} selectedMethod="links" />,
+  );
+  const list = await screen.findByRole("list", { name: "Invite links" });
+  await user.click(screen.getByRole("button", { name: "Show more" }));
+  await waitFor(() =>
+    expect(within(list).getAllByRole("listitem")).toHaveLength(2),
+  );
+  await user.click(
+    screen.getByRole("button", { name: /^Revoke Link 9b9c8f7e/ }),
+  );
+  const dialog = await screen.findByRole("alertdialog");
+  await user.click(within(dialog).getByRole("button", { name: "Revoke" }));
+  await within(dialog).findByRole("alert");
+  await user.click(within(dialog).getByRole("button", { name: "Cancel" }));
+
+  await user.click(screen.getByRole("button", { name: "Refresh" }));
+  await waitFor(() =>
+    expect(within(list).getAllByRole("listitem")[1]).toHaveTextContent(
+      "Revoked",
+    ),
+  );
+  const rows = within(list).getAllByRole("listitem");
+  expect(rows).toHaveLength(2);
+  expect(rows[0]).toHaveTextContent("Link 1b9c8f7e");
+  expect(rows[0]).toHaveTextContent("Active");
+  expect(
+    calls
+      .filter((c) => c.route === "invites")
+      .slice(-2)
+      .map((c) => c.body),
+  ).toEqual([{}, { before: `1700000000000001_${linkId(1)}` }]);
+});
+
+it("keeps the shown list when a refresh read fails partway", async () => {
+  const user = userEvent.setup();
+  let failOlder = false;
+  broker({
+    invites: (body) =>
+      (body as { before?: string }).before
+        ? failOlder
+          ? unavailable()
+          : Response.json({ invites: [link(2)], next_before: null })
+        : Response.json({
+            invites: [link(1, { use_count: failOlder ? 7 : 0 })],
+            next_before: `1699999999_${linkId(1)}`,
+          }),
+  });
+  const { relay: data } = relay(owner);
+  render(
+    <CommunityAdmin relay={data} active={() => true} selectedMethod="links" />,
+  );
+  const list = await screen.findByRole("list", { name: "Invite links" });
+  await user.click(screen.getByRole("button", { name: "Show more" }));
+  await waitFor(() =>
+    expect(within(list).getAllByRole("listitem")).toHaveLength(2),
+  );
+  failOlder = true;
+  await user.click(screen.getByRole("button", { name: "Refresh" }));
+  await screen.findByRole("alert");
+  const rows = within(list).getAllByRole("listitem");
+  expect(rows).toHaveLength(2);
+  expect(rows[0]).toHaveTextContent("0 uses");
+  expect(screen.getByRole("button", { name: "Retry" })).toBeEnabled();
+});
+
+it("ignores an older list response that arrives after a newer one", async () => {
+  let finish!: (response: Response) => void;
+  const held = new Promise<Response>((resolve) => {
+    finish = resolve;
+  });
+  let reads = 0;
+  broker({
+    invites: () =>
+      ++reads === 1
+        ? held
+        : Response.json({ invites: [link(2)], next_before: null }),
+  });
+  const { relay: data } = relay(owner);
+  const active = () => true;
+  const view = render(
+    <CommunityAdmin relay={data} active={active} selectedMethod="links" />,
+  );
+  await waitFor(() => expect(reads).toBe(1));
+  view.rerender(
+    <CommunityAdmin relay={data} active={active} selectedMethod="members" />,
+  );
+  view.rerender(
+    <CommunityAdmin relay={data} active={active} selectedMethod="links" />,
+  );
+  const list = await screen.findByRole("list", { name: "Invite links" });
+  await waitFor(() => expect(list).toHaveTextContent("Link 2b9c8f7e"));
+  await act(async () => {
+    finish(Response.json({ invites: [link(1)], next_before: null }));
+    await held;
+  });
+  expect(list).toHaveTextContent("Link 2b9c8f7e");
+  expect(list).not.toHaveTextContent("Link 1b9c8f7e");
+});
+
+it("keeps Links hidden on Members and drops only an unsent confirmation", async () => {
+  const user = userEvent.setup();
+  const calls = broker({
+    invites: () => Response.json({ invites: [link(1)], next_before: null }),
+  });
+  const { relay: data } = relay(owner);
+  const active = () => true;
+  const view = render(
+    <CommunityAdmin relay={data} active={active} selectedMethod="links" />,
+  );
+  await user.click(await screen.findByRole("button", { name: /^Revoke Link/ }));
+  expect(await screen.findByRole("alertdialog")).toBeVisible();
+  view.rerender(
+    <CommunityAdmin relay={data} active={active} selectedMethod="members" />,
+  );
+  expect(
+    screen.getByRole("list", { name: "Invite links", hidden: true }),
+  ).not.toBeVisible();
+  await waitFor(() => expect(screen.queryByRole("alertdialog")).toBeNull());
+  view.rerender(
+    <CommunityAdmin relay={data} active={active} selectedMethod="links" />,
+  );
+  expect(
+    await screen.findByRole("list", { name: "Invite links" }),
+  ).toBeVisible();
+  expect(screen.queryByRole("alertdialog")).toBeNull();
+  expect(calls.some((c) => c.route === "invite-revoke")).toBe(false);
+});
+
+it("shows a revoke failure that arrived while Links was hidden", async () => {
+  const user = userEvent.setup();
+  let finish!: (response: Response) => void;
+  const held = new Promise<Response>((resolve) => {
+    finish = resolve;
+  });
+  broker({
+    invites: () => Response.json({ invites: [link(1)], next_before: null }),
+    "invite-revoke": () => held,
+  });
+  const { relay: data } = relay(owner);
+  const active = () => true;
+  const view = render(
+    <CommunityAdmin relay={data} active={active} selectedMethod="links" />,
+  );
+  await user.click(await screen.findByRole("button", { name: /^Revoke Link/ }));
+  await user.click(
+    within(await screen.findByRole("alertdialog")).getByRole("button", {
+      name: "Revoke",
+    }),
+  );
+  view.rerender(
+    <CommunityAdmin relay={data} active={active} selectedMethod="members" />,
+  );
+  await act(async () => {
+    finish(unavailable());
+    await held.catch(() => {});
+  });
+  view.rerender(
+    <CommunityAdmin relay={data} active={active} selectedMethod="links" />,
+  );
+  const dialog = await screen.findByRole("alertdialog");
+  expect(within(dialog).getByRole("alert")).toHaveTextContent(
+    "community writes are temporarily unavailable",
+  );
+  expect(within(dialog).getByRole("button", { name: "Retry" })).toBeEnabled();
+  // The open modal hides the list from the accessibility tree.
+  expect(
+    screen.getByRole("list", { name: "Invite links", hidden: true }),
+  ).toHaveTextContent("Active");
+});
+
+it("keeps focus on the confirm action after a refused revoke", async () => {
+  const user = userEvent.setup();
+  let finish!: (response: Response) => void;
+  const held = new Promise<Response>((resolve) => {
+    finish = resolve;
+  });
+  const calls = broker({
+    invites: () => Response.json({ invites: [link(1)], next_before: null }),
+    "invite-revoke": () => held,
+  });
+  const { relay: data } = relay(owner);
+  render(
+    <CommunityAdmin relay={data} active={() => true} selectedMethod="links" />,
+  );
+  await user.click(await screen.findByRole("button", { name: /^Revoke Link/ }));
+  const dialog = await screen.findByRole("alertdialog");
+  const action = within(dialog).getByRole("button", { name: "Revoke" });
+  action.focus();
+  await user.keyboard("{Enter}");
+  const revokes = () => calls.filter((c) => c.route === "invite-revoke");
+  await waitFor(() => expect(revokes()).toHaveLength(1));
+  // A second Enter and a click on the busy action send nothing more.
+  await user.keyboard("{Enter}");
+  await user.click(action);
+  expect(revokes()).toHaveLength(1);
+  // While loading, the action stays focusable (a disabled button drops focus to
+  // the body in browsers) and blocks a second submit.
+  await waitFor(() => expect(action).toHaveAttribute("aria-busy", "true"));
+  expect(action).not.toHaveAttribute("disabled");
+  await act(async () => {
+    finish(unavailable());
+    await held;
+  });
+  await within(dialog).findByRole("alert");
+  expect(action).toHaveFocus();
+  expect(action).toHaveTextContent("Retry");
+});

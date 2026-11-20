@@ -178,6 +178,12 @@ Native goose forwarding removes `Authorization` before sending discovery or
 inference requests to the gateway. The gateway must authenticate callers
 separately; Buzz context headers supply attribution, not authentication.
 
+Local Codex uses its own configured provider for model discovery and inference.
+Buzz adds context to eligible turns when the active provider's `base_url`
+has the descriptor's gateway origin. Codex keeps the provider's configured
+mount path. The provider ID can be any custom ID made of letters, digits,
+underscores or hyphens.
+
 With it set, a local agent membership in a listed community routes through the
 gateway only when the relay's NIP-11 `read_state_snapshot.community_id` is
 exactly the listed ID, the descriptor gives the agent type's declared harness
@@ -207,7 +213,7 @@ harness's own turn activity for other turns, which receive it as
 later message supersedes it. That choice is made before dispatch; a turn whose
 gateway access is revoked after dispatch fails visibly and is never
 replayed. A type that declares its harness with `mode: "attribution"`, as
-Claude Code does, only adds the gateway's headers where its own checks allow,
+Claude Code and Codex do, only adds the gateway's headers where its own checks allow,
 so none of this holds or fails its turns: it takes the route as it stands
 without waiting, and any blocked route, a pending check or a 401/403
 included, runs the turn unattributed with the note "Ran without gateway

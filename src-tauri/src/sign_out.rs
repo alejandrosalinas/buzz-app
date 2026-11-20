@@ -94,6 +94,8 @@ pub(crate) struct Paths {
     backups: PathBuf,
     /// Other app-owned folders: local data and WebView storage, caches.
     others: Vec<PathBuf>,
+    /// Saved relay images, inside the caches.
+    media: PathBuf,
     /// Storage the legacy identifier left, each with where it goes.
     moves: Vec<(PathBuf, PathBuf)>,
     /// Where a first development launch copies the installed app's folders, app data last.
@@ -121,10 +123,9 @@ impl Paths {
     pub(crate) fn resolve(identifier: &str) -> Option<Self> {
         let data = dirs::data_dir()?;
         let app_data = data.join(identifier);
-        let mut others = vec![
-            dirs::data_local_dir()?.join(identifier),
-            dirs::cache_dir()?.join(identifier),
-        ];
+        let cache = dirs::cache_dir()?.join(identifier);
+        let media = cache.join(crate::relay::MEDIA_CACHE_DIR);
+        let mut others = vec![dirs::data_local_dir()?.join(identifier), cache];
         #[cfg(target_os = "macos")]
         others.push(dirs::home_dir()?.join("Library/WebKit").join(identifier));
         others.retain(|path| *path != app_data);
@@ -138,6 +139,7 @@ impl Paths {
             app_data,
             backups: crate::nsec_backup_choice::root()?,
             others,
+            media,
             moves: legacy_identifier::moves(identifier)?,
             seeds: legacy_identifier::seeds(identifier)?,
         })
@@ -423,10 +425,18 @@ pub(crate) fn boot(
 /// and never deletes a key saved since.
 pub(crate) fn forget_signed_out_key(
     instance: &Instance,
+    paths: &Paths,
     remove_current_key: impl FnOnce() -> Result<(), String>,
 ) -> Result<(), String> {
+    let forget = || {
+        // Another copy signed out of the key this one shares, so the next
+        // identity here must not see the saved images (see `finish`).
+        missing(fs::remove_dir_all(&paths.media))
+            .map_err(|error| format!("delete saved images: {error}"))?;
+        remove_current_key()
+    };
     // std can't sync a folder on Windows.
-    reconcile_sign_outs(instance, remove_current_key, |folder| {
+    reconcile_sign_outs(instance, forget, |folder| {
         if cfg!(unix) {
             File::open(folder)?.sync_all()
         } else {
@@ -703,6 +713,10 @@ fn finish(
             .and_then(|()| clear(path, kept))
             .map_err(|error| format!("delete wiped {}: {error}", path.display()))?;
     }
+    // Saved images are keyed by URL alone and served without the relay, so the
+    // next identity on this device would see this one's private images.
+    missing(fs::remove_dir_all(&paths.media))
+        .map_err(|error| format!("delete saved images: {error}"))?;
     // Record it before the marker goes; a resumed attempt records it again.
     OpenOptions::new()
         .create(true)

@@ -91,7 +91,11 @@ function subscribePlaces(session: Session, listener: () => void) {
       store.places = undefined;
       for (const notify of [...store.listeners]) notify();
     };
-    const stopViews = subscribeView(session.scope, changed);
+    const stopViews = subscribeView(
+      session.scope,
+      changed,
+      (key) => !!draftCoordinates(key),
+    );
     const stopFiles = subscribeAttachmentDraftCounts(
       session as ComposerSession,
       changed,

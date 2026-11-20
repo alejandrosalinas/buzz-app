@@ -167,17 +167,16 @@ export function workflowMarked(event: RelayEvent, owner: string) {
  * replaces the old one. Rejects when the community ends up another one or another owner's, is
  * disconnected or fails in a way the service does not recover from by itself,
  * or when `signal` aborts first. It waits for the service's own notifications
- * and never reconnects. */
+ * and never reconnects. Its errors name what waits, `what`. */
 export function readyOwnerReads(
   relay: RelayData | undefined,
   agent: Readonly<{ relay: string; owner: string; pubkey: string }>,
   signal: AbortSignal,
   channelId?: string,
+  what = "Workflow request",
 ): Promise<AgentReads> {
   const unavailable = () =>
-    new Error(
-      "Workflow request could not start: its community is no longer connected.",
-    );
+    new Error(`${what} could not start: its community is no longer connected.`);
   let origin: string;
   try {
     origin = communityDestination(agent.relay).url;
@@ -234,7 +233,7 @@ export function readyOwnerReads(
       finish();
       reject(
         new Error(
-          "Workflow request could not start: its community did not reconnect before the delivery deadline.",
+          `${what} could not start: its community did not reconnect before the delivery deadline.`,
           { cause: signal.reason },
         ),
       );

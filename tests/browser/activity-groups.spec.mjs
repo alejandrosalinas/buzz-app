@@ -1,7 +1,83 @@
 import { test, expect } from "./playwright-test.mjs";
 import { createServer } from "./vite-server.mjs";
 import { activate } from "./navigation.mjs";
-import { virtuaIdle } from "./timeline.mjs";
+import { clickRow, virtuaIdle } from "./timeline.mjs";
+
+test("a long relayed message fits the chat before and after opening", async ({
+  page,
+}) => {
+  const server = await createServer({
+    configFile: false,
+    envFile: false,
+    logLevel: "error",
+    server: { host: "127.0.0.1", port: 0, strictPort: false },
+  });
+  await server.listen();
+  const fixture = `http://127.0.0.1:${server.httpServer.address().port}/tests/fixtures/activity-groups.html`;
+  try {
+    await page.setViewportSize({ width: 860, height: 700 });
+    await page.goto(`${fixture}?relayed`);
+    const history = page.getByRole("region", {
+      name: "Channel message history",
+    });
+    const toggle = history.getByRole("button", {
+      name: /Relayed fixture update/,
+    });
+    const source = history.getByRole("link", {
+      name: "#quarterly-infrastructure-planning-and-roadmap-review-for-all-teams",
+    });
+    const sourceWidth = () =>
+      source.evaluate((link) => link.parentElement.clientWidth);
+    const sourceFits = () =>
+      source.evaluate((link) => {
+        const label = link.parentElement;
+        return label.scrollWidth === label.clientWidth;
+      });
+    const fits = () =>
+      toggle.evaluate((button) => {
+        const history = button.closest(
+          '[aria-label="Channel message history"]',
+        );
+        const row = button.closest("[data-relayed]").getBoundingClientRect();
+        const bounds = history.getBoundingClientRect();
+        return (
+          row.left >= bounds.left &&
+          row.right <= bounds.right &&
+          history.scrollWidth === history.clientWidth
+        );
+      });
+    await expect(toggle).toHaveAttribute("aria-expanded", "false");
+    await expect.poll(sourceWidth).toBe(320);
+    await expect.poll(sourceFits).toBe(false);
+    await expect(source.locator("..")).toHaveCSS("text-overflow", "ellipsis");
+    await expect.poll(fits).toBe(true);
+    await page.setViewportSize({ width: 560, height: 700 });
+    await expect.poll(fits).toBe(true);
+    await toggle.press("Enter");
+    await expect(toggle).toHaveAttribute("aria-expanded", "true");
+    await expect(
+      history.getByText(
+        "The complete handoff remains readable when this preview opens.",
+      ),
+    ).toBeVisible();
+    await expect.poll(fits).toBe(true);
+    await page.setViewportSize({ width: 860, height: 700 });
+    await expect.poll(sourceFits).toBe(true);
+    await page.setViewportSize({ width: 340, height: 700 });
+    await expect.poll(sourceFits).toBe(false);
+    await expect.poll(fits).toBe(true);
+
+    await page.setViewportSize({ width: 860, height: 700 });
+    await page.goto(`${fixture}?relayed=group`);
+    const group = history.getByRole("button", { name: /^Show 2 messages/ });
+    await expect.poll(sourceWidth).toBe(320);
+    await expect.poll(sourceFits).toBe(false);
+    await group.press("Enter");
+    await expect.poll(sourceFits).toBe(true);
+  } finally {
+    await server.close();
+  }
+});
 
 function observeScrollWrites(element, afterFocus) {
   const offsets = afterFocus ? [] : [element.scrollTop];
@@ -243,12 +319,11 @@ test("Solo activity folds, stays expanded on append/prepend, and reveals exact v
       .toBeCloseTo(top, 0);
     await page.getByRole("button", { name: "Prepend history" }).click();
     await expect(messages).toHaveCount(18);
-    await expect(
-      history.getByRole("button", { name: /^Collapse activity history:/ }),
-    ).toBeVisible();
-    await history
-      .getByRole("button", { name: /^Collapse activity history:/ })
-      .click();
+    const collapseHistory = history.getByRole("button", {
+      name: /^Collapse activity history:/,
+    });
+    await collapseHistory.scrollIntoViewIfNeeded();
+    await clickRow(page, collapseHistory, history);
     await expect(messages).toHaveCount(0);
     await expect(
       history.getByRole("button", { name: /^Show activity history:/ }),

@@ -216,7 +216,7 @@ function Candidate({
   const notify = useToastNotification();
   const dismissalKey = `agent-connection-dismissed:${JSON.stringify([channelId, peer])}`;
   const dismissed = useSyncExternalStore(
-    (listener) => subscribeView(session.scope, listener),
+    (listener) => subscribeView(session.scope, listener, dismissalKey),
     () => readView<unknown>(session.scope, dismissalKey, false) === true,
   );
   const owned = useAgentOwnerEvidence(session, peer);

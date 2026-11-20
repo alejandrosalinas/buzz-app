@@ -5,7 +5,9 @@ import {
   conversationFolder,
   conversationKey,
   existingFolder,
+  startingFolder,
 } from "./conversation-folders";
+import { fileStore } from "./state";
 import { localStore } from "./store";
 
 const memory = () => {
@@ -57,6 +59,87 @@ describe("conversation folders", () => {
         ["d", "/work/b"],
       ]),
     );
+  });
+
+  it("refuse a folder once the conversation started in the workspace", async () => {
+    const store = memory();
+    await expect(
+      startingFolder(store, "s", "agent", "c"),
+    ).resolves.toBeUndefined();
+    // Starting again is idempotent, and the record is no folder.
+    await expect(
+      startingFolder(store, "s", "agent", "c"),
+    ).resolves.toBeUndefined();
+    expect(conversationFolder(store, "s", "agent", "c")).toBeUndefined();
+    expect(agentFolders(store, "s", "agent")).toEqual(new Map());
+    await expect(
+      assignConversationFolder(store, "s", "agent", "c", "/work/a"),
+    ).rejects.toThrow("already started in the agent's workspace");
+    // Another conversation is unaffected, and starts in the folder it has.
+    await assignConversationFolder(store, "s", "agent", "d", "/work/a");
+    await expect(startingFolder(store, "s", "agent", "d")).resolves.toBe(
+      "/work/a",
+    );
+  });
+
+  it("order the first start and an assignment by whichever saves first", async () => {
+    // Each save waits for the test, so both sides are in flight at once.
+    const saves: Array<() => void> = [];
+    const store = fileStore(
+      new Map(),
+      async () => {},
+      (_key, _value) =>
+        new Promise<string | null>((resolve) =>
+          saves.push(() => resolve(null)),
+        ),
+    );
+    const start = startingFolder(store, "s", "agent", "c");
+    const assign = assignConversationFolder(
+      store,
+      "s",
+      "agent",
+      "c",
+      "/work/a",
+    );
+    const refused = expect(assign).rejects.toThrow(
+      "already started in the agent's workspace",
+    );
+    // Neither is decided while the start's save is pending.
+    await Promise.resolve();
+    expect(saves).toHaveLength(1);
+    saves[0]?.();
+    await expect(start).resolves.toBeUndefined();
+    await refused;
+    expect(conversationFolder(store, "s", "agent", "c")).toBeUndefined();
+  });
+
+  it("refuse a folder while the start's save is pending, also when it then fails", async () => {
+    let fail: ((error: Error) => void) | undefined;
+    const store = fileStore(
+      new Map(),
+      async () => {},
+      () =>
+        new Promise<string | null>((_resolve, reject) => {
+          fail = reject;
+        }),
+    );
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    const start = startingFolder(store, "s", "agent", "c");
+    const assign = assignConversationFolder(
+      store,
+      "s",
+      "agent",
+      "c",
+      "/work/a",
+    );
+    const settled = Promise.allSettled([start, assign]);
+    await vi.waitFor(() => expect(fail).toBeDefined());
+    fail?.(new Error("disk full"));
+    const [started, assigned] = await settled;
+    // The turn does not start without its record, and no folder is given.
+    expect(started).toMatchObject({ status: "rejected" });
+    expect(assigned).toMatchObject({ status: "rejected" });
+    expect(conversationFolder(store, "s", "agent", "c")).toBeUndefined();
   });
 
   it("check a folder still exists without creating it", async () => {

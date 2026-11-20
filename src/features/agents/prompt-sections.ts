@@ -85,19 +85,33 @@ export function ownerSections(
  * saved one back if the write fails. */
 const saving = new WeakMap<
   Pick<AgentStore, "get">,
-  { saved: string | null; count: number }
+  { saved: string | null; count: number; write?: Promise<void> }
 >();
+const committed = (store: Pick<AgentStore, "get">) => {
+  const pending = saving.get(store);
+  return pending ? pending.saved : store.get(PROMPT_SECTIONS_KEY);
+};
+
+/** The owner's saved choices, without one whose save is still being
+ * written, and the last such save to wait for. */
+export function committedOwnerSections(store: Pick<AgentStore, "get">) {
+  return {
+    sections: ownerSections(store, SECTIONS, committed(store)),
+    writing: saving.get(store)?.write,
+  };
+}
 
 /** The owner's choices as the prompt builder takes them. A turn reads the
  * saved ones: a choice whose save then fails must not have reached it, for
  * an older thread restarts on a first choice. */
 export function ownerChoices(store: Pick<AgentStore, "get">) {
-  const pending = saving.get(store);
-  const text = pending ? pending.saved : store.get(PROMPT_SECTIONS_KEY);
   return Object.fromEntries(
-    Object.entries(ownerSections(store, SECTIONS, text).choices).map(
-      ([id, { basedOn: _, ...choice }]): [string, OwnerChoice] => [id, choice],
-    ),
+    Object.entries(
+      ownerSections(store, SECTIONS, committed(store)).choices,
+    ).map(([id, { basedOn: _, ...choice }]): [string, OwnerChoice] => [
+      id,
+      choice,
+    ]),
   );
 }
 
@@ -138,8 +152,10 @@ export async function saveOwnerSections(
   };
   pending.count += 1;
   saving.set(store, pending);
+  const write = store.set(PROMPT_SECTIONS_KEY, value);
+  pending.write = write;
   try {
-    await store.set(PROMPT_SECTIONS_KEY, value);
+    await write;
     // Writes are saved in order, so this is now the saved value.
     pending.saved = value;
   } finally {

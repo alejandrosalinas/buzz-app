@@ -31,6 +31,7 @@ pub(crate) fn is_legacy_cli_arg(arg: &OsStr) -> bool {
             | "notes"
             | "repos"
             | "projects"
+            | "raw"
             | "patches"
             | "issues"
             | "pr"
@@ -75,6 +76,7 @@ mod tests {
             "notes",
             "repos",
             "projects",
+            "raw",
             "patches",
             "issues",
             "pr",

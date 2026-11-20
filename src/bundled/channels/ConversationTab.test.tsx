@@ -22,12 +22,18 @@ import type { ConversationTab as Tab } from "./useChannelTabState";
 vi.mock("../../features/messages/ThreadPanel", () => ({
   ThreadPanel: ({
     active,
+    messageId,
+    subthreadId,
+    sourceThreadId,
     replyRequest,
     focusRequest,
     revealSelected,
     revealRequest,
   }: {
     active: boolean;
+    messageId: string;
+    subthreadId?: string;
+    sourceThreadId?: string;
     replyRequest?: number;
     focusRequest?: number;
     revealSelected?: boolean;
@@ -35,6 +41,9 @@ vi.mock("../../features/messages/ThreadPanel", () => ({
   }) => (
     <aside
       data-active={active}
+      data-message={messageId}
+      data-subthread={subthreadId}
+      data-source-thread={sourceThreadId}
       data-reply-request={replyRequest}
       data-focus-request={focusRequest}
       data-reveal-selected={revealSelected}
@@ -642,6 +651,29 @@ it("a thread tab asks its reader to reveal for each open at a message, not on re
   );
   expect(thread).toHaveAttribute("data-reveal-selected", "true");
   expect(thread).toHaveAttribute("data-reveal-request", "2");
+});
+
+it("opens the selected reply within the requested workspace branch", () => {
+  const c = openingAt([]);
+  render(
+    <ConversationTab
+      {...c.props}
+      subthreadId="invocation"
+      tab={{
+        id: "conversation",
+        kind: "thread",
+        channelId: "beta",
+        rootId: "source",
+        messageId: "reply",
+        revealRequest: 1,
+      }}
+    />,
+  );
+  const thread = screen.getByText("Thread content");
+  expect(thread).toHaveAttribute("data-message", "reply");
+  expect(thread).toHaveAttribute("data-subthread", "invocation");
+  expect(thread).toHaveAttribute("data-source-thread", "source");
+  expect(thread).toHaveAttribute("data-reveal-selected", "true");
 });
 
 it("markRead false reaches the reader, and a restored tab does not reveal again", () => {

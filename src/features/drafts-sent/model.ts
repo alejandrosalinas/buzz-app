@@ -7,6 +7,7 @@ export type Entry = {
   id: string;
   channelId: string;
   threadRootId?: string;
+  subthreadId?: string;
   text: string;
   /** Sent: relay time. Draft: when this device last saw it change. */
   createdAt?: number;

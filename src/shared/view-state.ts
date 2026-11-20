@@ -1,40 +1,86 @@
+import { sha256 } from "@noble/hashes/sha2.js";
+import { bytesToHex, utf8ToBytes } from "@noble/hashes/utils.js";
 import { traceDraft } from "./draft-diagnostics";
 
 // View intent is durable and explicitly partitioned; connection generations are not storage keys.
-const viewListeners = new Map<string, Set<(key?: string) => void>>();
+type RemovedView = { key: string; revision: string };
+type ViewListener = (key?: string, removed?: readonly RemovedView[]) => void;
+const viewListeners = new Map<string, Set<ViewListener>>();
 const composerDraftKey =
-  /^draft:([a-zA-Z0-9][a-zA-Z0-9._-]{0,255})(?::thread:([0-9a-f]{64}))?$/;
+  /^draft:([a-zA-Z0-9][a-zA-Z0-9._-]{0,255})(?::thread:([0-9a-f]{64})(?::subthread:([0-9a-f]{64}))?)?$/;
 export function draftCoordinates(key: string) {
   const match = composerDraftKey.exec(key);
   return match?.[1]
-    ? { channelId: match[1], ...(match[2] ? { threadRootId: match[2] } : {}) }
+    ? {
+        channelId: match[1],
+        ...(match[2] ? { threadRootId: match[2] } : {}),
+        ...(match[3] ? { subthreadId: match[3] } : {}),
+      }
     : undefined;
 }
 // `key` names the one key that changed; undefined means any key may have.
-const changed = (scope: string, key?: string) => {
+const changed = (
+  scope: string,
+  key?: string,
+  removed?: readonly RemovedView[],
+) => {
   if (key) traceDraft(scope, key, "notify");
-  for (const listener of viewListeners.get(scope) ?? []) listener(key);
+  for (const listener of viewListeners.get(scope) ?? []) listener(key, removed);
 };
 /** Same durable view keys as the composer; no parallel draft store or index. */
-export function subscribeView(scope: string, listener: (key?: string) => void) {
+export function subscribeView(
+  scope: string,
+  listener: ViewListener,
+  keys?: string | readonly string[] | ((key: string) => boolean),
+) {
+  const notify: ViewListener = (key, removed) => {
+    if (
+      key === undefined ||
+      keys === undefined ||
+      (typeof keys === "string"
+        ? key === keys
+        : typeof keys === "function"
+          ? keys(key)
+          : keys.includes(key))
+    ) {
+      if (removed?.length) listener(key, removed);
+      else listener(key);
+    }
+  };
   let listeners = viewListeners.get(scope);
   if (!listeners) {
     listeners = new Set();
     viewListeners.set(scope, listeners);
   }
-  listeners.add(listener);
+  listeners.add(notify);
   const onStorage = (event: StorageEvent) => {
     try {
       if (event.storageArea !== localStorage) return;
       if (event.key === null) {
-        listener();
+        notify();
         return;
       }
-      if (!event.key.startsWith("buzz-view.v1:")) return;
-      const pair: unknown = JSON.parse(event.key.slice("buzz-view.v1:".length));
+      if (event.key === viewScopePurgeKey(scope)) {
+        notify();
+        return;
+      }
+      const prefix = event.key.startsWith(draftRetirementPrefix)
+        ? draftRetirementPrefix
+        : "buzz-view.v1:";
+      if (!event.key.startsWith(prefix)) return;
+      const pair: unknown = JSON.parse(event.key.slice(prefix.length));
       if (Array.isArray(pair) && pair[0] === scope) {
-        if (typeof pair[1] === "string") traceDraft(scope, pair[1], "storage");
-        listener(typeof pair[1] === "string" ? pair[1] : undefined);
+        const key = typeof pair[1] === "string" ? pair[1] : undefined;
+        if (key) traceDraft(scope, key, "storage");
+        notify(
+          key,
+          prefix === "buzz-view.v1:" &&
+            key &&
+            event.newValue === null &&
+            event.oldValue !== null
+            ? [{ key, revision: event.oldValue }]
+            : undefined,
+        );
       }
     } catch {
       /* Storage may be unavailable while a window is closing. */
@@ -43,7 +89,7 @@ export function subscribeView(scope: string, listener: (key?: string) => void) {
   window.addEventListener("storage", onStorage);
   return () => {
     window.removeEventListener("storage", onStorage);
-    listeners?.delete(listener);
+    listeners?.delete(notify);
     if (!listeners?.size) viewListeners.delete(scope);
   };
 }
@@ -64,16 +110,25 @@ export function viewRevision(scope: string, key: string) {
   }
 }
 export function writeView(scope: string, key: string, value: unknown) {
-  let phase: "serialize-failed" | "write-failed" | "notify-failed" =
-    "serialize-failed";
   try {
-    const revision = JSON.stringify(value);
-    phase = "write-failed";
+    return writeViewRevision(scope, key, JSON.stringify(value));
+  } catch {
+    traceDraft(scope, key, "serialize-failed");
+    return false;
+  }
+}
+
+function writeViewRevision(
+  scope: string,
+  key: string,
+  revision: string,
+  retired?: string,
+) {
+  let phase: "write-failed" | "notify-failed" = "write-failed";
+  try {
     traceDraft(scope, key, "write");
-    localStorage.setItem(
-      `buzz-view.v1:${JSON.stringify([scope, key])}`,
-      revision,
-    );
+    const storageKey = `buzz-view.v1:${JSON.stringify([scope, key])}`;
+    localStorage.setItem(storageKey, revision);
     const current = viewRevision(scope, key);
     if (current !== revision) {
       traceDraft(scope, key, "write-mismatch", 0, {
@@ -85,7 +140,12 @@ export function writeView(scope: string, key: string, value: unknown) {
       return false;
     }
     phase = "notify-failed";
-    changed(scope, key);
+    if (retired !== undefined) recordDraftRetirement(scope, key, retired);
+    changed(
+      scope,
+      key,
+      retired === undefined ? undefined : [{ key, revision: retired }],
+    );
     return true;
   } catch {
     traceDraft(scope, key, phase);
@@ -93,6 +153,7 @@ export function writeView(scope: string, key: string, value: unknown) {
     return false;
   }
 }
+
 /** Foreground comparison, not a cross-window transaction or lock. */
 export function replaceView(
   scope: string,
@@ -104,6 +165,44 @@ export function replaceView(
   if (current === undefined) return "failed";
   if (current !== expected) return "changed";
   return writeView(scope, key, value) ? "saved" : "failed";
+}
+
+/** Compare and save a draft that already holds its exact serialized revision. */
+export function replaceViewRevision(
+  scope: string,
+  key: string,
+  expected: string | null | undefined,
+  revision: string,
+): "saved" | "changed" | "failed" {
+  const current = viewRevision(scope, key);
+  if (current === undefined) return "failed";
+  if (current !== expected) return "changed";
+  return writeViewRevision(scope, key, revision) ? "saved" : "failed";
+}
+
+/** Outbox admission retires the sent revision without overwriting peer edits. */
+export function retireViewDraft(
+  scope: string,
+  key: string,
+  expected: string | null | undefined,
+  replacement: string,
+  cursor: number | undefined,
+): "saved" | "changed" | "failed" {
+  const current = viewRevision(scope, key);
+  if (current === undefined || expected === undefined) return "failed";
+  if (expected !== null && draftWasRetired(scope, key, expected, cursor))
+    return current === replacement ? "saved" : "changed";
+  if (current === replacement || current !== expected) {
+    // An empty follow-up could belong to a different accepted send.
+    if (expected !== null && expected !== replacement) {
+      recordDraftRetirement(scope, key, expected);
+      changed(scope, key, [{ key, revision: expected }]);
+    }
+    return current === replacement ? "saved" : "changed";
+  }
+  return writeViewRevision(scope, key, replacement, expected ?? undefined)
+    ? "saved"
+    : "failed";
 }
 
 // Rich snapshots contain structure as well as text (up to 32,001 nodes).
@@ -196,16 +295,112 @@ export function listDraftViews(
   return { entries: drafts, limited, unavailable };
 }
 
-/** Forgets every key saved under one scope, for a community the viewer has left. */
-export function clearViewScope(scope: string) {
-  const prefix = `buzz-view.v1:${JSON.stringify([scope]).slice(0, -1)},`;
+const conflictDraftPrefix = "buzz-draft-conflict.v1:";
+const draftRetirementPrefix = "buzz-ret.v1:";
+const draftRetirementKey = (scope: string, key: string) =>
+  `${draftRetirementPrefix}${JSON.stringify([scope, key])}`;
+const maxRetiredRevisions = 32;
+const viewScopePurgeKey = (scope: string) =>
+  `buzz-view-purge.v1:${JSON.stringify(scope)}`;
+
+/** A leave invalidates window-local recovery even when its editor is closed. */
+export function viewScopePurgeToken(scope: string) {
+  try {
+    return localStorage.getItem(viewScopePurgeKey(scope));
+  } catch {
+    return undefined;
+  }
+}
+
+export function conflictDraftKey(scope: string, key: string) {
+  return `${conflictDraftPrefix}${JSON.stringify([scope, key])}`;
+}
+
+function retirementHistory(scope: string, key: string): [number, ...string[]] {
+  return JSON.parse(
+    localStorage.getItem(draftRetirementKey(scope, key)) ?? "[0]",
+  );
+}
+
+export function draftRetirementCursor(scope: string, key: string) {
+  try {
+    return retirementHistory(scope, key)[0];
+  } catch {
+    return undefined;
+  }
+}
+
+const revisionDigest = (revision: string) =>
+  bytesToHex(sha256(utf8ToBytes(revision)));
+
+export function draftWasRetired(
+  scope: string,
+  key: string,
+  revision: string,
+  cursor: number | undefined,
+) {
+  if (cursor === undefined) return false;
+  try {
+    const [end, ...revisions] = retirementHistory(scope, key);
+    return revisions
+      .slice(Math.max(0, cursor - end + revisions.length))
+      .includes(revisionDigest(revision));
+  } catch {
+    return false;
+  }
+}
+
+function recordDraftRetirement(scope: string, key: string, revision: string) {
+  try {
+    const [end, ...previous] = retirementHistory(scope, key);
+    const digest = revisionDigest(revision);
+    const recent = previous.slice(1 - maxRetiredRevisions);
+    for (const revisions of [[...recent, digest], [digest]]) {
+      try {
+        localStorage.setItem(
+          draftRetirementKey(scope, key),
+          JSON.stringify([end + 1, ...revisions]),
+        );
+        return;
+      } catch {
+        // Retry with one exact receipt. Keep prior receipts if it cannot fit.
+      }
+    }
+  } catch {
+    // Storage failure must not prevent clearing the draft itself.
+  }
+}
+
+function clearScopedStorage(storage: Storage, prefix: string) {
   const stale: string[] = [];
-  for (let index = 0; index < localStorage.length; index++) {
-    const key = localStorage.key(index);
+  for (let index = 0; index < storage.length; index++) {
+    const key = storage.key(index);
     if (key?.startsWith(prefix)) stale.push(key);
   }
-  for (const key of stale) localStorage.removeItem(key);
-  changed(scope);
+  for (const key of stale) storage.removeItem(key);
+}
+
+/** Forgets every key saved under one scope, for a community the viewer has left. */
+export function clearViewScope(scope: string) {
+  const keyPrefix = `${JSON.stringify([scope]).slice(0, -1)},`;
+  const purgeKey = viewScopePurgeKey(scope);
+  const token = crypto.randomUUID();
+  let retry = false;
+  try {
+    localStorage.setItem(purgeKey, token);
+  } catch {
+    // Removing the old scope can free enough quota to record the purge.
+    retry = true;
+  }
+  clearScopedStorage(localStorage, `buzz-view.v1:${keyPrefix}`);
+  clearScopedStorage(localStorage, `${draftRetirementPrefix}${keyPrefix}`);
+  try {
+    if (retry) localStorage.setItem(purgeKey, token);
+  } finally {
+    changed(scope);
+    if (typeof sessionStorage !== "undefined")
+      clearScopedStorage(sessionStorage, `${conflictDraftPrefix}${keyPrefix}`);
+  }
 }
 
 /** Forgets one key in every scope where it holds `value`, as when the thing it
@@ -236,16 +431,21 @@ export function clearViewValue(key: string, value: unknown) {
   } catch {
     /* Storage unavailable; nothing was saved to forget. */
   }
-  for (const scope of scopes) changed(scope);
+  for (const scope of scopes) changed(scope, key);
 }
 
 /** Recovery callers must confirm cleanup before retiring their durable operation. */
 export function clearView(scope: string, ...keys: string[]) {
+  const removed: RemovedView[] = [];
   for (const key of keys) {
     const storageKey = `buzz-view.v1:${JSON.stringify([scope, key])}`;
+    const revision = localStorage.getItem(storageKey);
     localStorage.removeItem(storageKey);
     if (localStorage.getItem(storageKey) !== null)
       throw new Error("Could not clear the saved message. Try again.");
+    if (revision !== null) removed.push({ key, revision });
   }
-  changed(scope, keys.length === 1 ? keys[0] : undefined);
+  for (const { key, revision } of removed)
+    if (draftCoordinates(key)) recordDraftRetirement(scope, key, revision);
+  changed(scope, keys.length === 1 ? keys[0] : undefined, removed);
 }

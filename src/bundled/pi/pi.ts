@@ -88,7 +88,10 @@ type Handlers = Readonly<{
   prompt?(call: {
     agent: string;
     request: string;
-  }): Promise<{ text: string; steer: string } | undefined>;
+    steers?: boolean;
+  }): Promise<
+    { text: string; steer: string; instructions?: string } | undefined
+  >;
 }>;
 
 /** The host stopped after it started; its runs continue in the next one. */
@@ -489,7 +492,11 @@ export class Pi {
               : method === "tool"
                 ? await this.handlers.tool(params as ToolCall, signal)
                 : ((await this.handlers.prompt?.(
-                    params as { agent: string; request: string },
+                    params as {
+                      agent: string;
+                      request: string;
+                      steers?: boolean;
+                    },
                   )) ?? false),
       };
     } catch (error) {

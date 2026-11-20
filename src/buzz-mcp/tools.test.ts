@@ -5234,6 +5234,54 @@ it("validates creation inputs and reports hosts without agent creation", async (
   });
 });
 
+it("hands off between saved tasks in one source thread", async () => {
+  const second = "3".repeat(64);
+  const { client } = fake([
+    event({ kind: 39000, tags: [["d", "chan"]] }),
+    ...[nested, second].map((id) =>
+      event({
+        id,
+        tags: [
+          ["h", "chan"],
+          ["e", root, "", "reply"],
+        ],
+      }),
+    ),
+  ]);
+  const handoff = vi.fn();
+  Object.assign(client, {
+    handoff,
+    isTaskThread: (_channel: string, id: string) => id === second,
+  });
+  const context: import("./client").Context = {
+    channel: "chan",
+    root: nested,
+    sourceRoot: root,
+  };
+  const wake = (thread: string, from = context) =>
+    callTool(client, from, "self_handoff", {
+      channel: "chan",
+      thread,
+      text: "Continue",
+    });
+  await expect(wake(nested)).rejects.toThrow("That is this conversation.");
+  await expect(wake(second)).resolves.toContain(second);
+  expect(handoff).toHaveBeenCalledExactlyOnceWith({
+    channel: "chan",
+    root: second,
+    text: "Continue",
+    from: { channel: "chan", root: nested },
+  });
+  const channelWide = { channel: "chan", root, wholeChannel: true };
+  await expect(wake(second, channelWide)).resolves.toContain(second);
+  expect(handoff).toHaveBeenLastCalledWith({
+    channel: "chan",
+    root: second,
+    text: "Continue",
+    from: { channel: "chan", root },
+  });
+});
+
 it("hands off to the agent in another of its conversations it can see", async () => {
   const solo = event({
     kind: 39000,
@@ -6001,6 +6049,131 @@ it("preserves ordinary attachment sends when snapshot hashing is unavailable", a
   } finally {
     hash.mockRestore();
   }
+});
+
+it("keeps ordinary routed sends in the task branch and preserves an explicit source reply", async () => {
+  const { client, published } = fake(community);
+  const context = { channel: "chan", root: nested, sourceRoot: root };
+  await callTool(client, context, "send", {
+    audience: "everyone",
+    text: "Task work",
+  });
+  await callTool(client, context, "send", {
+    audience: "everyone",
+    text: "Source",
+    reply: root,
+  });
+  expect(published.map((event) => event.tags)).toEqual([
+    [
+      ["h", "chan"],
+      ["e", root, "", "root"],
+      ["e", nested, "", "reply"],
+    ],
+    [
+      ["h", "chan"],
+      ["e", root, "", "reply"],
+    ],
+  ]);
+});
+
+it("reads nested task replies when their parents are on later pages", async () => {
+  const parent = event({
+    id: "3".repeat(64),
+    content: "Task parent",
+    created_at: 110,
+    tags: [
+      ["h", "chan"],
+      ["e", root, "", "root"],
+      ["e", nested, "", "reply"],
+    ],
+  });
+  const child = event({
+    id: "4".repeat(64),
+    content: "Task child",
+    created_at: 130,
+    tags: [
+      ["h", "chan"],
+      ["e", root, "", "root"],
+      ["e", parent.id, "", "reply"],
+    ],
+  });
+  const sibling = event({
+    id: "5".repeat(64),
+    content: "Source sibling",
+    created_at: 120,
+    tags: [
+      ["h", "chan"],
+      ["e", root, "", "reply"],
+    ],
+  });
+  const anchor = event({
+    id: nested,
+    created_at: 125,
+    tags: [
+      ["h", "chan"],
+      ["e", root, "", "reply"],
+    ],
+  });
+  const { client } = fake([anchor, parent, child, sibling]);
+  const context = { channel: "chan", root: nested, sourceRoot: root };
+  const first = await callTool(client, context, "read", { limit: 1 });
+  expect(first).toContain("Task child");
+  expect(first).toContain("Older replies remain");
+  expect(first).not.toContain("Task parent");
+  const next = await callTool(client, context, "read", {
+    limit: 1,
+    before: child.created_at,
+    before_id: child.id,
+  });
+  expect(next).not.toContain("Source sibling");
+  const last = await callTool(client, context, "read", {
+    limit: 1,
+    before: sibling.created_at,
+    before_id: sibling.id,
+  });
+  expect(last).toContain("Task parent");
+  expect(last).not.toContain("Task child");
+  await expect(
+    callTool(client, context, "read", {
+      channel: "other",
+      thread: nested,
+    }),
+  ).rejects.toThrow("different channel");
+});
+
+it("keeps an explicit flat reply to a nested task message in the task", async () => {
+  const parent = event({
+    id: "3".repeat(64),
+    tags: [
+      ["h", "chan"],
+      ["e", root, "", "root"],
+      ["e", nested, "", "reply"],
+    ],
+  });
+  const child = event({
+    id: "4".repeat(64),
+    tags: [
+      ["h", "chan"],
+      ["e", root, "", "root"],
+      ["e", parent.id, "", "reply"],
+    ],
+  });
+  const { client, published } = fake([...community, parent, child]);
+  await callTool(
+    client,
+    { channel: "chan", root: nested, sourceRoot: root },
+    "send",
+    {
+      audience: "everyone",
+      text: "Reply in task",
+      reply: child.id,
+    },
+  );
+  expect(published[0]?.tags).toEqual([
+    ["h", "chan"],
+    ["e", root, "", "root"],
+    ["e", nested, "", "reply"],
+  ]);
 });
 
 it("passes only explicit runtime settings through the owner review tool", async () => {

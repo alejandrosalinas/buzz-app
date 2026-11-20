@@ -279,6 +279,9 @@ In a Codex agent’s settings, open **Huddle voice** in the **Settings** tab to 
   **Copy link**, and shared expiry and use limits. On macOS, hover over the QR
   or focus its action with the keyboard to reveal **Share**, which opens the
   system share menu with a QR image and the invite link.
+  **Links** lists the community's invite links with their status, uses and
+  expiry; **Revoke** on a row, or paste a link into **Revoke a link**, stops
+  anyone new from joining with it. People who already joined stay in.
 - To use Buzz on your phone, open Settings → **Mobile app** (**Pair mobile**
   in builds without Builderlab). When you're signed in with Builderlab and your
   account holds this identity's backup, it says to install the app (with store
@@ -493,7 +496,8 @@ Quitting Buzz also turns it off.
   chat. Two or more in a row fold into one line showing the latest one and how
   many more there are; it names their chat when they all came from the same
   one, or says they came from other chats. Select it to list each one. A claim
-  that cannot be verified shows as the sender's ordinary message.
+  that cannot be verified shows as the sender's ordinary message. Long chat
+  names end in an ellipsis. Expand the line to see more of the name.
 
 - Only explicit additions by another member and removals appear as centered
   channel notices; self-joins and voluntary leaves are hidden.
@@ -641,11 +645,14 @@ Quitting Buzz also turns it off.
   from someone with permission.
 - **Workspaces** can hold any mix of chats, channels, forums and DMs. Use **Move to…**
   in a conversation’s menu or drag the row to a workspace. Unfiled items appear
-  in **Solo**, **Team**, **Forums**, or **Direct messages**. Reorder any section,
-  including **Starred**, by dragging its heading or using **Move up** and
+  in **Solo**, **Team** (channels and forums), or **Direct messages**. Reorder
+  any section, including **Starred**, by dragging its heading or using **Move up** and
   **Move down** in its **…** menu. Escape cancels a drag.
   The arrow beside a workspace’s creation icon offers **New chat**, **New channel**
   and **New DM**. The last choice becomes that workspace’s icon and primary action.
+  If the workspace heading shows recent activity, find these commands in its
+  **Actions** menu. Hover over the activity or Tab to the heading controls to
+  reveal the menu button. On touch, the menu button is visible directly.
   Open **Workspace settings** from the heading’s **…** menu to change the name,
   emoji, folders, worktree, Canvas, or default agents. Use **New channel** from a
   workspace to start with its destination and agent defaults selected. You can
@@ -1181,7 +1188,8 @@ Quitting Buzz also turns it off.
   The floating **New options** button at the end of the sidebar list opens
   **New chat**, **New channel**, **New DM** and **New workspace**. **Cmd/Ctrl+N**
   opens this menu in Messages, including during Focus. The **Solo** heading's
-  **+** starts a chat, and each workspace heading has its own **New** button.
+  **+** starts a chat. A workspace heading offers creation commands from its
+  **New** button or **Actions** menu.
 - **Link boundaries**: a bare http(s) or buzz link ends at whitespace and at
   fullwidth, CJK or curly-quote punctuation such as `，`, `。`, `」` or `’`. In a
   host name, `。` works as a dot. Wrap it as `<url>` to keep them in it.
@@ -1206,6 +1214,13 @@ Quitting Buzz also turns it off.
   the conversation sidebar available, so you can switch straight back to a chat.
   Saved links to it open the plugin, or offer to turn it on. Use the **Drafts**
   and **Sent** tabs to switch lists; Buzz remembers your choice for this community.
+  Buzz saves conversation drafts when you pause typing or leave the composer. If
+  another window saves a different version while you edit, choose **Load saved
+  draft** or **Keep my draft** before sending. Reloading the same window
+  restores your conflicting text so you can still choose. If another window
+  sends or clears a draft, Buzz uses recent records of those actions to skip
+  restoring the same version. If storage is full or those records have expired,
+  Buzz may still offer the saved conflict for recovery.
   Rows lead with the destination and message text. It lists
   the messages you started but did not send, newest
   change first, with the number of drafts shown beside it in the Messages
@@ -1247,7 +1262,7 @@ Quitting Buzz also turns it off.
   Messages and plugin pages share the saved width within the same community
   and identity; narrow windows use a navigation drawer instead.
 - **Sidebar sections** default to **Solo**, **Starred**, your workspaces,
-  **Team**, **Forums**, then **Direct messages**. After an upgrade from the
+  **Team**, then **Direct messages**. After an upgrade from the
   separate Solo and Team sidebars, Buzz keeps their order: workspaces from the
   previous Solo sidebar, **Solo**, **Starred**, workspaces from the previous
   Team sidebar, then **Team**. A saved section order takes precedence.
@@ -1265,8 +1280,8 @@ Quitting Buzz also turns it off.
   sidebar preferences.
 - **Moving conversations** works by dragging or choosing **Move to…** from the
   row’s menu. Workspaces and **Starred** accept any type. Unfiled conversations
-  return to the home for their type, **Solo**, **Team**, **Forums** or
-  **Direct messages**.
+  return to the home for their type: **Solo** for chats, **Team** for channels
+  and forums, or **Direct messages**.
 - Saved workspaces, stars, mutes, sorting and filters update while connected in
   hosts that support saved sidebar preferences. Moving a starred conversation
   to a workspace or home section from the sidebar clears its star.
@@ -1692,6 +1707,33 @@ If an agent reports incompatible synced settings, choose the **Previous Versions
   why and stops. In a community that advertises no archive authority, Delete
   skips the archive. **Forget** drops an agent that can't reach its community
   from this device only; it may stay in that community's channels.
+- **Settings → Agent setup → Base instructions** shows what Buzz tells every
+  agent on this device before the agent's own instructions, one section per
+  topic. For Publishing, Progress, Etiquette, Agent Memory, Engineering
+  Discipline, Commit identity and Autonomy, choose **Default**, **Off**, or
+  **Custom** with your own text of up to 4 KiB, then **Save**. Default shows
+  the section's text to read and copy; choose Custom to edit it. The other
+  sections are always on, or Buzz sets them for the conversation; **All
+  sections** shows the default text of each. A plugin that is on can declare
+  sections that it replaces in the chats it manages: its install review lists
+  them. For example, such a plugin can set where an agent's work happens in a
+  chat it manages, except for an agent that runs on another computer. Each section that such a plugin declared names the plugin.
+  When such a plugin first manages a Codex conversation that an earlier Buzz
+  version started, that conversation starts over once, without its earlier
+  context; on another computer, it asks for a new session. The install review
+  says so.
+  When you choose Off or Custom for one of them, your own choice also applies
+  in those chats. A choice applies to all your
+  agents on this device, not on your other devices, and each agent gets it
+  from its next turn. After the first choice that is not Default, older Codex
+  conversations on this device start over once; older Codex conversations on
+  another computer keep their instructions until you start a new session.
+  Agents that run outside the app, in the standalone agent host, get a change
+  when that host next starts. Mesh agents do not get the base instructions.
+  When a later
+  Buzz version changes the default of a section you turned off or replaced,
+  your choice stays, and the section says **Default changed** until you choose
+  **Keep mine** or **Reset to default**.
 - **Settings → Agent setup → Harness defaults** is where supported agent types
   offer installation, sign-in, and default-model controls. Available controls
   depend on the type. Do not assume a provider is configured or signed in.
@@ -1744,8 +1786,9 @@ If an agent reports incompatible synced settings, choose the **Previous Versions
   there, and fail until there is one, or while Codex's sign-in is for another
   workspace. Codex's harness defaults offer that sign-in while Codex is signed
   out. API key and keyring sign-ins can't run them.
-- **Agent gateway access**: in builds that route local agents through a gateway,
-  a refused sign-in or access check stops the turn and asks you to sign in again.
+- **Agent gateway access**: for local agents whose harness uses Buzz to forward
+  requests through a gateway, a refused sign-in or access check stops the turn
+  and asks you to sign in again.
   Later turns stay blocked while access is rechecked, even if that check stalls
   or loses its connection. A successful access check lets the agent run again.
   If access is still being checked after a few seconds, the turn stops and asks
@@ -1811,6 +1854,19 @@ If an agent reports incompatible synced settings, choose the **Previous Versions
   settings files, including a gateway app's. Claude agents running on a
   remote execution target are not attributed either; Buzz leaves their
   Claude settings alone.
+- Where a build enables it, local Codex agents add Buzz context when the
+  active provider is configured on the agent gateway's HTTPS origin. Codex
+  uses its configured provider for model discovery and inference. A new
+  message in the same Buzz thread joins a running turn and is attributed to
+  the message that started it. A message from another thread, or after the
+  agent's gateway access changed, waits and runs as its own turn. A running
+  turn is never stopped for attribution. When Codex uses another provider,
+  runs on another machine, or uses an active voice session's retained setup,
+  its turns run without that context, and Activity shows "Ran without the
+  Buzz context" with the reason.
+  When the gateway access check is pending or denied, turns and **Compact
+  session** run with Codex's own settings and Activity shows "Ran without
+  gateway attribution" with the reason.
 - **Agents → Your teams → Previous versions**, in a team's editor, lists the
   saved versions of a team that syncs to a community, the same way. Reverting
   restores its instructions and keeps its current name; members are not
@@ -1922,6 +1978,14 @@ tab, asks **Discard changes?** first; **Keep editing** keeps them.
 
 ## Optional features and limits
 
+- Buzz saves channels and messages on this device so they show at once after
+  a restart. The desktop app also saves the images it loads, up to 256 MB
+  across all communities, so it reads them from disk the next time instead of
+  from the community; **Settings → Local settings → Cached data** shows how
+  much is in use. **Clear cache** there forgets what this device saved
+  for that community; Buzz loads it again as needed. Clearing cancels uploads
+  in progress. Losing access to a channel deletes the messages and images
+  saved from it. Leaving a community or signing out also clears it.
 - Desktop packages include a `buzz` command line client. On macOS, use
   `Buzz.app/Contents/Resources/bin/buzz`. Recognized CLI commands sent to the
   old `Contents/MacOS/buzz` path fail with exit code 1 (bad input) instead of

@@ -45,7 +45,7 @@ buzz-credential-store = { path = "../crates/credential-store" }
 buzz-agent-controller = { path = "../crates/agent-controller" }
 serde = { version = "1", features = ["derive"] }
 serde_json = { version = "1", features = ["raw_value"] }
-buzz-audio-client = { git = "https://github.com/block/buzz.git", rev = "630922a9e1f891380a61f5b7d726d05ca948cc64" }
+buzz-audio-client = { git = "https://github.com/block/buzz.git", rev = "e21606bf968b561106d6ca7272d1c6be4031366d" }
 rustls-native-certs = "0.8"
 tokio = { version = "1", features = ["sync", "time", "macros", "process", "io-util", "net", "signal"] }
 sha2 = "0.10"

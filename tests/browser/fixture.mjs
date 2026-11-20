@@ -289,6 +289,8 @@ export const test = base.extend({
     );
     // Kind 0 by author for keys a test creates; served on later profile reads.
     const servedProfiles = new Map();
+    // NIP-38 general statuses by author, served on later status reads.
+    const servedStatuses = new Map();
     const soloAgentKeys = [];
     const soloAgents = [...soloAgentNames, ...soloOutsideAgentNames].map(
       (name) => {
@@ -1470,7 +1472,9 @@ export const test = base.extend({
         });
         expect(filter.authors.length).toBeGreaterThan(0);
         expect(filter.authors.length).toBeLessThanOrEqual(100);
-        return [];
+        return [...servedStatuses.values()].filter((event) =>
+          filter.authors.includes(event.pubkey),
+        );
       }
       if (filter.kinds?.includes(30178)) {
         expect(filter).toEqual({
@@ -2975,6 +2979,20 @@ export const test = base.extend({
         serveProfile(key, body) {
           const event = sign(0, [], JSON.stringify(body), key);
           servedProfiles.set(event.pubkey, event);
+          return event;
+        },
+        // Answer later status reads for this key, like serveProfile.
+        serveStatus(key, emoji, text) {
+          const event = sign(
+            30315,
+            [
+              ["d", "general"],
+              ["emoji", emoji],
+            ],
+            text,
+            key,
+          );
+          servedStatuses.set(event.pubkey, event);
           return event;
         },
         // A real, newer NIP-OA head; the client still admits it through a read.

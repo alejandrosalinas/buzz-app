@@ -1,6 +1,7 @@
 import { purgeArtifactStorage } from "../artifact-storage/store";
 import { purgeOutboxStorage } from "./outbox-storage";
 import { relayPartition } from "./partition";
+import { clearNativeMedia } from "./native";
 import { createHeadPersistence } from "./persistence";
 import { purgeReadStateStorage } from "./read-state-storage";
 import { purgeSoloModelPicks } from "../messages/solo-model-picks-storage";
@@ -25,6 +26,7 @@ export async function purgeRelayPartition(
       heads.close();
     }
   });
+  await attempt("saved images", () => clearNativeMedia(origin));
   await attempt("read state", () => purgeReadStateStorage(partition));
   await attempt("outbox", () => purgeOutboxStorage(partition));
   await attempt("artifacts", () => purgeArtifactStorage(viewer, origin));

@@ -2,7 +2,10 @@ import { workspaceSectionOrder } from "../../features/relay/sidebar-preferences"
 import { FadingLabel } from "./FadingLabel";
 import { ChannelSidebarRows } from "../../features/channel-navigation/ChannelSidebarRows";
 import { createPortal } from "react-dom";
-import type { ComposeWorkspaces } from "../../features/channel-navigation/WorkspaceComposition";
+import type {
+  ComposeWorkspaces,
+  WorkspaceHeaderTrailing,
+} from "../../features/channel-navigation/WorkspaceComposition";
 import type { WorkspaceSidebarComposition } from "./sidebar-environment";
 import { sidebarDropRowKinds } from "./sidebar-sections";
 import { prepareSoloMove } from "../../features/channel-navigation/solo-navigation";
@@ -43,6 +46,7 @@ import {
   type ReactNode,
   type ReactElement,
   type RefObject,
+  type SyntheticEvent,
 } from "react";
 import type { RelaySession } from "../../features/relay/session";
 import { readView, writeView } from "../../shared/view-state";
@@ -94,6 +98,24 @@ export type ChatListItem = Readonly<{
 export const SOLO_CHAT_CAP = 7;
 export const SOLO_CHAT_STEP = 10;
 const workspaceSectionKey = (id: string) => (id ? `group:${id}` : "solo");
+
+function soloMenuFocusTarget(id: string, disclosure = false) {
+  const row = document.querySelector(
+    `[data-solo-menu-id="${CSS.escape(id)}"]:not([inert] *)`,
+  );
+  if (disclosure)
+    return (
+      row?.querySelector<HTMLElement>("[data-solo-disclosure]") ??
+      row?.querySelector<HTMLElement>(
+        "button[aria-expanded]:not([aria-haspopup])",
+      )
+    );
+  return (
+    row?.querySelector<HTMLElement>("[data-solo-workspace-id]") ??
+    row?.querySelector<HTMLElement>("[data-solo-destination-id]") ??
+    row?.querySelector<HTMLElement>("button")
+  );
+}
 
 /** The existing relay preference service owns delivery, rollback and retry. */
 export function SoloWorkspaces({
@@ -234,12 +256,8 @@ export function SoloWorkspaces({
     // collapse was requested after the asynchronous save began.
     const closed =
       collapsed.includes(project) && !rowHosts.current.get(project)?.unframed;
-    const target = CSS.escape(closed ? `project-${project}` : rowFocus);
-    document
-      .querySelector<HTMLElement>(
-        `[data-solo-menu-id="${target}"]:not([inert] *) ${closed ? "button[aria-expanded]:not([aria-haspopup])" : "button"}`,
-      )
-      ?.focus({ preventScroll: true });
+    const target = closed ? `project-${project}` : rowFocus;
+    soloMenuFocusTarget(target, closed)?.focus({ preventScroll: true });
     setRowFocus(undefined);
   }, [rowFocus, collapsed, snapshot.data]);
   // Show more and Show fewer each unmount once spent; focus stays on the row,
@@ -276,11 +294,9 @@ export function SoloWorkspaces({
   const [orderFocus, setOrderFocus] = useState<string>();
   useLayoutEffect(() => {
     if (!orderFocus) return;
-    document
-      .querySelector<HTMLElement>(
-        `[data-solo-menu-id="project-${CSS.escape(orderFocus)}"]:not([inert] *) button`,
-      )
-      ?.focus({ preventScroll: true });
+    soloMenuFocusTarget(`project-${orderFocus}`)?.focus({
+      preventScroll: true,
+    });
     setOrderFocus(undefined);
   }, [orderFocus]);
   const moveProject = (id: string, to: number) => {
@@ -579,17 +595,27 @@ export function SoloWorkspaces({
     );
     const header = (
       primary: ReactNode,
-      trailing?: ReactNode,
+      newTask?: ReactNode,
       actions?: ReactNode,
+      trailing?: WorkspaceHeaderTrailing,
     ) => (
       <ChatActionsMenu
         id={`project-${project.id}`}
         title={project.name}
         className={styles.workspaceHeader}
         enabled={!!project.id}
-        content={
+        independentControls={trailing?.hasInteractiveDecoration ?? false}
+        content={(menuAnchor) => (
           <>
             {actions}
+            {trailing?.metadata != null &&
+              typeof trailing.metadata !== "boolean" &&
+              project.id &&
+              workspaceComposition?.newAction(
+                project.id,
+                project.name,
+                menuAnchor,
+              )}
             <MenuItem
               disabled={!orderWritable || groupIndex <= 0}
               onClick={() => moveProject(project.id, groupIndex - 1)}
@@ -637,29 +663,51 @@ export function SoloWorkspaces({
               Delete workspace
             </MenuItem>
           </>
-        }
+        )}
       >
         {(overflow) => (
           <NavigationSectionHeading
             disclosure
             revealActions
+            trailing={
+              trailing && {
+                metadata: trailing.metadata,
+                accessory: trailing.accessory != null &&
+                  typeof trailing.accessory !== "boolean" && (
+                    // Keep the accessory above the primary button's full-header hit area.
+                    <div
+                      className="relative flex shrink-0 items-center"
+                      data-solo-workspace-accessory=""
+                    >
+                      {trailing.accessory}
+                    </div>
+                  ),
+              }
+            }
             actions={
               <>
+                {trailing?.hasInteractiveDecoration && newTask}
                 {overflow}
-                {project.id &&
-                  workspaceComposition?.newAction(project.id, project.name)}
-                {trailing ??
-                  (onNew &&
-                    !workspaceComposition &&
-                    (!compose || !project.id) && (
-                      <IconButton
-                        size="compact"
-                        aria-label={`New chat in ${project.name}`}
-                        title="New chat"
-                        icon={<PlusIcon size={15} strokeWidth={2.5} />}
-                        onClick={() => onNew(project.id || undefined)}
-                      />
-                    ))}
+                {(trailing?.metadata == null ||
+                  typeof trailing.metadata === "boolean") && (
+                  <>
+                    {project.id &&
+                      workspaceComposition?.newAction(project.id, project.name)}
+                    {newTask == null &&
+                      onNew &&
+                      !workspaceComposition &&
+                      (!compose || !project.id) && (
+                        <IconButton
+                          size="compact"
+                          aria-label={`New chat in ${project.name}`}
+                          title="New chat"
+                          icon={<PlusIcon size={15} strokeWidth={2.5} />}
+                          onClick={() => onNew(project.id || undefined)}
+                        />
+                      )}
+                  </>
+                )}
+                {!trailing?.hasInteractiveDecoration && newTask}
               </>
             }
           >
@@ -667,6 +715,7 @@ export function SoloWorkspaces({
               sectionKey={projectKey}
               groupIndex={groupIndex}
               reorderable={reorderable}
+              capturePointerDown={trailing?.hasInteractiveDecoration ?? false}
             >
               {primary}
             </WorkspaceDragHandle>
@@ -1333,6 +1382,7 @@ function WorkspaceDragHandle({
   sectionKey: string;
   groupIndex: number;
   reorderable: boolean;
+  capturePointerDown: boolean;
 }) {
   const drag = useSidebarSectionDrag(options);
   // Preserve the heading recipe's direct trigger and the composed workspace's
@@ -1351,6 +1401,7 @@ function ChatActionsMenu({
   content,
   indicator,
   enabled = true,
+  independentControls = false,
 }: {
   id: string;
   title: string;
@@ -1358,22 +1409,26 @@ function ChatActionsMenu({
   /** A function places the overflow action itself, such as in a heading's
    * actions; otherwise it follows the children. */
   children: ReactNode | ((overflow: ReactNode) => ReactNode);
-  content: ReactNode;
+  content:
+    | ReactNode
+    | ((trigger: RefObject<HTMLButtonElement | null>) => ReactNode);
   indicator?: ReactNode;
   enabled?: boolean;
+  independentControls?: boolean;
 }) {
   const [open, setOpen] = useState(false);
   const [anchor, setAnchor] = useState<HTMLElement>();
-  const restoreFocus = () => {
-    const row = document.querySelector(
-      `[data-solo-menu-id="${id}"]:not([inert] *)`,
+  const trigger = useRef<HTMLButtonElement>(null);
+  const menuContent =
+    typeof content === "function" ? content(trigger) : content;
+  // React bubbles events from portalled content through this trigger.
+  const ownsContextTarget = ({ target, currentTarget }: SyntheticEvent) =>
+    target instanceof Element &&
+    currentTarget.contains(target) &&
+    !target.closest(
+      "[data-solo-workspace-accessory], [data-solo-leading-action]",
     );
-    return (
-      row?.querySelector<HTMLElement>("[data-solo-destination-id]") ??
-      row?.querySelector<HTMLElement>("button") ??
-      false
-    );
-  };
+  const restoreFocus = () => soloMenuFocusTarget(id) ?? false;
   if (!enabled)
     return (
       <div className={className} data-solo-menu-id={id}>
@@ -1383,6 +1438,7 @@ function ChatActionsMenu({
   const overflow = (
     <MenuRoot>
       <MenuTrigger
+        ref={trigger}
         render={(props) => (
           <IconButton
             {...props}
@@ -1402,7 +1458,7 @@ function ChatActionsMenu({
         align="end"
         finalFocus={restoreFocus}
       >
-        {content}
+        {menuContent}
       </MenuPopup>
     </MenuRoot>
   );
@@ -1416,7 +1472,16 @@ function ChatActionsMenu({
     >
       <ContextMenuTrigger
         render={<div className={className} data-solo-menu-id={id} />}
+        onContextMenu={(event) => {
+          if (independentControls && !ownsContextTarget(event))
+            event.preventBaseUIHandler();
+        }}
+        onTouchStart={(event) => {
+          if (independentControls && !ownsContextTarget(event))
+            event.preventBaseUIHandler();
+        }}
         onKeyDown={(event) => {
+          if (independentControls && !ownsContextTarget(event)) return;
           if (
             event.key === "ContextMenu" ||
             (event.shiftKey && event.key === "F10")
@@ -1443,7 +1508,7 @@ function ChatActionsMenu({
         anchor={anchor}
         finalFocus={restoreFocus}
       >
-        {content}
+        {menuContent}
       </MenuPopup>
     </ContextMenuRoot>
   );

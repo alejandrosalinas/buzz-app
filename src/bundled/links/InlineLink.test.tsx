@@ -57,6 +57,12 @@ it.each([
     "Thread",
     "message-2",
   ],
+  [
+    "buzz://plugin-install?repository=example-org%2Fexample-plugin&ref=main",
+    "plugin",
+    "Plugin",
+    "layout-grid",
+  ],
 ])(
   "renders semantic Buzz labels and icons for %s",
   (href, kind, label, icon) => {
@@ -67,6 +73,16 @@ it.each([
     expect(html).toContain('href="buzz://');
   },
 );
+
+it("keeps an install link's authored label beside the plugin icon", () => {
+  const href =
+    "buzz://plugin-install?repository=example-org%2Fexample-plugin&ref=main";
+  const markup = renderToStaticMarkup(
+    <InlineLink href={href}>Click to install</InlineLink>,
+  );
+  expect(markup).toContain("tabler-icon-layout-grid");
+  expect(textOf(markup)).toBe("Click to install");
+});
 
 it("renders private channel links with the design-system lock icon", () => {
   const markup = renderToStaticMarkup(

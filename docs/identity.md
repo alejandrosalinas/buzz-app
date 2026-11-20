@@ -1509,7 +1509,19 @@ Both validate HTTPS and the `/media/<hash>` URL shape but do not enforce
 saved-community membership; the selected server receives a short-lived token
 scoped to its origin. The scheme signs a fresh 60-second `get` token per request
 and forwards only a bounded single `Range`; non-image/video/audio types (and SVG)
-are served with download disposition and `nosniff`. The main webview does not navigate to protected media for downloads: a narrowly scoped native command authenticates the bounded media GET, saves to the OS Downloads directory without replacing existing files, and rejects unsafe filenames. On macOS, the main webview's native media menu also saves relay media to Downloads without replacing existing files, but under the blob's `<hash>.<ext>` name rather than the attachment name, and removes the partial file if a download fails or Buzz quits before it finishes. It refuses media of unknown length or larger than the largest video Buzz uploads. The menu omits the items that would copy, open or share the tokened loopback URL, and its Download item when Buzz cannot save it. `relay_upload`
+are served with download disposition and `nosniff`. Whole image responses up to
+2 MiB (not ranges, downloads or other types) are also saved in the app cache directory, grouped
+by community origin, up to 256 MiB with least-recently-used eviction. Relay media is
+content-addressed, so a saved image is served without a relay read and never goes
+stale. Clear cache, an access refusal and leaving a community delete that community's
+saved images. Saved images are keyed by URL, not identity, so every sign-out, including
+a key replacement without wipe, deletes them all as it finishes. Copies with other
+identifiers share the key but not the cache, so each deletes its own on the first launch
+after any of them finishes a sign-out. A saved image skips the
+relay's per-reference media check, so a message's images are also saved by the channel
+that shows them (avatars and emoji by community only), and are deleted whenever that
+channel's saved messages are: on losing access to it, and for every channel a complete
+roster read leaves out. The main webview does not navigate to protected media for downloads: a narrowly scoped native command authenticates the bounded media GET, saves to the OS Downloads directory without replacing existing files, and rejects unsafe filenames. On macOS, the main webview's native media menu also saves relay media to Downloads without replacing existing files, but under the blob's `<hash>.<ext>` name rather than the attachment name, and removes the partial file if a download fails or Buzz quits before it finishes. It refuses media of unknown length or larger than the largest video Buzz uploads. The menu omits the items that would copy, open or share the tokened loopback URL, and its Download item when Buzz cannot save it. `relay_upload`
 hashes, signs (`upload` + `x`) and sends the exact bytes JavaScript passes it,
 then requires the successful response's SHA-256 and size to match those bytes.
 Shared TypeScript (`hostUpload`) owns limits, error mapping and the remaining

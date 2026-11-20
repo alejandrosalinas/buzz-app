@@ -85,6 +85,26 @@ export function RegionChannelGroup(props: SoloChannelGroupProps) {
         }
       : undefined;
   const Icon = channelIcon(channel);
+  const leading = props.headerLeading;
+  const activateLeading = () => {
+    if (eligible(current())) leading?.onActivate();
+  };
+  const accessory =
+    typeof props.headerAccessory === "boolean"
+      ? undefined
+      : props.headerAccessory;
+  const disclosure = (
+    <SoloDisclosure
+      leading={leading && { ...leading, onActivate: activateLeading }}
+      label={props.disclosureLabel}
+      summary=""
+      expanded={props.expanded}
+      controls={props.controls}
+      onToggle={() => {
+        if (eligible(current())) props.onToggle();
+      }}
+    />
+  );
   const select = () => {
     if (eligible(current())) props.onSelect();
   };
@@ -118,6 +138,12 @@ export function RegionChannelGroup(props: SoloChannelGroupProps) {
         <NavigationSectionHeading
           disclosure
           revealActions
+          trailing={{
+            metadata: props.headerMetadata,
+            accessory: accessory != null && (
+              <div className="flex shrink-0 items-center">{accessory}</div>
+            ),
+          }}
           actions={
             <>
               {newTask && (
@@ -137,6 +163,13 @@ export function RegionChannelGroup(props: SoloChannelGroupProps) {
                 size="compact"
                 label={`Actions for ${channel.name}`}
                 openDetails={() => void openDetails()}
+                leadingAction={
+                  leading && (
+                    <MenuItem onClick={activateLeading}>
+                      {leading.label}
+                    </MenuItem>
+                  )
+                }
                 startChat={
                   newTask && <MenuItem onClick={newTask}>New task</MenuItem>
                 }
@@ -145,6 +178,7 @@ export function RegionChannelGroup(props: SoloChannelGroupProps) {
           }
         >
           <div className={styles.heading}>
+            {leading && disclosure}
             <SpringLoadedNavigationItem
               label={channel.name}
               title={channel.name}
@@ -153,15 +187,7 @@ export function RegionChannelGroup(props: SoloChannelGroupProps) {
               onClick={select}
               onSpring={select}
             />
-            <SoloDisclosure
-              label={props.disclosureLabel}
-              summary=""
-              expanded={props.expanded}
-              controls={props.controls}
-              onToggle={() => {
-                if (eligible(current())) props.onToggle();
-              }}
-            />
+            {!leading && disclosure}
           </div>
         </NavigationSectionHeading>
       </NavigationCard>

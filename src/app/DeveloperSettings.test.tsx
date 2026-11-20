@@ -5,8 +5,6 @@ import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { DeveloperSettings } from "./DeveloperSettings";
 import { logLevel, setLogLevel } from "../features/developer/logging";
-import type { RelayData } from "../features/relay/service";
-const relay = { clearCache: vi.fn() } as unknown as RelayData;
 beforeEach(() => vi.stubEnv("BUZZ_DEV_SETTINGS", "1"));
 let revision = 0;
 afterEach(() => {
@@ -25,7 +23,7 @@ it("loads the saved level, changes it live, and displays remote changes", async 
     }),
   );
   vi.stubGlobal("fetch", fetcher);
-  render(<DeveloperSettings relay={relay} />);
+  render(<DeveloperSettings />);
   const control = screen.getByRole("combobox", { name: "Log level" });
   await waitFor(() => expect(control).toBeEnabled());
   expect(control).toHaveTextContent("Debug");
@@ -55,7 +53,7 @@ it("shows save failure without pretending the level was persisted", async () => 
         : Response.json({ logLevel: "debug", revision: ++revision }),
     ),
   );
-  render(<DeveloperSettings relay={relay} />);
+  render(<DeveloperSettings />);
   const control = screen.getByRole("combobox", { name: "Log level" });
   await waitFor(() => expect(control).toBeEnabled());
   await user.tab();
@@ -80,7 +78,7 @@ it("disables unsupported runtime settings without requesting their API", async (
   vi.stubEnv("BUZZ_DEV_SETTINGS", "0");
   const fetcher = vi.fn(async (_url: unknown) => Response.json({ queries: 0 }));
   vi.stubGlobal("fetch", fetcher);
-  render(<DeveloperSettings relay={relay} />);
+  render(<DeveloperSettings />);
   expect(await screen.findByRole("alert")).toHaveTextContent(
     "Runtime settings require",
   );
@@ -101,7 +99,7 @@ it("omits broker activity and never polls stats without the development broker",
   });
   vi.stubGlobal("fetch", fetcher);
   vi.useFakeTimers();
-  render(<DeveloperSettings relay={relay} />);
+  render(<DeveloperSettings />);
   await act(async () => vi.advanceTimersByTimeAsync(0));
   expect(screen.getByRole("combobox", { name: "Log level" })).toBeEnabled();
   expect(
@@ -111,9 +109,6 @@ it("omits broker activity and never polls stats without the development broker",
     screen.queryByText(/Broker stats aren’t available/),
   ).not.toBeInTheDocument();
   expect(screen.getByText("Runtime settings")).toBeInTheDocument();
-  expect(
-    screen.getByRole("button", { name: "Clear cache" }),
-  ).toBeInTheDocument();
   await act(async () => vi.advanceTimersByTimeAsync(15_000));
   expect(fetcher.mock.calls.map(([url]) => url)).toEqual(["/api/dev/settings"]);
 });
@@ -130,7 +125,7 @@ it("shows broker diagnostics and refreshes their totals in development", async (
   });
   vi.stubGlobal("fetch", fetcher);
   vi.useFakeTimers();
-  const { unmount } = render(<DeveloperSettings relay={relay} />);
+  const { unmount } = render(<DeveloperSettings />);
   const activity = screen.getByRole("region", { name: "Broker activity" });
   await act(async () => vi.advanceTimersByTimeAsync(0));
   expect(activity).toHaveTextContent("12");

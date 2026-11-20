@@ -840,7 +840,6 @@ it("reorders sections through native signing and readback, never rewriting a sat
       "starred",
       "group:work",
       "channels",
-      "forums",
       "dms",
     ],
   });

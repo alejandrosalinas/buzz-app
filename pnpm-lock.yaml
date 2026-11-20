@@ -41,6 +41,9 @@ importers:
       '@noble/curves':
         specifier: 2.0.1
         version: 2.0.1
+      '@noble/hashes':
+        specifier: 2.0.1
+        version: 2.0.1
       '@pierre/diffs':
         specifier: 1.6.4
         version: 1.6.4(@shikijs/themes@4.6.0)(react-dom@19.2.8(react@19.2.8))(react@19.2.8)

@@ -356,27 +356,28 @@ describe("AgentSessions", () => {
     },
   );
 
-  it("keeps the session when a prompt update fails, and updates it at the next turn", async () => {
+  it("fails a turn whose prompt update fails, keeps the session, and updates it at the next turn", async () => {
     const { fake, sessions, change } = setup({}, false, {
       fingerprint: (settings) => settings.workspace,
     });
-    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
     await sessions.deliver("a", "one", 1);
     const [goose] = fake.geese;
     if (goose) goose.promptError = "database is locked";
     change({ systemPrompt: "newer" });
-    await sessions.deliver("a", "two", 2);
-    expect(warn).toHaveBeenCalled();
+    // It is not run on the rules it had before.
+    await expect(sessions.deliver("a", "two", 2)).resolves.toEqual({
+      ok: false,
+      error: expect.stringContaining(
+        "could not update its instructions: database is locked",
+      ),
+      undelivered: true,
+    });
     expect(goose?.prompts.get("session-1")).toBe("prompt");
     await sessions.deliver("a", "three", 3);
     expect(goose?.opened).toHaveLength(1);
     expect(goose?.closed).toEqual([]);
     expect(goose?.prompts.get("session-1")).toBe("newer");
-    expect(goose?.turns.map((turn) => turn.text)).toEqual([
-      "one",
-      "two",
-      "three",
-    ]);
+    expect(goose?.turns.map((turn) => turn.text)).toEqual(["one", "three"]);
   });
 
   it("shows a reopened conversation everything again", async () => {

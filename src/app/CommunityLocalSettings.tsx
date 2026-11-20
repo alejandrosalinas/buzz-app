@@ -1,4 +1,4 @@
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { CommunityDialog } from "../features/communities/CommunityDialog";
 import { CommunityRepositoriesSettings } from "./CommunityRepositoriesSettings";
 import { DefaultLifetimeSettings } from "../features/solo/DefaultLifetimeSettings";
@@ -14,8 +14,23 @@ import { SettingsGroup } from "../shared/design-system/ui/SettingsGroup";
 import { Field } from "../shared/design-system/ui/Field";
 import { Input } from "../shared/design-system/ui/Input";
 import { Button } from "../shared/design-system/ui/Button";
+import { PreferenceRow } from "../shared/design-system/ui/PreferenceRow";
 import { useToastNotification } from "../shared/design-system/ui/Toast";
 import { writeClipboardText } from "../shared/clipboard";
+import {
+  nativeMediaUsage,
+  type NativeMediaUsage,
+} from "../features/relay/native";
+import { formatFileSize } from "../features/messages/FileAttachment";
+
+const size = (bytes: number) => (bytes ? formatFileSize(bytes) : "0 MB");
+
+/** With one community the shared limit is this community's own. */
+function usageText({ community, total, budget }: NativeMediaUsage) {
+  return total === community
+    ? `Saved images: ${size(community)} of ${size(budget)}.`
+    : `Saved images: ${size(community)} here, ${size(total)} of ${size(budget)} across communities.`;
+}
 
 /** Captured viewer/community; never saves into a newly selected destination. */
 export function CommunityLocalSettings({
@@ -42,6 +57,34 @@ export function CommunityLocalSettings({
       setCopyError("Couldn’t copy the URL. Select it and copy manually.");
     } finally {
       setCopying(false);
+    }
+  };
+  const [usage, setUsage] = useState<NativeMediaUsage>();
+  useEffect(() => {
+    let alive = true;
+    // The readout is optional; without it the row still clears.
+    nativeMediaUsage(address).then(
+      (next) => alive && setUsage(next),
+      () => alive && setUsage(undefined),
+    );
+    return () => {
+      alive = false;
+    };
+  }, [address]);
+  const [clearing, setClearing] = useState(false);
+  const [clearError, setClearError] = useState("");
+  const clearCache = async () => {
+    if (clearing) return;
+    setClearing(true);
+    setClearError("");
+    try {
+      await communities.relay.clearCache();
+      notify("Cache cleared.", "success");
+    } catch {
+      setClearError("Couldn’t clear the cache. Try again.");
+    } finally {
+      setClearing(false);
+      nativeMediaUsage(address).then(setUsage, () => setUsage(undefined));
     }
   };
   const [editingConnection, setEditingConnection] = useState(false);
@@ -176,6 +219,28 @@ export function CommunityLocalSettings({
               Edit connection
             </Button>
           </div>
+        </SettingsGroup>
+      </div>
+      <div className="mt-section-gap">
+        <SettingsGroup>
+          <PreferenceRow
+            title="Cached data"
+            subtitle={`Channels, messages and images this device saved from this community. Buzz loads them again as needed. Clearing also cancels uploads in progress.${usage ? ` ${usageText(usage)}` : ""}`}
+            trailing={
+              <Button
+                type="button"
+                loading={clearing}
+                onClick={() => void clearCache()}
+              >
+                Clear cache
+              </Button>
+            }
+          />
+          {clearError && (
+            <p role="alert" className="buzz-field-error">
+              {clearError}
+            </p>
+          )}
         </SettingsGroup>
       </div>
       {editingConnection && (

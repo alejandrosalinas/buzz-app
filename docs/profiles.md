@@ -125,6 +125,17 @@ navigates to the relay-confirmed channel in the scope captured at click time. A
 confirmed open also clears that DM's local sidebar hide. The person's
 self-published NIP-38 `general` status (kind 30315, emoji tag plus text) uses the
 session's shared live status owner, including expiration and clear events.
+Statuses the session shows are saved with the saved profiles, for as many
+people as those keep, and appear at once on the next start. Each row still reads
+its author's status, so a newer one replaces the saved copy and one the relay
+no longer returns is dropped. Expired and empty statuses are not saved, and
+statuses use only the room the saved names leave. A channel access change keeps statuses shown, because
+they belong to the person rather than a channel, and reads them again.
+Channel timelines and threads read bylines' statuses in the same request as
+their profiles, or alone when the profile is already known, so a new author's
+status arrives with their name and their rows read nothing more. If that
+combined read fails, the names are read again on their own and the rows read
+their own statuses.
 A custom `:shortcode:` status saves its catalog image URL as the emoji tag's third
 value (`["emoji", ":code:", url]`) so it renders without the viewer's catalog;
 unicode keeps the two-value tag, and older two-value custom statuses use the

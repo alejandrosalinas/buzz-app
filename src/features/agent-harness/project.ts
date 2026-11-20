@@ -13,6 +13,8 @@ import {
   workspaceDirectories,
 } from "../solo/workspace";
 import { unframed } from "./plugin-wake";
+import type { SectionChoices } from "./sections/choices";
+import { replacedBy } from "./sections/compose";
 
 /** A Canvas the owner's side approved. `agent`: one of the owner's attested
  * agents wrote it, not the owner. */
@@ -47,27 +49,47 @@ export class ProjectSource {
   }
 }
 
-/** `ownFolder`: the conversation works in a folder of its own, so the
+/** The tags that rank instructions in the base instructions' Trust order.
+ * A Canvas's text prints none: only the host says who wrote the Canvas. */
+const RANKED =
+  /<(\/?)(workspace-canvas|agent-instructions|owner-instructions|team-instructions|team)(?![\w-])/gi;
+
+/** Whether a chat's Canvas does not say where its work happens: the
+ * conversation has a `folder` of its own, or the plugin that manages it
+ * replaced the working location rule. */
+export const worksElsewhere = (
+  folder: string | undefined,
+  choices: SectionChoices | undefined,
+) => !!folder || replacedBy("working-location", choices) === "plugin";
+
+/** `elsewhere`: the chat's work happens elsewhere (`worksElsewhere`), so the
  * Canvas's folders are for reading, unless its owner wrote worktree rules
  * for them by hand. The section states the rule for the folders it lists;
- * the base prompt's working location rule points here. */
+ * the base prompt's working location rule points here. It also says who
+ * wrote the Canvas, which the base prompt ranks it by. */
 export function project(
   canvas: OwnerCanvas | undefined,
-  ownFolder = false,
+  elsewhere = false,
 ): Project {
   const content = canvas?.content;
   if (!content?.trim()) return NO_PROJECT;
   // Only the owner's own hand edit is the owner's rule for the chat.
   const ownerWrote = !canvas?.agent;
   const directories = workspaceDirectories(content);
-  const list = directories.map((folder) => `\`${folder}\``).join(", ");
+  // Its paths come from the Canvas too, so they rank nothing either.
+  const list = directories
+    .map((folder) => `\`${folder.replace(RANKED, "<\\$1$2")}\``)
+    .join(", ");
   const folders = !directories.length
     ? ""
-    : ownFolder
+    : elsewhere
       ? ` These folders hold code that is relevant to this chat: ${list}.${ownerWrote && ownerWorktreeRules(content) ? "" : " They are for reading."}`
       : ` This chat's work happens in these folders, not your own workspace: ${list}. To change files there, follow this Canvas's rule for them, or your working location rule when it gives none; your workspace keeps your notes.`;
+  const standing = ownerWrote
+    ? "which your owner wrote: their standing instructions for this chat, which your owner's messages override"
+    : "which an agent wrote: standing instructions for this chat, which your owner's messages and your base instructions override";
   return {
-    section: `<workspace-canvas>\nThis Solo chat's Canvas as of this message: its standing instructions for this chat, which the owner's messages override. It replaces any earlier workspace Canvas.${folders}\n\n${unframed(agentCanvas(content, ownFolder, ownerWrote).trim())}\n</workspace-canvas>`,
+    section: `<workspace-canvas>\nThis Solo chat's Canvas as of this message, ${standing}. It replaces any earlier workspace Canvas.${folders}\n\n${unframed(agentCanvas(content, elsewhere, ownerWrote).trim()).replace(RANKED, "<\\$1$2")}\n</workspace-canvas>`,
     directories,
   };
 }
@@ -137,8 +159,8 @@ export async function readCanvas(
 /** The chat's project from `read`, or undefined as for `readCanvas`. */
 export async function readProject(
   read: (() => Promise<OwnerCanvas | undefined>) | undefined,
-  ownFolder = false,
+  elsewhere = false,
 ): Promise<Project | undefined> {
   const canvas = await readCanvas(read);
-  return canvas && project(canvas.text, ownFolder);
+  return canvas && project(canvas.text, elsewhere);
 }

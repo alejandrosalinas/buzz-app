@@ -141,11 +141,11 @@ type Workspace = {
 /** Per history, so a plugin that reloads starts over. */
 const cache = new WeakMap<GooseHistory, Map<string, Workspace>>();
 
-/** Brings `state` up to date with goose's listing of `workspace`: only the
+/** Brings `state` up to date with goose's listing of `workspaces`: only the
  * sessions new or updated since the last read are exported again. */
 async function refresh(
   history: GooseHistory,
-  workspace: string,
+  workspaces: readonly string[],
   state: Workspace,
   since: number,
   signal: AbortSignal,
@@ -156,7 +156,7 @@ async function refresh(
     return read?.settled && read.at === row.at ? read : undefined;
   };
   const { rows, messages } = await history.workspace(
-    workspace,
+    workspaces,
     since,
     (row) => !kept(row),
     signal,
@@ -180,21 +180,52 @@ async function refresh(
   state.reads = reads;
 }
 
-/** The agent's goose sessions in `workspace` used since `since`. */
+/** The agent's goose sessions used since `since`, in `workspace` and in the
+ * `folders` its conversations were given. Every agent shares the workspace's
+ * listing; an agent with folders also reads its own, of those folders only,
+ * so a workspace's sessions are exported once however many agents have
+ * folders. */
 export async function readUsage(
   history: GooseHistory,
   agent: string,
   workspace: string,
   since: number,
   signal: AbortSignal,
+  folders: readonly string[] = [],
 ): Promise<SessionUsage[]> {
   signal.throwIfAborted();
+  const read = (key: string, paths: readonly string[]) =>
+    listing(history, key, paths, since, signal);
+  // A folder that is the workspace itself is in the shared listing already.
+  const own = await abortable(history.elsewhere(workspace, folders), signal);
+  const states = await Promise.all([
+    read(workspace, [workspace]),
+    ...(own.length ? [read(JSON.stringify([workspace, agent]), own)] : []),
+  ]);
+  // By id: a session the two listings both name is one.
+  const sessions = new Map<string, SessionUsage>();
+  for (const state of states)
+    for (const { owner, session } of state.reads.values())
+      if (owner === agent && session && session.lastAt >= since)
+        sessions.set(session.id, session);
+  return [...sessions.values()].sort((a, b) => b.lastAt - a.lastAt);
+}
+
+/** The listing kept under `key`, of goose's sessions in `paths`, once the read
+ * under way, or a new one, brings it up to date. */
+async function listing(
+  history: GooseHistory,
+  key: string,
+  paths: readonly string[],
+  since: number,
+  signal: AbortSignal,
+): Promise<Workspace> {
   const workspaces = cache.get(history) ?? new Map<string, Workspace>();
   cache.set(history, workspaces);
-  let state = workspaces.get(workspace);
+  let state = workspaces.get(key);
   if (!state) {
     state = { reads: new Map() };
-    workspaces.set(workspace, state);
+    workspaces.set(key, state);
   }
   const current = state;
   let reading = current.reading;
@@ -205,11 +236,9 @@ export async function readUsage(
     const started: NonNullable<Workspace["reading"]> = {
       readers: 0,
       stop,
-      done: refresh(history, workspace, current, since, stop.signal).finally(
-        () => {
-          if (current.reading === started) current.reading = undefined;
-        },
-      ),
+      done: refresh(history, paths, current, since, stop.signal).finally(() => {
+        if (current.reading === started) current.reading = undefined;
+      }),
     };
     current.reading = reading = started;
   }
@@ -228,9 +257,5 @@ export async function readUsage(
       shared.readers -= 1;
     }
   }
-  return [...current.reads.values()]
-    .flatMap(({ owner, session }) =>
-      owner === agent && session && session.lastAt >= since ? [session] : [],
-    )
-    .sort((a, b) => b.lastAt - a.lastAt);
+  return current;
 }

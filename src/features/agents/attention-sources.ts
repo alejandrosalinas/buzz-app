@@ -57,9 +57,9 @@ export type AttentionProducer = Omit<AttentionSource, "run"> & {
 };
 type SourceObject = AttentionObject & { value: SourceWatch };
 export class AttentionSources {
-  private runs = new Map<
+  private registrations = new Map<
     string,
-    { object: SourceObject; stop: AbortController; done: boolean }
+    { object: SourceObject; type: string; stop: AbortController | undefined }
   >();
   constructor(
     private host: {
@@ -78,6 +78,7 @@ export class AttentionSources {
     provider: string,
     source: AttentionProducer,
     agents: readonly Agent[],
+    suspended: (agent: string) => boolean = () => false,
   ) {
     const wanted = new Map<string, { agent: Agent; object: SourceObject }>();
     for (const agent of agents) {
@@ -98,49 +99,54 @@ export class AttentionSources {
           });
       }
     }
-    for (const [key, run] of this.runs) {
-      if (wanted.get(key)?.object === run.object) continue;
-      run.stop.abort();
-      this.runs.delete(key);
+    for (const [key, registration] of this.registrations) {
+      if (wanted.get(key)?.object === registration.object) continue;
+      this.registrations.delete(key);
+      registration.stop?.abort();
     }
     for (const [key, { agent, object }] of wanted) {
-      if (this.runs.has(key) || this.host.completed(agent.key, object))
-        continue;
-      const run = { object, stop: new AbortController(), done: false };
-      this.runs.set(key, run);
-      const emit = (text: string) => {
-        if (run.stop.signal.aborted || run.done)
-          throw new Error("This source watch is no longer running");
-        if (text.trim())
-          this.host.emit(
-            agent.key,
-            object,
-            text,
-            () => !run.stop.signal.aborted,
-          );
+      const registration = this.registrations.get(key) ?? {
+        object,
+        type: agent.type,
+        stop: undefined,
       };
-      let succeeded = false;
+      this.registrations.set(key, registration);
+      if (registration.type !== agent.type) {
+        registration.stop?.abort();
+        registration.stop = undefined;
+        registration.type = agent.type;
+      }
+      if (
+        suspended(agent.key) ||
+        registration.stop ||
+        this.host.completed(agent.key, object)
+      )
+        continue;
+      const stop = new AbortController();
+      registration.stop = stop;
+      const current = () => this.registrations.get(key) === registration;
+      let finished = false;
+      const emit = (text: string) => {
+        if (stop.signal.aborted || finished)
+          throw new Error("This source watch is no longer running");
+        // A harness change stops new output from the old producer. Accepted output belongs to
+        // the registration and remains valid until the watch is invalidated.
+        if (text.trim()) this.host.emit(agent.key, object, text, current);
+      };
       const previous = this.tails.get(key);
-      const done = Promise.resolve(previous)
-        .then(async () => {
-          if (run.stop.signal.aborted || this.host.completed(agent.key, object))
+      const done = Promise.resolve(previous).then(async () => {
+        try {
+          if (stop.signal.aborted || this.host.completed(agent.key, object))
             return;
           await source.run({
             id: object.slug,
             agent: agent.key,
             watch: object.value,
-            signal: run.stop.signal,
+            signal: stop.signal,
             emit,
           });
-          succeeded = true;
-        })
-        .catch((error) => {
-          if (!run.stop.signal.aborted)
-            console.warn(`Attention source ${provider} failed`, error);
-        })
-        .finally(async () => {
-          run.done = true;
-          if (succeeded && !run.stop.signal.aborted)
+          finished = true;
+          if (!stop.signal.aborted)
             await this.host
               .finish(agent.key, object)
               .catch((error) =>
@@ -149,13 +155,21 @@ export class AttentionSources {
                   error,
                 ),
               );
+        } catch (error) {
+          if (!stop.signal.aborted)
+            console.warn(`Attention source ${provider} failed`, error);
+        } finally {
+          finished = true;
           if (this.tails.get(key) === done) this.tails.delete(key);
-        });
+        }
+      });
       this.tails.set(key, done);
     }
   }
   stop() {
-    for (const run of this.runs.values()) run.stop.abort();
-    this.runs.clear();
+    const registrations = this.registrations;
+    this.registrations = new Map();
+    for (const registration of registrations.values())
+      registration.stop?.abort();
   }
 }

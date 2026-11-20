@@ -23,6 +23,7 @@ import type { ComposerInputElement } from "../messages/composer-dom";
 import { attachmentDraft } from "../messages/attachment-draft";
 import type { UploadedAttachment } from "../relay/attachments";
 import { mentionDraft } from "../messages/mention-draft";
+import { ThreadPanel } from "../messages/ThreadPanel";
 import { createRelaySession } from "../relay/session";
 import type { RelayData, RelaySnapshot } from "../relay/service";
 import type { Navigation } from "../navigation/controller";
@@ -300,6 +301,7 @@ function fixture(upload?: () => Promise<UploadedAttachment>) {
       channelId = "room",
       text = "Already sent",
       createdAt = 25,
+      parentId = root.id,
     ) => {
       const sent = message(
         viewer,
@@ -309,7 +311,7 @@ function fixture(upload?: () => Promise<UploadedAttachment>) {
         thread
           ? [
               ["e", root.id, "", "root"],
-              ["e", root.id, "", "reply"],
+              ["e", parentId, "", "reply"],
             ]
           : [],
       );
@@ -391,6 +393,7 @@ it("edits and sends from the real channel composer, then focuses a surviving row
 
 it("opens a verified thread draft with the real reply composer and origin action", async () => {
   const h = fixture();
+  h.seedSent(true, "room", "Reply with an unloaded parent", 25, "f".repeat(64));
   const key = `draft:room:thread:${h.root.id}`;
   writeView(h.session.scope, key, "Thread draft");
   h.render();
@@ -400,6 +403,9 @@ it("opens a verified thread draft with the real reply composer and origin action
   const region = screen.getByRole("region", { name: "Draft for #Design" });
   const editor = await within(region).findByRole("textbox");
   await waitFor(() => expect(editor).toHaveTextContent("Thread draft"));
+  expect(
+    await within(region).findByText("Reply with an unloaded parent"),
+  ).toBeInTheDocument();
   fireEvent.click(
     within(region).getByRole("button", { name: "Open conversation" }),
   );
@@ -419,6 +425,76 @@ it("opens a verified thread draft with the real reply composer and origin action
   expect(
     h.published.find((event) => event.content === "Thread draft")?.tags,
   ).toContainEqual(["e", h.root.id, "", "reply"]);
+});
+
+it("reopens a saved task draft, edits it, and sends in the task branch", async () => {
+  const h = fixture();
+  const task = h.seedSent(true, "room", "Start task");
+  const key = `draft:room:thread:${h.root.id}:subthread:${task.id}`;
+  const ordinaryKey = `draft:room:thread:${h.root.id}`;
+  writeView(h.session.scope, ordinaryKey, "Ordinary source draft");
+  const taskView = render(
+    <ThreadPanel
+      session={h.session}
+      scope={h.session.scope}
+      channelId="room"
+      channelName="#Design"
+      messageId={task.id}
+      subthreadId={task.id}
+      onOpenLink={() => false}
+    />,
+  );
+  const input = (await screen.findByRole("textbox")) as ComposerInputElement;
+  act(() => {
+    input.value = "Saved task draft";
+    fireEvent.input(input);
+  });
+  await waitFor(() =>
+    expect(mentionDraft(readView(h.session.scope, key, "")).text).toBe(
+      "Saved task draft",
+    ),
+  );
+  taskView.unmount();
+  h.render();
+  fireEvent.click(
+    await screen.findByRole("button", {
+      name: /Continue draft.*Saved task draft/,
+    }),
+  );
+  const region = screen.getByRole("region", { name: "Draft for #Design" });
+  const editor = (await within(region).findByRole(
+    "textbox",
+  )) as ComposerInputElement;
+  await waitFor(() => expect(editor).toHaveTextContent("Saved task draft"));
+  fireEvent.click(
+    within(region).getByRole("button", { name: "Open conversation" }),
+  );
+  expect(h.open).toHaveBeenCalledWith(
+    expect.objectContaining({
+      channelId: "room",
+      threadRootId: h.root.id,
+      messageId: task.id,
+    }),
+  );
+  act(() => {
+    editor.value = "Edited task draft";
+    fireEvent.input(editor);
+  });
+  fireEvent.click(within(region).getByRole("button", { name: "Send message" }));
+  await waitFor(() =>
+    expect(
+      h.published.some((event) => event.content === "Edited task draft"),
+    ).toBe(true),
+  );
+  const sent = h.published.find(
+    (event) => event.content === "Edited task draft",
+  );
+  expect(sent?.tags).toContainEqual(["e", h.root.id, "", "root"]);
+  expect(sent?.tags).toContainEqual(["e", task.id, "", "reply"]);
+  expect(mentionDraft(readView(h.session.scope, key, "")).text).toBe("");
+  expect(mentionDraft(readView(h.session.scope, ordinaryKey, "")).text).toBe(
+    "Ordinary source draft",
+  );
 });
 
 it.each([false, true])(
@@ -626,21 +702,28 @@ it("does not close on delivery if the person has started a new draft in the same
     const editor = (await screen.findByRole("textbox")) as ComposerInputElement;
     fireEvent.click(screen.getByRole("button", { name: "Send message" }));
     await waitFor(() => expect(h.publish).toHaveBeenCalled());
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
     act(() => {
       editor.value = "New unsent thought";
       fireEvent.input(editor);
     });
+    expect(editor).toHaveTextContent("New unsent thought");
+    expect(mentionDraft(readView(h.session.scope, "draft:room", "")).text).toBe(
+      "",
+    );
+    await act(async () => release());
+    expect(h.published).toHaveLength(1);
+    expect(
+      screen.getByRole("region", { name: "Draft for #Design" }),
+    ).toBeInTheDocument();
+    expect(screen.getByRole("textbox")).toHaveTextContent("New unsent thought");
     expect(mentionDraft(readView(h.session.scope, "draft:room", "")).text).toBe(
       "New unsent thought",
     );
   } finally {
     await act(async () => release());
+    vi.useRealTimers();
   }
-  await waitFor(() => expect(h.published).toHaveLength(1));
-  expect(
-    screen.getByRole("region", { name: "Draft for #Design" }),
-  ).toBeInTheDocument();
-  expect(screen.getByRole("textbox")).toHaveTextContent("New unsent thought");
 });
 
 it("waits for a background attachment send whose draft cleanup happens before delivery", async () => {

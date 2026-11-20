@@ -6,6 +6,8 @@ import { Radio, RadioGroup } from "../../shared/design-system/ui/RadioGroup";
 import { DEFAULT_ACTIVE_WINDOW_SECONDS } from "../../features/relay/sidebar-preferences";
 import styles from "./SidebarActiveDialog.module.css";
 
+const PRESET_DAYS = [1, 3, 7, 30, 90];
+
 export function activeWindowLabel(seconds = DEFAULT_ACTIVE_WINDOW_SECONDS) {
   const days = seconds / 86400;
   return `${days} ${days === 1 ? "day" : "days"}`;
@@ -26,7 +28,7 @@ export function SidebarActiveDialog({
   const form = useRef<HTMLDivElement>(null);
   const days = seconds / 86400;
   const [preset, setPreset] = useState(
-    [1, 7, 30, 90].includes(days) ? String(days) : "30",
+    PRESET_DAYS.includes(days) ? String(days) : "30",
   );
   const [pending, setPending] = useState(false);
   const [error, setError] = useState("");
@@ -82,7 +84,7 @@ export function SidebarActiveDialog({
             aria-label="Time frame"
           >
             <div className={styles.presets}>
-              {[1, 7, 30, 90].map((days) => (
+              {PRESET_DAYS.map((days) => (
                 <Radio
                   key={days}
                   value={String(days)}

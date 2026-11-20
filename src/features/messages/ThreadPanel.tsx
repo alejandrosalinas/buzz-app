@@ -5,7 +5,7 @@ import { ActivityExpansion } from "./ActivityExpansion";
 import { ActivityGroupPreview } from "./ActivityGroupPreview";
 import {
   activityPresentation,
-  useChannelActivitySnapshot,
+  useActivityHistorySnapshot,
   useStableRowActivity,
 } from "./activity-presentation";
 import { activityRuns, relayedRuns } from "./activity-groups";
@@ -81,6 +81,9 @@ export type ThreadPanelProps = {
   soloConversation?: boolean | undefined;
   disabled?: boolean | undefined;
   messageId: string;
+  /** Display and compose only within this invocation's branch. */
+  subthreadId?: string | undefined;
+  sourceThreadId?: string | undefined;
   /** Channel workspaces retain the editor across same-thread link navigation. */
   retainThread?: boolean | undefined;
   /** The hosting tab strip owns the title, close and Escape. */
@@ -194,7 +197,7 @@ export function ThreadPanel(props: ThreadPanelProps) {
           </Button>
         </p>
       )}
-      {props.retainThread ? (
+      {props.retainThread && !props.subthreadId ? (
         <RetainedThreadPanel key={viewKey} {...props} />
       ) : (
         <OwnedThreadPanel key={viewKey} {...props} />
@@ -444,6 +447,8 @@ function OwnedThreadPanel({
   channelName,
   channelId,
   messageId,
+  subthreadId,
+  sourceThreadId,
   navigation,
   onOpenLink,
   onOpenMediaReview,
@@ -456,6 +461,8 @@ function OwnedThreadPanel({
   active = true,
   revealSelected,
   revealFocus,
+  revealRequest,
+  latestRequest,
   unreadRequest,
   requireReadyRoot,
   onDraftSaved,
@@ -470,13 +477,15 @@ function OwnedThreadPanel({
     try {
       if (navigation?.signal.aborted) return;
       const exact =
+        !!subthreadId ||
         requireReadyRoot ||
         revealSelected ||
         (navigation?.target.kind === "conversation" &&
           navigation.target.threadRootId !== messageId);
-      const owned = session.thread(channelId, messageId, {
+      const owned = session.thread(channelId, subthreadId ?? messageId, {
         exact,
         reading: true,
+        ...(subthreadId ? { subthread: true } : {}),
       });
       const cancel = () => {
         owned.dispose();
@@ -485,7 +494,8 @@ function OwnedThreadPanel({
       setError(undefined);
       setView(owned);
       navigation?.signal.addEventListener("abort", cancel, { once: true });
-      void owned.refresh();
+      if (subthreadId) void owned.refresh({ messageId, sourceThreadId });
+      else void owned.refresh();
       return () => {
         navigation?.signal.removeEventListener("abort", cancel);
         owned.dispose();
@@ -502,6 +512,8 @@ function OwnedThreadPanel({
     session,
     channelId,
     messageId,
+    subthreadId,
+    sourceThreadId,
     attempt,
     navigation,
     revealSelected,
@@ -533,8 +545,11 @@ function OwnedThreadPanel({
       active={active}
       revealSelected={revealSelected}
       revealFocus={revealFocus}
+      revealRequest={subthreadId ? revealRequest : undefined}
+      latestRequest={subthreadId ? latestRequest : undefined}
       unreadRequest={unreadRequest}
       requireReadyRoot={requireReadyRoot}
+      subthreadId={subthreadId}
       onDraftSaved={onDraftSaved}
       onSend={onSend}
       onOpenLink={onOpenLink}
@@ -570,6 +585,7 @@ function ThreadMessages({
   latestRequest,
   unreadRequest,
   requireReadyRoot,
+  subthreadId,
   onDraftSaved,
   onSend,
   selectionFailure,
@@ -577,6 +593,7 @@ function ThreadMessages({
   routePending,
 }: {
   intro?: ReactNode;
+  subthreadId?: string | undefined;
   onResolvedRoot?: ThreadPanelProps["onResolvedRoot"];
   /** A route to this reader is on its way: until it lands, a reader not yet
    * shown stays hidden and unread rather than showing a place the route
@@ -646,10 +663,9 @@ function ThreadMessages({
     view.snapshot,
     view.snapshot,
   );
-  const threadChannels = useMemo(() => new Set([channelId]), [channelId]);
-  const activitySnapshot = useChannelActivitySnapshot(
+  const activitySnapshot = useActivityHistorySnapshot(
     session.agentActivity,
-    threadChannels,
+    channelId,
   );
   const stableActivity = useStableRowActivity();
   const resolvedRoot = snapshot.root?.id;
@@ -756,7 +772,7 @@ function ThreadMessages({
     void profileGeneration;
     if (authors)
       void session.profiles
-        .ensure(authors.split(":"), "background")
+        .ensure(authors.split(":"), "background", { withStatuses: true })
         .catch(() => {});
   }, [session.profiles, authors, profileGeneration]);
   const profiles = useRowProfiles(session.profiles, rows);
@@ -2207,6 +2223,7 @@ function ThreadMessages({
       (snapshot.root?.id === messageId && snapshot.targetStatus === "ready"))
       ? snapshot.root
       : undefined;
+  const sourceRootId = subthreadId ? composerRoot?.threadRootId : undefined;
   const retryThread = () => {
     if (showOlderPageStatus) {
       if (scroller.current) captureOlderAnchor(scroller.current);
@@ -2224,12 +2241,10 @@ function ThreadMessages({
         // exact reply under an unavailable original shows alone, so it, not
         // its signed root, is the thread: its hidden siblings stay unread.
         rootId={snapshot.root?.id ?? messageId}
-        // A visible exact reply can outlive its unavailable root. Until resolved,
-        // observe rows individually; an absent root must not mean channel catch-up.
-        // The same order the rows are shown in, so a same-second tie names
-        // the row a folded group shows as its latest.
+        // Projected branches and replies with unavailable roots only mark visible rows.
+        // For a full thread, use display order to break same-second ties.
         latestMessageId={
-          snapshot.root
+          snapshot.root && !subthreadId
             ? snapshot.replies.reduce<ChannelMessage | undefined>(
                 (latest, row) =>
                   !latest || compareMessages(row, latest) > 0 ? row : latest,
@@ -2507,8 +2522,11 @@ function ThreadMessages({
           channelName={channelName}
           placeholder={replyPlaceholder(composerRoot)}
           threadRootId={composerRoot.id}
+          sourceRootId={sourceRootId}
           threadSeed={threadSeed}
-          replyParentId={replyParent}
+          replyParentId={
+            replyParent ?? (sourceRootId ? composerRoot.id : undefined)
+          }
           disabled={
             disabled ||
             (requireReadyRoot &&

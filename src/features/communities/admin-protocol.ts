@@ -5,6 +5,7 @@ const MIN_TTL = 60;
 const MAX_TTL = 30 * 24 * 60 * 60;
 const MAX_USES = 10_000;
 const ROLES = ["admin", "member"];
+const UUID = "[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}";
 const KINDS: Record<string, number> = { add: 9030, remove: 9031, role: 9032 };
 
 /** Normalized `POST /api/invites` body; unknown fields are dropped. */
@@ -29,6 +30,44 @@ export function inviteRequest(value: unknown) {
   )
     throw new Error("Invalid invite use limit");
   return { ttl_secs: ttl, max_uses: uses };
+}
+
+/** `GET /api/invites` path for one page; `before` is the relay's opaque cursor. */
+export function inviteListPath(value: unknown) {
+  const { before, ...rest } = (value ?? {}) as { before?: unknown };
+  if (
+    Object.keys(rest).length ||
+    (before !== undefined &&
+      (typeof before !== "string" ||
+        !new RegExp(`^\\d{1,20}_${UUID}$`).test(before)))
+  )
+    throw new Error("Invalid invite list request");
+  return before === undefined
+    ? "/api/invites"
+    : `/api/invites?before=${before}`;
+}
+
+/** Normalized `POST /api/invites/revoke` body: exactly one of `id` or `code`. */
+export function revokeRequest(value: unknown) {
+  const { id, code, ...rest } = (value ?? {}) as {
+    id?: unknown;
+    code?: unknown;
+  };
+  if (Object.keys(rest).length === 0) {
+    if (
+      typeof id === "string" &&
+      code === undefined &&
+      new RegExp(`^${UUID}$`).test(id)
+    )
+      return { id };
+    if (
+      typeof code === "string" &&
+      id === undefined &&
+      /^[a-zA-Z0-9._-]{1,256}$/.test(code)
+    )
+      return { code };
+  }
+  throw new Error("Invalid revoke request");
 }
 
 /** Unsigned NIP-43 add/remove/role command for one member. */
@@ -78,6 +117,11 @@ const REASONS = new Set([
   "invalid: cannot set role to owner",
   "blocked: you are banned from this community",
   "only relay owners and admins can create invites",
+  "only relay owners and admins can list invites",
+  "only relay owners, admins or the invite's creator can revoke it",
+  "invite_not_revocable",
+  "invite_not_found",
+  "invite_restricted",
   "community writes are temporarily unavailable",
 ]);
 

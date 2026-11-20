@@ -1,9 +1,161 @@
 import { afterEach, expect, it, vi } from "vitest";
+import { createLocalAgentActivity } from "../agents/local-activity";
 
 afterEach(() => vi.useRealTimers());
 import { createRelaySession } from "./session";
 import type { LiveCallbacks } from "./live";
+import { transportPartition } from "./partition";
 import { keypair, roster, scriptedTransport, signed } from "./testing";
+
+it.each(["CLOSED", "private metadata", "concurrent readPage"])(
+  "restores retained local activity after verified preview recovery from %s",
+  async (loss) => {
+    vi.useFakeTimers();
+    vi.setSystemTime(1_800_000_000_000);
+    const viewer = keypair();
+    const relay = keypair();
+    const wire = scriptedTransport(viewer.pubkey, relay.pubkey);
+    const local = createLocalAgentActivity();
+    const work = vi.fn(local.reader.work);
+    const update = vi.fn();
+    let live!: LiveCallbacks;
+    const owner = createRelaySession(
+      {
+        ...wire.transport,
+        agentActivity: true,
+        subscribe(callbacks) {
+          live = callbacks;
+          return { update, retry() {}, dispose() {} };
+        },
+      },
+      { localAgents: { ...local.reader, work } },
+    );
+    const channelId = "preview";
+    const metadata = (visibility: "public" | "private", created_at: number) =>
+      signed(relay, {
+        kind: 39000,
+        content: "",
+        created_at,
+        tags: [["d", channelId], [visibility]],
+      });
+    const publicPreview = metadata("public", 10);
+    const failedId = "1".repeat(64);
+    const declinedId = "2".repeat(64);
+    const begin = (messageId: string) =>
+      local.begin({
+        scope: transportPartition(wire.transport),
+        agent: "a".repeat(64),
+        channelId,
+        threadRootId: messageId,
+        messageId,
+      });
+    const activity = owner.session.agentActivity;
+    const snapshot = () => activity.snapshot(channelId);
+    const onActivity = vi.fn();
+    const onOtherActivity = vi.fn();
+    try {
+      const resolve = owner.session.channels.resolve?.([channelId]);
+      await vi.advanceTimersByTimeAsync(0);
+      wire.next().respond([publicPreview]);
+      await resolve;
+      expect(owner.session.channels.get?.(channelId)?.readOnly).toBe(true);
+      activity.activate();
+      const observer = {
+        id: "observer",
+        status: "live",
+        replay: "unknown",
+      } as const;
+      live.state({ status: "connected", routes: [observer] });
+      begin(failedId).finish({ ok: false, error: "Agent failed" });
+      begin(declinedId).remove("workflow");
+      expect(snapshot().local).toMatchObject([
+        { messageId: failedId, state: "error" },
+      ]);
+      expect(snapshot().declined).toMatchObject([{ messageId: declinedId }]);
+      const interests = update.mock.lastCall;
+      update.mockClear();
+
+      if (loss === "CLOSED") {
+        live.state({
+          status: "connected",
+          routes: [
+            observer,
+            {
+              id: `channel:${channelId}`,
+              channelId,
+              status: "error",
+              replay: "unknown",
+              error: "restricted: channel access revoked",
+            },
+          ],
+        });
+      } else {
+        live.receive([metadata("private", 20)]);
+      }
+      expect(owner.session.channels.get?.(channelId)).toBeUndefined();
+      expect(snapshot().local ?? []).toEqual([]);
+      expect(snapshot().declined ?? []).toEqual([]);
+      activity.subscribe(onActivity, channelId);
+      activity.subscribe(onOtherActivity, "unrelated");
+
+      const recovery =
+        loss !== "CLOSED"
+          ? owner.session.channels.resolve?.([channelId])
+          : undefined;
+      void recovery?.catch(() => {});
+      await vi.advanceTimersByTimeAsync(0);
+      const recheck = wire.pending.find(({ filters }) =>
+        filters.some((filter) => filter["#d"]?.includes(channelId)),
+      );
+      expect(recheck).toBeDefined();
+      const publicAgain =
+        loss === "CLOSED" ? publicPreview : metadata("public", 30);
+      if (loss === "concurrent readPage") {
+        const page = owner.session.readPage([
+          {
+            kinds: [39000],
+            authors: [relay.pubkey],
+            "#d": [channelId],
+            limit: 1,
+          },
+        ]);
+        void page.catch(() => {});
+        await vi.advanceTimersByTimeAsync(0);
+        const read = wire.pending.find(
+          ({ filters }) =>
+            filters.length === 1 && filters[0]?.["#d"]?.includes(channelId),
+        );
+        expect(read).toBeDefined();
+        read?.respond([publicAgain]);
+        await page;
+        expect(owner.session.channels.get?.(channelId)?.readOnly).toBe(true);
+        expect(snapshot().local).toMatchObject([
+          { messageId: failedId, state: "error" },
+        ]);
+        expect(snapshot().declined).toMatchObject([{ messageId: declinedId }]);
+      }
+      recheck?.respond([publicAgain]);
+      await recovery;
+      await vi.advanceTimersByTimeAsync(0);
+      expect(owner.session.channels.get?.(channelId)?.readOnly).toBe(true);
+      expect(update.mock.calls.length).toBeGreaterThan(0);
+      for (const call of update.mock.calls) expect(call).toEqual(interests);
+      expect(snapshot().local).toMatchObject([
+        { messageId: failedId, state: "error" },
+      ]);
+      expect(snapshot().declined).toMatchObject([{ messageId: declinedId }]);
+      expect(onActivity).toHaveBeenCalledTimes(1);
+      expect(onOtherActivity).not.toHaveBeenCalled();
+
+      work.mockClear();
+      await vi.advanceTimersByTimeAsync(1000);
+      expect(work).not.toHaveBeenCalled();
+      expect(onActivity).toHaveBeenCalledTimes(1);
+    } finally {
+      owner.dispose();
+    }
+  },
+);
 
 it("live typing is owner-recognized and self-suppressed, bypasses history/read views, and loses access before a mixed batch", async () => {
   const viewer = keypair(),

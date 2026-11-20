@@ -36,7 +36,7 @@ export function draftLifetime(
 
 export function useDefaultLifetime(scope: string) {
   return useSyncExternalStore(
-    useCallback((listener) => subscribeView(scope, listener), [scope]),
+    useCallback((listener) => subscribeView(scope, listener, KEY), [scope]),
     () => readDefaultLifetime(scope),
   );
 }

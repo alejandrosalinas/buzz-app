@@ -43,10 +43,11 @@ export type Facts = Readonly<{
   /** Whether each thread is a session of its own, or the whole channel or
    * community is one. */
   scope: "thread" | "channel" | "community";
-  /** What the session is, for a harness that states it: one thread, one
-   * whole conversation (a DM, a personal chat, a huddle or a channel's top
-   * level), or a watch's or timer's run that joins no conversation. Without
-   * it, the Session Model describes the scope alone. */
+  /** What the session is: one thread, one whole conversation (a DM, a
+   * personal chat, a huddle or a channel's top level), or a watch's or
+   * timer's run that joins no conversation. An installed harness that does
+   * not name the conversation leaves it out, and the Session Model then
+   * describes the scope alone. */
   place?: "thread" | "conversation" | "standalone" | undefined;
   /** The agent's workspace, absolute, when the conversation works in a folder
    * of its own instead. */
@@ -171,3 +172,11 @@ export const SECTIONS: readonly Section[] = [
  * text. */
 export const locked = (section: Section) =>
   typeof section.text === "string" && !section.owner && !section.plugin;
+
+/** The section a plugin can replace under `id`, also by an ID the section
+ * had before. */
+export const pluginSection = (id: string) =>
+  SECTIONS.find(
+    (section) =>
+      section.plugin && (section.id === id || section.aliases?.includes(id)),
+  );

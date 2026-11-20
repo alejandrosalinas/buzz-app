@@ -1,22 +1,17 @@
 // @vitest-environment jsdom
-import { cleanup, renderHook } from "@testing-library/react";
+import { act, cleanup, renderHook } from "@testing-library/react";
 import { afterEach, expect, it } from "vitest";
+import { createAgentActivity } from "../agents/activity";
 import type { ChannelMessage } from "../relay/contracts";
 import {
   activityPresentation,
-  useChannelActivitySnapshot,
+  useActivityPresentation,
   useStableRowActivity,
   type ActivityRowPresentation,
 } from "./activity-presentation";
 import { useActivityIndicator } from "./use-activity-indicator";
 import { useLiveConversationAgents } from "./TypingIndicator";
-import {
-  agent,
-  entry,
-  fixture,
-  root,
-  type Snapshot,
-} from "./typing-indicator-testing";
+import { agent, entry, fixture, root } from "./typing-indicator-testing";
 
 afterEach(cleanup);
 
@@ -108,35 +103,132 @@ it("re-renders a live-agents host only when its working agents change", () => {
   expect(result.current).toEqual([agent]);
 });
 
-it("keeps a conversation's activity snapshot through other channels' work", () => {
+it("keeps message history stable while an agent starts and stops typing", () => {
   const live = fixture();
-  const record = (id: string, channelId: string) =>
-    Object.freeze({
-      id,
-      channelIds: Object.freeze([channelId]),
-    }) as unknown as Snapshot["records"][number];
-  const turn = (channelId: string, timestamp: number) =>
-    ({ agent, turnId: "t", channelId, timestamp, state: "working" }) as const;
-  const elsewhere = record("elsewhere", "other");
-  const here = record("here", "channel");
-  const channels = new Set(["channel"]);
+  const rows: ChannelMessage[] = [
+    {
+      id: root,
+      channelId: "channel",
+      authorId: agent,
+      createdAt: 1,
+      content: "Update",
+      mentions: [],
+      attachments: [],
+      reactions: [],
+      replyCount: 0,
+      participants: [],
+      audience: "agents",
+    },
+  ];
+  const agents = new Set([agent]);
   let renders = 0;
-  const { result } = renderHook(() => {
+  renderHook(() => {
     renders++;
-    return useChannelActivitySnapshot(live.session.agentActivity, channels);
+    return useActivityPresentation(rows, live.session.agentActivity, agents);
   });
-  const initial = result.current;
-  const idle = renders;
-  live.update([], { records: [elsewhere] });
-  live.update([], { records: [elsewhere], turns: [turn("other", 1)] });
-  live.update([], { records: [elsewhere], turns: [turn("other", 2)] });
-  expect(renders).toBe(idle);
-  expect(result.current).toBe(initial);
-  live.update([], { records: [elsewhere, here] });
-  expect(result.current?.records).toEqual([elsewhere, here]);
-  const withRecord = result.current;
-  live.update([], { records: [elsewhere, here], turns: [turn("channel", 3)] });
-  expect(result.current).not.toBe(withRecord);
+  const initial = renders;
+  live.update([], {
+    local: [],
+    turnsTrimmed: false,
+    typing: [
+      {
+        agent,
+        channelId: "channel",
+        threadRootId: root,
+        startedAt: 1,
+        working: true,
+      },
+    ],
+  });
+  live.update([], { typing: [] });
+  expect(renders).toBe(initial);
+
+  live.update([], { trimmed: 1 });
+  expect(renders).toBeGreaterThan(initial);
+  const afterTrim = renders;
+  live.update([], { turnsTrimmed: true });
+  expect(renders).toBeGreaterThan(afterTrim);
+});
+
+it("only updates mounted activity rows in the channel that received a tool step", () => {
+  const live = fixture();
+  let generation: number | null = null;
+  const activity = createAgentActivity(
+    true,
+    (value) => {
+      generation = value;
+    },
+    () => true,
+  );
+  activity.queries.activate();
+  activity.state({
+    status: "connected",
+    routes: [{ id: "observer", status: "live", replay: "unknown" }],
+  });
+  const session = { ...live.session, agentActivity: activity.queries };
+  const mountRow = (channelId: string) => {
+    const row = { id: root, authorId: agent, channelId } as ChannelMessage;
+    let renders = 0;
+    const view = renderHook(() => {
+      renders++;
+      return useActivityIndicator(session, row, true);
+    });
+    return { result: view.result, renders: () => renders };
+  };
+  let seq = 0;
+  const receive = (kind: string, channelId: string, payload: unknown = {}) => {
+    const now = Date.now();
+    if (generation === null) throw new Error("Observer is not active");
+    activity.receive(
+      {
+        id: (++seq).toString(16).padStart(64, "0"),
+        agent,
+        createdAt: Math.floor(now / 1000),
+        plaintext: JSON.stringify({
+          kind,
+          channelId,
+          turnId: channelId,
+          seq,
+          timestamp: new Date(now).toISOString(),
+          payload,
+        }),
+      },
+      generation,
+    );
+  };
+  try {
+    receive("turn_started", "channel");
+    receive("turn_started", "other");
+    live.update([
+      { pubkey: agent, channelId: "channel" },
+      { pubkey: agent, channelId: "other" },
+    ]);
+    const here = mountRow("channel");
+    const there = mountRow("other");
+    expect(here.result.current).toBe(true);
+    expect(there.result.current).toBe(true);
+    const hereBefore = here.renders();
+    const thereBefore = there.renders();
+    act(() =>
+      receive("acp_read", "channel", {
+        jsonrpc: "2.0",
+        method: "session/update",
+        params: {
+          update: {
+            sessionUpdate: "tool_call",
+            toolCallId: "read",
+            title: "Read",
+            kind: "read",
+            status: "in_progress",
+          },
+        },
+      }),
+    );
+    expect(here.renders()).toBeGreaterThan(hereBefore);
+    expect(there.renders()).toBe(thereBefore);
+  } finally {
+    act(() => activity.dispose());
+  }
 });
 
 it("maps each request to its agents' latest public replies", () => {

@@ -11,7 +11,7 @@ import { absoluteWorkspace } from "../../../bundled/codex/config";
 import type { SessionAction } from "../../agents/service";
 import type { AcpProcess } from "./process";
 import type { AcpSession } from "./session";
-import { codeOf } from "./steps";
+import { codeOf, errorMessage } from "./steps";
 import type {
   ActivityReceipt,
   Choice,
@@ -177,8 +177,9 @@ export type SessionsOptions = Readonly<{
   }>;
   /** The servers its sessions hold: the shared pool unless given. */
   pool?: ServerPool;
-  /** The agent's current settings, for a new session. */
-  launch(): Promise<Launch>;
+  /** The agent's current settings, for a new session or a session's next
+   * turn in `conversation`: none for a one-off turn. */
+  launch(conversation?: string): Promise<Launch>;
   /** The agent's provider, model and thinking level now, which each new
    * turn runs on. */
   choice(): Choice;
@@ -354,8 +355,9 @@ export class AgentSessions {
   }
 
   /** Sends `text` into the conversation `key`, and resolves when the session
-   * has answered it. `steer` replaces `text` when the session is mid-turn;
-   * `fresh` builds it again when the session it was built for was closed;
+   * has answered it; the activity's `refresh`, if any, builds it again as
+   * it is handed over, and `fresh` when the session it was built for was
+   * closed;
    * `title` names a session opened for it, except that the conversation's
    * first one is left for the harness to name, if it names sessions, when `named`
    * takes that name;
@@ -369,7 +371,6 @@ export class AgentSessions {
     text: string,
     seen: number,
     {
-      steer = text,
       current,
       fresh,
       title,
@@ -380,7 +381,6 @@ export class AgentSessions {
       kept,
       ...activity
     }: Readonly<{
-      steer?: string;
       current?: () => boolean;
       fresh?: () => Promise<string>;
       title?: string;
@@ -445,7 +445,7 @@ export class AgentSessions {
       }
       // A harness that cannot take a new prompt in place needs a new session.
       if (!live.session.busy && !live.process.repromptable) {
-        const { systemPrompt } = await this.options.launch();
+        const { systemPrompt } = await this.options.launch(key);
         if (this.live.get(key) !== live) continue;
         if (systemPrompt !== live.systemPrompt) {
           this.drop(key, live);
@@ -456,7 +456,7 @@ export class AgentSessions {
         key,
         live,
         seen,
-        live.session.busy ? steer : text,
+        text,
         { ...activity, ...(current ? { current } : {}) },
         model,
         effort,
@@ -529,6 +529,11 @@ export class AgentSessions {
     return started.settled ?? this.late;
   }
 
+  /** Resolves once each session opening now has taken its message or
+   * failed, so that `snapshot` lists every conversation that has one. */
+  async opened() {
+    await Promise.allSettled([...this.opening.values()]);
+  }
   /** Stops the turn running in conversation `key`, if any, once a session
    * opening for it has taken its message. */
   async interrupt(key: string) {
@@ -979,7 +984,8 @@ export class AgentSessions {
     const { pool } = this;
     // Read before `launch` reads the settings, so it never describes newer ones.
     const fingerprint = this.options.fingerprint();
-    const launch = await this.options.launch();
+    const conversation = this.once.has(key) ? undefined : key;
+    const launch = await this.options.launch(conversation);
     // Removed meanwhile: a process started now would outlive it.
     if (this.disposed) throw new Error(`${this.options.label} was stopped`);
     const asked = ++this.asked;
@@ -995,7 +1001,7 @@ export class AgentSessions {
     const slot: Slot = { idle: () => false, evict: async () => undefined };
     const room = pool.take(slot);
     let opened: AcpSession | undefined;
-    const tags = this.options.tags?.(this.once.has(key) ? undefined : key);
+    const tags = this.options.tags?.(conversation);
     const start = () =>
       process.open({
         ...(tags ? { tags } : {}),
@@ -1045,18 +1051,21 @@ export class AgentSessions {
       at: Date.now(),
     };
     // Each turn runs on the current prompt. The session runs these one at a
-    // time, so an older prompt never lands after a newer one; a failure keeps
-    // the session and is tried again at the next turn.
+    // time, so an older prompt never lands after a newer one. A failure fails
+    // that turn undelivered, as a rule it no longer has would not hold for it,
+    // and keeps the session to try again at the next turn.
     if (process.repromptable)
       session.beforeTurn = async () => {
-        const { systemPrompt } = await this.options.launch();
+        const { systemPrompt } = await this.options.launch(conversation);
         if (systemPrompt === live.systemPrompt) return;
         try {
           await process.reprompt(session, systemPrompt);
-          live.systemPrompt = systemPrompt;
         } catch (error) {
-          console.warn(`${this.options.label} kept its old prompt`, error);
+          throw new Error(
+            `${this.options.label} could not update its instructions: ${errorMessage(error)}`,
+          );
         }
+        live.systemPrompt = systemPrompt;
       };
     if (fingerprint !== this.options.fingerprint() && !this.disposed) {
       // Settings saved while it opened: it would work with the old ones.

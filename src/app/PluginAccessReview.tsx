@@ -2,6 +2,7 @@ import { type Ref, useContext, useSyncExternalStore } from "react";
 import { AgentsContext } from "../features/agents/react";
 import type { RegisteredAgentType } from "../features/agents/service";
 
+import { pluginSection } from "../features/agent-harness/sections";
 import type { PluginManifest } from "../plugins/api";
 import { Accordion } from "../shared/design-system/ui/Accordion";
 import { Button } from "../shared/design-system/ui/Button";
@@ -73,6 +74,30 @@ function hostDeclarations(
       icon: PlugIcon,
       details: <code className={styles.sourcePath}>{harness}</code>,
     })),
+    ...(manifest.host?.agentPromptSections ?? []).map((id) => {
+      const section = pluginSection(id);
+      const title = section?.title ?? id;
+      return {
+        key: `agentPromptSections:${id}`,
+        signature: `Agent instructions: ${id}`,
+        title: "Agent instructions:",
+        name: `Agent instructions ${title}`,
+        label: `Replace the ${title} instructions for agents`,
+        hint: "Can replace this part of the base instructions in chats it manages.",
+        icon: PlugIcon,
+        details: (
+          <p className="m-0">
+            In a chat this plugin manages, agents get the plugin’s text for{" "}
+            {title} in place of the text Buzz gives them.
+            {section?.owner &&
+              " Your own choice for this part in Settings → Agent setup still applies there."}{" "}
+            When this plugin first manages a Codex chat that an earlier Buzz
+            version started, that chat starts over once, without its earlier
+            context; on another computer, it asks for a new session.
+          </p>
+        ),
+      };
+    }),
     ...(manifest.host?.commands ?? []).map((command) => ({
       key: `command:${command.id}`,
       signature: `Command ${command.id}: ${JSON.stringify([command.program, ...command.args])} · input: ${command.maxInputBytes === undefined ? "none" : `up to ${command.maxInputBytes} bytes`} · output: up to ${command.maxOutputBytes ?? 4096} bytes`,

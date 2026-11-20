@@ -289,7 +289,7 @@ export function SoloDraft({
         settingsRevision = nextSettings;
         setDraftSettings(readDraftSettings(scope, draftKey));
       }
-    });
+    }, [projectKey, settingsKey]);
   }, [scope, draftKey, projectId]);
   const prompt = useRef<HTMLDivElement>(null);
   useEffect(() => {
